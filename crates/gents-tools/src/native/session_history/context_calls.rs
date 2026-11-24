@@ -37,7 +37,7 @@ pub async fn load_latest_session_context_calls(
     }
     let mut after = None;
     loop {
-        let bindings = load_session_request_bindings(
+        let (bindings, next) = load_session_request_bindings(
             access,
             node_did,
             requester_did,
@@ -45,16 +45,17 @@ pub async fn load_latest_session_context_calls(
             RequestBindings::Page(after.as_deref()),
         )
         .await?;
-        if bindings.is_empty() {
-            return values(selected);
-        }
-        let rows = gents_store::views::read_view(
-            access,
-            &ContextCalls::retained(node_did.trim(), lower_bound.clone())
-                .for_requests(bindings.keys().cloned().collect())
-                .limit(CONTEXT_CALL_LIMIT as u64),
-        )
-        .await?;
+        let rows = if bindings.is_empty() {
+            Vec::new()
+        } else {
+            gents_store::views::read_view(
+                access,
+                &ContextCalls::retained(node_did.trim(), lower_bound.clone())
+                    .for_requests(bindings.keys().cloned().collect())
+                    .limit(CONTEXT_CALL_LIMIT as u64),
+            )
+            .await?
+        };
         for row in rows {
             let physical = row
                 .request_doc_id
@@ -70,10 +71,14 @@ pub async fn load_latest_session_context_calls(
             selected.push(row);
         }
         gents_inference::views::context::retain_latest(&mut selected, CONTEXT_CALL_LIMIT);
-        if bindings.len() < PAGE_SIZE {
+        let Some(next) = next else {
             return values(selected);
-        }
-        after = bindings.last_key_value().map(|(id, _)| id.clone());
+        };
+        anyhow::ensure!(
+            after.as_deref() != Some(next.as_str()),
+            "session request cursor did not advance"
+        );
+        after = Some(next);
     }
 }
 
@@ -90,12 +95,12 @@ async fn indexed_calls(
     session_id: &str,
 ) -> Result<Vec<ContextCallRow>> {
     let mut selected = Vec::with_capacity(CONTEXT_CALL_LIMIT);
-    let mut cursor = None;
+    let mut cursor: Option<ContextCursor> = None;
     loop {
         let mut view = ContextCalls::indexed(node_did.trim(), session_id.trim())
             .limit(CONTEXT_CALL_LIMIT as u64);
-        if let Some(cursor) = cursor {
-            view = view.after(cursor);
+        if let Some(cursor) = &cursor {
+            view = view.after(cursor.clone());
         }
         let rows = gents_store::views::read_view(access, &view).await?;
         if rows.is_empty() {
@@ -110,7 +115,7 @@ async fn indexed_calls(
                     .map(str::to_owned)
             })
             .collect::<Vec<_>>();
-        let bindings = load_session_request_bindings(
+        let (bindings, _) = load_session_request_bindings(
             access,
             node_did,
             requester_did,
@@ -119,7 +124,7 @@ async fn indexed_calls(
         )
         .await?;
         let page_len = rows.len();
-        cursor = rows.last().map(ContextCursor::from);
+        cursor = ContextCursor::after_page(cursor, &rows);
         for row in rows {
             let Some(request_id) = row
                 .request_doc_id

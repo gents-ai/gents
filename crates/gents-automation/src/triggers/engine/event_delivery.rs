@@ -552,25 +552,23 @@ pub(crate) async fn group_correlation_page(
         .correlation_field()
         .context("group correlation field missing")?;
     gents_store::graphql::validate_collection_identifier(delivery.collection())?;
-    let base = gents_store::graphql::selection_filter(delivery.filter(), None)?;
-    let filter = cursor.map_or(base.clone(), |cursor| {
-        format!(
-            "{{_and:[{base},{{_docID:{{_gt:\"{}\"}}}}]}}",
-            escape_graphql_string(cursor)
-        )
-    });
+    let filter = gents_store::graphql::selection_filter(delivery.filter(), None)?;
+    let after = gents_store::graphql::cursor_after_arg(cursor);
     let response = access
         .execute(&format!(
-            "{{{}(filter:{filter},order:{{_docID:ASC}},limit:{GROUP_RECOVERY_PAGE_SIZE}){{_docID {field}}}}}",
+            "{{_cursor{{{}(first:{GROUP_RECOVERY_PAGE_SIZE}{after},filter:{filter},order:[{{_docID:ASC}}]){{_docID {field}}} _pageInfo{{hasNext endCursor}}}}}}",
             delivery.collection()
         ))
         .await?;
-    let rows: Vec<Value> = serde_json::from_value(response["data"][delivery.collection()].clone())?;
-    let cursor = rows
-        .last()
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+    let (rows, next) = gents_store::graphql::cursor_page_data::<Value>(
+        response.get("data"),
+        delivery.collection(),
+    )?;
+    anyhow::ensure!(
+        next.is_none() || next.as_deref() != cursor,
+        "event group recovery cursor did not advance"
+    );
+    let complete = next.is_none();
     let correlations = rows
         .iter()
         .filter_map(|row| row.get(field).and_then(Value::as_str))
@@ -579,7 +577,7 @@ pub(crate) async fn group_correlation_page(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    Ok((correlations, cursor, rows.len() < GROUP_RECOVERY_PAGE_SIZE))
+    Ok((correlations, next, complete))
 }
 
 pub(crate) fn group_candidate_eligible(

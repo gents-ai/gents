@@ -74,11 +74,13 @@ async fn context_view_nullable_keyset_matches_model_on_served_node() -> Result<(
         };
         let mut view = ContextCalls::indexed("node", "session").limit(2);
         if let Some(label) = label {
-            let cursor = rows
+            let position = rows
                 .iter()
-                .find(|row| row.doc_id == documents[label])
+                .position(|row| row.doc_id == documents[label])
                 .context("cursor fixture missing")?;
-            view = view.after(ContextCursor::from(cursor));
+            let cursor = ContextCursor::after_page(None, &rows[..=position])
+                .context("cursor fixture missing")?;
+            view = view.after(cursor);
         }
         let mut page = reader.read_view(&view).await?;
         page.reverse();
