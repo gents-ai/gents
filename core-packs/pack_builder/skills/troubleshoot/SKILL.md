@@ -28,4 +28,4 @@ Run the preview (see `design-page`), and check the manifest lists every surface 
 - Ask for a restart only when you can say what it will prove.
 - Still stuck after three attempts at the same step? Stop and ask, with what you tried and ruled out.
 
-Once you know the failing step, fix it with that part's skill: `build-automation`, `design-page`, `package-or-install`.
+Once you know the failing step, fix it with that part's skill: `automate`, `design-page`, `package-or-install`.
