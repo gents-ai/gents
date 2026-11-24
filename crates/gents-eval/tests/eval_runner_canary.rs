@@ -16,12 +16,11 @@ use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::embedded::{
     export_retained_transcript, EmbeddedExecutor, EmbeddedHome, TranscriptCalls, TranscriptOptions,
 };
-#[cfg(feature = "live-e2e")]
-use gents_eval::runner::CaptureResult;
 use gents_eval::runner::{
-    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest, TrialEvidence,
-    TrialExecutor, TrialLocator, TrialSpec,
+    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest, TrialLocator,
 };
+#[cfg(feature = "live-e2e")]
+use gents_eval::runner::{CaptureResult, TrialExecutor};
 use gents_observe::observe::adapter_projection::ProjectionRedactionMode;
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
@@ -589,47 +588,6 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
     );
 }
 
-/// Lets the provider answer again as the slot's second attempt is provisioned.
-struct ProviderReturnsForTheSecondAttempt<'a> {
-    inner: EmbeddedExecutor,
-    backend: &'a ScriptedBackend,
-    provisioned: std::sync::atomic::AtomicUsize,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for ProviderReturnsForTheSecondAttempt<'_> {
-    fn isolation(&self) -> gents_eval::runner::Isolation {
-        self.inner.isolation()
-    }
-
-    async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
-        if self
-            .provisioned
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            == 1
-        {
-            self.backend.release(SOLO_MARKER);
-        }
-        self.inner.provision(spec).await
-    }
-
-    async fn discard(&self, trial_id: &str) {
-        self.inner.discard(trial_id).await;
-    }
-
-    async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
-        self.inner.execute(spec, cancel).await
-    }
-
-    async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
-        self.inner.recollect(at, captures).await
-    }
-
-    async fn provider_answers(&self, spec: &TrialSpec) -> bool {
-        self.inner.provider_answers(spec).await
-    }
-}
-
 #[tokio::test]
 async fn a_slot_whose_provider_dropped_its_streams_is_attempted_again() {
     let backend = ScriptedBackend::start_with_plans(MODEL, answering_plans()).unwrap();
@@ -637,22 +595,40 @@ async fn a_slot_whose_provider_dropped_its_streams_is_attempted_again() {
     let (canary, mut request) = canary_request(backend.endpoint(), "run-dropped").await;
     request.case_ids = Some(vec!["one-stage".into()]);
     request.max_infra_retries = 2;
-    let executor = ProviderReturnsForTheSecondAttempt {
-        inner: canary.executor(),
-        backend: &backend,
-        provisioned: std::sync::atomic::AtomicUsize::new(0),
+    let executor = canary.executor();
+    let registry = CheckRegistry::builtin();
+    let options = RunOptions::default();
+    let mut trial_changes =
+        gents_store::subscription_source::subscribe_collections(&canary._home.node, ["EvalTrial"])
+            .unwrap();
+    let provider_returns = async {
+        loop {
+            let trials = load_trials(&canary.access, &request.owner, &request.run_id)
+                .await
+                .unwrap();
+            if trials.iter().any(|trial| trial.completion.is_some()) {
+                backend.release(SOLO_MARKER);
+                break;
+            }
+            trial_changes
+                .recv()
+                .await
+                .expect("the trial change stream stays open");
+        }
     };
 
-    let outcome = run(
-        &canary.access,
-        &request,
-        &executor,
-        &CheckRegistry::builtin(),
-        CancellationToken::new(),
-        &RunOptions::default(),
-    )
-    .await
-    .unwrap();
+    let (outcome, ()) = tokio::join!(
+        run(
+            &canary.access,
+            &request,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &options,
+        ),
+        provider_returns
+    );
+    let outcome = outcome.unwrap();
 
     let mut trials = load_trials(&canary.access, &request.owner, &request.run_id)
         .await
