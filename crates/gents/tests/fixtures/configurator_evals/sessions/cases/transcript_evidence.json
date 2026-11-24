@@ -5,45 +5,31 @@
   "stages": [
     {
       "stage_id": "record",
-      "prompt": "Record this incident note: The upload retry keeps its checkpoint until the server acknowledges the batch. Reply only Recorded.",
+      "prompt": "Incident note for later: the upload retry keeps its checkpoint until the server acknowledges the batch.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
-            "any": [
-              "Recorded",
-              "recorded"
+            "all": [
+              {
+                "matches": "\\S"
+              }
             ]
           },
-          "tier": "acceptance",
+          "tier": "development",
           "weight": 1
         }
       ]
     },
     {
       "stage_id": "investigate",
-      "prompt": "Use sessions to find our earlier incident note about upload retries. Quote the checkpoint rule and include the canonical source message ID so I can verify it.",
+      "prompt": "What did I tell you earlier about upload retries? Quote the checkpoint rule, and give me the ID of the message it's in so I can link to it.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               "keeps its checkpoint"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

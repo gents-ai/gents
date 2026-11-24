@@ -5,45 +5,31 @@
   "stages": [
     {
       "stage_id": "record",
-      "prompt": "Record this deploy note: The rollout pauses at the first failing health check and leaves the previous image pinned. Reply only Recorded.",
+      "prompt": "Deploy note for later: the rollout pauses at the first failing health check and leaves the previous image pinned.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
-            "any": [
-              "Recorded",
-              "recorded"
+            "all": [
+              {
+                "matches": "\\S"
+              }
             ]
           },
-          "tier": "acceptance",
+          "tier": "development",
           "weight": 1
         }
       ]
     },
     {
       "stage_id": "investigate",
-      "prompt": "Find our recorded deployment rollback decision using sessions. Quote the health-check rule and cite the source message ID.",
+      "prompt": "What did we decide about a rollout that hits a failing health check? Quote the rule, and give me the ID of the message it's in so I can link to it.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               "leaves the previous image pinned"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

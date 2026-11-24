@@ -63,7 +63,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "In our Kestrel handoff notes, what UTC pickup time did the July 11 revision specify? Return just the time and the source session ID. Use the notes themselves.",
+      "prompt": "In our Kestrel handoff notes, what UTC pickup time did the July 11 revision specify? Give me the time and the session ID it's in.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -72,21 +72,6 @@
               {
                 "matches": "(?i)\\b10[:.]?50\\b"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

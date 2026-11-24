@@ -13,17 +13,11 @@ use super::rules::{findings, Rule, Subject};
 
 const README: &str = "crates/gents/tests/fixtures/configurator_evals/README.md";
 const CELL_AGENT: &str = "engineer";
+const ENGINEER_CONTEXT_ID: &str = "engineer-context";
+const ENGINEER_TOOLS_ID: &str = "engineer-tools";
 
 #[rustfmt::skip]
-const ENGINEER_PIN: &[(&str, usize)] = &[
-    ("ladder/l2_agent/cases/analyst_grants_file_tools.json", 2),
-    ("ladder/l2_agent/cases/archivist_full_files_no_bash.json", 2),
-    ("ladder/l2_agent/cases/clerk_automation_seed_fire.json", 2),
-    ("ladder/l2_agent/cases/cursor_grants_list_only.json", 2),
-    ("ladder/l2_agent/cases/ledger_prompt_edit_in_place.json", 4),
-    ("ladder/l2_agent/cases/porter_fix_in_place_disable_bash.json", 4),
-    ("ladder/l2_agent/cases/scout_grants_two_file_tools.json", 4),
-];
+const ENGINEER_PIN: &[(&str, usize)] = &[];
 #[rustfmt::skip]
 const LONG_PROMPT: &[(&str, usize)] = &[
     ("engineer_automation_graphs/cases/bay_thread_per_key.json", 1),
@@ -38,15 +32,6 @@ const LONG_PROMPT: &[(&str, usize)] = &[
     ("engineer_automation_graphs/cases/redline_follow_up.json", 1),
     ("engineer_automation_graphs/cases/scale_card_repair.json", 2),
     ("engineer_automation_graphs/cases/yard_receipts.json", 1),
-    ("engineer_datastore/cases/board_notice_linkage.json", 2),
-    ("engineer_datastore/cases/dispatch_active_route_assignment.json", 2),
-    ("engineer_datastore/cases/library_hold_edition_links.json", 2),
-    ("engineer_datastore/cases/protected_and_wrong_scope.json", 2),
-    ("engineer_datastore/cases/rental_location_cleanup.json", 2),
-    ("engineer_datastore/cases/sample_bin_placement.json", 2),
-    ("engineer_datastore/cases/shipment_count_page.json", 1),
-    ("engineer_datastore/cases/shipment_lifecycle.json", 1),
-    ("engineer_datastore/cases/yard_approval_holds.json", 2),
     ("engineer_goals/cases/blocked_manifest.json", 1),
     ("engineer_goals/cases/crate_budget_raise.json", 1),
     ("engineer_goals/cases/narrow_report_objective.json", 1),
@@ -124,20 +109,6 @@ const LONG_PROMPT: &[(&str, usize)] = &[
     ("ladder/l4_automation/cases/train_parallel_baseline.json", 1),
     ("ladder/l4_automation/cases/val_stop_fern_receipt_outcomes.json", 1),
     ("ladder/l5_agents_tools/cases/heldout_mixed_valid_and_ghost.json", 1),
-    ("native_packs/cases/authority_refusal.json", 1),
-    ("native_packs/cases/local_sealed_install.json", 2),
-    ("schema_experience/cases/admiral_report_search.json", 2),
-    ("schema_experience/cases/board_category_migration.json", 2),
-    ("schema_experience/cases/catalog_neighbors.json", 1),
-    ("schema_experience/cases/cooler_target_temperature.json", 2),
-    ("schema_experience/cases/crate_audit_discrepancy.json", 2),
-    ("schema_experience/cases/customer_timeline.json", 1),
-    ("schema_experience/cases/editorial_relationships.json", 1),
-    ("schema_experience/cases/guest_bookings.json", 1),
-    ("schema_experience/cases/help_center_search.json", 1),
-    ("schema_experience/cases/projects_and_tasks.json", 1),
-    ("schema_experience/cases/stock_records.json", 1),
-    ("schema_experience/cases/workshop_shift_priority.json", 2),
 ];
 #[rustfmt::skip]
 const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[
@@ -150,15 +121,6 @@ const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[
     ("engineer_pages/cases/restore_my_holdings.json", 1),
     ("engineer_script/cases/freight_pagination.json", 1),
     ("engineer_script/cases/wet_lots_audit.json", 1),
-    ("native_packs/cases/local_sealed_install.json", 1),
-    ("sessions/cases/archive_evidence.json", 1),
-    ("sessions/cases/count_closed.json", 1),
-    ("sessions/cases/cross_agent_visible.json", 1),
-    ("sessions/cases/discover_old.json", 1),
-    ("sessions/cases/filtered_discovery.json", 1),
-    ("sessions/cases/stub_recovery.json", 1),
-    ("sessions/cases/transcript_evidence.json", 1),
-    ("sessions/cases/wrong_id.json", 1),
 ];
 #[rustfmt::skip]
 const ROUTE: &[(&str, usize)] = &[
@@ -182,19 +144,6 @@ const ROUTE: &[(&str, usize)] = &[
     ("engineer_context/cases/route_fare_total.json", 4),
     ("engineer_context/cases/slimmed_rotation_recovery.json", 4),
     ("engineer_context/cases/trimmed_outputs_report.json", 9),
-    ("engineer_datastore/cases/board_notice_linkage.json", 12),
-    ("engineer_datastore/cases/board_open_receiving_tickets.json", 5),
-    ("engineer_datastore/cases/dispatch_active_route_assignment.json", 4),
-    ("engineer_datastore/cases/library_hold_edition_links.json", 4),
-    ("engineer_datastore/cases/protected_and_wrong_scope.json", 3),
-    ("engineer_datastore/cases/rental_location_cleanup.json", 4),
-    ("engineer_datastore/cases/sample_bin_placement.json", 4),
-    ("engineer_datastore/cases/shipment_count_page.json", 4),
-    ("engineer_datastore/cases/shipment_lifecycle.json", 4),
-    ("engineer_datastore/cases/yard_approval_holds.json", 4),
-    ("engineer_explain/cases/empty_report_execution.json", 4),
-    ("engineer_explain/cases/indexed_versus_scan.json", 4),
-    ("engineer_explain/cases/recover_and_refuse.json", 4),
     ("engineer_goals/cases/blocked_manifest.json", 4),
     ("engineer_goals/cases/crate_budget_raise.json", 3),
     ("engineer_goals/cases/greenhouse_water_goal.json", 3),
@@ -284,7 +233,6 @@ const ROUTE: &[(&str, usize)] = &[
     ("engineer_workflows/cases/pier_sums.json", 2),
     ("engineer_workflows/cases/reefer_tally_fan_in.json", 2),
     ("engineer_workflows/cases/west_loading_reconcile.json", 2),
-    ("factory_setup/definition/cases/factory_setup.json", 12),
     ("ladder/l1_inference/cases/held_nightly_automation_reviewer.json", 4),
     ("ladder/l1_inference/cases/train_basic_exec_profile_bind.json", 4),
     ("ladder/l1_inference/cases/val_minimal_limits.json", 4),
@@ -336,39 +284,6 @@ const ROUTE: &[(&str, usize)] = &[
     ("ladder/l5_agents_tools/cases/val_stop_duplicate_invoice_batch.json", 9),
     ("ladder/l5_agents_tools/cases/val_two_targets_both_selected.json", 4),
     ("ladder/l5_agents_tools/cases/val_verify_then_delegate_no_dupes.json", 5),
-    ("native_packs/cases/authority_refusal.json", 3),
-    ("native_packs/cases/local_sealed_install.json", 12),
-    ("native_packs/cases/scaffold_check.json", 8),
-    ("schema_experience/cases/archive_return_seal.json", 2),
-    ("schema_experience/cases/board_category_migration.json", 9),
-    ("schema_experience/cases/catalog_neighbors.json", 2),
-    ("schema_experience/cases/cooler_target_temperature.json", 3),
-    ("schema_experience/cases/crate_audit_discrepancy.json", 3),
-    ("schema_experience/cases/customer_timeline.json", 2),
-    ("schema_experience/cases/editorial_relationships.json", 2),
-    ("schema_experience/cases/extend_customer_records.json", 2),
-    ("schema_experience/cases/guest_bookings.json", 2),
-    ("schema_experience/cases/help_center_search.json", 2),
-    ("schema_experience/cases/projects_and_tasks.json", 2),
-    ("schema_experience/cases/spanish_knowledge_base.json", 2),
-    ("schema_experience/cases/stock_records.json", 2),
-    ("schema_experience/cases/workshop_shift_priority.json", 3),
-    ("sessions/cases/archive_evidence.json", 4),
-    ("sessions/cases/atlas_review_close_date.json", 4),
-    ("sessions/cases/birch_gate_unconfirmed.json", 4),
-    ("sessions/cases/cedar_receiving_not_recorded.json", 4),
-    ("sessions/cases/count_closed.json", 4),
-    ("sessions/cases/cross_agent_visible.json", 4),
-    ("sessions/cases/discover_old.json", 4),
-    ("sessions/cases/filtered_discovery.json", 4),
-    ("sessions/cases/frame_corrected_handoff_bay.json", 4),
-    ("sessions/cases/frame_matched_weld_seal.json", 4),
-    ("sessions/cases/frame_reconciled_cost.json", 4),
-    ("sessions/cases/juniper_original_dock.json", 4),
-    ("sessions/cases/kestrel_newest_revision.json", 4),
-    ("sessions/cases/relay_handoff_current_window.json", 4),
-    ("sessions/cases/transcript_evidence.json", 4),
-    ("sessions/cases/wrong_id.json", 4),
 ];
 #[rustfmt::skip]
 const UNEXERCISED: &[(&str, usize)] = &[
@@ -393,15 +308,6 @@ const UNEXERCISED: &[(&str, usize)] = &[
     ("ladder/l4_automation/cases/train_daily_cron_digest.json", 1),
     ("ladder/l4_automation/cases/train_interval_heartbeat_fires.json", 1),
     ("ladder/l4_automation/cases/val_retime_luthier_schedule_in_place.json", 1),
-    ("schema_experience/cases/archive_return_seal.json", 1),
-    ("schema_experience/cases/catalog_neighbors.json", 1),
-    ("schema_experience/cases/customer_timeline.json", 1),
-    ("schema_experience/cases/editorial_relationships.json", 1),
-    ("schema_experience/cases/extend_customer_records.json", 1),
-    ("schema_experience/cases/guest_bookings.json", 1),
-    ("schema_experience/cases/help_center_search.json", 1),
-    ("schema_experience/cases/projects_and_tasks.json", 1),
-    ("schema_experience/cases/spanish_knowledge_base.json", 1),
 ];
 
 const OPEN: [(Rule, &[(&str, usize)]); 5] = [
@@ -461,7 +367,7 @@ fn scan() -> BTreeMap<(Rule, String), BTreeSet<String>> {
     let tools = known_tools(&suites);
     let mut found: BTreeMap<(Rule, String), BTreeSet<String>> = BTreeMap::new();
     for suite in &suites {
-        let subject = subject(suite, tools.clone());
+        let subject = subject(tools.clone());
         let paths = case_paths(&suite.dir);
         for case in definition(&suite.dir).cases {
             let path = &paths[&case.case_id];
@@ -476,19 +382,11 @@ fn scan() -> BTreeMap<(Rule, String), BTreeSet<String>> {
     found
 }
 
-fn subject(suite: &Suite, tools: BTreeSet<String>) -> Subject {
-    let config = json(&fixtures().join(&suite.subject).join("pack_config.json"));
-    let agent = array(&config["agents"])
-        .find(|agent| agent["agent_slot"] == CELL_AGENT)
-        .unwrap_or_else(|| panic!("{}: its subject has no {CELL_AGENT} slot", suite.id));
-    let context_id = agent["context_id"].as_str().unwrap().to_owned();
-    let context = array(&config["contexts"])
-        .find(|context| context["context_id"] == context_id.as_str())
-        .unwrap_or_else(|| panic!("{}: its subject has no Context {context_id}", suite.id));
+fn subject(tools: BTreeSet<String>) -> Subject {
     Subject {
         engineer: format!("{AGENT_SLOT_REFERENCE_PREFIX}{CELL_AGENT}"),
-        tools_id: context["tools_id"].as_str().unwrap().to_owned(),
-        context_id,
+        tools_id: ENGINEER_TOOLS_ID.to_owned(),
+        context_id: ENGINEER_CONTEXT_ID.to_owned(),
         tools,
     }
 }

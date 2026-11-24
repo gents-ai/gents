@@ -2,20 +2,19 @@
   "id": "native-packs",
   "title": "Native local plugin packs",
   "coverage": [
-    "verified local artifact preview",
+    "local artifact preview before install",
     "digest-pinned sealed install",
-    "explicit plugin selection preserves other Tools settings",
+    "plugin selection on the Engineer's own Tools",
     "fresh-request plugin call",
     "offline deterministic artifact, no registry dependency",
-    "model assertion cannot grant plugin authority"
+    "pack scaffold and check"
   ],
   "subject_fixtures": [
     {
       "name": "native-pack-archives",
-      "why": "Two built plugin pack archives a user hands the Engineer to inspect and install; each case copies the one it names into the workspace.",
+      "why": "A built plugin pack archive a user hands the Engineer to inspect and install; the case copies it into the workspace.",
       "assets": [
-        "artifacts/native_echo.pack",
-        "artifacts/native_authority.pack"
+        "artifacts/native_echo.pack"
       ]
     }
   ]

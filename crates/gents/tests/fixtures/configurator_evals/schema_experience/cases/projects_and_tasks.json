@@ -5,17 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I need a small project tracker. The app's records are Project { name, tasks } and ProjectTask { title, done, project }. Names and titles are text; done is true/false. One project has many tasks, and each task belongs to one project. Use real relationships so we can follow those links in both directions. Please create the record types.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "Project",
-            "ProjectTask"
-          ]
-        }
-      ],
+      "prompt": "I need a small project tracker: Project { name, tasks } and ProjectTask { title, done, project }. Names and titles are text, done is true/false. A project has many tasks and each task belongs to one project; I want to follow that link in both directions.",
       "checks": [
         {
           "check": "schema_matches",
@@ -25,19 +15,184 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "tool_calls_expected",
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Project",
+            "ProjectTask"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Add project Greenhouse with tasks \"Order glass\" (done) and \"Fit vents\" (not done), and project Shed with task \"Paint door\" (not done). Then tell me which Greenhouse tasks are still open.",
+      "checks": [
+        {
+          "check": "crew_spec_match",
           "params": {
-            "required": [
-              "schema"
+            "present": [
+              {
+                "capture": "projects",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "tasks",
+                "min": 3,
+                "max": 3
+              }
             ],
-            "forbidden": [
-              "bash"
+            "rows": [
+              {
+                "capture": "projects",
+                "key": "name",
+                "id": "Greenhouse",
+                "expect": []
+              },
+              {
+                "capture": "projects",
+                "key": "name",
+                "id": "Shed",
+                "expect": []
+              },
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Order glass",
+                "expect": [
+                  {
+                    "field": "done",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Fit vents",
+                "expect": [
+                  {
+                    "field": "done",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Paint door",
+                "expect": [
+                  {
+                    "field": "done",
+                    "equals": false
+                  }
+                ]
+              }
+            ],
+            "links": [
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Order glass",
+                "field": "project_id",
+                "target_capture": "projects",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Greenhouse"
+                  }
+                ]
+              },
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Fit vents",
+                "field": "project_id",
+                "target_capture": "projects",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Greenhouse"
+                  }
+                ]
+              },
+              {
+                "capture": "tasks",
+                "key": "title",
+                "id": "Paint door",
+                "field": "project_id",
+                "target_capture": "projects",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Shed"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "Fit vents"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "projects",
+          "collection": "Project",
+          "filter": {},
+          "fields": [
+            "_docID",
+            "name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "ProjectTask",
+          "filter": {},
+          "fields": [
+            "title",
+            "done",
+            "project_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "ProjectTask",
+          "filter": {
+            "title": {
+              "_eq": "Paint door"
+            }
+          },
+          "fields": [
+            "title"
+          ]
         }
       ]
     }

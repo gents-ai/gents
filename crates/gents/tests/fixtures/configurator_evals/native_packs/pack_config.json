@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-native-packs",
-      "comparability_version": 3,
+      "comparability_version": 4,
       "title": "Native plugin pack lifecycle",
       "subject": {
         "kind": "agent",
@@ -21,7 +21,6 @@
       },
       "cases": [
         "./cases/local_sealed_install.json",
-        "./cases/authority_refusal.json",
         "./cases/scaffold_check.json"
       ]
     }

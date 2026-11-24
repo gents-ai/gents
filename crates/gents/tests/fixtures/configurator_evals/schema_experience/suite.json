@@ -2,9 +2,9 @@
   "id": "schema-experience",
   "title": "Schema management",
   "coverage": [
-    "BM25 index deployment",
-    "relational modeling",
-    "ordered, unique and vector indexes",
+    "BM25 index deployment and ranked search",
+    "relational modeling and linked records",
+    "ordered, unique and vector indexes, each read back",
     "additive updates preserve records",
     "write and read configured records",
     "precedence backfill",

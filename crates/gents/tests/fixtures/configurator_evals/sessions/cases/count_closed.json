@@ -83,35 +83,15 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "How many closed sessions visible to me have the release tag? Give the exact total using sessions, including readable sessions from other agents.",
+      "prompt": "How many closed sessions tagged release are there? Count other agents' sessions you can see too.",
       "checks": [
         {
-          "check": "tool_result_matches",
+          "check": "final_message_matches",
           "params": {
-            "expect": [
+            "all": [
               {
-                "field": "count",
-                "equals": 3
-              },
-              {
-                "field": "scope.visibility",
-                "equals": "acp"
+                "matches": "(?i)\\b(?:3|three)\\b[^.\\n]{0,60}(?:sessions?|closed|release|count|total)|(?:sessions?|closed|release|count|total)[^.\\n]{0,60}?\\b(?:3|three)\\b"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

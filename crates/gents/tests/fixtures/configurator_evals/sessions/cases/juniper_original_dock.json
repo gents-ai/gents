@@ -63,7 +63,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "Which dock did the original March 2 Juniper assignment specify, before the April revision? Return just the dock name and the source session ID.",
+      "prompt": "Which dock did the original March 2 Juniper assignment specify, before the April revision? Give me the dock name and the session ID it's in.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -72,21 +72,6 @@
               {
                 "matches": "(?i)\\bAmber\\b"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

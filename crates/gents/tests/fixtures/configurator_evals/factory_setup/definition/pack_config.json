@@ -3,8 +3,8 @@
   "eval_definitions": [
     {
       "definition_id": "factory-setup",
-      "comparability_version": 17,
-      "title": "Research desk: complete configuration, no execution",
+      "comparability_version": 18,
+      "title": "Research desk: complete configuration, then one brief through it",
       "subject": {
         "kind": "agent",
         "inference_slots": [
