@@ -26,6 +26,9 @@ ts-rs = { version = "10.1", default-features = false, features = [
     "no-serde-warnings",
 ] }
 
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+workers.workspace = true
+
 [features]
 typescript = ["gents-protocol/typescript"]
 # Test seams for downstream crates' tests; never enabled by production builds.
@@ -41,3 +44,4 @@ tokio = { workspace = true, features = ["test-util"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
 wiremock = "0.6"
+workers.workspace = true

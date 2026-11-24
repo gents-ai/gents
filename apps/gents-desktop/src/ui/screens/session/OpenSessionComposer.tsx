@@ -208,6 +208,24 @@ export function OpenSessionComposer({
   const [field, setField] = useDraftField(drafts, draftKey);
   const leaveHistory = history.leave;
   useEffect(() => leaveHistory(), [draftKey, !!editing, leaveHistory]);
+  /* a phone opens a session to read it: the keyboard stays down until the
+     person taps the field, as other chat apps behave; a narrow window with a
+     pointer still focuses the composer */
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 767px) and (pointer: coarse)").matches) return;
+    const drop = () => {
+      const field = textarea.current;
+      if (field && field.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement | null)?.blur();
+      }
+    };
+    const frame = window.requestAnimationFrame(drop);
+    const later = window.setTimeout(drop, 250);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(later);
+    };
+  }, [draftKey]);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::live_inference::request_terminal_rows;
 use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, SignedMailboxTurn};
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{StreamChunk, StreamResponse};
 
 const BACKEND_ID: &str = "own-tools-backend";
@@ -51,7 +51,7 @@ async fn configure(tools: &[Box<dyn gents_loop::tool::ToolDyn>], call: Value) ->
 /// The Engineer, holding the Node administration init gives the default
 /// Agent, creates two helper agents and an agent target for each: `writer`
 /// runs, `helper` it disables.
-async fn seed_agent_targets(db: &crate::support::TestDb, turn: &SignedMailboxTurn) {
+async fn seed_agent_targets(db: &gents_store::test_support::TestStore, turn: &SignedMailboxTurn) {
     let node_did = turn.node_did.clone();
     let engineer = turn.agent.did().to_owned();
     turn.client
@@ -126,7 +126,7 @@ fn offered(body: &Value) -> Vec<String> {
 /// gained, and the target whose agent does not run as waiting, not in effect.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_calls_a_tool_it_granted_itself_in_the_same_request() {
-    let db = test_db("own-tools-rebinding").await;
+    let db = trial_store("own-tools-rebinding").await;
     let request_id = "own-tools-request";
     let grant = serde_json::json!({
         "argv": ["tools", "update"],
@@ -185,7 +185,7 @@ async fn an_agent_calls_a_tool_it_granted_itself_in_the_same_request() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             ..Default::default()
         },
     )

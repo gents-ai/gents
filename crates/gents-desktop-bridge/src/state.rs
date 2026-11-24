@@ -253,7 +253,8 @@ where
                         break;
                     }
                     let notice = *store_updates.borrow_and_update();
-                    let _ = app.emit("desktop://client-updated", ClientUpdateEvent::store(notice));
+                    let event = ClientUpdateEvent::store(notice, core.session_list_fingerprint());
+                    let _ = app.emit("desktop://client-updated", event);
                 }
                 changed = sync_updates.changed() => {
                     if changed.is_err() {

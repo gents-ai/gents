@@ -71,6 +71,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { listViews, useListViews } from "@/app/listViews";
 import { useApp } from "@/app/AppContext";
+import { scrollPlaceInMemory, useKeptScroll } from "@/hooks/useKeptScroll";
 import { usePinnedSessions } from "@/preferences";
 import { useFleet } from "../hooks/useFleet";
 import { RenameField } from "./SessionHeader";
@@ -91,6 +92,8 @@ const NONE_FRESH: ReadonlySet<string> = new Set();
 const STEP = 24;
 const titleOf = (session: SessionSummary) => session.title ?? "Untitled";
 const isArchived = (session: SessionSummary) => session.archivedAt !== null;
+/* each node's lists, as narrowed, keep their place while a session is open */
+const sessionsScroll = scrollPlaceInMemory();
 
 export function SessionsScreen({
   under,
@@ -179,6 +182,17 @@ export function SessionsScreen({
       root?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null,
     );
   }, []);
+  useKeptScroll(
+    scroller,
+    JSON.stringify([
+      selectedNodeDid,
+      archived ? "archived" : (under ?? null),
+      filter,
+      query,
+    ]),
+    rows.length > 0,
+    sessionsScroll,
+  );
   return (
     <ScrollArea ref={scrollRoot} className="h-full" data-testid="sessions-screen">
       {/* measured, so a row's toggle knows whether the margin has room */}
