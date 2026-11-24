@@ -527,8 +527,8 @@ async fn arm(
         })
         .collect::<Vec<_>>();
     /* every root is opened at once: one round trip for the set instead of one
-    per root, and a slow handshake no longer holds the rest back. All are
-    armed before the source reports the set ready, as before */
+    per root, and a slow handshake does not hold the rest back. All are
+    armed before the source reports the set ready */
     let opened =
         futures::future::try_join_all(roots.iter().map(|(_, query)| access.subscribe(query)))
             .await

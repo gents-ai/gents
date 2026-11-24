@@ -211,10 +211,10 @@ async fn publish_child(
 }
 
 /// The pending children of `collection` matching `filter`, a page of 64 at a
-/// time by plain `_docID > last` queries. A cursor query skips the planner's
-/// index estimates (its seek key is bound to one index), so it fell back to
-/// the first declared index, `node_did`, which every document on the node
-/// shares: each recovery walked the whole collection. A plain query is
+/// time by plain `_docID > last` queries. External premise: a cursor query
+/// skips the planner's index estimates (its seek key is bound to one index)
+/// and takes the first declared index, `node_did`, which every document on
+/// the node shares, so it walks the whole collection; a plain query is
 /// estimated and takes the selective index.
 async fn keyset_rows(
     txn: &ConfigApplyTxn<'_>,

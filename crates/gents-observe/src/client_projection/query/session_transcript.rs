@@ -77,10 +77,9 @@ pub(super) async fn read_request_documents(
 /// the caller cannot see is absent, a denial is the caller's error, and any
 /// other failure leaves the sources out. Like every store read it waits for
 /// the node's answer, never a client clock (`tla/CommitResponseWait.tla`,
-/// `ClientWindow`): a deadline here threw a live node's answer away, and on a
-/// cold client it also ran through the endpoint's authentication and the
-/// shared HTTP client's first build, so a first read could end before it was
-/// sent.
+/// `ClientWindow`): a client deadline throws a live node's answer away, and on
+/// a cold client it also covers the endpoint's authentication and the shared
+/// HTTP client's first build, so a first read can end before it is sent.
 async fn read_legacy_question_sources<'a>(
     access: &ConfigAccess,
     requests: impl Iterator<Item = &'a AgentRequestRow>,

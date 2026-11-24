@@ -284,9 +284,9 @@ where
 
 /// Whether selecting a node reads it at once. While its observer is still
 /// connecting, the observer's own first read is what makes the node current;
-/// a second full read beside it only collided with that one (one was
-/// discarded or read again), doubling a launch's requests and holding
-/// "connected" until a third read.
+/// a second full read beside it only collides with that one (one is
+/// discarded or read again), doubling a launch's requests (Lean
+/// `RuntimeConnectionObservation.selectionReadsNode`).
 fn selection_reads_node(
     observer: Option<gents_observe::client_projection::observe::RuntimeConnectionStatus>,
 ) -> bool {
