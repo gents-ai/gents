@@ -395,6 +395,13 @@ pub trait TrialExecutor: Send + Sync {
     /// their position in the session (`"0"`, `"1"`, …) and match no case's
     /// `stage_id`, and `interrupted_on_deadline` is unknowable afterwards.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
+
+    /// Whether the provider `spec` infers on answers at all, asked after an
+    /// attempt that was not evidence and while the run waits out an outage.
+    /// An executor without a provider of its own answers `true`.
+    async fn provider_answers(&self, _spec: &TrialSpec) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

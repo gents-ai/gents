@@ -11,6 +11,7 @@ pub mod surface;
 pub mod task_run;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+pub mod tools_rebinding;
 pub mod ux_data;
 pub mod ux_preview;
 

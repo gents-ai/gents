@@ -1,16 +1,16 @@
 {
   "install": {
     "documents": [
-      "Skill/automate",
-      "Skill/connect-data",
+      "Skill/build-automation",
       "Skill/control-access",
-      "Skill/delegate-work",
+      "Skill/design-data",
       "Skill/design-page",
-      "Skill/diagnose-node",
-      "Skill/package-pack",
-      "Skill/plan-work",
-      "Skill/use-database",
-      "Skill/write-plugin"
+      "Skill/exact-rules",
+      "Skill/import-data",
+      "Skill/package-or-install",
+      "Skill/plan-app",
+      "Skill/troubleshoot",
+      "Skill/use-helpers"
     ],
     "slots": [],
     "dependencies": []

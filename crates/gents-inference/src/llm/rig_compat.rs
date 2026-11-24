@@ -300,8 +300,11 @@ where
         while let Some(item) = inner.next().await {
             match item {
                 Ok(item) => {
-                    if let Some(guard) = &guard {
+                    if let Some(guard) = guard.as_mut() {
                         guard.observe_progress();
+                        if is_token(&item) {
+                            guard.mark_first_token();
+                        }
                     }
                     if let StreamedAssistantContent::Final(response) = &item {
                         let mut terminal_guard = guard
@@ -338,6 +341,20 @@ where
         }
     };
     StreamingCompletionResponse::stream(Box::pin(guarded))
+}
+
+/// Rig consumes the response headers, SSE keep-alives and message ids without
+/// yielding an item, so any item but the terminal response that carries text
+/// is a token the model generated.
+fn is_token<R>(item: &StreamedAssistantContent<R>) -> bool {
+    match item {
+        StreamedAssistantContent::Text(text) => !text.text.is_empty(),
+        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => !reasoning.is_empty(),
+        StreamedAssistantContent::Final(_) => false,
+        StreamedAssistantContent::ToolCall { .. }
+        | StreamedAssistantContent::ToolCallDelta { .. }
+        | StreamedAssistantContent::Reasoning(_) => true,
+    }
 }
 
 fn streamed_item_to_raw_choices<R, S>(

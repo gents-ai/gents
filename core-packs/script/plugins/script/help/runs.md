@@ -1,0 +1,3 @@
+`agent_new`, `agent_message` and `config` `task run` return a receipt at once; the run goes on in its own session. `await wait(receipt)` waits for that run to end and returns `{reply, lifecycle_state, terminal_reason, ...}`, where `reply` is the run's last message, parsed when it is only JSON: ask a helper to answer in JSON to get data back.
+
+`await wait(receipt, {timeout_ms})` gives up after that much waiting (default 60000) and throws an error naming the call that reads the run later; the script's own time limit stops it too. Each check is one `agent_session_read` call and counts toward the script's tool calls. A `spawn_process` receipt is waited on with `wait_process`.

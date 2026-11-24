@@ -271,6 +271,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .is_err());
@@ -287,6 +288,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();
@@ -299,6 +301,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();

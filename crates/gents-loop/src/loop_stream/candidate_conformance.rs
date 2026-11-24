@@ -12,6 +12,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::NoopSessionHook;
+use crate::test_support::fixed_tool::FixedTool;
 use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use crate::tool::{BoxFuture, ToolDefinition, ToolError};
 
@@ -79,8 +80,8 @@ fn reply(index: usize, call: &family::Call) -> Reply {
 }
 
 /// Whether a request's history carries a control-character tool argument,
-/// its request context, and the echo tool.
-fn observation(request: &rig::completion::CompletionRequest) -> (bool, bool, bool) {
+/// its request context, the echo tool and the rebound tool.
+fn observation(request: &rig::completion::CompletionRequest) -> (bool, bool, bool, bool) {
     let messages = request
         .chat_history
         .iter()
@@ -95,7 +96,8 @@ fn observation(request: &rig::completion::CompletionRequest) -> (bool, bool, boo
     });
     let context = messages.iter().any(is_request_context_message);
     let offered = request.tools.iter().any(|tool| tool.name == "echo");
-    (dirty, context, offered)
+    let rebound = request.tools.iter().any(|tool| tool.name == "rebound");
+    (dirty, context, offered, rebound)
 }
 
 fn has_control(value: &serde_json::Value) -> bool {
@@ -121,7 +123,33 @@ fn error(kind: &str) -> CompletionError {
     }.into())
 }
 
-struct Echo;
+/// Echoes each call; the call of the accepted tool turn `rebind_at` stages
+/// the toolset that adds `rebound`, as a config call committing the
+/// request's own Tools does.
+struct Echo {
+    rebind_at: Option<u64>,
+    calls: Arc<std::sync::atomic::AtomicU64>,
+    staged: Arc<Mutex<Option<ReboundTools>>>,
+}
+
+impl Echo {
+    fn new(input: &family::Input) -> Self {
+        Self {
+            rebind_at: input.rebind_at,
+            calls: Default::default(),
+            staged: Default::default(),
+        }
+    }
+
+    fn rebinding(&self) -> ToolRebinding {
+        let staged = self.staged.clone();
+        Arc::new(move || {
+            let staged = staged.lock().unwrap().take();
+            Box::pin(async move { staged })
+        })
+    }
+}
+
 impl ToolDyn for Echo {
     fn hidden(&self) -> bool {
         false
@@ -143,6 +171,21 @@ impl ToolDyn for Echo {
         _: String,
         _context: &'a crate::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
+        let turn = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.rebind_at == Some(turn) {
+            *self.staged.lock().unwrap() = Some(ReboundTools {
+                tools: Arc::new(vec![
+                    Box::new(Echo {
+                        rebind_at: None,
+                        calls: self.calls.clone(),
+                        staged: self.staged.clone(),
+                    }) as Box<dyn ToolDyn>,
+                    Box::new(FixedTool::new("rebound", "REBOUND")),
+                ]),
+                preamble: None,
+                configuration_guard: None,
+            });
+        }
         Box::pin(async { Ok("ECHOED".into()) })
     }
 }
@@ -185,6 +228,7 @@ fn config(
             .then(StructuredOutputConfig::for_type::<TypedReply>),
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: Some(Arc::new(move |call, turn, attempt, request, trace| {
             let captures = captures.clone();
             let arming = arming.clone();
@@ -371,6 +415,8 @@ async fn observe(
     let allowances = Arc::new(Mutex::new(Vec::new()));
     let mut config = config(input, captures.clone(), allowances.clone());
     config.provider_call.capture = capture;
+    let echo = Echo::new(input);
+    config.tool_rebinding = Some(echo.rebinding());
     let budget = config.aggregate_token_budget.clone();
     if let Some(usage) = input.nested_usage.clone() {
         let budget = budget.clone().unwrap();
@@ -387,7 +433,7 @@ async fn observe(
                 let input: family::Input = serde_json::from_value(serde_json::json!({
                     "calls": [], "transport": 0, "resample": 0, "repair": false,
                     "deadline_fits": true, "max_turns": 0, "context": false,
-                    "initial_dirty": false, "missing_capture": false, "limit": null, "nested_usage": null, "structured": false, "recovered_pair": false, "compactor": false,
+                    "initial_dirty": false, "missing_capture": false, "limit": null, "nested_usage": null, "structured": false, "recovered_pair": false, "compactor": false, "rebind_at": null,
                 })).unwrap();
                 let mut child_config = self::config(&input, Default::default(), Default::default());
                 child_config.aggregate_token_budget = Some(budget);
@@ -444,7 +490,7 @@ async fn observe(
             Message::user(prompt)
         }),
         history(input),
-        Arc::new(vec![Box::new(Echo) as Box<dyn ToolDyn>]),
+        Arc::new(vec![Box::new(echo) as Box<dyn ToolDyn>]),
         config,
     );
     futures::pin_mut!(stream);
@@ -462,6 +508,7 @@ async fn observe(
         allowances: Vec::new(),
         ledger_used: None,
         offered: Vec::new(),
+        rebound: Vec::new(),
     };
     while let Some(item) = stream.next().await {
         match item {
@@ -507,6 +554,7 @@ async fn observe(
     observed.dirty_inputs = inputs.iter().map(|i| i.0).collect();
     observed.context_inputs = inputs.iter().map(|i| i.1).collect();
     observed.offered = inputs.iter().map(|i| i.2).collect();
+    observed.rebound = inputs.iter().map(|i| i.3).collect();
     let requests = sent
         .iter()
         .map(|request| format!("{request:?}"))
@@ -565,7 +613,7 @@ async fn generated_completion_text_discards_retracted_previews() {
             model(&input.calls),
             Message::user("hi"),
             Vec::new(),
-            Arc::new(vec![Box::new(Echo) as Box<dyn ToolDyn>]),
+            Arc::new(vec![Box::new(Echo::new(&input)) as Box<dyn ToolDyn>]),
             config(&input, Default::default(), Default::default()),
         )
         .await;

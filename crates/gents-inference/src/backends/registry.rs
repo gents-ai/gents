@@ -767,6 +767,38 @@ pub async fn discover_shared_backend(
         .context("discovered backend observation is missing")
 }
 
+/// Whether the backend's endpoint answers at all. No credential is sent: any
+/// response below a server error, a refusal included, is an answer.
+pub async fn backend_endpoint_answers(backend: &InferenceBackend) -> bool {
+    let discovery_timeout =
+        std::time::Duration::from_secs(backend.effective_discovery_timeout_secs() as u64);
+    let connect_timeout =
+        std::time::Duration::from_secs(backend.effective_connect_timeout_secs() as u64)
+            .min(discovery_timeout);
+    let Ok(client) = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect_timeout)
+        .timeout(discovery_timeout)
+        .build()
+    else {
+        return false;
+    };
+    match crate::backends::provider::discover_models(
+        &client,
+        backend.provider_kind,
+        &backend.endpoint,
+        None,
+        None,
+        backend.client_version.as_deref(),
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(error) => crate::backends::provider::ModelDiscoveryHttpError::in_chain(&error)
+            .is_some_and(|refused| refused.status < 500),
+    }
+}
+
 /// Observe the exact backend as the calling actor before runtime secret access.
 pub async fn discover_runtime_backend_models(
     access: &gents_store::config_client::ConfigAccess,

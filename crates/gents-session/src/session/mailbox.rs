@@ -23,6 +23,7 @@ mod domain;
 #[cfg(test)]
 mod native_policy_conformance;
 mod notification;
+mod recipient;
 mod reply;
 mod waiting;
 pub(crate) use reply::claim_reply_in_txn;
@@ -596,6 +597,8 @@ async fn stamp_notification_with_source(
         .context("create stamped mailbox item")
 }
 
+const NO_RECIPIENT: &str = "no inbox to file to: neither a person nor a trigger started this run. Put the notice in your reply instead; whoever started you reads it.";
+
 #[derive(Debug)]
 pub struct MailboxToolError(anyhow::Error);
 
@@ -713,19 +716,16 @@ impl gents_loop::tool::Tool for MailboxCreateTool {
         _context: &gents_loop::tool::ToolCallEnvelope,
         request: &gents_loop::tool::ToolRequestContext,
     ) -> std::result::Result<Self::Output, Self::Error> {
-        let admitted = request
-            .admitted_client
+        let access = self
+            .access
             .as_ref()
-            .context("file_mailbox_item requires an admitted client recipient")?;
-        if admitted.request_doc_id != request.request_doc_id {
-            return Err(anyhow::anyhow!(
-                "mailbox request provenance does not match the claimed request"
-            )
-            .into());
-        }
+            .context("mailbox tool requires managed Agent access")?;
+        let requester_did = recipient::observed_recipient(&self.node, access, request)
+            .await?
+            .context(NO_RECIPIENT)?;
         let request_id = request.request_id.clone();
         let context = MailboxStampContext {
-            requester_did: admitted.signer_did.clone(),
+            requester_did,
             node_did: request.node_did.clone(),
             agent_did: request.agent_did.clone(),
             session_id: Some(request.session_id.clone()),
@@ -756,10 +756,6 @@ impl gents_loop::tool::Tool for MailboxCreateTool {
             &context.agent_did,
             event_id,
         )?;
-        let access = self
-            .access
-            .as_ref()
-            .context("mailbox tool requires managed Agent access")?;
         let receipt = stamp_notification_with_source(
             &self.node,
             access,

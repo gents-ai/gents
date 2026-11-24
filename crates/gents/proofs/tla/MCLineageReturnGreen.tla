@@ -1,0 +1,3 @@
+---- MODULE MCLineageReturnGreen ----
+EXTENDS LineageReturn
+====

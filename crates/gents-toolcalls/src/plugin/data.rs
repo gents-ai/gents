@@ -572,7 +572,10 @@ impl Session {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
                             gents_tools::builtin::defra_query::validate_filter(
-                                txn, collection, filter,
+                                txn,
+                                collection,
+                                filter,
+                                &CollectionScope::all(),
                             )
                             .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
@@ -587,7 +590,10 @@ impl Session {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
                             gents_tools::builtin::defra_query::validate_filter(
-                                txn, collection, filter,
+                                txn,
+                                collection,
+                                filter,
+                                &CollectionScope::all(),
                             )
                             .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)

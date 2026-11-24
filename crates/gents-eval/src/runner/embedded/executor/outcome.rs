@@ -8,30 +8,49 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_documents::TriggerObservation;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
+/// What a recorded inference failure says of its provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatedReason {
+    pub reason: ProviderReason,
+    /// The backend ended the request itself, whatever the subject did.
+    pub ended_by_backend: bool,
+}
+
 /// External premise: an eval trial reads a request's persisted
 /// `failure_reason`, the only record of why inference failed; the durable
 /// AgentRequest schema carries no failure kind, so the provider's status and
-/// wording are read from that text.
-pub fn provider_reason_from_failure(failure_reason: &str) -> Option<ProviderReason> {
+/// wording are read from that text. Inference admission records exactly
+/// `BackendGone` on a call of a backend it no longer serves.
+pub fn provider_reason_from_failure(failure_reason: &str) -> Option<StatedReason> {
+    if failure_reason == "BackendGone" {
+        return Some(StatedReason {
+            reason: ProviderReason::Unavailable,
+            ended_by_backend: true,
+        });
+    }
+    let worded = |reason| StatedReason {
+        reason,
+        ended_by_backend: false,
+    };
     let reason = failure_reason.to_lowercase();
     if let Some(status) = http_status(&reason) {
-        return Some(match status {
+        return Some(worded(match status {
             408 | 429 => ProviderReason::Unavailable,
             400..=499 => ProviderReason::Rejected,
             _ => ProviderReason::Unavailable,
-        });
+        }));
     }
     if ["context", "policy", "content"]
         .iter()
         .any(|named| reason.contains(named))
     {
-        return Some(ProviderReason::Rejected);
+        return Some(worded(ProviderReason::Rejected));
     }
     if ["connect", "timeout", "timed out", "rate"]
         .iter()
         .any(|named| reason.contains(named))
     {
-        return Some(ProviderReason::Unavailable);
+        return Some(worded(ProviderReason::Unavailable));
     }
     None
 }
@@ -78,18 +97,29 @@ pub(super) fn outcome_kind(classification: &str) -> OutcomeKind {
     }
 }
 
-pub(super) fn provider_reason(
-    failure_kind: Option<OutcomeKind>,
-    evidence: &RequestEvidence,
-) -> Option<ProviderReason> {
-    if failure_kind != Some(OutcomeKind::Provider) {
-        return None;
-    }
-    evidence
+pub(super) fn stated_provider_reason(evidence: &RequestEvidence) -> Option<StatedReason> {
+    let mut stated = evidence
         .inference_calls
         .iter()
         .filter_map(|call| call.failure_reason.as_deref())
-        .find_map(provider_reason_from_failure)
+        .filter_map(provider_reason_from_failure);
+    let first = stated.next()?;
+    Some(StatedReason {
+        ended_by_backend: first.ended_by_backend || stated.any(|later| later.ended_by_backend),
+        ..first
+    })
+}
+
+pub(super) fn stage_outcome(
+    ended_by_backend: bool,
+    request: Option<OutcomeKind>,
+    stated: Option<ProviderReason>,
+) -> Option<(OutcomeKind, Option<ProviderReason>)> {
+    let kind = request?;
+    if ended_by_backend && matches!(kind, OutcomeKind::Provider | OutcomeKind::Unknown) {
+        return Some((OutcomeKind::Provider, Some(ProviderReason::Unavailable)));
+    }
+    Some((kind, stated.filter(|_| kind == OutcomeKind::Provider)))
 }
 
 pub(super) async fn trigger_failure(

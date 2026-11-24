@@ -32,6 +32,9 @@ pub struct TerminalObservation {
     pub terminal_state: Option<RequestLifecycleState>,
     pub session_id: Option<String>,
     pub interrupted_on_deadline: bool,
+    /// Set when the runner interrupted the request on finding it parked in
+    /// `waiting_for_backend`.
+    pub parked_for_backend: bool,
     pub elapsed: Duration,
 }
 
@@ -124,6 +127,7 @@ async fn await_terminal_inner(
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut interrupted_for_backend = false;
+    let mut interrupted_while_parked = false;
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
@@ -153,6 +157,7 @@ async fn await_terminal_inner(
                 terminal_state,
                 session_id,
                 interrupted_on_deadline,
+                parked_for_backend: interrupted_while_parked,
                 elapsed: started.elapsed(),
             });
         }
@@ -189,6 +194,7 @@ async fn await_terminal_inner(
                 "interrupt request parked for its backend"
             })?;
             interrupted_on_deadline |= at_deadline;
+            interrupted_while_parked |= parked_for_backend;
             interrupted_for_backend = true;
         }
         let boundary = deadline.map(|deadline| {
@@ -203,6 +209,7 @@ async fn await_terminal_inner(
                 terminal_state,
                 session_id,
                 interrupted_on_deadline: true,
+                parked_for_backend: interrupted_while_parked,
                 elapsed: started.elapsed(),
             });
         }

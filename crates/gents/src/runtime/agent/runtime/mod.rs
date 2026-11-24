@@ -1,6 +1,7 @@
 mod context;
-mod control_watcher;
+pub(in crate::runtime::agent) mod control_watcher;
 mod router;
+pub(in crate::runtime::agent) mod slot_tools;
 mod startup;
 mod surface_publication;
 

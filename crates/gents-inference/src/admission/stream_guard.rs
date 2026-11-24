@@ -18,6 +18,8 @@ pub(crate) trait StreamGuardLifecycle {
 
     fn mark_stream_error(&mut self, _error: &str) {}
 
+    fn mark_first_token(&mut self) {}
+
     fn finish_stream(self) -> BoxFuture<'static, Result<(), AdmissionError>>
     where
         Self: Sized + Send + 'static,

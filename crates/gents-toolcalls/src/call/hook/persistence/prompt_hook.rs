@@ -118,9 +118,10 @@ impl DefraSessionHook {
         args: &str,
         context: &gents_loop::tool::ToolCallEnvelope,
     ) -> ToolCallHookAction {
+        let bindings = self.tool_bindings();
         let owned = HookOwnedTool::of(tool_name).filter(|route| match route {
-            HookOwnedTool::GetGoal | HookOwnedTool::UpdateGoal => self.goal_tools_enabled,
-            HookOwnedTool::CreateGoal => self.goal_creation_enabled,
+            HookOwnedTool::GetGoal | HookOwnedTool::UpdateGoal => bindings.goal_tools_enabled,
+            HookOwnedTool::CreateGoal => bindings.goal_creation_enabled,
             _ => true,
         });
         if owned == Some(HookOwnedTool::SessionMessage) {
@@ -239,7 +240,7 @@ impl DefraSessionHook {
             };
         }
 
-        if let Some(binding) = self.job_tools.get(tool_name) {
+        if let Some(binding) = bindings.job_tools.get(tool_name) {
             let result = Box::pin(self.persist_job_tool_call(
                 binding,
                 tool_call_id,

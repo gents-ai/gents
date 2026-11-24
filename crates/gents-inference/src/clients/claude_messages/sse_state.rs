@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::{MessagesParseError, ThinkingParseCause};
 use crate::llm::rig_compat::completion::{
-    CompletionError, RawStreamingChoice, RawStreamingToolCall, Usage,
+    CompletionError, RawStreamingChoice, RawStreamingToolCall, ToolCallDeltaContent, Usage,
 };
 use crate::llm::rig_compat::model::StreamEnd;
 use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
@@ -260,8 +260,17 @@ impl MessagesSseState {
                             Some(Value::Object(_)) => Some(block["input"].to_string()),
                             _ => None,
                         };
+                        let internal_call_id = uuid::Uuid::new_v4().to_string();
+                        if !name.is_empty() {
+                            events.push(RawStreamingChoice::ToolCallDelta {
+                                id: id.clone(),
+                                internal_call_id: internal_call_id.clone(),
+                                content: ToolCallDeltaContent::Name(name.clone()),
+                            });
+                        }
                         self.pending = Some(PendingBlock::Tool(PendingTool {
                             id: id.clone(),
+                            internal_call_id,
                             name: name.clone(),
                             start_input,
                             deltas: String::new(),
@@ -612,6 +621,7 @@ fn audit_index(payload: &Value) -> Result<u32, MessagesParseError> {
 
 struct PendingTool {
     id: String,
+    internal_call_id: String,
     name: String,
     /// `content_block.input` from `content_block_start`, serialized. Anthropic
     /// sends `{}` here and streams the real arguments as deltas.
@@ -656,7 +666,8 @@ fn mapped_tool_call(
         serde_json::from_str(&raw).map_err(|error| MessagesParseError::MalformedToolUse {
             message: format!("tool_use {} input is not JSON: {error}", tool.id),
         })?;
-    let mut call = RawStreamingToolCall::new(tool.id, tool.name, input);
+    let mut call = RawStreamingToolCall::new(tool.id, tool.name, input)
+        .with_internal_call_id(tool.internal_call_id);
     // The loop moves the streamed text onto the native tool call and strips the key.
     let mut params = serde_json::Map::new();
     params.insert(

@@ -49,6 +49,7 @@ async fn an_agent_reads_its_recorded_refusal_as_typed_fields() {
         Some(recorded),
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();

@@ -4,9 +4,9 @@ use gents_session::session::output_render::ordered;
 
 use acp::nac::{PermissionProvenance, PermissionVia};
 use gents_store::config_client::{ConfigAccess, ConfigClientError, NodePermission};
-use gents_store::identity::GrantSet;
+use gents_store::identity::{ApplicationPolicy, GrantSet};
 
-const VERBS: [&str; 5] = ["get", "check", "explain", "grant", "revoke"];
+const VERBS: [&str; 6] = ["get", "check", "explain", "grant", "revoke", "create"];
 
 /// What `--permission`, `--collection`, `--doc` and `--relation` name, before
 /// a Household name is placed on its document.
@@ -97,6 +97,7 @@ fn guidance(message: impl Into<String>, next_call: Value) -> anyhow::Error {
 fn ensure_options(parsed: &ParsedArgs, verb: &str) -> Result<()> {
     let allowed: &[&str] = match verb {
         "get" => &["subject", "collection", "doc"],
+        "create" => &["definition"],
         _ => &["subject", "permission", "collection", "doc", "relation"],
     };
     if let Some(name) = parsed
@@ -285,15 +286,15 @@ fn session_relation_kept(
     )
 }
 
-/// Lean `Identity.GrantSets.selfChangeKeepsLockout`. Document relationships are
-/// not modeled here and stay governed by native document authorization.
+/// Lean `Identity.GrantSets.selfChangeKeepsLockout` for a node permission and
+/// `relationChangeKeepsLockout` for a document relation.
 fn keeps_lockout(no_lockout: bool, is_self: bool, delete: bool, target: &PolicyTarget) -> bool {
     if !(no_lockout && is_self) {
         return true;
     }
     match target {
         PolicyTarget::Node(permission) => !(delete && lockout_protected(*permission)),
-        PolicyTarget::Relation { .. } => true,
+        PolicyTarget::Relation { .. } => !delete,
     }
 }
 
@@ -552,13 +553,16 @@ impl ConfigCommandTool {
         let verb = argv.first().map(String::as_str).unwrap_or_default();
         if !VERBS.contains(&verb) {
             return Err(guidance(
-                format!("unknown policy verb {verb:?}; policy takes get, check, explain, grant or revoke"),
+                format!("unknown policy verb {verb:?}; policy takes get, check, explain, grant, revoke or create"),
                 json!({"argv": ["policy", "--help"]}),
             ));
         }
         self.ensure_resource("policy")?;
         let parsed = ParsedArgs::parse(&argv[1..])?;
         ensure_options(&parsed, verb)?;
+        if verb == "create" {
+            return self.policy_create(&parsed).await;
+        }
         let call = self.policy_call(&parsed, verb).await?;
         let access = self.core.access()?;
         match (verb, &call.permission) {
@@ -572,6 +576,62 @@ impl ConfigCommandTool {
             (_, Some(permission)) => Err(Self::derived_permission(verb, permission)),
             (_, None) => self.policy_change(&access, &call, verb == "grant").await,
         }
+    }
+
+    /// Registers an admitted document access policy as this agent (Lean
+    /// `Identity.ApplicationPolicy`), which native NAC admits only while it
+    /// holds `add-dac-policy`.
+    async fn policy_create(&self, parsed: &ParsedArgs) -> Result<String> {
+        let help = json!({"argv": ["policy", "create", "--help"]});
+        let definition = parsed.one("definition")?.ok_or_else(|| {
+            guidance(
+                "policy create needs options.definition, a policy object",
+                help.clone(),
+            )
+        })?;
+        let policy: ApplicationPolicy = serde_json::from_str(definition).map_err(|error| {
+            guidance(
+                format!("options.definition is not a policy: {error}"),
+                help.clone(),
+            )
+        })?;
+        policy.admit().map_err(|refusal| {
+            guidance(format!("policy create refused: {refusal}"), help.clone())
+        })?;
+        let actor = self.core.identity()?;
+        let access = self.core.access()?;
+        self.execution.enter_mutation();
+        let id = access
+            .add_document_policy(&policy.yaml())
+            .await
+            .map_err(|error| {
+                guidance(
+                    format!("policy create refused: {error}. Registering a policy needs node permission add-dac-policy"),
+                    json!({"argv": ["policy", "check", "--permission", "add-dac-policy"]}),
+                )
+            })?;
+        tracing::info!(
+            target: "gents::tools::builtin::self_config::policy",
+            acting_agent = %actor.as_str(),
+            policy_id = %id,
+            "document policy registered"
+        );
+        let directives = policy
+            .resources
+            .iter()
+            .map(|resource| format!("@policy(id: \"{id}\", resource: \"{}\")", resource.name))
+            .collect::<Vec<_>>();
+        ordered! {
+            "answer": format!("Created document policy {:?} with ID {id}.", policy.name),
+            "attach": directives,
+            "how_to_proceed": "Put one attach line on a new collection's type with the schema tool's collection create; an existing collection keeps its binding. Each document then belongs to the agent that creates it, and others reach it only through policy grant --subject AGENT_DID --collection COLLECTION --doc DOC_ID --relation RELATION.",
+            "metadata": json!({
+                "policy_id": id,
+                "acting_agent_did": actor.as_str(),
+                "policy": policy.yaml(),
+            }),
+        }
+        .pretty()
     }
 
     async fn policy_call(&self, parsed: &ParsedArgs, verb: &str) -> Result<PolicyCall> {
@@ -891,9 +951,13 @@ impl ConfigCommandTool {
         }
         let actor = self.core.identity()?;
         if !keeps_lockout(self.no_lockout, call.is_self, !grant, target) {
+            let who = match target {
+                PolicyTarget::Node(_) => "the permissions its own configuration needs; revoke it from another agent, or ask a User with native admin to change this agent",
+                PolicyTarget::Relation { .. } => "so it cannot revoke its own way into a document; the document's owner or a manager of the relation can remove it",
+            };
             return Err(guidance(
                 format!(
-                    "self_config_no_lockout keeps {} on this agent, the permissions its own configuration needs; revoke it from another agent, or ask a User with native admin to change this agent.",
+                    "self_config_no_lockout keeps {} on this agent, {who}.",
                     target_words(target)
                 ),
                 json!({"argv": ["policy", "get"]}),
@@ -1170,6 +1234,11 @@ mod tests {
                 .chain(GrantSet::PolicyDelegate.permissions())
                 .map(|permission| permission.as_str().to_owned())
                 .collect::<BTreeSet<_>>();
+            let relation = PolicyTarget::Relation {
+                collection: "Order".to_owned(),
+                doc_id: "bae-order".to_owned(),
+                relation: "reader".to_owned(),
+            };
             gents_lean_vocab::families::contracts_policy_lockout::LockoutOutput {
                 protected: owned.into_iter().collect(),
                 kept: i
@@ -1185,6 +1254,11 @@ mod tests {
                             &PolicyTarget::Node(permission),
                         )
                     })
+                    .collect(),
+                relation_kept: i
+                    .relation_rows
+                    .iter()
+                    .map(|row| keeps_lockout(row.no_lockout, row.is_self, row.delete, &relation))
                     .collect(),
             }
         });

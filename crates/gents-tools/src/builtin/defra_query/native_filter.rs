@@ -5,6 +5,7 @@ use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::CollectionScope;
 use gents_store::config_client::ConfigRead;
 
 #[derive(Clone, Deserialize)]
@@ -22,10 +23,13 @@ struct InputField {
     type_ref: TypeRef,
 }
 
+/// A condition on a relationship reads the related collection, which the
+/// call's grant must admit (Lean `ToolPolicy.QuerySelection.crossable`).
 pub async fn validate_filter(
     access: &dyn ConfigRead,
     collection: &str,
     filter: &Value,
+    scope: &CollectionScope,
 ) -> Result<()> {
     if filter.is_null() {
         return Ok(());
@@ -40,7 +44,7 @@ pub async fn validate_filter(
         name: Some(format!("{collection}FilterArg")),
         of_type: None,
     };
-    validate_value(access, &root, filter, &mut BTreeMap::new())
+    validate_value(access, &root, filter, scope, &mut BTreeMap::new())
         .await
         .with_context(|| format!("invalid filter for {collection}; call query with argv:[help,find] for filter syntax"))
 }
@@ -49,6 +53,7 @@ fn validate_value<'a>(
     access: &'a dyn ConfigRead,
     ty: &'a TypeRef,
     value: &'a Value,
+    scope: &'a CollectionScope,
     cache: &'a mut BTreeMap<String, Vec<InputField>>,
 ) -> BoxFuture<'a, Result<()>> {
     Box::pin(async move {
@@ -63,6 +68,7 @@ fn validate_value<'a>(
                     .as_deref()
                     .context("native non-null type lacks its inner type")?,
                 value,
+                scope,
                 cache,
             )
             .await;
@@ -77,10 +83,10 @@ fn validate_value<'a>(
                 .context("native list type lacks its element type")?;
             if let Some(values) = value.as_array() {
                 for item in values {
-                    validate_value(access, inner, item, cache).await?;
+                    validate_value(access, inner, item, scope, cache).await?;
                 }
             } else {
-                validate_value(access, inner, value, cache).await?;
+                validate_value(access, inner, value, scope, cache).await?;
             }
             return Ok(());
         }
@@ -117,7 +123,7 @@ fn validate_value<'a>(
                         .as_object()
                         .is_some_and(|object| object.keys().all(|key| !key.starts_with('_'))));
             if literal {
-                return validate_value(access, &equality.type_ref, value, cache).await;
+                return validate_value(access, &equality.type_ref, value, scope, cache).await;
             }
         }
         let object = value
@@ -125,7 +131,7 @@ fn validate_value<'a>(
             .context("filter condition must be an object")?;
         if !fields.iter().any(|field| field.name == "_eq") {
             if let Some(collection) = name.strip_suffix("FilterArg") {
-                gents_documents::reject_protected_collection_name(collection)?;
+                scope.ensure_allowed(collection)?;
             }
         }
         for (key, operand) in object {
@@ -151,7 +157,7 @@ fn validate_value<'a>(
                     "filtering on restricted credential field {collection}.{key} is not allowed"
                 );
             }
-            validate_value(access, &field.type_ref, operand, cache).await?;
+            validate_value(access, &field.type_ref, operand, scope, cache).await?;
         }
         Ok(())
     })
@@ -177,7 +183,7 @@ mod tests {
             json!({"payload":{"_eq":{"nested":[]}}}),
             json!({"tags":{"_any":{"_like":"A%"}}}),
         ] {
-            validate_filter(&access, "FilterBook", &filter)
+            validate_filter(&access, "FilterBook", &filter, &CollectionScope::all())
                 .await
                 .unwrap_or_else(|error| panic!("valid native filter {filter}: {error:#}"));
         }
@@ -188,16 +194,21 @@ mod tests {
             json!({"author":{"wrong_field":{"_eq":"Ada"}}}),
         ] {
             assert!(
-                validate_filter(&access, "FilterBook", &filter)
+                validate_filter(&access, "FilterBook", &filter, &CollectionScope::all())
                     .await
                     .is_err(),
                 "invalid filter was accepted: {filter}"
             );
         }
         node.add_collection("type OAuthCredential { credential_id: String access_token: String refresh_token: String id_token: String }").await.unwrap();
-        let error = validate_filter(&access, "OAuthCredential", &json!({"unknown_field":"x"}))
-            .await
-            .unwrap_err();
+        let error = validate_filter(
+            &access,
+            "OAuthCredential",
+            &json!({"unknown_field":"x"}),
+            &CollectionScope::all(),
+        )
+        .await
+        .unwrap_err();
         let diagnostic = format!("{error:#}");
         assert!(diagnostic.contains("credential_id"));
         for field in ["access_token", "refresh_token", "id_token"] {

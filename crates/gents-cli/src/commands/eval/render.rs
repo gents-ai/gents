@@ -201,6 +201,10 @@ fn seconds(millis: Option<u64>) -> String {
     )
 }
 
+fn millis(millis: Option<u64>) -> String {
+    millis.map_or_else(|| "-".to_owned(), |millis| format!("{millis}ms"))
+}
+
 fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
     writeln!(
         out,
@@ -208,7 +212,7 @@ fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10}",
         "cell",
         "set",
         "trials",
@@ -219,7 +223,9 @@ fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
         "turns",
         "tools d/s/in",
         "failed d/s/in",
-        "wall"
+        "wall",
+        "first_ttft",
+        "ttft"
     )?;
     let run = (report.cells.len() > 1).then_some(("run", &report.subject_usage));
     for (label, summary) in report
@@ -254,7 +260,7 @@ fn subject_row(
     };
     writeln!(
         out,
-        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10}",
         label,
         set,
         spend.trials,
@@ -269,7 +275,9 @@ fn subject_row(
             "failed_script_calls",
             "failed_inside_script_calls"
         ]),
-        seconds(median("wall_ms"))
+        seconds(median("wall_ms")),
+        millis(median("first_request_first_token_ms")),
+        millis(median("median_first_token_ms"))
     )
 }
 
@@ -330,6 +338,17 @@ fn subject_lines(subject: &SubjectUsage, out: &mut dyn Write) -> io::Result<()> 
         seconds(subject.wall_ms),
         seconds(subject.model_ms),
         seconds(subject.tool_ms)
+    )?;
+    writeln!(
+        out,
+        "subject first_token first_request {} median {}",
+        millis(
+            subject
+                .first_request
+                .as_ref()
+                .and_then(|first| first.first_token_ms)
+        ),
+        millis(subject.median_first_token_ms)
     )
 }
 
