@@ -276,8 +276,13 @@ export class SandboxHost {
     this.post({ t: "data-watch-closed", id });
   }
 
+  /** closes the watches of a node another node replaced as the selection.
+      A snapshot rebuild can leave the selection briefly empty; a watch
+      outlives that, so it is not closed and reopened (each reopen costs the
+      node a read). */
   selectionChanged(shell: ShellSnapshot): void {
     const node = (shell.selectedDeployment as { nodeDid?: string } | null)?.nodeDid;
+    if (!node) return;
     for (const [id, watch] of this.watches)
       if (watch.node !== node) this.closeWatch(id);
   }

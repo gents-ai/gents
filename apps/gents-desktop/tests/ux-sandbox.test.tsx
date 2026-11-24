@@ -171,6 +171,50 @@ describe("a plugin in its frame", () => {
       delete host.data!.watch;
     }
   });
+  it("keeps the frame watch while the selection is briefly empty or unchanged", async () => {
+    const previous = host.shell.selectedDeployment;
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:a" }) as never;
+    const stop = vi.fn();
+    const watch = vi.fn(async () => stop);
+    host.data!.watch = watch;
+    const source = `export default { id: 'board', async register(ctx) {
+      let heard = 0
+      ctx.onEvent('shell-changed', () => ctx.storage.set('heard', ++heard))
+      await ctx.data.watch('board', 'list_tasks', {}, () => {})
+    } }`;
+    /* what the shell tells each frame when it changes */
+    const shellChanged = (nodeDid: string | null) => {
+      const shell = {
+        route: {},
+        deployments: [],
+        selectedDeployment: nodeDid ? { nodeDid } : null,
+        selectedSessionId: null,
+      } as never;
+      const frame = sandboxHostOf("board")!;
+      frame.selectionChanged(shell);
+      frame.post({ t: "shell", shell });
+    };
+    try {
+      expect(await load(source)).toBe("board");
+      await settle();
+      /* a rebuild: the same node, then no node for a moment, then the node */
+      shellChanged("did:key:a");
+      shellChanged(null);
+      shellChanged("did:key:a");
+      await settle();
+      expect(stop).not.toHaveBeenCalled();
+      expect(watch).toHaveBeenCalledOnce();
+      expect(window.localStorage.getItem("gents.ux.board.heard")).toBeNull();
+      /* another node still closes it, and the page hears of it once */
+      shellChanged("did:key:b");
+      await settle();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(window.localStorage.getItem("gents.ux.board.heard")).toBe("1");
+    } finally {
+      host.shell.selectedDeployment = previous;
+      delete host.data!.watch;
+    }
+  });
   it("cancels a watch that finishes starting after its frame is disposed", async () => {
     let resolveStart: ((stop: () => void) => void) | undefined;
     const stop = vi.fn();
