@@ -113,12 +113,14 @@ private theorem drainWakeKeys_terminalizes_wake
         · exact ih _ h_rest h_still
         · exact drainWakeKeys_terminal_monotonic observed _ rest h_terminal
 
-/-- External obligations: the native adapter must retain the exact authenticated
-session scope across capture and commit. The pending scan is a filtered read
-the store does not validate and the embedded write gate orders no writers
-(`TransactionFence.a_filtered_read_does_not_fence_an_arrival`), so only the
-wakes the latch observed are drained: a completion inserted after its pending
-scan stays pending. -/
+/-- The latch drains the wakes in `observed`. A filtered scan of the pending
+wakes is not validated at commit
+(`TransactionFence.a_filtered_read_does_not_fence_an_arrival`), so a drain
+decided from a scan misses a wake committed after it; production instead
+compares the generation each wake recorded with the session's interrupt
+marker when the wake is claimed (`InterruptGeneration.wakeAtClaim`), which
+drains every wake pending at the interrupt's commit, as `latchInterrupt`
+over the whole pending queue does. -/
 def latchInterruptObserved (request : RequestContext)
     (observed : List RequestId) (queue : SessionQueueState) :
     RequestContext × SessionQueueState :=
