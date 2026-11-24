@@ -127,6 +127,10 @@ impl ClientRuntime {
     pub fn store_updates(&self) -> watch::Receiver<u64> {
         self.stores.subscribe()
     }
+    /// [`session_list_fingerprint`] of this client's stores.
+    pub fn session_list_fingerprint(&self) -> u64 {
+        session_list_fingerprint(&self.stores)
+    }
     pub fn last_mutation_error(&self) -> Option<String> {
         self.last_mutation_error
             .read()
@@ -280,3 +284,51 @@ impl ClientRuntime {
         Ok(())
     }
 }
+
+/// A fingerprint of what every node's session list shows: each row's
+/// status, turn, title, activity, previews and archive state. A store
+/// update that changes none of it (a followed turn's reply pieces, which
+/// are output rows) leaves it equal, so a client following a turn reads
+/// the list only when a row changed.
+pub(crate) fn session_list_fingerprint(stores: &ObservedStores) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for node_did in stores.node_dids() {
+        let store = stores.snapshot(&node_did);
+        node_did.hash(&mut hasher);
+        let entries = gents_observe::client_projection::store::session_summary_entries(
+            &store.sessions,
+            &store.requests,
+            &node_did,
+        );
+        entries.len().hash(&mut hasher);
+        for entry in entries {
+            let session = entry.session;
+            let observation = session.observation.as_ref();
+            (
+                &session.session_id,
+                &session.requester_did,
+                &session.closed_at,
+                &session.archived_at,
+                session.archive_revision.to_string(),
+                &session.tags,
+                format!("{:?}", session.title),
+                observation.map(|value| {
+                    (
+                        &value.last_activity_at,
+                        &value.preview,
+                        &value.reply_preview,
+                    )
+                }),
+                format!("{:?} {:?}", entry.lifecycle, entry.turn_state),
+                entry.latest_request_id,
+                entry.latest_request_doc_id,
+            )
+                .hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod session_list_tests;

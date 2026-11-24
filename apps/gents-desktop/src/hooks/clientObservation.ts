@@ -73,6 +73,8 @@ export function startClientObservation(
       startupRead = false;
       void controller.request("session");
     };
+    /* the session list fingerprint of the last store update */
+    let lastSessionList: string | null = null;
     let relistenTimer: ReturnType<typeof setTimeout> | undefined;
     let relistenMs = RELISTEN_FIRST_MS;
     let registrationError: string | null = null;
@@ -80,11 +82,18 @@ export function startClientObservation(
       void listenToDesktopClientUpdates(
         async (event) => {
           if (stopped) return;
+          /* a store update says what the session lists show; one with no
+             fingerprint, or a new one, may have changed a row */
+          const sessionList = event.sessionList ?? null;
+          const sessionListChanged =
+            sessionList === null || sessionList !== lastSessionList;
+          if (event.reason === "store") lastSessionList = sessionList;
           const scope = desktopUpdateRefreshScope(
             event.reason,
             selection.getState().sessionId,
             trackedRequestId(),
             selectedSessionUnresolved(),
+            sessionListChanged,
           );
           await controller.request(scope);
         },

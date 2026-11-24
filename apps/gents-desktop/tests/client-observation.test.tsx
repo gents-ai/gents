@@ -12,6 +12,7 @@ import {
   startClientObservation,
 } from "../src/hooks/clientObservation";
 import * as shellPlatform from "../src/lib/shellPlatform";
+import { listedSession } from "../src/hooks/fleetStore";
 import { node, testApp } from "./app-fixture";
 import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
 
@@ -124,6 +125,124 @@ describe("following the client while it runs", () => {
       }
     },
   );
+
+  it("shows another session's change in the list while the open session's turn is followed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      /* s-1 is open, its turn followed; s-2 is another row in the list */
+      const listed = (otherTurn: string) =>
+        ({
+          ...running,
+          client: {
+            deployments: [
+              node({
+                nodeDid: NODE_DID,
+                sessions: [
+                  { sessionId: "s-1", nodeDid: NODE_DID, requesterDid: null },
+                  {
+                    sessionId: "s-2",
+                    nodeDid: NODE_DID,
+                    requesterDid: null,
+                    turnState: otherTurn,
+                  },
+                ],
+              }),
+            ],
+          },
+        }) as unknown as DesktopClientSnapshot;
+      api.fetchDesktopSnapshot.mockResolvedValue(listed("idle"));
+      const session = sessionSnapshot({
+        sessionId: "s-1",
+        nodeDid: NODE_DID,
+        turnState: "running",
+        latestRequestId: "r-1",
+        liveCursor: null,
+        projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
+        timelineItems: [],
+      });
+      api.fetchSessionSnapshot.mockResolvedValue(session);
+      const app = testApp({ api, snapshot: listed("idle"), session });
+      expect(app.trackedRequestId()).toBe("r-1");
+      let update:
+        | ((event: { reason?: string; sessionList?: string }) => Promise<void>)
+        | undefined;
+      stop = startClientObservation(
+        app,
+        vi.fn(async (listener) => {
+          update = listener as typeof update;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(BURST);
+      const otherTurn = () =>
+        listedSession(app.stores.fleet.getState(), NODE_DID, "s-2")?.turnState;
+      expect(otherTurn()).toBe("idle");
+
+      /* s-2 starts a turn of its own; its store update arrives while s-1's
+         turn is still followed */
+      api.fetchDesktopSnapshot.mockResolvedValue(listed("running"));
+      void update?.({ reason: "store", sessionList: "list-2" });
+      await vi.advanceTimersByTimeAsync(BURST);
+      expect(app.trackedRequestId()).toBe("r-1");
+      expect(otherTurn()).toBe("running");
+    } finally {
+      stop?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads no list for the followed turn's reply pieces", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const session = sessionSnapshot({
+        sessionId: "s-1",
+        nodeDid: NODE_DID,
+        turnState: "running",
+        latestRequestId: "r-1",
+        liveCursor: null,
+        projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
+        timelineItems: [],
+      });
+      api.fetchSessionSnapshot.mockResolvedValue(session);
+      const app = testApp({ api, snapshot: running, session });
+      let update:
+        | ((event: { reason?: string; sessionList?: string }) => Promise<void>)
+        | undefined;
+      stop = startClientObservation(
+        app,
+        vi.fn(async (listener) => {
+          update = listener as typeof update;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(BURST);
+      /* the first store update's list is new to the client */
+      void update?.({ reason: "store", sessionList: "list-1" });
+      await vi.advanceTimersByTimeAsync(BURST);
+      const listReads = api.fetchDesktopSnapshot.mock.calls.length;
+
+      /* reply pieces: store updates that change no row the list shows */
+      for (let piece = 0; piece < 5; piece++) {
+        void update?.({ reason: "store", sessionList: "list-1" });
+        await vi.advanceTimersByTimeAsync(BURST);
+      }
+      expect(app.trackedRequestId()).toBe("r-1");
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(listReads);
+      expect(api.fetchSessionSnapshot.mock.calls.length).toBeGreaterThan(1);
+
+      /* a row changes: the list is read once */
+      void update?.({ reason: "store", sessionList: "list-2" });
+      await vi.advanceTimersByTimeAsync(BURST);
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(listReads + 1);
+    } finally {
+      stop?.();
+      vi.useRealTimers();
+    }
+  });
 
   it("reads nothing while the window is hidden, and reads in full on show", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });

@@ -19,12 +19,17 @@ export function desktopUpdateRefreshScope(
   selectedSessionId: string | null,
   selectedTrackedRequestId: string | null,
   selectedSessionUnresolved = false,
+  sessionListChanged = true,
 ): DesktopUpdateRefreshScope {
   if (reason === "health")
     return selectedSessionId && selectedSessionUnresolved ? "full" : "snapshot";
+  /* while the open session's turn is followed, an update that changed a row
+     the session list shows still reads the list: the followed turn need not
+     end soon (ProjectionDrain `OthersCatchUp`). The turn's own reply pieces
+     change no row, so they read only the open session. */
   if (selectedSessionId && selectedTrackedRequestId) {
-    if (reason === "store") return "sessionDelta";
-    return "sessionEvent";
+    if (reason !== "store") return "full";
+    return sessionListChanged ? "storeUpdate" : "sessionDelta";
   }
   if (reason === "store" && selectedSessionId && !selectedSessionUnresolved)
     return "storeUpdate";
