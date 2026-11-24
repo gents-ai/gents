@@ -579,5 +579,18 @@
         "bound": "64"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-automation/src/triggers/engine/durable.rs",
+      "collection": "TriggerFire",
+      "arguments": "filter: { owner_did: { _eq: \"$GENTS_owner$\" }, trigger_id: { _eq: \"$GENTS_trigger$\" } }, order: { fire_sequence: DESC }, limit: 1"
+    },
+    "bindings": [
+      {
+        "owner": "probe",
+        "trigger": "probe"
+      }
+    ]
   }
 ]

@@ -346,18 +346,12 @@ pub(crate) async fn stage_fire_receipt(
 /// transaction is never stale at commit (Lean
 /// `Triggers.FireBudget.concurrent_admission_preserves_bound`).
 async fn next_fire_sequence(txn: &ConfigApplyTxn<'_>, identity: &FireIdentity) -> Result<i64> {
-    use gents_protocol::document_query::{
-        fields::trigger_fire as fields, Direction, Filter, Query, Selection,
-    };
     let response = txn
-        .run(
-            &Query::select(Selection::new().field(fields::FIRE_SEQUENCE))
-                .filter(Filter::eq(fields::OWNER_DID, &identity.owner_did))
-                .filter(Filter::eq(fields::TRIGGER_ID, &identity.trigger_id))
-                .order_by(fields::FIRE_SEQUENCE, Direction::Desc)
-                .limit(1)
-                .render(),
-        )
+        .execute(&format!(
+            r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{owner}" }}, trigger_id: {{ _eq: "{trigger}" }} }}, order: {{ fire_sequence: DESC }}, limit: 1) {{ fire_sequence }} }}"#,
+            owner = gents_store::graphql::escape_graphql_string(&identity.owner_did),
+            trigger = gents_store::graphql::escape_graphql_string(&identity.trigger_id),
+        ))
         .await?;
     Ok(response["data"]["TriggerFire"][0]["fire_sequence"]
         .as_i64()

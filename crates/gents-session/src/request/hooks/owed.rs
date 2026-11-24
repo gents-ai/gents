@@ -864,8 +864,8 @@ async fn halted_sessions(
                     .await?;
                 let interrupted = txn
                     .execute(&format!(
-                        r#"{{ AgentSessionInterrupt(filter: {{ node_did: {{ _eq: "{node}" }}, interrupted_at: {{ _ge: "{}" }} }}, order: {{ interrupted_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#,
-                        escape_graphql_string(horizon)
+                        r#"{{ AgentSessionInterrupt(filter: {{ node_did: {{ _eq: "{node}" }}, interrupted_at: {{ _ge: "{horizon}" }} }}, order: {{ interrupted_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#,
+                        horizon = escape_graphql_string(horizon)
                     ))
                     .await?;
                 let mut candidates: Vec<String> = Vec::new();

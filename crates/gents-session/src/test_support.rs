@@ -747,8 +747,12 @@ pub async fn interrupt_session_of_request_at(
     request_doc_id: &str,
     at: &str,
 ) {
+    let root = node
+        .node_identity_did()
+        .map(|did| identity::Did::new(did).expect("node DID"))
+        .expect("fixture node identity");
     interrupt_session_of_request_as(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(node.clone(), root),
         request_doc_id,
         at,
     )
@@ -786,11 +790,8 @@ pub async fn interrupt_session_of_request_as(
                 let marker = match crate::session::interrupt_marker::read_in_txn(txn, &session.doc_id).await? {
                     Some(marker) => marker,
                     None => {
-                        txn.execute_with_variables(
-                            "mutation($input: AgentSessionInterruptMutationInputArg!) { create_AgentSessionInterrupt(input: $input) { _docID } }",
-                            &serde_json::json!({"input": {"session_doc_id": session.doc_id, "node_did": node_did, "session_id": session_id, "generation": 0}}),
-                        )
-                        .await?;
+                        crate::session::interrupt_marker::create_in_txn(txn, &session.doc_id, node_did, session_id)
+                            .await?;
                         crate::session::interrupt_marker::read_in_txn(txn, &session.doc_id)
                             .await?
                             .ok_or_else(|| anyhow::anyhow!("fixture marker disappeared"))?
