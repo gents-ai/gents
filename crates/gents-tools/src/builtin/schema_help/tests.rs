@@ -124,8 +124,10 @@ async fn schema_agent_node() -> (gents_store::test_support::TestStore, SchemaToo
         Arc::new(crate::surface::ToolCeiling::meta_only()),
     )
     .await;
-    let (db, user, access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, "schema-help-agent").await;
+    let signed_home =
+        gents_documents::test_support::SignedHome::enroll(db, "schema-help-agent").await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     // Selecting the schema tool projects schema permissions only an owner
     // holds; init makes the installing User the household owner.
@@ -1580,11 +1582,13 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use gents_store::config_client::NodePermission;
 
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "schema-native-warnings",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(
