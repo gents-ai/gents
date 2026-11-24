@@ -56,6 +56,10 @@ def applyCreate (state : RegistryState) (request : CreateRequest) : RegistryStat
     { state with rows :=
         ⟨request.storedEnvelope, true⟩ :: state.rows }
 
+/-- An open row belongs to the request that filed it, whose reply answers it.
+A filing from another request under the same owner prefix stores nothing and
+receives no receipt, so the open row stays as it was; the filing request
+receives its own row back only for the content it stored. -/
 def storedCreateReceipt? (state : RegistryState) (request : CreateRequest) :
     Option (RegistryState × StoredEnvelope) :=
   if !stamped request then none else

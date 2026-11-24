@@ -3,43 +3,44 @@ import Proofs.Documents.ApplyReconcile.Publication
 
 namespace ApplyReconcile
 
-/-- Accepted publication realizes every desired field before the same canonical
-registry decoder and readiness projection run. -/
-theorem publication_resolved_snapshot
-    (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
+/-- An admitted application realizes the merged desired documents before the
+same canonical registry decoder and readiness projection run. -/
+theorem application_resolved_snapshot
+    (p : Plan) (L : LiveState) (hp : admits (p.over L.desired) p.changed = true)
     (decode : RegistryDecoder) (owner : String) (encode : String → AgentDid)
     (hencode : Function.Injective encode) (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid) :
-    (publish L M).toResolvedSnapshot decode owner (M.agentNames owner) encode hencode
-      defaultAgent runtimeAvailable =
-    snapshotFromDesired M.docs decode owner (M.agentNames owner) encode hencode
-      defaultAgent runtimeAvailable := by
+    (applyPlan L p).toResolvedSnapshot decode owner ((p.over L.desired).agentNames owner) encode
+      hencode defaultAgent runtimeAvailable =
+    snapshotFromDesired (p.over L.desired).docs decode owner ((p.over L.desired).agentNames owner)
+      encode hencode defaultAgent runtimeAvailable := by
   unfold LiveState.toResolvedSnapshot
-  rw [publish_realizes L M hM]
+  rw [applyPlan_admitted L p hp]
 
-theorem publication_coverage
-    (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
+theorem application_coverage
+    (p : Plan) (L : LiveState) (hp : admits (p.over L.desired) p.changed = true)
     (decode : RegistryDecoder) (owner : String) (encode : String → AgentDid)
     (hencode : Function.Injective encode) (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid) :
-    let snapshot := (publish L M).toResolvedSnapshot decode owner (M.agentNames owner)
-      encode hencode defaultAgent runtimeAvailable
-    snapshot.runnable ∪ snapshot.unavailable = (M.agentNames owner).image encode := by
-  simp only [publication_resolved_snapshot M L hM]
-  exact snapshot_coverage M.docs decode owner (M.agentNames owner) encode hencode
-    defaultAgent runtimeAvailable
+    let snapshot := (applyPlan L p).toResolvedSnapshot decode owner
+      ((p.over L.desired).agentNames owner) encode hencode defaultAgent runtimeAvailable
+    snapshot.runnable ∪ snapshot.unavailable =
+      ((p.over L.desired).agentNames owner).image encode := by
+  simp only [application_resolved_snapshot p L hp]
+  exact snapshot_coverage (p.over L.desired).docs decode owner
+    ((p.over L.desired).agentNames owner) encode hencode defaultAgent runtimeAvailable
 
-theorem publication_rejected_configuration_unavailable
-    (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
+theorem application_rejected_configuration_unavailable
+    (p : Plan) (L : LiveState) (hp : admits (p.over L.desired) p.changed = true)
     (decode : RegistryDecoder) (owner name : String) (encode : String → AgentDid)
-    (hencode : Function.Injective encode) (hname : name ∈ M.agentNames owner)
+    (hencode : Function.Injective encode) (hname : name ∈ (p.over L.desired).agentNames owner)
     (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid)
     (err : Configuration.ResolveError)
-    (h : Configuration.resolveAgent (decode M.docs) owner name = .error err) :
-    encode name ∈ ((publish L M).toResolvedSnapshot decode owner (M.agentNames owner)
-      encode hencode defaultAgent runtimeAvailable).unavailable := by
-  rw [publication_resolved_snapshot M L hM]
+    (h : Configuration.resolveAgent (decode (p.over L.desired).docs) owner name = .error err) :
+    encode name ∈ ((applyPlan L p).toResolvedSnapshot decode owner
+      ((p.over L.desired).agentNames owner) encode hencode defaultAgent runtimeAvailable).unavailable := by
+  rw [application_resolved_snapshot p L hp]
   apply Finset.mem_sdiff.mpr
   refine ⟨Finset.mem_image.mpr ⟨name, hname, rfl⟩, ?_⟩
-  exact rejected_configuration_not_runnable M.docs decode owner name (M.agentNames owner)
-    encode hencode defaultAgent runtimeAvailable err h
+  exact rejected_configuration_not_runnable (p.over L.desired).docs decode owner name
+    ((p.over L.desired).agentNames owner) encode hencode defaultAgent runtimeAvailable err h
 
 end ApplyReconcile

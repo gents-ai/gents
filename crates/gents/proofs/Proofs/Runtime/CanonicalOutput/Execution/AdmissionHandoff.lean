@@ -144,7 +144,7 @@ theorem delegation_preserves_immediate_author (s : State) (agent document sessio
     (causeHop targetHop : Nat) (active : activeTurn s.context.effect.lifecycle = true)
     (author : s.context.effect.committedBy = some agent) :
     outbound s.context.effect document session targetAgent target causeHop targetHop =
-      some ⟨⟨document, session, targetAgent, agent, target⟩,
+      some ⟨⟨document, session, targetAgent, agent, target, agent, document⟩,
         CausalHop.nextHop (.crossSession causeHop) targetHop⟩ := by
   simp [outbound, active, author]
 

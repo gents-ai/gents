@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::context::StartupBarrier;
 use crate::runtime::agent::reconcile::GenerationSupervisor;
-use crate::runtime::agent::{Gents, ProcessLifecycleState};
+use crate::runtime::agent::Gents;
 use crate::runtime::status::RuntimeStatusHandle;
 use gents_inference::admission::AdmissionRegistry;
 use gents_inference::backends::registry;
@@ -151,7 +151,17 @@ async fn run_agent_with_runtime_status(
     runtime_status: RuntimeStatusHandle,
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
-    let terminal_observer = agent.process_state_observer.clone();
+    #[cfg(not(test))]
+    let admission_gate = super::router::RuntimeAdmissionGate::closed();
+    #[cfg(test)]
+    let admission_gate = super::router::RuntimeAdmissionGate::closed_with_dispatch_probe(
+        agent.router_dispatch_probe.clone(),
+    );
+    let lifecycle = Arc::new(RuntimeLifecycleCoordinator::new(
+        admission_gate.clone(),
+        runtime_status.clone(),
+        agent.process_state_observer.clone(),
+    ));
     let initialized = runtime_status
         .initialize_startup(agent.default_agent_did())
         .await;
@@ -160,7 +170,9 @@ async fn run_agent_with_runtime_status(
             run_agent_owned(
                 agent,
                 external_shutdown,
-                runtime_status.clone(),
+                runtime_status,
+                &lifecycle,
+                admission_gate,
                 #[cfg(test)]
                 slot_runner,
             )
@@ -169,52 +181,15 @@ async fn run_agent_with_runtime_status(
         Err(error) => Err(error.context("initialize runtime agent_config readiness")),
     };
 
-    finish_run_agent(
-        body_result,
-        runtime_status_owner,
-        runtime_status,
-        terminal_observer,
-    )
-    .await
+    finish_run_agent(body_result, runtime_status_owner, &lifecycle).await
 }
 
 async fn finish_run_agent(
     body_result: Result<()>,
     runtime_status_owner: crate::runtime::status::RuntimeStatusOwner,
-    runtime_status: RuntimeStatusHandle,
-    terminal_observer: Option<Arc<dyn crate::runtime::agent::ProcessLifecycleObserver>>,
+    lifecycle: &RuntimeLifecycleCoordinator,
 ) -> Result<()> {
-    let mut teardown_error = None;
-    let process_state = runtime_status.readiness().observation().process_state();
-    if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::Shutdown {
-        if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::ShuttingDown
-        {
-            let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
-                runtime_status
-                    .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
-                    .await,
-            );
-            if let Err(error) = persisted {
-                tracing::error!(error = %error, "failed to publish terminal ShuttingDown state");
-                teardown_error = Some(error);
-            } else if let Some(observer) = &terminal_observer {
-                observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
-            }
-        }
-        let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
-            runtime_status
-                .set_process_state_durable(ProcessLifecycleState::Shutdown)
-                .await,
-        );
-        if let Err(error) = persisted {
-            tracing::error!(error = %error, "failed to publish terminal Shutdown state");
-            if teardown_error.is_none() {
-                teardown_error = Some(error);
-            }
-        } else if let Some(observer) = &terminal_observer {
-            observer.on_process_state_change(ProcessLifecycleState::Shutdown);
-        }
-    }
+    let mut teardown_error = lifecycle.finish_run().await.err();
     if let Err(error) = runtime_status_owner.close().await {
         tracing::error!(error = %error, "failed to close runtime agent_config readiness owner");
         if teardown_error.is_none() {
@@ -239,6 +214,7 @@ async fn resolve_startup(
 ) -> Result<(
     Option<super::control_watcher::ControlSubscription>,
     gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
+    bool,
 )> {
     resolve_startup_until(
         agent,
@@ -250,7 +226,8 @@ async fn resolve_startup(
 }
 
 /// Startup's configuration, read under the plugin store's publication lease
-/// when it selects plugins, waiting for an installer until `deadline`.
+/// when it selects plugins, waiting for an installer until `deadline`, and
+/// whether startup recovery found stuck requests.
 pub(super) async fn resolve_startup_until(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
@@ -259,6 +236,7 @@ pub(super) async fn resolve_startup_until(
 ) -> Result<(
     Option<super::control_watcher::ControlSubscription>,
     gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
+    bool,
 )> {
     // Subscribe before reading startup configuration so racing commits remain pending.
     let control_subscription = match agent
@@ -328,7 +306,7 @@ pub(super) async fn resolve_startup_until(
     {
         runtime_status.request_publication_recovery();
     }
-    log_recovery(
+    let stuck_requests = log_recovery(
         &agent.node,
         agent.node_did(),
         agent.default_agent_did(),
@@ -359,13 +337,15 @@ pub(super) async fn resolve_startup_until(
             "agent_config unavailable at startup"
         );
     }
-    Ok((control_subscription, resolved_snapshot))
+    Ok((control_subscription, resolved_snapshot, stuck_requests))
 }
 
 async fn run_agent_owned(
     agent: Gents,
     mut external_shutdown: watch::Receiver<bool>,
     runtime_status: RuntimeStatusHandle,
+    lifecycle: &Arc<RuntimeLifecycleCoordinator>,
+    admission_gate: super::router::RuntimeAdmissionGate,
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
@@ -375,9 +355,6 @@ async fn run_agent_owned(
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
         .await;
-    if let Some(observer) = &agent.process_state_observer {
-        observer.on_process_state_change(ProcessLifecycleState::Recovering);
-    }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
@@ -395,11 +372,12 @@ async fn run_agent_owned(
     .with_native_executables(agent.native_executables().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
-    let (control_subscription, resolved_snapshot) = tokio::select! {
+    let (control_subscription, resolved_snapshot, stuck_requests) = tokio::select! {
         biased;
         _ = external_shutdown.changed() => return Ok(()),
         resolved = resolve_startup(&agent, &tool_runtime, &runtime_status) => resolved?,
     };
+    lifecycle.startup_recovered(stuck_requests).await?;
 
     let startup_barrier = Arc::new(StartupBarrier::new(
         &resolved_snapshot
@@ -407,17 +385,6 @@ async fn run_agent_owned(
             .values()
             .cloned()
             .collect::<Vec<_>>(),
-    ));
-    #[cfg(not(test))]
-    let admission_gate = super::router::RuntimeAdmissionGate::closed();
-    #[cfg(test)]
-    let admission_gate = super::router::RuntimeAdmissionGate::closed_with_dispatch_probe(
-        agent.router_dispatch_probe.clone(),
-    );
-    let lifecycle = Arc::new(RuntimeLifecycleCoordinator::new(
-        admission_gate.clone(),
-        runtime_status.clone(),
-        agent.process_state_observer.clone(),
     ));
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
     let (enrollment_owner, enrollment_handle) =
@@ -520,7 +487,7 @@ async fn run_agent_owned(
     let callback_engine_handle = tasks::spawn_callback_engine(startup_tasks);
     let readiness_handle = tasks::spawn_readiness(
         startup_tasks,
-        &lifecycle,
+        lifecycle,
         &initial_active_snapshot,
         readiness_fatal_error,
     );
@@ -575,7 +542,7 @@ async fn run_agent_owned(
     shutdown_runtime(
         result,
         &agent,
-        &lifecycle,
+        lifecycle,
         &runtime_shutdown_tx,
         &cancel,
         OwnedRuntimeTasks {

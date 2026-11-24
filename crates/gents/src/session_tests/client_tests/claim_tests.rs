@@ -327,7 +327,29 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let grant_cases = gents_lean_vocab::families::native_refinement_grant_scenario::cases();
     let mut publications = Vec::new();
     let claim_cases = gents_lean_vocab::families::native_refinement_claim_scenario::cases();
-    let mut claims = Vec::new();
+    type ClaimKey = (
+        &'static str,
+        Option<&'static str>,
+        &'static str,
+        &'static str,
+        bool,
+        bool,
+        bool,
+        u64,
+    );
+    let held = |read, update, invoke| -> ClaimKey {
+        (
+            "agent",
+            Some("client"),
+            "call",
+            "doc",
+            read,
+            update,
+            invoke,
+            0,
+        )
+    };
+    let mut claims: Vec<(ClaimKey, bool)> = Vec::new();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let foreign =
@@ -343,11 +365,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let node = db.node.clone();
     grant_operator_user(&node, runtime.as_ref(), &user).await;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let second_binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [
         foreign.did(),
         collaborator.did(),
         binding.agent_did.as_str(),
+        second_binding.agent_did.as_str(),
     ] {
         for permission in [
             NodePermission::CollectionGet,
@@ -509,10 +533,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .expect("document ACP revocation did not finish")
     .unwrap();
     document_pause.resume.notify_one();
-    assert!(
-        document_claim.await.unwrap().unwrap().is_none(),
-        "revoked document ACP cannot commit a claim"
-    );
+    claims.push((
+        ("agent", Some("client"), "call", "doc", true, true, true, 1),
+        document_claim.await.unwrap().unwrap().is_some(),
+    ));
     let session_doc = create.session_doc_id.as_ref().unwrap();
     user_access
         .delete_actor_relationship(
@@ -553,7 +577,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     let denied_update = submit(&collaborator_access, &denied_update).await.unwrap();
     claims.push((
-        (true, false, true),
+        held(true, false, true),
         claim(&node, &agent_access, &agent, &denied_update)
             .await
             .unwrap()
@@ -603,7 +627,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     let denied_invoke = submit(&collaborator_access, &denied_invoke).await.unwrap();
     claims.push((
-        (true, true, false),
+        held(true, true, false),
         claim(&node, &agent_access, &agent, &denied_invoke)
             .await
             .unwrap()
@@ -651,7 +675,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         .await
         .unwrap();
     claims.push((
-        (false, true, true),
+        held(false, true, true),
         claim(&node, &agent_access, &agent, &denied_read)
             .await
             .unwrap()
@@ -689,33 +713,42 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         submit(&collaborator_access, &signed).await,
         Err(gents_toolcalls::call::control::client::ClientControlError::NotAuthorized)
     ));
-    let persisted_tampered = user_access.transact_write("test.control.invalid_signed_intent", |txn| {
-        let tampered = &tampered;
-        Box::pin(async move {
-            let response = txn.execute_client_signed_create(
-                "mutation($input: AgentToolControlMutationInputArg!) { create_AgentToolControl(input: $input) { _docID } }",
-                &serde_json::json!({"input": {
-                    "intent_id": tampered.intent_id, "intent_json": serde_json::to_string(tampered)?,
-                    "client_did": tampered.client_did, "agent_did": tampered.agent_did,
-                    "node_did": tampered.node_did, "session_id": tampered.session_id,
-                    "session_doc_id": tampered.session_doc_id, "request_doc_id": tampered.request_doc_id,
-                    "requester_did": tampered.requester_did, "tool_call_id": tampered.tool_call_id,
-                    "tool_call_doc_id": tampered.tool_call_doc_id, "action": tampered.action, "state": "pending"
-                }}),
-                gents_protocol::schemas::AGENT_TOOL_CONTROL,
-            ).await?;
-            Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, "AgentToolControl")?)
-        })
-    }).await.unwrap();
-    user_access
-        .add_actor_relationship(
-            "AgentToolControl",
-            &persisted_tampered,
-            "working_agent",
-            &agent,
-        )
-        .await
-        .unwrap();
+    fn intent_row(
+        intent: &gents_protocol::process_control::ToolControlIntent,
+    ) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::json!({"input": {
+            "intent_id": intent.intent_id, "intent_json": serde_json::to_string(intent)?,
+            "client_did": intent.client_did, "agent_did": intent.agent_did,
+            "node_did": intent.node_did, "session_id": intent.session_id,
+            "session_doc_id": intent.session_doc_id, "request_doc_id": intent.request_doc_id,
+            "requester_did": intent.requester_did, "tool_call_id": intent.tool_call_id,
+            "tool_call_doc_id": intent.tool_call_doc_id, "action": intent.action, "state": "pending"
+        }}))
+    }
+    /// Writes `intent` as the native owner `access` names, the way a client
+    /// stores its own intent, and lets `agent` read it.
+    async fn persist_intent(
+        access: &ConfigAccess,
+        intent: &gents_protocol::process_control::ToolControlIntent,
+        agent: &identity::Did,
+    ) -> String {
+        let doc = access.transact_write("test.control.persisted_intent", |txn| {
+            Box::pin(async move {
+                let response = txn.execute_client_signed_create(
+                    "mutation($input: AgentToolControlMutationInputArg!) { create_AgentToolControl(input: $input) { _docID } }",
+                    &intent_row(intent)?,
+                    gents_protocol::schemas::AGENT_TOOL_CONTROL,
+                ).await?;
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, "AgentToolControl")?)
+            })
+        }).await.unwrap();
+        access
+            .add_actor_relationship("AgentToolControl", &doc, "working_agent", agent)
+            .await
+            .unwrap();
+        doc
+    }
+    let persisted_tampered = persist_intent(&user_access, &tampered, &agent).await;
     assert!(
         claim(&node, &agent_access, &agent, &persisted_tampered)
             .await
@@ -778,6 +811,174 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
+    async fn resigned(
+        user: &KeyIdentity,
+        mut intent: gents_protocol::process_control::ToolControlIntent,
+    ) -> gents_protocol::process_control::ToolControlIntent {
+        intent.signature = user.sign(&intent.signing_payload().unwrap()).await.unwrap();
+        intent
+    }
+    let held_intent = || {
+        prepare(
+            &user_access,
+            &user,
+            runtime.did(),
+            tool_doc,
+            Some(("tool-control-session", "control-call")),
+            "process_stop",
+        )
+    };
+    /// What the claim's checks before its native owner check observe of a
+    /// stored intent, read as `access`: the one row it reads, the Agent that row
+    /// names, and the native owners the claim transaction reports for it.
+    async fn observed_intent(
+        case: &str,
+        access: &ConfigAccess,
+        doc: &str,
+    ) -> (String, Vec<Option<String>>) {
+        let rows = access
+            .execute(&format!(
+                r#"{{ AgentToolControl(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ agent_did state }} }}"#
+            ))
+            .await
+            .unwrap();
+        let rows = rows["data"]["AgentToolControl"].as_array().unwrap().clone();
+        let [row] = rows.as_slice() else {
+            panic!("{case}: the claimant reads exactly one intent row: {rows:?}");
+        };
+        assert_eq!(row["state"], "pending");
+        let owners = access
+            .transact_readonly("test.control.intent_owner", |txn| {
+                Box::pin(async move {
+                    txn.document_owners("AgentToolControl", &[doc.to_owned()])
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        (
+            row["agent_did"].as_str().unwrap().to_owned(),
+            owners
+                .into_iter()
+                .map(|observed| observed.owner.map(|did| did.as_str().to_owned()))
+                .collect(),
+        )
+    }
+    let second_agent: identity::Did = second_binding.agent_did.parse().unwrap();
+    let second_identity =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &second_binding).unwrap();
+    let second_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        second_agent.clone(),
+        second_identity.as_ref(),
+    )
+    .unwrap();
+    let other_claimant =
+        persist_intent(&user_access, &held_intent().await.unwrap(), &second_agent).await;
+    let (named, _) = observed_intent("other_claimant", &second_access, &other_claimant).await;
+    assert_ne!(named, second_agent.as_str(), "the row names another Agent");
+    claims.push((
+        ("other", Some("client"), "call", "doc", true, true, true, 0),
+        claim(&node, &second_access, &second_agent, &other_claimant)
+            .await
+            .unwrap()
+            .is_some(),
+    ));
+    let unowned_intent = held_intent().await.unwrap();
+    let unowned = ConfigAccess::local(node.clone())
+        .transact_write("test.control.unowned_intent", |txn| {
+            let unowned_intent = &unowned_intent;
+            Box::pin(async move {
+                let response = txn
+                    .execute_with_variables(
+                        "mutation($input: AgentToolControlMutationInputArg!) { create_AgentToolControl(input: $input) { _docID } }",
+                        &intent_row(unowned_intent)?,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(
+                    &response,
+                    "AgentToolControl",
+                )?)
+            })
+        })
+        .await
+        .expect("an intent row with no native owner");
+    let intent_rows = |doc: &str| {
+        format!(r#"{{ AgentToolControl(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#)
+    };
+    let unowned_rows = ConfigAccess::local(node.clone())
+        .execute(&intent_rows(&unowned))
+        .await
+        .unwrap();
+    assert_eq!(
+        unowned_rows["data"]["AgentToolControl"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let unowned_rows = agent_access.execute(&intent_rows(&unowned)).await.unwrap();
+    assert_eq!(
+        unowned_rows["data"]["AgentToolControl"]
+            .as_array()
+            .map(Vec::len),
+        Some(0),
+        "the selected Agent reads no intent row that has no native owner, so the claim \
+         refuses it before the owner check"
+    );
+    claims.push((
+        ("agent", None, "call", "doc", true, true, true, 0),
+        claim(&node, &agent_access, &agent, &unowned)
+            .await
+            .unwrap()
+            .is_some(),
+    ));
+    let foreign_owned =
+        persist_intent(&foreign_access, &held_intent().await.unwrap(), &agent).await;
+    let (named, owners) = observed_intent("foreign_owned", &agent_access, &foreign_owned).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(foreign.did().to_owned())]);
+    claims.push((
+        ("agent", Some("other"), "call", "doc", true, true, true, 0),
+        claim(&node, &agent_access, &agent, &foreign_owned)
+            .await
+            .unwrap()
+            .is_some(),
+    ));
+    let mut other_call = held_intent().await.unwrap();
+    other_call.tool_call_id = "other-call".into();
+    let other_call = persist_intent(&user_access, &resigned(&user, other_call).await, &agent).await;
+    let (named, owners) = observed_intent("other_call", &agent_access, &other_call).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(user.did().to_owned())]);
+    claims.push((
+        ("agent", Some("client"), "other", "doc", true, true, true, 0),
+        claim(&node, &agent_access, &agent, &other_call)
+            .await
+            .unwrap()
+            .is_some(),
+    ));
+    let mut other_doc = held_intent().await.unwrap();
+    other_doc.tool_call_doc_id = session_doc.clone();
+    let other_doc = persist_intent(&user_access, &resigned(&user, other_doc).await, &agent).await;
+    let (named, owners) = observed_intent("other_doc", &agent_access, &other_doc).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(user.did().to_owned())]);
+    claims.push((
+        (
+            "agent",
+            Some("client"),
+            "call",
+            "other",
+            true,
+            true,
+            true,
+            0,
+        ),
+        claim(&node, &agent_access, &agent, &other_doc)
+            .await
+            .unwrap()
+            .is_some(),
+    ));
     let other = identity::Did::new(user.did()).unwrap();
     assert!(claim(&node, &agent_access, &other, &first).await.is_err());
     assert!(
@@ -786,7 +987,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             .is_err()
     );
     claims.push((
-        (true, true, true),
+        held(true, true, true),
         claim(&node, &agent_access, &agent, &first)
             .await
             .unwrap()
@@ -963,7 +1164,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     pause.resume.notify_one();
     claims.push((
-        (true, false, false),
+        held(true, false, false),
         paused.await.unwrap().unwrap().is_some(),
     ));
     let retained = recover_claim(&agent_access, &agent, runtime.did(), &first_claim)
@@ -1010,21 +1211,26 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         .await
         .unwrap());
     assert_eq!(claim_cases.len(), claims.len());
-    for (case, (permissions, claimed)) in claim_cases.iter().zip(claims) {
-        assert_eq!(
-            (
-                case.input.claimant.as_str(),
-                case.input.owner.as_deref(),
-                case.input.requested_id.as_str(),
-                case.input.requested_doc.as_str(),
-                case.input.current_revision,
-                (case.input.read, case.input.update, case.input.invoke),
-            ),
-            ("agent", Some("client"), "call", "doc", 0, permissions),
-            "the served scenario builds {:?}",
-            case.input
+    for case in &claim_cases {
+        let input = &case.input;
+        let key = (
+            input.claimant.as_str(),
+            input.owner.as_deref(),
+            input.requested_id.as_str(),
+            input.requested_doc.as_str(),
+            input.read,
+            input.update,
+            input.invoke,
+            input.current_revision,
         );
-        case.check(claimed);
+        let [(_, claimed)] = claims
+            .iter()
+            .filter(|(built, _)| *built == key)
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("the scenario builds {input:?} exactly once");
+        };
+        case.check(*claimed);
     }
     assert_eq!(grant_cases.len(), publications.len());
     for (case, (grant, published)) in grant_cases.iter().zip(publications) {

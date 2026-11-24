@@ -60,7 +60,7 @@ def LiveState.toResolvedSnapshot (L : LiveState)
     (encode : String → AgentDid) (hencode : Function.Injective encode)
     (defaultAgent : AgentDid)
     (runtimeAvailable : Finset AgentDid) : ResolvedSnapshot :=
-  snapshotFromDesired L.desired decode owner names encode hencode defaultAgent runtimeAvailable
+  snapshotFromDesired L.desired.docs decode owner names encode hencode defaultAgent runtimeAvailable
 
 theorem resolved_id_iff (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)

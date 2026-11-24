@@ -276,11 +276,14 @@ fn eligible_queue_key(candidate: &AgentRequestRow, pin: Option<i64>) -> Result<O
     if !crate::request::retry_budget::successor_budget_remains(true, retry_count, pin) {
         return Ok(None);
     }
+    let own_key = gents_protocol::request_input::QueueSource::BackgroundCompletion
+        .queue_key(required_str(candidate.session_id.as_deref(), "session_id")?);
     Ok(candidate
         .input
         .as_ref()
         .and_then(|input| input.queue.as_ref())
-        .and_then(automated_queue_key))
+        .and_then(automated_queue_key)
+        .filter(|key| *key == own_key))
 }
 
 pub fn background_wake_retry_delay(retry_count: i64) -> chrono::Duration {
@@ -538,3 +541,6 @@ async fn build_redrive_request(
 
 #[cfg(test)]
 mod pushdown_tests;
+
+#[cfg(test)]
+mod rows_conformance;

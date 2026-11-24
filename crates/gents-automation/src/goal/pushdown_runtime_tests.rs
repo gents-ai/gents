@@ -1135,31 +1135,23 @@ async fn reserve_goal_session(
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
 ) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let access = db.client_access(user);
-    let spec = RequestSpec::new(
+    let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: agent.did().into(),
-            session_id: session.into(),
-            request_id: format!("goal-session-reservation-{session}"),
-            content: "reserve session".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-07-14T00:00:00Z".into(),
-        },
+        format!("goal-session-reservation-{session}"),
+        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session),
+        "reserve session",
+        "interactive",
+        "2026-07-14T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    build_signed_client_request(&access, spec, RequestSigner::Identity(user))
+    gents_session::request::lifecycle::reserve_goal_session(&access, &create)
         .await
         .expect("reserve user-owned goal session")
-        .session_doc_id
-        .expect("reserved physical session")
 }
 
 async fn publish_owned_terminal_activity(

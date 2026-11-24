@@ -1,10 +1,12 @@
+/// Runs startup recovery and returns whether it found stuck work a
+/// predecessor left, or could not tell because a recovery pass failed.
 pub(super) async fn log_recovery(
     node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     default_agent_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     executions: &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
-) {
+) -> bool {
     // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =
         crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
@@ -54,6 +56,7 @@ pub(super) async fn log_recovery(
         }
     }
     let mut recovered_any = false;
+    let mut recovery_failed = false;
 
     match outcome.tool_calls {
         Ok(report) => {
@@ -72,6 +75,7 @@ pub(super) async fn log_recovery(
                 error = %error,
                 "startup tool-call recovery failed"
             );
+            recovery_failed = true;
         }
     }
 
@@ -92,6 +96,7 @@ pub(super) async fn log_recovery(
                 error = %error,
                 "startup inference-call recovery failed"
             );
+            recovery_failed = true;
         }
     }
 
@@ -108,6 +113,7 @@ pub(super) async fn log_recovery(
         }
         Err(error) => {
             tracing::warn!(node_did = %node_did, error = %error, "startup task hook recovery failed");
+            recovery_failed = true;
         }
     }
 
@@ -140,6 +146,7 @@ pub(super) async fn log_recovery(
         }
         Err(error) => {
             tracing::warn!(node_did = %node_did, error = %error, "startup recovery failed");
+            recovery_failed = true;
         }
     }
 
@@ -150,4 +157,5 @@ pub(super) async fn log_recovery(
             "startup recovery found no stuck documents"
         );
     }
+    recovered_any || recovery_failed
 }

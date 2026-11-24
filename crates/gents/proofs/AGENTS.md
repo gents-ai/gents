@@ -116,9 +116,9 @@ consumed family has no entry.
   provider or WASM guest that no Gents test observes, with its reason. A name
   beginning `boundary.` is a premise; any other name is an emitted family whose
   cases only that fact decides.
-- `openFamilies`: emitted families with no consumer, by name only. The list is
-  being emptied: a family leaves it when its consumer is written or Lean stops
-  emitting it, and `OPEN` in the scan pins it so it never grows.
+- `openFamilies`: emitted families with no consumer, by name only. It is
+  empty, and `OPEN` in the scan pins it so it never grows: a new family
+  arrives with its consumer.
 
 An owner emits one family over the cases production reaches; cases production
 cannot express stay Lean theorems, not an `*_unreached` complement family.

@@ -566,51 +566,45 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     node.shutdown().await.expect("node shutdown");
 }
 
+fn router_snapshot(
+    generation: u64,
+    default_agent_did: &str,
+) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
+    Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: default_agent_did.to_string(),
+            tool_configs: Default::default(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    )
+}
+
+/// The router routes with the generation it observed (`pre_router_generation`)
+/// while the published source is `pre_active_generation`, with one request
+/// waiting. Every input the router waits on is ready before its first poll, so
+/// that poll either returns the request or holds it until an input changes.
+/// A held request is then released by publishing the source generation to
+/// the router.
 async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) {
+    use futures::FutureExt as _;
+
     let node_did = "did:test:router-latest-snapshot";
-    let initial_snapshot = Arc::new(
-        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: String::new(),
-            default_agent_did: "general".to_string(),
-            tool_configs: Default::default(),
-            agents: RapidHashMap::new(),
-            tool_surfaces: RapidHashMap::new(),
-            backend_admission_configs: RapidHashMap::new(),
-            unavailable_agents: RapidHashMap::new(),
-            active_schedules: RapidHashMap::new(),
-            unavailable_schedules: rapidhash::RapidHashSet::default(),
-            active_event_triggers: RapidHashMap::new(),
-            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-            active_tasks: RapidHashMap::new(),
-            dispatchers: RapidHashMap::new(),
-            agent_executor_capacities: RapidHashMap::new(),
-            agent_executor_queue_capacities: RapidHashMap::new(),
-        },
-    );
-    let updated_snapshot = Arc::new(
-        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: input.pre_active_generation,
-            node: None,
-            local_did: String::new(),
-            default_agent_did: "code".to_string(),
-            tool_configs: Default::default(),
-            agents: RapidHashMap::new(),
-            tool_surfaces: RapidHashMap::new(),
-            backend_admission_configs: RapidHashMap::new(),
-            unavailable_agents: RapidHashMap::new(),
-            active_schedules: RapidHashMap::new(),
-            unavailable_schedules: rapidhash::RapidHashSet::default(),
-            active_event_triggers: RapidHashMap::new(),
-            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-            active_tasks: RapidHashMap::new(),
-            dispatchers: RapidHashMap::new(),
-            agent_executor_capacities: RapidHashMap::new(),
-            agent_executor_queue_capacities: RapidHashMap::new(),
-        },
-    );
-    let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
+    let (active_tx, mut active_rx) =
+        watch::channel(router_snapshot(input.pre_router_generation, "general"));
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (watcher_tx, watcher_rx) = mpsc::channel(1);
     let mut watcher = ScriptedWatcher { rx: watcher_rx };
@@ -632,47 +626,52 @@ async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) 
     );
     let mut pending_request = None;
     let mut deferred = Default::default();
-    let (request, routed_snapshot, routed_observation) = {
-        let wait = wait_for_next_request_with_latest_snapshot(
-            node_did,
-            &mut watcher,
-            RouterWaitState {
-                active_snapshot: &mut active_snapshot,
-                active_snapshot_rx: &mut active_rx,
-                admission_gate: &admission_gate,
-                admission_changed: &mut admission_rx,
-                readiness_changed: &mut readiness_rx,
-                pending_request: &mut pending_request,
-                deferred: &mut deferred,
-            },
-            &mut shutdown_rx,
-            None,
-            None,
-        );
-        tokio::pin!(wait);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut wait)
-                .await
-                .is_err(),
-            "router returned a request while the source was ahead of the active generation"
-        );
-        active_tx.send(updated_snapshot).unwrap();
-        wait.await
-            .expect("router wait should succeed")
-            .expect("request should be returned")
+    macro_rules! route {
+        () => {
+            wait_for_next_request_with_latest_snapshot(
+                node_did,
+                &mut watcher,
+                RouterWaitState {
+                    active_snapshot: &mut active_snapshot,
+                    active_snapshot_rx: &mut active_rx,
+                    admission_gate: &admission_gate,
+                    admission_changed: &mut admission_rx,
+                    readiness_changed: &mut readiness_rx,
+                    pending_request: &mut pending_request,
+                    deferred: &mut deferred,
+                },
+                &mut shutdown_rx,
+                None,
+                None,
+            )
+        };
+    }
+    let first = route!().now_or_never();
+    let accepted = first.is_some();
+    let observed = active_snapshot.generation;
+    let routed = match first {
+        Some(routed) => routed,
+        None => {
+            assert!(
+                pending_request.is_none(),
+                "a held request stays with the watcher"
+            );
+            active_tx
+                .send(router_snapshot(input.pre_active_generation, "code"))
+                .unwrap();
+            route!().await
+        }
     };
-
+    let (request, routed_snapshot, routed_observation) = routed
+        .expect("router wait should succeed")
+        .expect("request should be returned");
+    assert_eq!(request.request_id, "req-router");
     assert_eq!(
         routed_observation.source_generation(),
         input.pre_active_generation
     );
     assert_eq!(routed_snapshot.generation, input.pre_active_generation);
-    assert_eq!(routed_snapshot.default_agent_did, "code");
-    assert_eq!(active_snapshot.default_agent_did, "code");
-    (
-        request.request_id == "req-router",
-        active_snapshot.generation,
-    )
+    (accepted, observed)
 }
 
 async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {

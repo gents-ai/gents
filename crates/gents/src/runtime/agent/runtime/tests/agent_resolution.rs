@@ -85,13 +85,23 @@ async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
     node.shutdown().await.unwrap();
 }
 
+/// The router's admission of an explicit selection: the session's bound
+/// Agent (`resolve_agent_for_request`), then the routed generation's
+/// dispatcher and startup demotion for the requested Agent
+/// (`effective_agent_admission`). The requesting Agent is always `selected`;
+/// the routed generation dispatches it only when the case's runtime holds the
+/// requested Agent.
 #[tokio::test]
 async fn explicit_agent_resolution_matches_lean_binding_cases() {
+    use gents_automation::triggers::runtime_snapshot::{
+        effective_agent_admission, EffectiveAgentAdmission,
+    };
     for case in gents_lean_vocab::families::contracts_runtime_reconcile_selection::cases() {
         let input = &case.input;
+        let requested = input.requested_agent.expect("an explicit selection");
         let fixture = PrivateSessionFixture::new().await;
         let bound = match input.pre_session_agent {
-            Some(agent) if Some(agent) != input.requested_agent => fixture.other.did(),
+            Some(agent) if agent != requested => fixture.other.did(),
             _ => fixture.selected.did(),
         };
         fixture.create_session("session-binding", bound, true).await;
@@ -103,10 +113,27 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
         .unwrap()
         .expect("the agent can read the session");
         assert_eq!(resolved.agent_did, fixture.selected.did(), "{}", input.name);
+        let demoted = input.pre_startup_demoted.contains(&requested);
+        let observation =
+            crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(
+                1,
+                demoted.then(|| {
+                    (
+                        fixture.selected.did().to_owned(),
+                        "startup build failed".to_owned(),
+                    )
+                }),
+            );
+        let admission = effective_agent_admission(
+            input.pre_runnable.contains(&requested) || demoted,
+            None,
+            observation.demotion_reason(&resolved.agent_did),
+        );
         fixture.db.node.shutdown().await.unwrap();
         case.check(
             gents_lean_vocab::families::contracts_runtime_reconcile_selection::ReconcileSelectionOutput {
-                legal: resolved.rejection_reason.is_none(),
+                legal: resolved.rejection_reason.is_none()
+                    && admission == EffectiveAgentAdmission::Ready,
             },
         );
     }

@@ -61,8 +61,12 @@ inductive Transition : ProcessState → ProcessState → Prop where
       Transition .uninitialized .ready
   | recovery_complete :
       Transition .recovering .ready
-  | begin_shutdown :
-      Transition .ready .shuttingDown
+  /-- Shutdown begins from any state that has not begun it: a startup that
+  fails, or a signal that arrives while the process is still uninitialized or
+  recovering, shuts the process down as surely as a signal to a ready one. -/
+  | begin_shutdown (pre : ProcessState) :
+      pre ≠ .shuttingDown → pre ≠ .shutdown →
+      Transition pre .shuttingDown
   | finish_shutdown :
       (activeRequestCount : Nat) →
       activeRequestCount = 0 →
@@ -99,7 +103,7 @@ def step? (pre : ProcessState) : Action → Option ProcessState
   | .recoveryComplete =>
       if pre = .recovering then some .ready else none
   | .beginShutdown =>
-      if pre = .ready then some .shuttingDown else none
+      if pre = .shuttingDown ∨ pre = .shutdown then none else some .shuttingDown
   | .finishShutdown activeRequestCount =>
       if pre = .shuttingDown ∧ activeRequestCount = 0 then
         some .shutdown
@@ -107,6 +111,54 @@ def step? (pre : ProcessState) : Action → Option ProcessState
         none
   | .restartClaim =>
       if pre = .shutdown then none else some .recovering
+
+/-- The process lifecycle actions without their parameters: the runtime passes
+whether startup found stuck requests and whether the active request count is
+zero beside the action. -/
+inductive ActionTag where
+  | startupRecover
+  | startupClean
+  | recoveryComplete
+  | beginShutdown
+  | finishShutdown
+  | restartClaim
+  deriving DecidableEq, Repr
+
+/-- The state a durable process-state write moves to, or `none` when the write
+is refused and the durable state stays `pre`. `pre` is the state this process
+last persisted; a process starts uninitialized. `stuckRequests` is whether
+startup recovery repaired work a predecessor left, or could not tell.
+`activeIsZero` is whether no request this process admitted can still be
+running: its admission gate never opened, or its ordered teardown joined every
+task that runs requests. A teardown cut by its deadline aborts those tasks and
+leaves their requests to the next start's recovery, so it never writes
+Shutdown. -/
+def next (pre : ProcessState) (action : ActionTag) (stuckRequests activeIsZero : Bool) :
+    Option ProcessState :=
+  step? pre <| match action with
+    | .startupRecover => .startupRecover { hasStuckRequests := stuckRequests }
+    | .startupClean => .startupClean { hasStuckRequests := stuckRequests }
+    | .recoveryComplete => .recoveryComplete
+    | .beginShutdown => .beginShutdown
+    | .finishShutdown => .finishShutdown (if activeIsZero then 0 else 1)
+    | .restartClaim => .restartClaim
+
+/-- Ready is reached only from startup or recovery, never from Ready itself. -/
+theorem ready_is_not_rewritten (action : ActionTag) (stuck active : Bool) :
+    next .ready action stuck active ≠ some .ready := by
+  cases action <;> cases stuck <;> cases active <;> decide
+
+/-- Shutdown is reached only from ShuttingDown with no active request. -/
+theorem shutdown_follows_drained_shutting_down (pre : ProcessState) (action : ActionTag)
+    (stuck active : Bool) (h : next pre action stuck active = some .shutdown) :
+    pre = .shuttingDown ∧ active = true := by
+  cases pre <;> cases action <;> cases stuck <;> cases active <;> simp_all [next, step?]
+
+/-- Every state that has not begun shutdown can begin it. -/
+theorem shutdown_begins_before_it_has_begun (pre : ProcessState) (stuck active : Bool)
+    (h_shutting : pre ≠ .shuttingDown) (h_shutdown : pre ≠ .shutdown) :
+    next pre .beginShutdown stuck active = some .shuttingDown := by
+  cases pre <;> simp_all [next, step?]
 
 /-- A restart claim can never assert readiness: it is the fail-closed half of
 adoption, so no durable predecessor state lets a claiming process report work
@@ -167,10 +219,9 @@ theorem step_sound
       simpa using Transition.recovery_complete
   | beginShutdown =>
       simp [step?] at h_step
-      rcases h_step with ⟨h_pre, h_post⟩
-      subst pre
+      rcases h_step with ⟨⟨h_not_shutting, h_not_shutdown⟩, h_post⟩
       subst post
-      simpa using Transition.begin_shutdown
+      exact Transition.begin_shutdown pre h_not_shutting h_not_shutdown
   | finishShutdown activeRequestCount =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
@@ -199,9 +250,9 @@ theorem transition_complete
   | recovery_complete =>
       refine ⟨.recoveryComplete, ?_⟩
       simp [step?]
-  | begin_shutdown =>
+  | begin_shutdown pre h_not_shutting h_not_shutdown =>
       refine ⟨.beginShutdown, ?_⟩
-      simp [step?]
+      simp [step?, h_not_shutting, h_not_shutdown]
   | finish_shutdown activeRequestCount h_zero =>
       refine ⟨.finishShutdown activeRequestCount, ?_⟩
       simp [step?, h_zero]

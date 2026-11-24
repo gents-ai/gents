@@ -10,20 +10,25 @@
 \* the same identity. The payload is released once the message is confirmed
 \* or discarded.
 \*
-\* Runtime: each send is two DefraDB transactions run by the User through the
-\* signed client endpoint. The reservation (`request.client.reserve_session`,
-\* `reserve_client_targets`) reads the target `AgentSession` document and the
-\* selected `Agent` to bind the physical targets the User then signs. The
-\* submission (`request.client.submit`, `submit_client_request`) reads the
-\* same documents, then creates the User-signed `AgentRequest`. While the
-\* session's turn runs, its working Agent publishes each message in a
-\* transaction that also refreshes the `AgentSession` observation
-\* (`patch_session_in_txn`, `last_activity_at`), so either transaction's
-\* commit aborts with a DefraDB conflict when that refresh lands after its
-\* read. A client-signed write may be rebuilt only after the native owner
-\* confirms the attempt did not commit (Lean `Identity.Configuration
-\* .clientSignedWriteMayRetry`); `Redrive` and `ReserveRedrive` select that
-\* rebuild, FALSE being the code before each fix.
+\* Runtime: a chat send (`Reserves` FALSE) is one DefraDB transaction run by
+\* the User through the signed client endpoint. Preparing the send only reads
+\* the target `AgentSession` and the selected `Agent` (or derives a new
+\* session's document id from its signed first block) to bind the physical
+\* targets the User signs; the submission (`request.client.submit`,
+\* `submit_client_request`) reads the same documents, then creates the
+\* session when it is new and the User-signed `AgentRequest` (Lean
+\* `AgentSession.admitRequest`). A reserving send (`Reserves` TRUE, the
+\* Goal path) first commits the session in a reservation transaction of its
+\* own (`request.client.reserve_session`, `reserve_client_targets`) and then
+\* submits. While the session's turn runs, its working Agent publishes each
+\* message in a transaction that also refreshes the `AgentSession`
+\* observation (`patch_session_in_txn`, `last_activity_at`), so a
+\* transaction's commit aborts with a DefraDB conflict when that refresh
+\* lands after its read. A client-signed write may be rebuilt only after the
+\* native owner confirms the attempt did not commit (Lean `Identity
+\* .Configuration.clientSignedWriteMayRetry`); `Redrive` and
+\* `ReserveRedrive` select that rebuild, FALSE being the code before each
+\* fix.
 \*
 \* The create is idempotent on the request identity (`send_client_request`:
 \* the unique key derived from the identity, the held lookup by
@@ -45,6 +50,7 @@ EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay,
         LeanDecision_Identity_Configuration
 
 CONSTANTS
+  Reserves,      \* the send commits a reservation before its submission
   Publications,  \* Agent session refreshes landing in one attempt series
   Attempts,      \* bounded attempts (TRANSACT_CONFLICT_MAX_RETRIES + 1)
   Redrive,       \* signed-conflict rebuild of the submission
@@ -55,7 +61,8 @@ CONSTANTS
   RetryFreshId,  \* RED: retry under a new request identity
   PayloadLost    \* RED: the client may drop an unconfirmed message's payload
 
-ASSUME /\ Publications \in Nat
+ASSUME /\ Reserves \in BOOLEAN
+       /\ Publications \in Nat
        /\ Attempts \in Nat \ {0}
        /\ Redrive \in BOOLEAN
        /\ ReserveRedrive \in BOOLEAN
@@ -96,7 +103,8 @@ Init ==
 Remove(s, i) == SubSeq(s, 1, i - 1) \o SubSeq(s, i + 1, Len(s))
 
 Send(id) ==
-  /\ wire' = Append(wire, [id |-> id, stage |-> "reserving", snap |-> sessVer, tries |-> 1])
+  /\ wire' = Append(wire, [id |-> id, stage |-> IF Reserves THEN "reserving" ELSE "open",
+                           snap |-> sessVer, tries |-> 1])
   /\ sends' = sends + 1
 
 \* The working Agent publishes a message and refreshes the observation.

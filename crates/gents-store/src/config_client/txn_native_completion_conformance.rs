@@ -343,3 +343,130 @@ async fn abandoned_registry_observations(
         retry_started,
     }
 }
+
+type TransactionTraceView =
+    gents_lean_vocab::families::native_completion_transaction_trace::TraceView;
+
+async fn native_owner_dropped(node: &EmbeddedNode, handle: &query::TransactionHandle) -> bool {
+    node.execute_request_in_txn(
+        defra_node::QueryRequest::new("{ NativeCompletionProbe { value } }"),
+        handle,
+    )
+    .await
+    .has_errors()
+}
+
+async fn release_outstanding_native(tracker: &NativeOperationTracker, release: &Notify) {
+    loop {
+        let outstanding = tracker.state.lock().unwrap().in_flight;
+        if outstanding == 0 {
+            return;
+        }
+        release.notify_one();
+        wait_for_native_count(tracker, outstanding - 1).await;
+    }
+}
+
+#[tokio::test]
+async fn lean_abandoned_transaction_defers_explicit_rollback_to_its_drop() {
+    for case in gents_lean_vocab::families::native_completion_transaction_trace::cases::<String>() {
+        let observed = abandoned_transaction_trace(&case.input.events).await;
+        case.check(observed);
+    }
+}
+
+async fn abandoned_transaction_trace(events: &[String]) -> Vec<TransactionTraceView> {
+    let (node, _signer, _release_on_panic) = signed_node().await;
+    let gate = mutation_write_gate(&node);
+    let mut txn = Some(Arc::new(
+        ConfigApplyTxn::begin_local(&node, None).await.unwrap(),
+    ));
+    let (tracker, handle) = match &txn.as_ref().unwrap().backend {
+        TxnBackend::Embedded {
+            native_operations,
+            handle,
+            ..
+        } => (native_operations.clone(), handle.clone()),
+        _ => unreachable!(),
+    };
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut observed = Vec::new();
+    let mut caller_timed_out = false;
+    let mut rollback_returned = false;
+    let mut retry_started = false;
+    let mut callers = Vec::new();
+    for event in events {
+        match event.as_str() {
+            "native_started" => {
+                let txn = Arc::clone(txn.as_ref().unwrap());
+                let mut caller = Box::pin(ConfigApplyTxn::with_native_operation_pause(
+                    entered.clone(),
+                    release.clone(),
+                    async move { txn.execute("{ NativeCompletionProbe { value } }").await },
+                ));
+                let expected = tracker.state.lock().unwrap().in_flight + 1;
+                tokio::select! {
+                    _ = caller.as_mut() => panic!("the paused native statement cannot return"),
+                    () = wait_for_native_count(&tracker, expected) => {}
+                }
+                callers.push(caller);
+            }
+            "caller_timed_out" => {
+                tokio::time::pause();
+                tokio::time::advance(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
+                for caller in callers.drain(..) {
+                    let error = caller.await.expect_err("the caller times out");
+                    assert!(crate::config_client::is_transaction_step_unavailable(
+                        &error
+                    ));
+                }
+                tokio::time::resume();
+                caller_timed_out = true;
+            }
+            "caller_cancelled" => callers.clear(),
+            "native_returned" => {
+                let outstanding = tracker.state.lock().unwrap().in_flight;
+                release.notify_one();
+                wait_for_native_count(&tracker, outstanding - 1).await;
+            }
+            "rollback_returned" => {
+                assert!(
+                    callers.is_empty(),
+                    "an explicit rollback owns the transaction"
+                );
+                let txn =
+                    Arc::get_mut(txn.as_mut().unwrap()).expect("no caller holds the transaction");
+                rollback_returned |= txn.rollback_inner().await.is_ok();
+            }
+            "retry_requested" => {
+                retry_started |= tracker.start().is_ok();
+            }
+            "registry_abandoned" => {
+                assert!(
+                    callers.is_empty(),
+                    "dropping the transaction ends its callers"
+                );
+                let owned =
+                    Arc::into_inner(txn.take().unwrap()).expect("no caller holds the transaction");
+                drop(owned);
+            }
+            "gate_release_requested" => {}
+            other => panic!("unsupported native transaction action {other}"),
+        }
+        let registry_abandoned = native_owner_dropped(&node, &handle).await;
+        observed.push(TransactionTraceView {
+            caller_abandonment_observed: tracker.is_abandoned() && caller_timed_out,
+            native_outstanding: tracker.state.lock().unwrap().in_flight as u64,
+            registry_abandoned,
+            rollback_returned,
+            gate_held: gate_owns_operation(&gate, "test.begin_local"),
+            retry_started,
+        });
+    }
+    drop(callers);
+    release_outstanding_native(&tracker, &release).await;
+    drop(txn);
+    node.shutdown().await.expect("node shutdown");
+    observed
+}

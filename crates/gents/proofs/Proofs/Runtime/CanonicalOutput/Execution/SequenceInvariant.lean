@@ -414,6 +414,17 @@ theorem Compaction.advanceCursor_preserves_sequenceBound
   exact hbound.of_messages_eq hmessages hsession
     (Nat.le_of_eq (congrArg Transcript.TranscriptState.nextSeq htranscript).symm)
 
+/-- A cursor names a stored message, so it stays below the sequence allocator. -/
+theorem Compaction.advanceCursor_stays_below_allocator
+    (before after : World) (cursor : Transcript.Sequence)
+    (hbound : SequenceBound before)
+    (h : advanceCursor? before cursor = some after) :
+    cursor < before.transcript.nextSeq := by
+  have hnamed := (advanceCursor_requires_stable_prefix before after cursor h).1
+  simp only [sessionSequences, List.mem_map, List.mem_filter, beq_iff_eq] at hnamed
+  obtain ⟨message, ⟨hmember, hsession⟩, rfl⟩ := hnamed
+  exact hbound message hmember hsession
+
 theorem Gate.evaluate_preserves_sequenceBound
     (operation : Operation) (before after : World) (hbound : SequenceBound before)
     (h : evaluate operation before = .ok after) : SequenceBound after := by
