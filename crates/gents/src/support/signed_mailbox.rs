@@ -21,10 +21,10 @@ use gents_store::{
 };
 
 use super::accepted_turn::PreparedAcceptedTurn;
-use super::TestDb;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
+use gents_store::test_support::TestStore;
 
 pub struct SignedMailboxTurn {
     pub user: KeyIdentity,
@@ -79,7 +79,7 @@ impl SignedMailboxTurn {
 }
 
 pub async fn prepare_signed_mailbox_turn(
-    db: &TestDb,
+    db: &TestStore,
     backend_id: &str,
     model: &str,
     request_id: &str,
@@ -87,9 +87,9 @@ pub async fn prepare_signed_mailbox_turn(
     prompt: &str,
     chunks: Vec<StreamChunk>,
 ) -> anyhow::Result<(PreparedAcceptedTurn, SignedMailboxTurn)> {
-    let user = KeyIdentity::load_or_create(db.data_path().join("mailbox-client.key"), None)?;
+    let user = KeyIdentity::load_or_create(db.path().join("mailbox-client.key"), None)?;
     let client = ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
+        GraphqlEndpoint::as_principal(db.graphql_endpoint(), user.did())
             .with_client_signing_capability(user.client_signing_capability()?)?
             .with_client_signed_agent_creates(),
     );

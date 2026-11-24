@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn goal_control_failures_pause_after_two_retries_even_with_generated_text() {
-    let db = test_db("goal-control-failure-loop").await;
+    let db = trial_store("goal-control-failure-loop").await;
     let mut parent_id = "control-parent".to_string();
     let (user, agent, access) = goal_recovery_actors(&db, &parent_id, "completed").await;
     let mut parent_doc = access
@@ -132,7 +132,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
 #[tokio::test]
 async fn unrelated_or_foreign_tool_failures_do_not_consume_goal_control_retries() {
     for (tool, foreign) in [("bash", false), ("get_goal", true)] {
-        let db = test_db("goal-control-failure-scope").await;
+        let db = trial_store("goal-control-failure-scope").await;
         let (user, agent, access) = goal_recovery_actors(&db, "ordinary-parent", "completed").await;
         let parent = access
             .execute("{AgentRequest(filter: {request_id: {_eq: \"ordinary-parent\"}}) {_docID}}")

@@ -10,7 +10,7 @@ use crate::support::live_inference::{
     wait_for_request_terminal,
 };
 use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
-use crate::support::test_db;
+use crate::support::trial_store;
 
 fn lsp_config() -> String {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -72,7 +72,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         std::fs::write(files_root.join("src/lib.rs"),
             "pub struct Harbor { pub berths: u16 }\npub fn berth_count(harbor: &Harbor) -> u16 { harbor.berths }\n").unwrap();
     }).await.unwrap();
-    let db = test_db("lsp-live").await;
+    let db = trial_store("lsp-live").await;
     let actors = bind_target(&db, &target).await;
     configure_agent_tools_as(
         &actors.fixture.access, actors.node_did(), actors.agent_did(),

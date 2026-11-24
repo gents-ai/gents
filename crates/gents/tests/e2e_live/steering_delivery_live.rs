@@ -16,7 +16,7 @@ use crate::support::agent_requests::{canonical_now, submit_user_request, Request
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_store::test_support::STALL_CEILING;
 
 async fn request_row(actors: &RequestActors, doc_id: &str) -> Value {
@@ -90,7 +90,7 @@ async fn submit_signed(actors: &RequestActors, mut request: AgentRequestCreate) 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool() {
     let target = live_target().await;
-    let db = test_db("live-promoted-queue-input").await;
+    let db = trial_store("live-promoted-queue-input").await;
     let actors = bind_target(&db, &target).await;
     let (runtime, held) = super::queued_user_messages::boot_held_turn(&db, &actors, &target).await;
     const SESSION: &str = "live-promoted-queue";
@@ -204,7 +204,7 @@ async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let target = live_target().await;
-    let db = test_db("live-forged-queue-slot").await;
+    let db = trial_store("live-forged-queue-slot").await;
     let actors = bind_target(&db, &target).await;
     const SESSION: &str = "live-forged-slot-session";
     let legitimate = submit_user_request(

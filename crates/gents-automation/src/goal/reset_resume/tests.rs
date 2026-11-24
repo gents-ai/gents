@@ -13,7 +13,7 @@ struct Reset {
 impl Reset {
     async fn new(kind: &str, reset_at: Option<i64>) -> Self {
         let f = Fixture::new(&json!({
-            "status": "usage_limited", "sequence": 0, "blocked_audits": 0,
+            "status": "usage_limited", "sequence": 0,
             "wrapup_requested": false, "wrapup_completed": false,
             "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
         }))

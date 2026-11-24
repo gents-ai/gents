@@ -342,9 +342,7 @@ pub(crate) async fn prepare_goal_control(
         GoalOperation::Create { .. } => unreachable!(),
     };
     Ok(
-        match crate::operations::goal::admit_set_in_txn(txn, actor, &goal, &input, None, None)
-            .await?
-        {
+        match crate::operations::goal::admit_set_in_txn(txn, actor, &goal, &input, None).await? {
             Ok(plan) => Ok(PreparedGoalControl::Set(Box::new(plan))),
             Err(refusal) => Err(refusal.to_string()),
         },

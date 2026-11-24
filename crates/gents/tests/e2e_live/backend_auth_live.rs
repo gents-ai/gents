@@ -8,12 +8,12 @@ use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
 
 use crate::support::live_inference::{bind_target, live_target, LiveUser};
-use crate::support::test_db;
+use crate::support::trial_store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_live_model_completes_through_configured_openrouter_adapter() -> Result<()> {
     let target = live_target().await;
-    let db = test_db("live-openrouter-local").await;
+    let db = trial_store("live-openrouter-local").await;
     let actors = bind_target(&db, &target).await;
     let live = LiveUser::install(&db, &target).await;
     let connection = connection_spec(
@@ -45,7 +45,7 @@ async fn local_live_model_completes_through_configured_openrouter_adapter() -> R
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -62,7 +62,7 @@ async fn local_live_model_completes_through_configured_openrouter_adapter() -> R
             db.node.clone(),
             agent,
             "Acknowledge this request in one short sentence. Do not call tools.",
-            &db.home.backend_admission(),
+            &db.backend_admission(),
         ),
     )
     .await

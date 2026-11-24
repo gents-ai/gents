@@ -54,8 +54,7 @@ pub(super) fn goal_transition_events(
                     state,
                     token_budget: version.token_budget,
                     tokens_used: version.tokens_used,
-                    last_blocked_request_id: version.last_blocked_request_id.clone(),
-                    last_blocked_reason: version.last_blocked_reason.clone(),
+                    blocked_reason: version.blocked_reason.clone(),
                     last_failure: version.last_failure.clone(),
                     completion_evidence: version.completion_evidence.clone(),
                     timestamp: first_owned([

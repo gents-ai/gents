@@ -16,15 +16,35 @@ source consistency checks, not a separate runtime compatibility version.
   cell and run over the trials that are evidence and over the passing ones,
   `eval trial` prints the trial's figures, and `eval compare` shows the
   change on passing trials without gating on it.
-- Task `goal_blocked_audit_threshold` (positive, default 3) and
-  `goal_max_infrastructure_retries` (non-negative, default 2) set the limits of
-  the Goals a Task creates. Every Goal a Task creates pins them, including Task
-  messages to an Agent. A Task that sets either without a goal objective is
-  rejected. Goals a person starts or the model creates keep the defaults. Goal
-  snapshots and the desktop's Goal view report both, and the desktop Tasks
-  panel edits them. A Goal's creation claim records both beside its token
-  budget, so a replayed creation that asks for other limits conflicts, as one
-  with another budget does.
+- Breaking: one blocked report pauses a Goal. When the working Agent calls
+  `update_goal` with status `blocked`, the Goal stops issuing continuation
+  turns at once and waits for its user; it is resumable, not failed. The
+  user's next message in the session resumes it, as does
+  `gents automation goal resume-request`. The reason the Agent gave is kept as
+  the Goal's `blocked_reason` for the user to read and is never compared
+  between turns. The rule that blocked a Goal only after three consecutive
+  byte-identical reasons is removed, with the Goal's
+  `consecutive_blocked_audits`, `last_blocked_request_id`,
+  `last_blocked_reason` and `blocked_audit_threshold` fields, the creation
+  claim's and Task fire's threshold, and Task `goal_blocked_audit_threshold`.
+- A Goal with a token budget pauses when it reaches it. A Goal has a budget
+  only when one is set (by the person creating or editing it, the Task that
+  fires it, or the Agent for its own Goal); there is no default budget, and a
+  Goal without one has no token ceiling. Reaching it runs one wrap-up turn, in
+  which the Agent is told to summarize what is done, what remains and what it
+  would do next, and then pauses the Goal as `budget_limited`. A person raises
+  the budget with `goal set --token-budget` or lifts it with
+  `--clear-token-budget` (also while the Goal is blocked or budget-limited)
+  and resumes it. A Task fire whose Goal pauses records that pause as the
+  fire's outcome; the Goal stays resumable.
+- Task `goal_max_infrastructure_retries` (non-negative, default 2) sets the
+  infrastructure retry limit of the Goals a Task creates. Every Goal a Task
+  creates pins it, including Task messages to an Agent. A Task that sets it
+  without a goal objective is rejected. Goals a person starts or the model
+  creates keep the default. Goal snapshots and the desktop's Goal view report
+  it, and the desktop Tasks panel edits it. A Goal's creation claim records it
+  beside its token budget, so a replayed creation that asks for another limit
+  conflicts, as one with another budget does.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.

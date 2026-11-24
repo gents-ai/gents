@@ -104,7 +104,10 @@ impl World {
     }
 }
 
-async fn agent_actor(db: &crate::support::TestDb, agent: &Arc<dyn NodeIdentity>) -> Actor {
+async fn agent_actor(
+    db: &gents_store::test_support::TestStore,
+    agent: &Arc<dyn NodeIdentity>,
+) -> Actor {
     Actor {
         access: ConfigAccess::local_managed_agent(
             db.node.clone(),
@@ -123,7 +126,7 @@ async fn agent_actor(db: &crate::support::TestDb, agent: &Arc<dyn NodeIdentity>)
 /// runtime-local, so no replicator is admitted for them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_session_creating_path_gives_its_marker_to_the_sessions_readers() {
-    let db = crate::support::test_db("session-interrupt-access").await;
+    let db = crate::support::trial_store("session-interrupt-access").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let (admin_agent, _) =
         crate::support::install_managed_agent(&db, &fixture.access, &fixture.user, "Administrator")

@@ -35,7 +35,7 @@ pub mod recovery_fixtures {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 mod slot_accounting_tests;

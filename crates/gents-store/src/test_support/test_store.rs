@@ -88,6 +88,17 @@ impl TestStore {
         .await
     }
 
+    /// [`Self::start_configured`] with the permission projector using
+    /// `tool_policy`.
+    pub async fn start_configured_with_tool_policy(
+        name: &str,
+        composition: Extensions,
+        configure: NodeConfigure,
+        tool_policy: Arc<dyn ToolSourcePolicy>,
+    ) -> Self {
+        Self::start_in(name, None, Some(configure), composition, tool_policy).await
+    }
+
     /// Starts the node over the home at `path`, creating it when absent and
     /// reopening it when a previous store left it there. The home is retained
     /// after the node stops.

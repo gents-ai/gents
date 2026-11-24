@@ -148,14 +148,26 @@ pub async fn stage_client_request_in_txn(
         )?,
         "client request requires its valid signed receipt"
     );
+    /* the session check and the held-identity check below are one read */
     let observed = {
         use gents_protocol::document_query::{
-            fields::agent_session as session_fields, Filter, Query, Selection,
+            fields::{agent_request as request_fields, agent_session as session_fields},
+            Filter, Query, QuerySet, Selection,
         };
         txn.run(
-            &Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
-                .filter(Filter::eq(session_fields::DOC_ID, session))
-                .limit(2)
+            &QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING),
+                    )
+                    .filter(Filter::eq(session_fields::DOC_ID, session))
+                    .limit(2),
+                )
+                .plain(
+                    &Query::select(Selection::doc_id())
+                        .filter(Filter::eq(request_fields::REQUEST_ID, &create.request_id))
+                        .limit(1),
+                )
                 .render(),
         )
         .await?
@@ -171,20 +183,8 @@ pub async fn stage_client_request_in_txn(
     );
     // `AgentRequest.request_id` is only `@index`: a client create never adds
     // a second request under an identity the actor can already read.
-    let held = {
-        use gents_protocol::document_query::{
-            fields::agent_request as request_fields, Filter, Query, Selection,
-        };
-        txn.run(
-            &Query::select(Selection::doc_id())
-                .filter(Filter::eq(request_fields::REQUEST_ID, &create.request_id))
-                .limit(1)
-                .render(),
-        )
-        .await?
-    };
     anyhow::ensure!(
-        held["data"]["AgentRequest"]
+        observed["data"]["AgentRequest"]
             .as_array()
             .context("client request identity check omitted rows")?
             .is_empty(),

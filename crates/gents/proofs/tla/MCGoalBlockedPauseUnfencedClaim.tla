@@ -1,0 +1,4 @@
+---- MODULE MCGoalBlockedPauseUnfencedClaim ----
+EXTENDS GoalBlockedPause
+
+====

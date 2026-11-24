@@ -223,7 +223,7 @@ theorem claimed_stop_has_legal_goal_transition
     (observation : Observation) (settled childExists : Bool) (state : State)
     (h : claimedGate observation settled childExists state = .stop) :
     (resolveUnavailable state).isSome := by
-  rcases state with ⟨status, blocked, requested, completed⟩
+  rcases state with ⟨status, requested, completed⟩
   cases childExists <;> cases status <;> cases requested <;> cases completed <;>
     simp_all [claimedGate, resolveUnavailable, Goals.step?]
 

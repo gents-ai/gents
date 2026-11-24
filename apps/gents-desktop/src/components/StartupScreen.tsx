@@ -5,34 +5,30 @@ import { Button } from "@gents/ui/components/button";
 import { connectNodeState, connectScreen } from "../lib/connectScreen";
 import { errorText } from "../lib/errorText";
 import { projectStartupLoadingStatus, startupSteps } from "../lib/loadingStatus";
+import type { StartupGate } from "../lib/startupGate";
 import { continueLabel } from "../lib/remoteNodes";
 import { useApp } from "../ui/app/AppContext";
 import { Mark } from "../ui/app/Mark";
 import { useStartup } from "../ui/hooks/useClient";
 import { StartupProgress } from "../ui/screens/setup/StartupProgress";
 
-export function StartupScreen({
-  configurationPending = false,
-  initConfigStatus,
-}: {
-  configurationPending?: boolean;
-  initConfigStatus?: "absent" | "configured" | "unreadable" | null;
-}) {
+/** `gate`: a ready app's screen that asks something of the person (see
+    `projectStartupGate`); without one, the startup progress until ready. */
+export function StartupScreen({ gate }: { gate?: Exclude<StartupGate, "shell"> }) {
   const { actions, lifecycle, stores } = useApp();
   const startup = useStartup();
   const { watchLocalServer } = actions;
   const localNode = stores.localServer.use.status();
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const waitsOnLocalNode = configurationPending && initConfigStatus === "configured";
+  const unconnected = gate === "not_connected";
   useEffect(
-    () => (waitsOnLocalNode ? watchLocalServer() : undefined),
-    [waitsOnLocalNode, watchLocalServer],
+    () => (unconnected ? watchLocalServer() : undefined),
+    [unconnected, watchLocalServer],
   );
-  const [shown, refusal] = localNode
-    ? connectScreen(connectNodeState(localNode), localNode.pairingReady)
-    : (["loading_settings", null] as const);
-  const unconnected = waitsOnLocalNode && shown === "not_connected";
+  const refusal = localNode
+    ? connectScreen(connectNodeState(localNode), localNode.pairingReady)[1]
+    : null;
   const blocked =
     refusal === "node_not_running"
       ? "The node on this computer is not running. Start it in a terminal with `gents runtime server`, then choose Try again."
@@ -54,7 +50,7 @@ export function StartupScreen({
       setConnecting(false);
     }
   };
-  if (configurationPending && unconnected) {
+  if (unconnected) {
     return (
       <section
         aria-labelledby="startup-title"
@@ -116,7 +112,7 @@ export function StartupScreen({
       </section>
     );
   }
-  if (configurationPending) {
+  if (gate === "unreadable") {
     return (
       <section
         aria-labelledby="startup-title"
@@ -130,14 +126,10 @@ export function StartupScreen({
               id="startup-title"
               className="font-heading text-xl font-medium text-heading"
             >
-              {initConfigStatus === "unreadable"
-                ? "Unable to read saved node settings"
-                : "Loading saved node settings"}
+              Unable to read saved node settings
             </h1>
             <p aria-live="polite" className="text-sm text-muted-foreground">
-              {initConfigStatus === "unreadable"
-                ? "The saved node settings could not be read. Try again to reload them."
-                : "Waiting for your saved settings and sessions."}
+              The saved node settings could not be read. Try again to reload them.
             </p>
           </div>
           <Button

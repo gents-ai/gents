@@ -47,7 +47,7 @@ async fn verified_client_lifecycle(
 }
 
 fn claimed_goal_state() -> serde_json::Value {
-    json!({"status":"active","blocked_audits":2,"wrapup_requested":false,
+    json!({"status":"active","wrapup_requested":false,
         "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000})
 }
@@ -1042,7 +1042,7 @@ async fn run_historical_publication_cases() {
 
 #[tokio::test]
 async fn queued_claimed_publication_observes_pause_before_creating_child() {
-    let before = json!({"status":"active","blocked_audits":2,"wrapup_requested":false,
+    let before = json!({"status":"active","wrapup_requested":false,
         "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000});
     let fixture = Fixture::new(&before).await;
@@ -1087,7 +1087,7 @@ async fn queued_claimed_publication_observes_pause_before_creating_child() {
 
 #[tokio::test]
 async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
-    let before = json!({"status":"active","blocked_audits":2,"wrapup_requested":false,
+    let before = json!({"status":"active","wrapup_requested":false,
         "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000});
     let fixture = Fixture::new(&before).await;

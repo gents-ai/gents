@@ -465,7 +465,8 @@ where
                         .and_then(|data| data.get("update_AgentRequest"))
                         .is_some_and(response_has_documents)
                 {
-                    crate::request::hooks::points::claim_applied(txn, request, claimed_at).await?;
+                    crate::request::hooks::points::claim_applied(txn, request, claimed_at, client)
+                        .await?;
                     crate::session::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;

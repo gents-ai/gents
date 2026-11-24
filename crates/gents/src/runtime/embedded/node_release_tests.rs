@@ -128,8 +128,8 @@ async fn measure_fixtures() -> Vec<StageReport> {
             Arc::downgrade(&home.node)
         })
         .await,
-        measure("test_db", || async {
-            let db = crate::support::test_db("node-release-db").await;
+        measure("trial_store", || async {
+            let db = crate::support::trial_store("node-release-db").await;
             Arc::downgrade(&db.node)
         })
         .await,

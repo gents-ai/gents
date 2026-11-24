@@ -19,14 +19,15 @@ use crate::support::live_inference::{
 use crate::support::snapshots::{
     fetch_message_snapshots_for_session_as, fetch_tool_call_snapshots_for_session,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 const WAIT: Duration = Duration::from_secs(180);
 
 struct Recovery {
-    db: TestDb,
+    db: TestStore,
     actors: RequestActors,
     runtime: Option<BootedAgent>,
     root: tempfile::TempDir,
@@ -35,7 +36,7 @@ struct Recovery {
 impl Recovery {
     async fn new(name: &str) -> Self {
         let target = live_target().await;
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let actors = bind_target(&db, &target).await;
         let root = tokio::task::spawn_blocking(tempfile::tempdir)
             .await

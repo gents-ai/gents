@@ -18,6 +18,64 @@ pub struct AccountSummary {
     pub connected_at: Option<DateTime<Utc>>,
 }
 
+/// A stored row without its tokens: what every account listing reads, for
+/// any client may list a node's accounts while only the runtime that holds an
+/// account reads its tokens (Lean `AccountListing.Summary`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthCredentialSummary {
+    pub credential_id: String,
+    pub node_did: String,
+    pub provider: String,
+    pub account_id: Option<String>,
+    /// The email the tokens showed when they were last stored or refreshed.
+    pub account_email: Option<String>,
+    pub chatgpt_plan_type: Option<String>,
+    pub access_token_expires_at: DateTime<Utc>,
+    pub last_refresh: Option<DateTime<Utc>>,
+    pub enabled: bool,
+    pub account_ref: Option<String>,
+    pub connected_at: Option<DateTime<Utc>>,
+    pub provider_account_key: Option<String>,
+    pub label: Option<String>,
+}
+
+impl OAuthCredentialSummary {
+    /// How a listing names the account: its email, else its account id, else
+    /// the provider's account key, each only when not blank (Lean
+    /// `AccountListing.identityOf`).
+    pub fn identity(&self) -> Option<String> {
+        let shown = |value: &Option<String>| value.clone().filter(|text| !text.trim().is_empty());
+        shown(&self.account_email)
+            .or_else(|| shown(&self.account_id))
+            .or_else(|| shown(&self.provider_account_key))
+    }
+
+    pub fn effective_label(&self) -> String {
+        label_or_product(self.label.as_deref(), &self.provider)
+    }
+}
+
+/// A held credential as a listing would show it once stored.
+impl From<&OAuthCredential> for OAuthCredentialSummary {
+    fn from(credential: &OAuthCredential) -> Self {
+        Self {
+            credential_id: credential.credential_id.clone(),
+            node_did: credential.node_did.clone(),
+            provider: credential.provider.clone(),
+            account_id: credential.account_id.clone(),
+            account_email: token_account_email(credential),
+            chatgpt_plan_type: credential.chatgpt_plan_type.clone(),
+            access_token_expires_at: credential.access_token_expires_at,
+            last_refresh: credential.last_refresh,
+            enabled: credential.enabled,
+            account_ref: credential.account_ref.clone(),
+            connected_at: credential.connected_at,
+            provider_account_key: credential.provider_account_key.clone(),
+            label: credential.label.clone(),
+        }
+    }
+}
+
 /// A stored row as account management shows it: any provider, no tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredAccount {
@@ -33,15 +91,15 @@ pub struct StoredAccount {
     pub last_refresh: Option<DateTime<Utc>>,
 }
 
-impl From<&OAuthCredential> for StoredAccount {
-    fn from(row: &OAuthCredential) -> Self {
+impl From<&OAuthCredentialSummary> for StoredAccount {
+    fn from(row: &OAuthCredentialSummary) -> Self {
         Self {
             credential_id: row.credential_id.clone(),
             node_did: row.node_did.clone(),
             provider: row.provider.clone(),
             account_ref: row.account_ref.clone(),
-            label: effective_account_label(row),
-            identity: account_display_label(row),
+            label: row.effective_label(),
+            identity: row.identity(),
             plan: row.chatgpt_plan_type.clone(),
             enabled: row.enabled,
             access_token_expires_at: row.access_token_expires_at,
@@ -50,16 +108,47 @@ impl From<&OAuthCredential> for StoredAccount {
     }
 }
 
+impl From<&OAuthCredential> for StoredAccount {
+    fn from(credential: &OAuthCredential) -> Self {
+        Self::from(&OAuthCredentialSummary::from(credential))
+    }
+}
+
+/// The query every account listing reads: the rows of `providers` the node
+/// owns, or every row it owns, and no token field.
+fn account_listing_query(node_did: &str, providers: Option<&[&str]>) -> String {
+    let filter = match providers {
+        Some(providers) => rows_filter(node_did, providers, None),
+        None => format!(
+            r#"{{ node_did: {{ _eq: "{}" }} }}"#,
+            gents_store::graphql::escape_graphql_string(node_did)
+        ),
+    };
+    format!("query {{ OAuthCredential(filter: {filter}) {{ {OAUTH_SUMMARY_FIELDS} }} }}")
+}
+
+async fn list_summaries(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    providers: Option<&[&str]>,
+) -> Result<Vec<OAuthCredentialSummary>> {
+    let response = access
+        .execute(&account_listing_query(node_did, providers))
+        .await?;
+    let mut rows = oauth_credential_summaries_from_response(&response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by(resolver_order);
+    Ok(rows)
+}
+
 /// Every row the node owns, in the resolver's order.
 pub async fn list_stored_accounts(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<StoredAccount>> {
-    Ok(list_oauth_credentials_on(access, node_did)
-        .await?
-        .iter()
-        .map(StoredAccount::from)
-        .collect())
+    let rows = list_summaries(access, node_did, None).await?;
+    Ok(rows.iter().map(StoredAccount::from).collect())
 }
 
 pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> String {
@@ -99,7 +188,11 @@ const ACCOUNT_PROVIDERS: [&str; 3] = [
 ];
 
 fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
-    let providers = ACCOUNT_PROVIDERS
+    rows_filter(node_did, &ACCOUNT_PROVIDERS, credential_id)
+}
+
+fn rows_filter(node_did: &str, providers: &[&str], credential_id: Option<&str>) -> String {
+    let providers = providers
         .iter()
         .map(|provider| format!("\"{provider}\""))
         .collect::<Vec<_>>()
@@ -126,16 +219,7 @@ pub async fn list_accounts(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<AccountSummary>> {
-    let response = access
-        .execute(&format!(
-            "query {{ OAuthCredential(filter: {}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}",
-            account_filter(node_did, None)
-        ))
-        .await?;
-    let mut rows = oauth_credentials_from_response(&response)
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-    rows.sort_by(resolver_order);
+    let rows = list_summaries(access, node_did, Some(&ACCOUNT_PROVIDERS)).await?;
     let defaults: Vec<_> = ACCOUNT_PROVIDERS
         .iter()
         .filter_map(|provider| {
@@ -149,8 +233,8 @@ pub async fn list_accounts(
             credential_id: row.credential_id.clone(),
             provider: row.provider.clone(),
             account_ref: row.account_ref.clone(),
-            label: effective_account_label(row),
-            identity: account_display_label(row),
+            label: row.effective_label(),
+            identity: row.identity(),
             plan: row.chatgpt_plan_type.clone(),
             enabled: row.enabled,
             default: defaults.contains(&row.credential_id),
@@ -276,4 +360,54 @@ pub async fn remove_account_in_txn(
     txn.delete_configuration_document(gents_protocol::schemas::OAUTH_CREDENTIAL_NAME, doc_id)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+
+    /// What a listing selects, and how it names the account, are the Lean
+    /// model's (`AccountListing.Contracts.listing`).
+    #[test]
+    fn a_listing_matches_the_lean_model() {
+        use gents_lean_vocab::families::account_listing_contracts_listing as family;
+        family::replay(|input: &family::Input| {
+            let summary = OAuthCredentialSummary {
+                credential_id: "credential".to_owned(),
+                node_did: "did:key:node".to_owned(),
+                provider: "chatgpt-codex".to_owned(),
+                account_id: input.account_id.clone(),
+                account_email: input.account_email.clone(),
+                chatgpt_plan_type: None,
+                access_token_expires_at: DateTime::default(),
+                last_refresh: None,
+                enabled: true,
+                account_ref: None,
+                connected_at: None,
+                provider_account_key: input.key.clone(),
+                label: None,
+            };
+            family::Listing {
+                selected: OAUTH_SUMMARY_FIELDS
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect(),
+                identity: summary.identity(),
+            }
+        });
+    }
+
+    /// Both listing queries select exactly those fields.
+    #[test]
+    fn every_listing_query_selects_the_summary_fields() {
+        for query in [
+            account_listing_query("did:key:node", None),
+            account_listing_query("did:key:node", Some(&ACCOUNT_PROVIDERS)),
+        ] {
+            assert!(
+                query.contains(&format!("{{ {OAUTH_SUMMARY_FIELDS} }}")),
+                "{query}"
+            );
+        }
+    }
 }

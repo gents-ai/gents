@@ -3,7 +3,7 @@ import Proofs.Conformance.Functions.Runtime
 import Proofs.Conformance.Family
 
 namespace Proofs.BackendHealth
-deriving instance Lean.ToJson for Event, ProbeTarget, TraceBackend, TraceStep, DocumentObservation
+deriving instance Lean.ToJson for ProbeTarget, TraceBackend, TraceStep, DocumentObservation
 end Proofs.BackendHealth
 
 namespace Conformance.BackendHealthRetention

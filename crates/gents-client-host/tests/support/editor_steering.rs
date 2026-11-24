@@ -1,5 +1,6 @@
-use super::{fake_llm::FakeLlm, STEERING_INPUT, STEERING_REPLY};
+use super::{STEERING_INPUT, STEERING_REPLY};
 use anyhow::{ensure, Context as _, Result};
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -23,7 +24,7 @@ pub fn has_completed_reply(request: &Value) -> bool {
 
 pub async fn verify(
     access: &gents_store::config_client::ConfigAccess,
-    provider: &FakeLlm,
+    provider: &ScriptedBackend,
     context: Context<'_>,
 ) -> Result<Value> {
     let Context {
@@ -147,7 +148,7 @@ pub async fn verify(
     };
     let image_url = format!("data:{};base64,{}", image.media_type, image.data);
     ensure!(
-        provider.captured_chat_requests().iter().any(|body| {
+        provider.observed_completion_bodies().iter().any(|body| {
             let parts: Vec<_> = body["messages"]
                 .as_array()
                 .into_iter()

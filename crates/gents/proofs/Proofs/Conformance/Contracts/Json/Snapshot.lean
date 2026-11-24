@@ -95,6 +95,7 @@ import Proofs.Conformance.ProviderUsageRefusal
 import Proofs.Conformance.Identity.ProviderUsageEvidence
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.ScheduleCadence
+import Proofs.Conformance.Triggers.ScheduleOccurrence
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
 import Proofs.Conformance.SessionObservation
@@ -325,6 +326,7 @@ import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
 import Proofs.Conformance.AccountStore
+import Proofs.Conformance.AccountListing
 import Proofs.Conformance.UsageRead
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups

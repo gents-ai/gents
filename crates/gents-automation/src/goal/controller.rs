@@ -72,10 +72,7 @@ pub(crate) async fn update_goal_fields_if_status_observed(
                     txn,
                     &updated.node_did,
                     &updated.goal_id,
-                    updated
-                        .last_blocked_reason
-                        .as_deref()
-                        .unwrap_or(&updated.status),
+                    &updated.status,
                     &Utc::now().to_rfc3339(),
                 )
                 .await?;
