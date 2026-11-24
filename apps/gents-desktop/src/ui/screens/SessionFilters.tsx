@@ -9,7 +9,10 @@ import {
   Play,
   User,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
+import { Check, ListFilter } from "lucide-react";
+import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
+import { useMediaQuery } from "@/lib/media";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
   hasFilter,
@@ -315,7 +318,55 @@ export function SessionFilters({
     countFor("agents", (c) => c.agentDid === id),
   );
 
+  const narrow = useMediaQuery("(max-width: 767px)");
   if (sessions.length === 0 && !hasFilter(value)) return null;
+
+  if (narrow) {
+    return (
+      <FilterSheet
+        sections={[
+          ...(agents.length > 0
+            ? [
+                {
+                  label: "Agent",
+                  options: agents.map((a) => ({
+                    value: a.id,
+                    label: a.name,
+                    count: a.count,
+                  })),
+                  value: value.agents,
+                  onChange: (agentsPicked: string[]) =>
+                    onChange({ ...value, agents: agentsPicked }),
+                },
+              ]
+            : []),
+          {
+            label: "State",
+            options: STATES.map((o) => ({
+              value: o.value,
+              label: o.label,
+              count: stateCounts[o.value] ?? 0,
+            })),
+            value: value.states as string[],
+            onChange: (states: string[]) =>
+              onChange({ ...value, states: states as SessionFilter["states"] }),
+          },
+          {
+            label: "Started by",
+            options: SOURCES.map((o) => ({
+              value: o.value,
+              label: o.label,
+              count: sourceCounts[o.value] ?? 0,
+            })),
+            value: value.sources as string[],
+            onChange: (sources: string[]) =>
+              onChange({ ...value, sources: sources as SessionFilter["sources"] }),
+          },
+        ]}
+        active={hasFilter(value)}
+      />
+    );
+  }
 
   return (
     <div
@@ -348,5 +399,87 @@ export function SessionFilters({
         onChange={(sources) => onChange({ ...value, sources })}
       />
     </div>
+  );
+}
+
+type FilterSection = {
+  label: string;
+  options: { value: string; label: string; count: number }[];
+  value: string[];
+  onChange: (next: string[]) => void;
+};
+
+/* a phone's filters: one button, and a sheet of labelled rows for every axis */
+function FilterSheet({
+  sections,
+  active,
+}: {
+  sections: FilterSection[];
+  active: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label="Filter sessions"
+        onClick={() => setOpen(true)}
+        className="relative shrink-0 text-muted-foreground"
+      >
+        <ListFilter />
+        {active && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 size-2 rounded-full bg-brand"
+          />
+        )}
+      </Button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="max-h-[80vh] gap-1 rounded-t-2xl border border-b-0 border-border/50 px-2 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
+          <span aria-hidden className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" />
+          <SheetTitle className="px-3 pb-1">Filter sessions</SheetTitle>
+          <div className="min-h-0 overflow-y-auto">
+            {sections.map((section) => (
+              <div key={section.label} className="pb-2">
+                <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">
+                  {section.label}
+                </p>
+                {section.options.map((option) => {
+                  const on = section.value.includes(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        section.onChange(
+                          on
+                            ? section.value.filter((v) => v !== option.value)
+                            : [...section.value, option.value],
+                        )
+                      }
+                      className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-start text-sm active:bg-accent"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {option.count}
+                      </span>
+                      <Check
+                        className={on ? "size-4 text-brand" : "size-4 opacity-0"}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
