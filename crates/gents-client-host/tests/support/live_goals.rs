@@ -89,7 +89,7 @@ pub async fn verify(
     };
     let ui: Value = serde_json::from_slice(&tokio::fs::read(root.join(name)).await?)?;
     let observed = access.execute(&format!(
-        "{{Goal(filter: {{node_did: {{_eq: \"{}\"}}}}) {{{}}} AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{{} interrupt_requested_at}}}}",
+        "{{Goal(filter: {{node_did: {{_eq: \"{}\"}}}}) {{{}}} AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{{} lifecycle_state}}}}",
         escape_graphql_string(node), gents_protocol::goal::GOAL_FIELDS,
         escape_graphql_string(node), gents::SIGNED_REQUEST_FIELDS,
     )).await?;
@@ -122,7 +122,8 @@ pub async fn verify(
             .context("signed Goal opening")?;
         verify_request(opening, author)?;
         ensure!(
-            opening.interrupt_requested_at.is_none(),
+            opening.lifecycle_state
+                != Some(gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted),
             "Goal control interrupted its owned work"
         );
         if !completed {

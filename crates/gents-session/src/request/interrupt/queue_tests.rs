@@ -65,13 +65,13 @@ async fn publish_client_request(
 async fn rows(access: &ConfigAccess, session: &str) -> Vec<Value> {
     let session = escape_graphql_string(session);
     let result = access.execute(
-        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id node_did requester_did lifecycle_state interrupt_requested_at input execution_origin}}}}"),
+        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id node_did requester_did lifecycle_state interrupt_generation input execution_origin}}}}"),
     ).await.unwrap();
     result["data"]["AgentRequest"].as_array().unwrap().clone()
 }
 
 async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
-    let observed = observe_interrupt_requested_at_with_access(
+    let observed = observe_request_interrupted_at_with_access(
         access,
         &parent.request_id,
         &parent.node_did,
@@ -83,20 +83,56 @@ async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
         observed.request_doc_id.as_deref(),
         Some(parent.doc_id.as_str())
     );
-    observed.requested_at
+    observed.interrupted_at
 }
 
-async fn fixture(case: &ModeledCase) -> QueueFixture {
-    use crate::request::lifecycle::{ClaimOutcome, RequestIdentity, RequestLifecycle};
+/// Runs the production claim of every pending request of the session as its
+/// working Agent. A claim drains a wake an interrupt covered
+/// (`InterruptGeneration.wakeAtClaim`); with the parent still running, every
+/// other pending request stays queued.
+async fn claim_pending(fixture: &QueueFixture) {
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    let parent = &fixture.parent;
+    for row in rows(&fixture.agent_access, &parent.session_id).await {
+        if row["lifecycle_state"] != "pending" {
+            continue;
+        }
+        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &fixture.agent_access,
+            row["_docID"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut lifecycle =
+            RequestLifecycle::new_with_node_did(fixture.db.node.clone(), request, 60);
+        lifecycle
+            .bind_managed_agent(fixture.agent.as_ref())
+            .unwrap();
+        let outcome = lifecycle.claim_with_identity().await.unwrap();
+        assert_ne!(
+            outcome,
+            ClaimOutcome::Claimed,
+            "the parent is still running"
+        );
+    }
+}
 
-    assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
-    assert_eq!(
-        case.requester_id,
-        Some(case.node_id),
-        "modeled requester scope"
-    );
+struct UnclaimedFixture {
+    db: gents_store::test_support::TestStore,
+    user: gents_store::identity::KeyIdentity,
+    client: ConfigAccess,
+    agent: Arc<dyn NodeIdentity>,
+    agent_access: ConfigAccess,
+    lifecycle: crate::request::lifecycle::RequestLifecycle,
+}
+
+/// A verified client request, pending and unclaimed, in a fresh session.
+async fn unclaimed_fixture(name: &str, request_id: String, session: String) -> UnclaimedFixture {
+    use crate::request::lifecycle::{RequestIdentity, RequestLifecycle};
+
     let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
-        &format!("interrupt-queue-{}", case.name),
+        &format!("interrupt-queue-{name}"),
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
@@ -108,13 +144,11 @@ async fn fixture(case: &ModeledCase) -> QueueFixture {
         agent.as_ref(),
     )
     .unwrap();
-    let request_id = case.active_request_id.unwrap().to_string();
-    let session = case.session_id.to_string();
     let doc = publish_client_request(
         &client,
         &user,
         RequestIdentity {
-            request_id: request_id.clone(),
+            request_id,
             node_did: db.node_identity.did().to_owned(),
             requester_did: Some(user.did().to_owned()),
             agent_did: binding.agent_did.clone(),
@@ -154,6 +188,38 @@ async fn fixture(case: &ModeledCase) -> QueueFixture {
     let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(admission);
+    UnclaimedFixture {
+        db,
+        user,
+        client,
+        agent,
+        agent_access,
+        lifecycle,
+    }
+}
+
+async fn fixture(case: &ModeledCase) -> QueueFixture {
+    use crate::request::lifecycle::ClaimOutcome;
+
+    assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
+    assert_eq!(
+        case.requester_id,
+        Some(case.node_id),
+        "modeled requester scope"
+    );
+    let UnclaimedFixture {
+        db,
+        user,
+        client,
+        agent,
+        agent_access,
+        mut lifecycle,
+    } = unclaimed_fixture(
+        &case.name,
+        case.active_request_id.unwrap().to_string(),
+        case.session_id.to_string(),
+    )
+    .await;
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
@@ -391,6 +457,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                     (kind, _) => panic!("{}: no sequential runner for {kind}", case.name),
                 }
             }
+            claim_pending(&fixture).await;
             let actual = rows(&fixture.agent_access, &parent.session_id).await;
             let by_doc: RapidHashMap<_, _> = actual
                 .iter()
@@ -537,20 +604,23 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let reached_in = Arc::clone(&reached);
         let release_in = Arc::clone(&release);
         let paused_in = Arc::clone(&paused);
+        // A write committed inside the pause can abort the interrupt; like
+        // the production owner, it then rebuilds from fresh reads
+        // (InterruptLatchContention.tla).
         let interrupt = tokio::spawn(async move {
             access
-                .transact_write("test.http_interrupt_overlap", |txn| {
+                .transact_signed_conflict_rebuild("test.http_interrupt_overlap", |txn| {
                     let reached = Arc::clone(&reached_in);
                     let release = Arc::clone(&release_in);
                     let paused = Arc::clone(&paused_in);
                     let filter = &filter;
                     Box::pin(async move {
-                        let drained = interrupt_request_matching_in_txn(txn, filter).await?;
+                        let interrupted = interrupt_request_matching_in_txn(txn, filter).await??;
                         if !paused.swap(true, Ordering::SeqCst) {
                             reached.notify_one();
                             release.notified().await;
                         }
-                        Ok::<_, anyhow::Error>(drained)
+                        Ok::<_, anyhow::Error>(interrupted)
                     })
                 })
                 .await
@@ -573,13 +643,6 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             bound.insert(entry.request_id, doc);
         }
         let before_commit = rows(&fixture.agent_access, &parent.session_id).await;
-        assert_eq!(
-            before_commit
-                .iter()
-                .find(|row| row["_docID"] == parent.doc_id)
-                .unwrap()["interrupt_requested_at"],
-            Value::Null
-        );
         for doc in bound.values() {
             assert_eq!(
                 before_commit
@@ -590,13 +653,18 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             );
         }
         release.notify_one();
-        let drained = tokio::time::timeout(Duration::from_secs(10), interrupt)
+        let interrupted = tokio::time::timeout(Duration::from_secs(10), interrupt)
             .await
             .expect("HTTP interrupt must commit after release")
             .unwrap()
             .unwrap();
-        let mut drained = drained;
-        drained.sort();
+        assert!(
+            matches!(
+                interrupted,
+                RequestInterrupt::Interrupted { already: false, .. }
+            ),
+            "{interrupted:?}"
+        );
         if let Some(entry) = after_commit {
             bound.insert(
                 entry.request_id,
@@ -604,6 +672,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             );
         }
         let latched = latch(&fixture.agent_access, parent).await;
+        claim_pending(&fixture).await;
         let after_commit = rows(&fixture.agent_access, &parent.session_id).await;
         let by_doc: RapidHashMap<_, _> = after_commit
             .iter()
@@ -655,13 +724,6 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             ids.sort();
             ids
         };
-        let mut drained_terminal = after_commit
-            .iter()
-            .filter(|row| row["lifecycle_state"] == "interrupted")
-            .map(|row| row["request_id"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>();
-        drained_terminal.sort();
-        assert_eq!(drained, drained_terminal, "exact committed drain receipt");
         let observation =
             gents_lean_vocab::families::interrupt_queue_contracts_overlap::Observation {
                 pending: modeled_ids(&actual_pending),
@@ -720,7 +782,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
     }
 }
 
-async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
+async fn a_failed_interrupt_covers_nothing(case: &ModeledCase) {
     let fixture = fixture(case).await;
     let node = fixture.db.node.clone();
     let parent = &fixture.parent;
@@ -751,7 +813,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
     .request
     .unwrap();
     let (result, count) = ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(2),
+        Some(1),
         interrupt_request_by_doc_id_with_access(
             &fixture.agent_access,
             &parent.doc_id,
@@ -760,18 +822,15 @@ async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
         ),
     )
     .await;
-    assert!(result.is_err(), "second transaction mutation must fail");
-    assert!(count >= 2, "latch and drain must share one transaction");
+    assert!(result.is_err(), "the marker write must fail");
+    assert!(count >= 1, "the interrupt writes the marker");
+    assert_eq!(latch(&fixture.agent_access, parent).await, None);
+    claim_pending(&fixture).await;
     let actual = rows(&fixture.agent_access, &parent.session_id).await;
-    let parent_row = actual
-        .iter()
-        .find(|row| row["_docID"] == parent.doc_id)
-        .unwrap();
     let wake_row = actual
         .iter()
         .find(|row| row["_docID"] == wake.doc_id)
         .unwrap();
-    assert!(parent_row["interrupt_requested_at"].is_null());
     assert_eq!(wake_row["lifecycle_state"], "pending");
     node.shutdown().await.expect("shut down test node");
 }
@@ -782,7 +841,7 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
         gents_lean_vocab::families::interrupt_queue_contracts_completion_before_interrupt::cases()
     {
         let case: ModeledCase = gents_lean_vocab::family::recode(&modeled.input);
-        interrupted_queue_drain_rolls_back_with_latch(&case).await;
+        a_failed_interrupt_covers_nothing(&case).await;
         desktop_interrupt_observation(&case, &modeled).await;
     }
 }
@@ -808,7 +867,7 @@ async fn desktop_interrupt_observation(
     let observer = spawn_request_interrupt_observer(
         fixture.db.node.clone(),
         fixture.agent_access.clone(),
-        parent.doc_id.clone(),
+        parent,
         interrupt_tx,
         shutdown_rx,
     );
@@ -823,7 +882,7 @@ async fn desktop_interrupt_observation(
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
     assert_eq!(
-        fetch_interrupt_requested_at_by_doc_id_with_access(
+        request_interrupted_at_by_doc_id_with_access(
             &gents_store::test_support::unrelated_document_reader(&fixture.db.node).await,
             &parent.doc_id
         )
@@ -833,7 +892,7 @@ async fn desktop_interrupt_observation(
         "an unrelated reader cannot observe the User-owned request"
     );
     assert_eq!(
-        fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
+        request_interrupted_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
             .await
             .unwrap(),
         first,
@@ -855,6 +914,7 @@ async fn desktop_interrupt_observation(
             .with_timezone(&Utc)
     );
     observer.await.unwrap();
+    claim_pending(&fixture).await;
     let after = rows(&fixture.agent_access, &parent.session_id).await;
     let state = &after.iter().find(|row| row["_docID"] == wake).unwrap()["lifecycle_state"];
     let observation =
@@ -936,4 +996,339 @@ async fn signed_interrupt_rebuilds_after_an_execution_renewal_conflict(case: &Mo
         observed["data"]["AgentRequest"][0]["execution_lease_expires_at"],
         "2026-12-01T00:00:00Z"
     );
+}
+
+/// Runs `write` once `future`'s transaction has read everything it reads and
+/// is about to commit, so `write` commits first. Returns whether that point
+/// was reached.
+async fn with_write_before_commit<F, W>(future: F, write: W) -> (F::Output, bool)
+where
+    F: std::future::Future,
+    W: std::future::Future<Output = ()>,
+{
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let paused = Arc::new(AtomicBool::new(false));
+    let owner = std::pin::pin!(ConfigApplyTxn::with_embedded_before_commit_pause(
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        future,
+    ));
+    let driver = std::pin::pin!({
+        let paused = Arc::clone(&paused);
+        async move {
+            reached.notified().await;
+            paused.store(true, Ordering::SeqCst);
+            write.await;
+            release.notify_one();
+        }
+    });
+    let (mut owner, mut driver) = (owner, driver);
+    let mut driven = false;
+    loop {
+        tokio::select! {
+            output = &mut owner => return (output, paused.load(Ordering::SeqCst)),
+            () = &mut driver, if !driven => driven = true,
+        }
+    }
+}
+
+/// The production interrupt owner and a background completion of the same
+/// session race: the wake commits after the interrupt's pending scan and
+/// before its commit. The interrupt covers every wake committed before it
+/// commits (`InterruptCases`, `empty_scan_completion_before_latch_commit`),
+/// so the wake is drained, not left to run after the interrupt.
+#[tokio::test]
+async fn an_interrupt_drains_a_wake_committed_before_it_commits() {
+    let case: ModeledCase = serde_json::from_value(json!({
+        "name": "wake-race", "node_id": 1, "requester_id": 1, "session_id": 900,
+        "active_request_id": 100,
+        "inputs": [{"kind": "enqueue", "entry": {
+            "request_id": 301, "created_at": 10, "execution_origin": "scheduled",
+            "source": "background_completion", "policy": "coalesce",
+            "queue_key": 900, "queued_after": null}}]
+    }))
+    .unwrap();
+    let entry = case
+        .inputs
+        .iter()
+        .find_map(|event| event.entry.as_ref())
+        .expect("modeled wake");
+    let fixture = fixture(&case).await;
+    let node = fixture.db.node.clone();
+    let parent = &fixture.parent;
+    let wake = std::sync::Mutex::new(None);
+    let (interrupted, paused) = with_write_before_commit(
+        interrupt_request_by_doc_id_with_access(
+            &fixture.agent_access,
+            &parent.doc_id,
+            &parent.node_did,
+            parent.requester_did.as_deref(),
+        ),
+        async {
+            let doc =
+                enqueue_generated_wake(&fixture.agent_access, &node, parent, &case, entry).await;
+            *wake.lock().unwrap() = Some(doc);
+        },
+    )
+    .await;
+    assert!(paused, "the wake must commit inside the interrupt");
+    interrupted.unwrap();
+    let wake = wake.into_inner().unwrap().expect("wake published");
+    claim_pending(&fixture).await;
+    let after = rows(&fixture.agent_access, &parent.session_id).await;
+    let state = |doc: &str| {
+        after
+            .iter()
+            .find(|row| row["_docID"] == doc)
+            .map(|row| row["lifecycle_state"].clone())
+    };
+    assert!(latch(&fixture.agent_access, parent).await.is_some());
+    assert_eq!(state(&wake), Some(json!("interrupted")), "{after:?}");
+    node.shutdown().await.expect("shut down test node");
+}
+
+/// The production session interrupt and a claim of the session's pending
+/// request race: the claim commits after the interrupt's active-request scan
+/// and before its commit. The interrupt covers the request claimed before it
+/// commits, so the claimed request carries the latch.
+#[tokio::test]
+async fn a_session_interrupt_latches_a_request_claimed_before_it_commits() {
+    use crate::request::lifecycle::ClaimOutcome;
+
+    let UnclaimedFixture {
+        db,
+        agent_access,
+        mut lifecycle,
+        ..
+    } = unclaimed_fixture("claim-race", "500".into(), "901".into()).await;
+    let request = lifecycle.request().clone();
+    let scope = gents_protocol::session::SessionScope {
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: request.requester_did.clone(),
+    };
+    let claimed = std::sync::Mutex::new(None);
+    let (interrupted, paused) = with_write_before_commit(
+        crate::session::message::interrupt_session_with_access(&db.node, &agent_access, &scope),
+        async {
+            let outcome = lifecycle.claim_with_identity().await;
+            *claimed.lock().unwrap() = Some(outcome);
+        },
+    )
+    .await;
+    assert!(paused, "the claim must commit inside the interrupt");
+    assert_eq!(
+        claimed.into_inner().unwrap().expect("claim ran").unwrap(),
+        ClaimOutcome::Claimed
+    );
+    interrupted.unwrap();
+    assert!(
+        latch(&agent_access, &request).await.is_some(),
+        "the interrupt reaches the request claimed before it committed"
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+/// The session interrupt writes only its marker (`InterruptGeneration`,
+/// `InterruptCoverage.tla` `InterruptNotPrevented`): with the interrupt read
+/// and about to commit, the session's running turn reaches its terminal and
+/// wakes are published into the session, and the interrupt still commits
+/// within its attempts. The wakes committed before it are drained when
+/// claimed.
+#[tokio::test]
+async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
+    use crate::request::lifecycle::RequestTerminalOutcome;
+    let case: ModeledCase = serde_json::from_value(json!({
+        "name": "concurrent", "node_id": 1, "requester_id": 1, "session_id": 902,
+        "active_request_id": 102, "inputs": []
+    }))
+    .unwrap();
+    let mut fixture = fixture(&case).await;
+    let node = fixture.db.node.clone();
+    let parent = fixture.parent.clone();
+    let scope = gents_protocol::session::SessionScope {
+        node_did: parent.node_did.clone(),
+        session_id: parent.session_id.clone(),
+        requester_did: parent.requester_did.clone(),
+    };
+    let wakes = (0..2_u64)
+        .map(|key| {
+            serde_json::from_value::<ModeledEntry>(json!({
+                "request_id": 310 + key, "created_at": 10, "execution_origin": "scheduled",
+                "source": "background_completion", "policy": "coalesce",
+                "queue_key": 910 + key, "queued_after": null
+            }))
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let first =
+        enqueue_generated_wake(&fixture.agent_access, &node, &parent, &case, &wakes[0]).await;
+    let published = std::sync::Mutex::new(Vec::new());
+    let agent_access = fixture.agent_access.clone();
+    let lifecycle = &mut fixture._lifecycle;
+    let (interrupted, paused) = with_write_before_commit(
+        crate::session::message::interrupt_session_with_access(&node, &agent_access, &scope),
+        async {
+            let second =
+                enqueue_generated_wake(&agent_access, &node, &parent, &case, &wakes[1]).await;
+            published.lock().unwrap().push(second);
+            lifecycle
+                .terminalize_owned(
+                    RequestTerminalOutcome::Completed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
+                .await
+                .unwrap();
+        },
+    )
+    .await;
+    assert!(paused, "the other writes must commit inside the interrupt");
+    interrupted.expect("the interrupt commits within its attempts");
+    claim_pending(&fixture).await;
+    let after = rows(&fixture.agent_access, &parent.session_id).await;
+    let state = |doc: &str| {
+        after
+            .iter()
+            .find(|row| row["_docID"] == doc)
+            .map(|row| row["lifecycle_state"].clone())
+    };
+    assert_eq!(state(&parent.doc_id), Some(json!("completed")), "{after:?}");
+    for wake in std::iter::once(first).chain(published.into_inner().unwrap()) {
+        assert_eq!(state(&wake), Some(json!("interrupted")), "{after:?}");
+    }
+    node.shutdown().await.expect("shut down test node");
+}
+
+/// Client submission refuses a request whose requester is not its session's:
+/// it is never created.
+#[tokio::test]
+async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
+    use crate::request::lifecycle::RequestIdentity;
+    let UnclaimedFixture {
+        db,
+        user,
+        client,
+        agent,
+        ..
+    } = unclaimed_fixture(
+        "requester-mismatch",
+        "1".into(),
+        "requester-mismatch".into(),
+    )
+    .await;
+    let mut spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        RequestIdentity {
+            request_id: "2".into(),
+            node_did: db.node_identity.did().to_owned(),
+            requester_did: Some(agent.did().to_owned()),
+            agent_did: agent.did().to_owned(),
+            session_id: "requester-mismatch".into(),
+            content: "another requester".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-09-01T00:00:01Z".into(),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    spec.input = RequestInput::default();
+    let submitted = match crate::request::lifecycle::build_signed_client_request(
+        &client,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    {
+        Ok(create) => crate::request::lifecycle::submit_client_request(&client, &create)
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::from),
+        Err(error) => Err(error),
+    };
+    assert!(submitted.is_err(), "{submitted:?}");
+    let rows = db
+        .client_access(agent.as_ref())
+        .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "2" } }) { _docID } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["AgentRequest"], json!([]));
+}
+
+/// External premise of `InterruptGeneration.interruptFootprint`
+/// (`a_session_writer_aborts_an_interrupt`,
+/// `only_marker_and_session_writers_abort_an_interrupt`): with a session
+/// interrupt read and about to commit, a write of the session document aborts
+/// that attempt and the interrupt lands on the next; a write of the session's
+/// running request does not abort it.
+#[tokio::test]
+async fn a_session_write_aborts_a_session_interrupt() {
+    for (writes_session, expected_attempts) in [(true, 2), (false, 1)] {
+        let case: ModeledCase = serde_json::from_value(json!({
+            "name": format!("session-write-{writes_session}"), "node_id": 1, "requester_id": 1,
+            "session_id": 903, "active_request_id": 103, "inputs": []
+        }))
+        .unwrap();
+        let fixture = fixture(&case).await;
+        let parent = fixture.parent.clone();
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let interrupt =
+            fixture
+                .agent_access
+                .transact_write("test.session_write_interrupt", |txn| {
+                    let (parent, attempts) = (&parent, &attempts);
+                    Box::pin(async move {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        interrupt_session_in_txn(
+                            txn,
+                            &parent.session_id,
+                            &parent.node_did,
+                            parent.requester_did.as_deref(),
+                        )
+                        .await
+                    })
+                });
+        let write = async {
+            let mutation = if writes_session {
+                let session = fixture
+                    .agent_access
+                    .execute(&format!(
+                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        parent.node_did, parent.session_id
+                    ))
+                    .await
+                    .expect("read the session")["data"]["AgentSession"][0]["_docID"]
+                    .as_str()
+                    .expect("the session")
+                    .to_owned();
+                format!(
+                    r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ tags: ["written"] }}) {{ _docID }} }}"#
+                )
+            } else {
+                format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    parent.doc_id
+                )
+            };
+            fixture
+                .agent_access
+                .write("test.session_write_interrupt.write", &mutation)
+                .await
+                .expect("the concurrent write commits");
+        };
+        let (interrupted, paused) = with_write_before_commit(interrupt, write).await;
+        assert!(paused, "the write must commit inside the interrupt");
+        interrupted.unwrap().expect("the interrupt is permitted");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            expected_attempts,
+            "writes the session document: {writes_session}"
+        );
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
 }

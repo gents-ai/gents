@@ -946,7 +946,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .context("the held Goal provider request was not observed")?;
         let current = access
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state }} }}"#,
                 gents_store::graphql::escape_graphql_string(&original_doc_id)
             ))
             .await?;
@@ -957,8 +957,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             rows.len() == 1
                 && rows[0]["_docID"] == original_doc_id
                 && rows[0]["request_id"] == request
-                && rows[0]["lifecycle_state"] == "processing"
-                && rows[0]["interrupt_requested_at"].is_null(),
+                && rows[0]["lifecycle_state"] == "processing",
             "Goal recovery must preserve the same processing request before controls: {rows:?}"
         );
         for status in ["paused", "active", "paused"] {
@@ -980,7 +979,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             );
             view = wait_goal(&mut client, &mut id, node_did, session, status).await?;
             let requests = access.execute(&format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
-                session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
+                session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ _docID request_id lifecycle_state }} }}"#,
                 gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(session))).await?;
             let rows = requests["data"]["AgentRequest"]
                 .as_array()
@@ -989,8 +988,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 rows.len() == 1
                     && rows[0]["_docID"] == original_doc_id
                     && rows[0]["request_id"] == request
-                    && rows[0]["lifecycle_state"] == "processing"
-                    && rows[0]["interrupt_requested_at"].is_null(),
+                    && rows[0]["lifecycle_state"] == "processing",
                 "goal controls must preserve the current owned turn"
             );
         }

@@ -169,7 +169,6 @@ fn folds_into(
         && row.workspace_authority == head.workspace_authority
         && row.workspace_seal_hash == head.workspace_seal_hash
         && row.execution_generation.is_none()
-        && blank(row.interrupt_requested_at.as_deref())
         && blank(row.retry_parent_request.as_deref())
         && blank(row.caused_by_trigger_id.as_deref())
         && blank(row.caused_by_source_doc_id.as_deref())
@@ -371,8 +370,7 @@ pub(crate) async fn consume_folded_in_txn(
             .and(Filter::eq(
                 fields::LIFECYCLE_STATE,
                 transition.from().as_str(),
-            ))
-            .and(Filter::is_null(fields::INTERRUPT_REQUESTED_AT)),
+            )),
     )
     .returning(
         Selection::doc_id()

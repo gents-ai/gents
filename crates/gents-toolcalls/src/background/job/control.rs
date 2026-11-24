@@ -796,7 +796,8 @@ mod tests {
             "created_at": "2026-01-01T00:00:00Z",
             "caused_by_parent_tool_call_doc_id": admission.tool.doc_id().unwrap(),
         });
-        admission.tool.access().unwrap().transact_write("test.control.caused", |txn| {
+        let access = admission.tool.access().unwrap();
+        let doc = access.transact_write("test.control.caused", |txn| {
             let value = &value;
             Box::pin(async move {
                 let response = txn
@@ -809,13 +810,17 @@ mod tests {
             })
         })
         .await
-        .unwrap()
+        .unwrap();
+        if matches!(state, "claimed" | "processing") {
+            gents_session::test_support::record_running_request_as(&access, &doc).await;
+        }
+        doc
     }
 
     /// Whether `doc_id` carries an interrupt latch, read as the job's Agent
     /// that owns its children.
     async fn interrupted(admission: &PublishedAdmission, doc_id: &str) -> bool {
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &access(admission),
             doc_id,
         )

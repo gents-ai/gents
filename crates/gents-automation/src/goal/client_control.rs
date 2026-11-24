@@ -181,10 +181,6 @@ pub(crate) async fn prepare_goal_control(
     txn: &ConfigApplyTxn<'_>,
     command: &SessionGoalControl,
 ) -> Result<Result<PreparedGoalControl, String>> {
-    gents_store::graphql::fence_arrivals(txn, "AgentSession").await?;
-    gents_store::graphql::fence_arrivals(txn, "AgentRequest").await?;
-    gents_store::graphql::fence_arrivals(txn, "Goal").await?;
-    gents_store::graphql::fence_arrivals(txn, "GoalCreationClaim").await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &command.node_did,
