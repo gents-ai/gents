@@ -27,6 +27,7 @@
         "./cases/freezer_breach_sustained.json",
         "./cases/blocked_order_escalation.json",
         "./cases/kiln_flag_and_question.json",
+        "./cases/big_order_inbox_note.json",
         "./cases/cooler_boundary_silent.json",
         "./cases/boiler_new_breach.json",
         "./cases/tank_two_low_readings.json",
