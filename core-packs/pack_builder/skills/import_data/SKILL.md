@@ -1,9 +1,4 @@
----
-name: connect-data
-description: Load when an app needs data from outside this node. Picks the route and makes imports repeatable.
----
-
-# Connect data
+# Import data
 
 - **A file in the workspace**: your file tools, or an installed data-table tool.
 - **A service with an MCP server**: register it and select its tools.
@@ -29,4 +24,4 @@ One document per run: source, time, rows read, rows changed, status. The page's 
 
 Run it on the real file twice. Then on a deliberately broken copy, and confirm nothing changed.
 
-Next: `design-page`.
+Next: load `design-page` before the page.

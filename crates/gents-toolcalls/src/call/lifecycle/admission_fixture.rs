@@ -586,8 +586,9 @@ pub async fn published_admission_with_owner(
         });
     let db = gents_store::test_support::TestStore::open_at(&path, p2p, options.composition.clone())
         .await?;
-    let (db, user, owner, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, &name).await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(db, &name).await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();

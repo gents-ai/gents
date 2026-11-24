@@ -49,12 +49,12 @@ mod agent_target_access {
     /// for every caller and target.
     #[tokio::test]
     async fn configured_agent_targets_grant_exactly_session_writer() {
-        let (db, user, user_access) =
-            gents_inference::test_support::signed_test_node_without_agent_from_db(
-                crate::support::trial_store("agent-target-access").await,
-                "agent-target-access",
-            )
-            .await;
+        let (db, user, user_access) = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store("agent-target-access").await,
+            "agent-target-access",
+        )
+        .await
+        .into_parts();
         let runtime = db.node_identity.clone();
         let node_did = runtime.did().to_owned();
         let user_did = identity::Did::new(user.did()).unwrap();
@@ -236,11 +236,13 @@ mod self_config_inference {
 
     #[tokio::test]
     async fn user_grants_selected_backend_manager_without_backend_write() -> Result<()> {
-        let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
             crate::support::trial_store("backend-selection-manager").await,
             "backend-selection-manager",
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, owner) = signed_home.into_parts();
         let runtime = db.node_identity.did().to_owned();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;

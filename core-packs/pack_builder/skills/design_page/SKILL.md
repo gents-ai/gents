@@ -1,8 +1,3 @@
----
-name: design-page
-description: Load before writing or changing an app page: SDK blocks, theme tokens, layout, preview check.
----
-
 # Design a page
 
 A page is a document on this node: create it with `config` (`help page`) and the app shows it at once and reloads it on each change. No file or pack is needed. Its module is one plain ES module with no build step, in a sandboxed frame. It imports only `@gents/ux-sdk`, `react` and `react/jsx-runtime`, writes elements with `jsx` and `jsxs`, and can't reach the app's DOM or styles. Block props: `config help page sdk`.
@@ -36,4 +31,4 @@ Theme tokens only, so light and dark both work: `var(--text)`, `var(--text-muted
 
 Run `config` with argv `["page","lint","<id>"]`, then `["ux","preview","page/<id>"]`. The preview renders light and dark with this node's data and reports problems. Fix every one and run it again. Check real data, no rows and a long list. If you can't render it, say so; don't describe how it looks.
 
-Next: `automate` if it must refresh on its own, otherwise `control-access`.
+Next: load `build-automation` before any schedule or trigger, otherwise `control-access`.

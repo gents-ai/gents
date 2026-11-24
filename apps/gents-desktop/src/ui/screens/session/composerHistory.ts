@@ -5,7 +5,10 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import type {
+  PendingTurnView,
+  RenderedTimelineItem,
+} from "@source-inc/gents-desktop-client";
 import {
   parseParts,
   type ChipKind,
@@ -21,11 +24,26 @@ export type SentMessage = { text: string; skills: string[] };
     not what the runtime sent on their behalf (automated input is its own
     kind). A message the transcript holds twice, as a pending turn and then
     as the turn it became, counts once, and the same message sent again in a
-    row is one step back, as in a shell. */
-export function sentMessages(items: readonly RenderedTimelineItem[]): SentMessage[] {
+    row is one step back, as in a shell. A message just sent, which the
+    transcript draws as the session's pending turn (`pending`), counts before
+    any read of the session holds it, so ↑ right after a send brings it back. */
+export function sentMessages(
+  items: readonly RenderedTimelineItem[],
+  pending: PendingTurnView | null = null,
+): SentMessage[] {
   const seen = new Set<string>();
   const sent: SentMessage[] = [];
-  for (const item of items) {
+  const all = pending
+    ? [
+        ...items,
+        {
+          ...pending,
+          kind: "pendingUserTurn",
+          itemKey: `pending:${pending.requestId}`,
+        } satisfies RenderedTimelineItem,
+      ]
+    : items;
+  for (const item of all) {
     if (item.kind !== "userMessage" && item.kind !== "pendingUserTurn") continue;
     const key =
       item.kind === "pendingUserTurn"

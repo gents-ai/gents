@@ -11,8 +11,9 @@ export function connectionLine(name: string, status: OperationalStatus) {
       return `Connected to ${name}`;
     case "connecting":
       return `Connecting to ${name}`;
+    /* the observer keeps retrying a lost connection by itself */
     case "disconnected":
-      return `Can’t reach ${name}`;
+      return `Reconnecting to ${name}`;
     case "refused":
       return `${name} doesn’t accept this app`;
     case "no_endpoint":

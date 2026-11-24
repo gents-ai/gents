@@ -15,11 +15,13 @@ fn test_identity(name: &str) -> KeyIdentity {
 async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::Result<()> {
     use gents_store::config_client::{ConfigAccess, NodePermission};
 
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("runtime-view-reader").await,
         "runtime-view-reader",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let runtime = db.node_identity.clone();
     let node = db.node.clone();
     let reader = tokio::task::spawn_blocking(|| test_identity("runtime-view-reader-actor")).await?;
@@ -69,11 +71,13 @@ async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::R
 
 #[tokio::test]
 async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
-    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-mutation-gate").await,
         "document-view-mutation-gate",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let principal = gents_documents::ensure_node(&node, owner).await.unwrap();
@@ -111,11 +115,12 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
 
 #[tokio::test]
 async fn load_document_runtime_view_includes_referenced_documents() {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let db = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-load").await,
         "document-view-load",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -145,12 +150,13 @@ async fn load_document_runtime_view_includes_referenced_documents() {
 
 #[tokio::test]
 async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("document-view-update").await,
-            "document-view-update",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("document-view-update").await,
+        "document-view-update",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -275,11 +281,13 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     use crate::turn::prompt::LayeredPromptBuilder;
     use gents_loop::tool::Tool;
 
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-skill").await,
         "document-view-skill",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -377,11 +385,13 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
 
 #[tokio::test]
 async fn apply_control_update_hot_reloads_skill() {
-    let (db, user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-skill-reload").await,
         "document-view-skill-reload",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     grant_delete_permissions(&db.node, db.node_identity.as_ref(), &user).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
@@ -468,11 +478,13 @@ async fn seed_raw_tools(
 
 #[tokio::test]
 async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-invalid-tool-selection").await,
         "document-view-invalid-tool-selection",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -510,11 +522,13 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
 
 #[tokio::test]
 async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-missing-agent-target").await,
         "document-view-missing-agent-target",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -662,11 +676,13 @@ async fn create_event_trigger(
 
 #[tokio::test]
 async fn retired_reserved_ids_are_never_visible() {
-    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-retired-ids").await,
         "document-view-retired-ids",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -723,11 +739,13 @@ async fn retired_reserved_ids_are_never_visible() {
 
 #[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
-    let (db, user, access, agent) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-tasks-schedules").await,
         "document-view-tasks-schedules",
     )
     .await;
+    let agent = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = &db.node;
     let node_did = db.node_identity.did();
     assert_eq!(
@@ -835,11 +853,13 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
 
 #[tokio::test]
 async fn load_document_runtime_view_populates_event_triggers() {
-    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-event-triggers").await,
         "document-view-event-triggers",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -892,11 +912,13 @@ async fn load_document_runtime_view_populates_event_triggers() {
 
 #[tokio::test]
 async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-schedule-active").await,
         "document-view-resolve-schedule-active",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -965,11 +987,13 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
 
 #[tokio::test]
 async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-trigger-active").await,
         "document-view-resolve-trigger-active",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1036,11 +1060,13 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
 
 #[tokio::test]
 async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-required-source-fill").await,
         "document-view-required-source-fill",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let owner = identity.did();
@@ -1141,11 +1167,13 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
 
 #[tokio::test]
 async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-trigger-unavailable").await,
         "document-view-resolve-trigger-unavailable",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1223,11 +1251,13 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
 /// validation entirely (e.g. replicated from a peer).
 #[tokio::test]
 async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-trigger-injection").await,
         "document-view-resolve-trigger-injection",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1292,11 +1322,13 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
 
 #[tokio::test]
 async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-schedule-unavailable").await,
         "document-view-resolve-schedule-unavailable",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1368,11 +1400,13 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
 
 #[tokio::test]
 async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-active-tasks").await,
         "document-view-resolve-active-tasks",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1523,11 +1557,13 @@ async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did:
 
 #[tokio::test]
 async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-chatgpt-nocred").await,
         "document-view-chatgpt-nocred",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1565,11 +1601,13 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
 
 #[tokio::test]
 async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
-    let (db, user, access, known) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-unknown-kind").await,
         "document-view-unknown-kind",
     )
     .await;
+    let known = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did();
@@ -1641,11 +1679,13 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
 
 #[tokio::test]
 async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-chatgpt-cred").await,
         "document-view-chatgpt-cred",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1673,12 +1713,13 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
 
 #[tokio::test]
 async fn readiness_follows_the_backend_account_reference() {
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("document-view-account-ref").await,
-            "document-view-account-ref",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("document-view-account-ref").await,
+        "document-view-account-ref",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1747,12 +1788,13 @@ async fn readiness_follows_the_backend_account_reference() {
 #[tokio::test]
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("document-view-account-lifecycle").await,
-            "document-view-account-lifecycle",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("document-view-account-lifecycle").await,
+        "document-view-account-lifecycle",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -1836,12 +1878,13 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 #[tokio::test]
 async fn an_account_pool_agent_follows_its_enabled_accounts() {
     use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("document-view-account-pool").await,
-            "document-view-account-pool",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("document-view-account-pool").await,
+        "document-view-account-pool",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -1929,12 +1972,13 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("document-view-account-rejection").await,
-            "document-view-account-rejection",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("document-view-account-rejection").await,
+        "document-view-account-rejection",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -2099,11 +2143,13 @@ async fn bind_default_agent_claude_backend(
 
 #[tokio::test]
 async fn claude_subscription_behavior_requires_enabled_credential() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-claude-cred").await,
         "document-view-claude-cred",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -2202,11 +2248,13 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
 
 #[tokio::test]
 async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
-    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-chatgpt-apply").await,
         "document-view-chatgpt-apply",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -2309,11 +2357,13 @@ fn finding_decl() -> gents_documents::WriteToolDecl {
 }
 #[tokio::test]
 async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
-    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-surface-revoke").await,
         "document-view-surface-revoke",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -2375,11 +2425,13 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
 
 #[tokio::test]
 async fn watcher_scan_identities_follow_lean_candidates() {
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("watcher-scan-root").await,
         "watcher-scan-root",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let cases = gents_lean_vocab::families::watcher_actors_scanned::cases();
@@ -2478,11 +2530,13 @@ use gents_inference::test_support::document_fixtures::*;
 /// event Trigger of it stays unavailable: an event source reads as an Agent.
 #[tokio::test]
 async fn resolve_schedules_a_command_task_without_an_agent_and_holds_its_event_trigger() {
-    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("document-view-resolve-command-task").await,
         "document-view-resolve-command-task",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();

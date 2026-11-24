@@ -11,6 +11,11 @@ if [[ -z "${LEAN_CACHE_ROOT:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${GITHUB_ENV:-}" ]]; then
+  echo "::error::GITHUB_ENV must be set to give later steps this runner's Mathlib download directory."
+  exit 1
+fi
+
 if [[ -z "${RUNNER_NAME:-}" ]]; then
   echo "::error::RUNNER_NAME must be set to isolate Lean output per runner process."
   exit 1
@@ -19,6 +24,9 @@ fi
 runner_cache_key="$(printf '%s' "${RUNNER_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
 cache_dir="${LEAN_CACHE_ROOT}/${runner_cache_key}"
 lake_link="${GITHUB_WORKSPACE}/crates/gents/proofs/.lake"
+
+# Mathlib's `cache get` writes `<file>.part` and renames it; a shared directory lets runners delete each other's.
+echo "MATHLIB_CACHE_DIR=${LEAN_CACHE_ROOT}/.mathlib/${runner_cache_key}" >> "${GITHUB_ENV}"
 
 # A cancelled Lake checkout can leave a Git lock in the persistent cache.
 # Leave locked checkouts to their owner and reuse a separate warm generation.

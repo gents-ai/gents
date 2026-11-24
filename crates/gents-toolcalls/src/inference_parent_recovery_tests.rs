@@ -12,11 +12,13 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "inference-recovery-native-authority",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

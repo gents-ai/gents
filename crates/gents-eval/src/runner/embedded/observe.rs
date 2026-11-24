@@ -660,8 +660,10 @@ mod tests {
             AcceptedFixtureCall,
         };
         let db = crate::support::trial_store("observe-evidence").await;
-        let (db, user, client, binding) =
-            crate::test_support::signed_test_node_from_db(db, "observe-evidence").await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "observe-evidence").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let did = db.node_identity.did().to_owned();
         crate::runner::embedded::executor::install::grant_trial_operations(&db, &binding.agent_did)
             .await

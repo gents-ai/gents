@@ -7,6 +7,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import { startClientObservation } from "../src/hooks/clientObservation";
+import { BURST_MS } from "../src/hooks/projectionController";
 import { LoadingStatus } from "../src/ui/screens/LoadingStatus";
 import { node, renderIn, testApp } from "./app-fixture";
 import { sessionSnapshot } from "./timeline-fixture";
@@ -39,7 +40,9 @@ type Listener = (event: { reason?: string }) => Promise<void>;
 
 /* a session with a request that has not finished and no live text, unless
    `idle`, whose read takes `readMs` and, while `changing` says so, differs
-   each time */
+   each time. Requests made together join one read, so the observer reads
+   `BURST_MS` after an update: `notify` delivers one, `sendUpdate` also waits
+   out that burst. */
 function observe({
   readMs,
   changing,
@@ -75,11 +78,12 @@ function observe({
       return () => {};
     }),
   );
+  const notify = (reason = "store") => void update?.({ reason });
   const sendUpdate = async (reason = "store") => {
-    void update?.({ reason });
-    await vi.advanceTimersByTimeAsync(0);
+    notify(reason);
+    await vi.advanceTimersByTimeAsync(BURST_MS);
   };
-  return { app, api, stop, started, sendUpdate };
+  return { app, api, stop, started, notify, sendUpdate };
 }
 
 function pendingError() {
@@ -110,7 +114,7 @@ describe("reading a session with an open request", () => {
   it("reads nothing while no update arrives", async () => {
     const run = observe({ readMs: 0, changing: () => true });
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(run.started).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(run.started).toHaveLength(1);
@@ -122,13 +126,16 @@ describe("reading a session with an open request", () => {
   it("reads an update once the last read has finished, never back to back and never dropped", async () => {
     const run = observe({ readMs: 1_000, changing: () => true });
     try {
-      await vi.advanceTimersByTimeAsync(1_000);
+      /* the first read starts after the burst and has just finished */
+      await vi.advanceTimersByTimeAsync(BURST_MS + 1_000);
       expect(run.started).toHaveLength(1);
       await run.sendUpdate();
       await vi.advanceTimersByTimeAsync(500);
       await run.sendUpdate();
       expect(run.started).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(499);
+      /* owed once a read's length has passed since that read, it waits a
+         burst of its own; the two updates above each waited one already */
+      await vi.advanceTimersByTimeAsync(499 - BURST_MS);
       expect(run.started).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(run.started).toHaveLength(2);
@@ -157,12 +164,16 @@ describe("reading a session with an open request", () => {
       await vi.advanceTimersByTimeAsync(61_000);
       await run.sendUpdate();
       const before = run.started.length;
+      /* an update every 250 ms */
       for (let i = 0; i < 20; i++) {
-        await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(250 - BURST_MS);
         await run.sendUpdate();
       }
       expect(run.started).toHaveLength(before);
-      await vi.advanceTimersByTimeAsync(3_000);
+      /* the owed read comes the slower gap after the last read ended and
+         waits its own burst; that read, started from the burst's timer,
+         ended a tick of the fake clock (1 ms) after it started */
+      await vi.advanceTimersByTimeAsync(3_000 + BURST_MS + 1);
       expect(run.started).toHaveLength(before + 1);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(run.started).toHaveLength(before + 1);
@@ -176,16 +187,19 @@ describe("reading an idle open session while its node is busy elsewhere", () => 
   it("refreshes the list on every store change but reads the session at its own pace", async () => {
     const run = observe({ readMs: 200, changing: () => false, idle: true });
     try {
-      await vi.advanceTimersByTimeAsync(200);
+      /* the first read starts after the burst and has just finished */
+      await vi.advanceTimersByTimeAsync(BURST_MS + 200);
       expect(run.app.trackedRequestId()).toBeNull();
       expect(run.started).toHaveLength(1);
       const lists = () => run.api.fetchDesktopSnapshot.mock.calls.length;
       let listed = lists();
+      /* an update every 50 ms; a change waits out a burst, and one made
+         while a session read runs is listed after it */
+      const listedWithin = Math.ceil((BURST_MS + 200) / 50);
       for (let i = 0; i < 40; i++) {
-        await run.sendUpdate();
+        run.notify();
         await vi.advanceTimersByTimeAsync(50);
-        /* a change made while a session read runs is listed after it */
-        if (i % 4 === 3) {
+        if (i % listedWithin === listedWithin - 1) {
           expect(lists()).toBeGreaterThan(listed);
           listed = lists();
         }
@@ -198,7 +212,7 @@ describe("reading an idle open session while its node is busy elsewhere", () => 
       const reads = run.started.length;
       await vi.advanceTimersByTimeAsync(60_000);
       expect(run.started.length).toBeLessThanOrEqual(reads + 1);
-      expect(run.started.at(-1)!).toBeGreaterThanOrEqual(2_000);
+      expect(run.started.at(-1)!).toBeGreaterThanOrEqual(BURST_MS + 2_000);
     } finally {
       run.stop();
     }
@@ -207,7 +221,7 @@ describe("reading an idle open session while its node is busy elsewhere", () => 
   it("reads nothing for the session while the window is hidden, then reads it once shown", async () => {
     const run = observe({ readMs: 0, changing: () => true, idle: true });
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(run.started).toHaveLength(1);
       showWindow(false);
       const lists = run.api.fetchDesktopSnapshot.mock.calls.length;
@@ -218,7 +232,7 @@ describe("reading an idle open session while its node is busy elsewhere", () => 
       expect(run.started).toHaveLength(1);
       expect(run.api.fetchDesktopSnapshot.mock.calls.length - lists).toBe(20);
       showWindow(true);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(run.started).toHaveLength(2);
     } finally {
       run.stop();
@@ -228,7 +242,7 @@ describe("reading an idle open session while its node is busy elsewhere", () => 
   it("keeps a running request's reads while the window is hidden", async () => {
     const run = observe({ readMs: 0, changing: () => true });
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(run.app.trackedRequestId()).toBe("r-1");
       showWindow(false);
       await vi.advanceTimersByTimeAsync(5_000);
@@ -281,18 +295,19 @@ describe("a session waiting on its node", () => {
     );
     const send = async (reason: string) => {
       void update?.({ reason });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
     };
     const phase = () => app.stores.session.getState().load.phase;
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(phase()).toBe("pending");
       expect(app.view.getState().loadingStatus).toMatchObject({
         phase: "loading",
         title: "Waiting for session update",
       });
-      /* nothing reads before the first re-read of the backoff is due */
-      await vi.advanceTimersByTimeAsync(999);
+      /* nothing reads before the first re-read of the backoff is due; the
+         pairing change's read, a burst after it, lands just ahead of it */
+      await vi.advanceTimersByTimeAsync(999 - BURST_MS);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
 
       await send("health");
@@ -353,7 +368,7 @@ describe("a session waiting on its node", () => {
       }),
     );
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
       expect(app.stores.session.getState().load.phase).toBe("loading");
       void update?.({ reason: "health" });
@@ -404,14 +419,14 @@ describe("a session waiting on its node", () => {
       );
       const status = () => app.view.getState().loadingStatus;
       try {
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(BURST_MS);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
         expect(status()).toMatchObject({
           title,
           action: null,
         });
         /* the runtime may catch up with no store notice: re-read at 1s, 2s,
-         4s, 8s and 15s, then stop and name the action */
+         4s, 8s and 15s, each a burst later, then stop and name the action */
         for (const [gap, reads] of [
           [1_000, 2],
           [2_000, 3],
@@ -419,7 +434,7 @@ describe("a session waiting on its node", () => {
           [8_000, 5],
           [15_000, 6],
         ] as const) {
-          await vi.advanceTimersByTimeAsync(gap - 1);
+          await vi.advanceTimersByTimeAsync(gap + BURST_MS - 1);
           expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(reads - 1);
           await vi.advanceTimersByTimeAsync(1);
           expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(reads);
@@ -436,10 +451,10 @@ describe("a session waiting on its node", () => {
 
         /* a notice still reads, and starts a fresh streak */
         void update?.({ reason: "store" });
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(BURST_MS);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(7);
         expect(status()).toMatchObject({ action: null });
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(1_000 + BURST_MS);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(8);
       } finally {
         stop();
@@ -478,9 +493,9 @@ describe("a session waiting on its node", () => {
       vi.fn(async () => () => {}),
     );
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(app.stores.session.getState().load.phase).toBe("pending");
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000 + BURST_MS);
       expect(app.stores.session.getState().load).toMatchObject({
         phase: "loaded",
         reread: false,
@@ -488,7 +503,7 @@ describe("a session waiting on its node", () => {
       expect(app.stores.session.getState().session?.sessionId).toBe("s-1");
       expect(app.view.getState().loadingStatus).toBeNull();
       /* the shown request's tracking reads it once more; no timer follows */
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);

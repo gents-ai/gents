@@ -1,9 +1,4 @@
----
-name: package-pack
-description: Load when a working app should become a pack, or when installing or changing a pack. Export, check, install, versions.
----
-
-# Package a pack
+# Package or install a pack
 
 A pack carries an app to another node, or back to this one, in one install. Make it from what already works.
 

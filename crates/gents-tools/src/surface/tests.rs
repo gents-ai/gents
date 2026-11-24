@@ -7,11 +7,13 @@ use identity::Did;
 
 async fn selected_surface_runtime() -> (gents_store::test_support::TestStore, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "selected-surface",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let node_did = root.did().to_owned();

@@ -128,11 +128,13 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("inference-recovery-parent").await,
         "inference-recovery-parent",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();

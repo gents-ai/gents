@@ -121,12 +121,13 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
         )
         .await;
-        let (mut node_db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                node_db,
-                "retained-task-outcomes-follow-modeled-as",
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            node_db,
+            "retained-task-outcomes-follow-modeled-as",
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (mut node_db, _user, user_access) = signed_home.into_parts();
         let node = node_db.node.clone();
         let identity =
             gents_store::test_support::held_runtime_identity(node_db.node_identity.did());

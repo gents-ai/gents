@@ -653,7 +653,13 @@ pub(super) async fn signed_materializer_agent(
     gents_store::config_client::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        name,
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");
