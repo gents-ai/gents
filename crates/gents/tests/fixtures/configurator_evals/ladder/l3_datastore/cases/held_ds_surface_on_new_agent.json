@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Night Writer that can only add them: no reading stored records and no other collections. I will hand it work through you.",
+      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Night Writer whose one tool adds such a record: no reading, changing or deleting stored records, and no other collections. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",

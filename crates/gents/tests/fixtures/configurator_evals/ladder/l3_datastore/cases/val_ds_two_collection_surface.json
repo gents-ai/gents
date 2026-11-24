@@ -11,7 +11,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "We already store WorkflowInput (correlation, message) and WorkflowOutput (correlation, result) records. Create an assistant called Flow Clerk that can add both and look either up by correlation, with no other database access. I will hand it work through you.",
+      "prompt": "We already store WorkflowInput (correlation, message) and WorkflowOutput (correlation, result) records. Create an assistant called Flow Clerk with its own tools to add each kind and look either up by correlation, and no other database access. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",

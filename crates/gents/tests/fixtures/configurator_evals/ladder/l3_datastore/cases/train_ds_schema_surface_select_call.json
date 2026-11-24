@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Results Clerk that can add them and look one up by its correlation, with no other database access. I will hand it work through you.",
+      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Results Clerk with two tools of its own: one adds a result, one looks a result up by its correlation. No other database access. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",

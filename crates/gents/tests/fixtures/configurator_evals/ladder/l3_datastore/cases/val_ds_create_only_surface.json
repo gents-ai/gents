@@ -11,7 +11,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "We already store WorkflowOutput records with a correlation and a result. Create an assistant called Intake Writer that can only add them: no reading stored records and no other collections. I will hand it work through you.",
+      "prompt": "We already store WorkflowOutput records with a correlation and a result. Create an assistant called Intake Writer whose one tool adds such a record: no reading, changing or deleting stored records, and no other collections. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",

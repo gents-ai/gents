@@ -47,7 +47,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our bulletin board keeps DispatchThread records, each with a ticket and a desk. Create an assistant called Board Reader that can look up tickets by desk, read-only, with no other database access. I will hand it work through you.",
+      "prompt": "Our bulletin board keeps DispatchThread records, each with a ticket and a desk. Create an assistant called Board Reader with one tool of its own that looks tickets up by desk: read-only, no other database access. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",
