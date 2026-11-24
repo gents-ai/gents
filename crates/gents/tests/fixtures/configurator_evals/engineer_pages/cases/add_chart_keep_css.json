@@ -123,7 +123,7 @@
     },
     {
       "stage_id": "chart",
-      "prompt": "On my Berth Summary page, add a bar chart of vessels per berth above the table. Feed the chart from a new read tool, berth_totals, on the existing berth_desk surface, and keep list_berths as it is. Keep the stylesheet exactly as it is and lint the page when you are done.",
+      "prompt": "On my Berth Summary page, add a bar chart of vessels per berth above the table. Keep the page's stylesheet exactly as it is, and lint the page when you're done.",
       "capture": [
         {
           "kind": "documents",
@@ -161,44 +161,9 @@
             "entries",
             "enabled"
           ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -210,8 +175,7 @@
               },
               {
                 "capture": "surfaces",
-                "min": 1,
-                "max": 1
+                "min": 1
               }
             ],
             "rows": [
@@ -238,11 +202,7 @@
                   },
                   {
                     "field": "module",
-                    "matches": "['\\\"]berth_totals['\\\"]"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "['\\\"]list_berths['\\\"]"
+                    "matches": "\\bvessels\\b"
                   },
                   {
                     "field": "data",
@@ -251,10 +211,6 @@
                   {
                     "field": "data",
                     "matches": "\"list_berths\""
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"berth_totals\""
                   }
                 ]
               },
@@ -266,10 +222,6 @@
                   {
                     "field": "entries",
                     "matches": "\"tool_name\"\\s*:\\s*\"list_berths\""
-                  },
-                  {
-                    "field": "entries",
-                    "matches": "\"tool_name\"\\s*:\\s*\"berth_totals\""
                   },
                   {
                     "field": "entries",

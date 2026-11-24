@@ -44,6 +44,69 @@
         }
       },
       {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "canal",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "dock",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "pier",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "jetty",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "mill",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "quay",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "weir",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "ford",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "gate",
+          "enabled": false
+        }
+      },
+      {
         "collection": "RelayOverride",
         "document": {
           "relay": "bay",
@@ -70,102 +133,87 @@
           "relay": "tram",
           "enabled": false
         }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "dock",
+          "enabled": null
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "jetty",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "mill",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "quay",
+          "enabled": null
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "cable",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "weir",
+          "enabled": null
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "ford",
+          "enabled": false
+        }
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Our relay switches come from RelayDefault records, and RelayOverride records take precedence over the default for the same relay. An override whose enabled value is empty turns that relay off, and an override can switch on a relay that has no default. Use a single script that queries both collections and works out which relays end up on. Return {\"active\": [...]} sorted, and tell me.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_queries",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "query"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        }
-      ],
+      "prompt": "How many relays end up switched on, and which? RelayDefault records set each relay, and a RelayOverride for the same relay takes precedence: an override with an empty enabled value turns it off, and an override can switch on a relay that has no default.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "query"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "active",
-                "equals": [
-                  "bus",
-                  "ferry",
-                  "rail",
-                  "river"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_queries",
-                "min": 2
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "bus"
+                "matches": "(?i)\\bbus\\b"
               },
               {
-                "matches": "ferry"
+                "matches": "(?i)\\bferry\\b"
               },
               {
-                "matches": "rail"
+                "matches": "(?i)\\bjetty\\b"
               },
               {
-                "matches": "river"
+                "matches": "(?i)\\bpier\\b"
+              },
+              {
+                "matches": "(?i)\\brail\\b"
+              },
+              {
+                "matches": "(?i)\\briver\\b"
+              },
+              {
+                "matches": "(?i)\\b(6|six)\\b[^.\\n]{0,40}\\brelays?|\\brelays?[^.\\n]{0,60}\\b(6|six)\\b"
               }
             ]
           },

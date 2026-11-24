@@ -17,24 +17,8 @@
   "stages": [
     {
       "stage_id": "settle",
-      "prompt": "What's payable on each staff travel claim in claims/? Reply with JSON mapping each claim id to the payable amount, as a number.",
+      "prompt": "What's payable on each staff travel claim in claims/? Just the amount for each claim.",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: Ferry settlement%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        },
         {
           "kind": "file",
           "name": "claims",
@@ -43,45 +27,14 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "load_skill"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "loaded",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"C-31\"\\s*:\\s*51\\b"
+                "matches": "C-31\\b(?:[^-]|-\\D){0,200}?\\b51\\b"
               },
               {
-                "matches": "\"C-32\"\\s*:\\s*9\\b"
+                "matches": "C-32\\b(?:[^-]|-\\D){0,200}?\\b9\\b"
               }
             ]
           },

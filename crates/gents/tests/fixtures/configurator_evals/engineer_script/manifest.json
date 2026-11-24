@@ -12,12 +12,12 @@
   "kind": "documents",
   "assets": [
     "README.md",
+    "cases/chrome_tabs_setup.json",
     "cases/cold_bin_notices.json",
     "cases/dock_totals_file.json",
     "cases/freight_pagination.json",
     "cases/lab_lock_audit.json",
     "cases/manifest_overlap.json",
-    "cases/pickup_reconcile.json",
     "cases/relay_precedence.json",
     "cases/retired_bins.json",
     "cases/sensor_recovery.json",

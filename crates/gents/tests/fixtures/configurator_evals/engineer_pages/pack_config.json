@@ -27,6 +27,7 @@
         "./cases/clear_lint_finding.json",
         "./cases/dock_totals_bar.json",
         "./cases/tide_line.json",
+        "./cases/pie_slice_limit.json",
         "./cases/unbilled_parcels.json",
         "./cases/add_chart_keep_css.json",
         "./cases/refund_aging.json",

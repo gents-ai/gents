@@ -2,11 +2,12 @@
   "id": "engineer-skills",
   "title": "Engineer skills",
   "coverage": [
-    "load the build-planning skill before building",
     "follow a domain skill to its answer",
     "pick the matching sibling skill",
-    "diagnose and pack guidance from shipped skills",
-    "no skill for an unrelated question"
+    "plan and write done-checks before building",
+    "diagnose without changes, then set up an automation that runs",
+    "a deduplicating collection, then a feed loaded into it",
+    "a one-off answer with nothing built"
   ],
   "subject_fixtures": [
     {

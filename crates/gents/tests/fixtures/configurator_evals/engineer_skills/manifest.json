@@ -18,11 +18,10 @@
     "cases/trigger_never_fires.json",
     "cases/courier_ticket_collection.json",
     "cases/plugin_tool_missing.json",
-    "cases/shift_minutes_no_skill.json",
     "cases/ferry_reimbursement_claims.json",
     "cases/urgent_count_once.json",
     "cases/lab_holding_periods.json",
-    "cases/courier_eta_no_skill.json",
+    "cases/late_ferry_claim.json",
     "pack_config.json",
     "suite.json"
   ],

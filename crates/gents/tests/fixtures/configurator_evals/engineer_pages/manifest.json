@@ -17,6 +17,7 @@
     "cases/dock_totals_bar.json",
     "cases/fix_stale_calibrations.json",
     "cases/harbor_arrivals_page.json",
+    "cases/pie_slice_limit.json",
     "cases/refund_aging.json",
     "cases/rename_read_tool.json",
     "cases/restore_my_holdings.json",

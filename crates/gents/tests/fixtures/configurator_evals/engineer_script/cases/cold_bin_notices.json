@@ -10,56 +10,252 @@
       {
         "collection": "ColdBin",
         "document": {
-          "bin": "CB-1",
-          "temp_c": 6
-        }
-      },
-      {
-        "collection": "ColdBin",
-        "document": {
-          "bin": "CB-2",
-          "temp_c": 9
-        }
-      },
-      {
-        "collection": "ColdBin",
-        "document": {
-          "bin": "CB-3",
-          "temp_c": 4
-        }
-      },
-      {
-        "collection": "ColdBin",
-        "document": {
-          "bin": "CB-4",
-          "temp_c": 11
-        }
-      },
-      {
-        "collection": "ColdBin",
-        "document": {
-          "bin": "CB-5",
+          "bin": "CB-11",
           "temp_c": 8
         }
       },
       {
         "collection": "ColdBin",
         "document": {
-          "bin": "CB-6",
+          "bin": "CB-12",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-13",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-14",
+          "temp_c": 9
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-15",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-16",
+          "temp_c": 5
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-17",
+          "temp_c": 4
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-18",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-19",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-20",
+          "temp_c": 4
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-21",
+          "temp_c": 3
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-22",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-23",
+          "temp_c": 12
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-24",
+          "temp_c": 4
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-25",
+          "temp_c": 3
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-26",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-27",
+          "temp_c": 2
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-28",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-29",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-30",
           "temp_c": 10
         }
       },
       {
         "collection": "ColdBin",
         "document": {
-          "bin": "CB-7",
-          "temp_c": -2
+          "bin": "CB-31",
+          "temp_c": 2
         }
       },
       {
         "collection": "ColdBin",
         "document": {
-          "bin": "CB-8",
+          "bin": "CB-32",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-33",
+          "temp_c": 3
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-34",
+          "temp_c": 2
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-35",
+          "temp_c": 2
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-36",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-37",
+          "temp_c": 5
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-38",
+          "temp_c": 2
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-39",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-40",
+          "temp_c": 7
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-41",
+          "temp_c": 9
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-42",
+          "temp_c": 5
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-43",
+          "temp_c": -1
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-44",
+          "temp_c": 5
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-45",
+          "temp_c": 6
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-46",
           "temp_c": 8
         }
       }
@@ -68,65 +264,26 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Check the ColdBin readings and flag the warm ones for me, all from one script: inside the script, query every ColdBin, find the bins warmer than 8 degrees (exactly 8 is fine), and put one item in my inbox titled \"Warm cold bins\" whose note lists them sorted by bin as \"BIN (TEMP)\" separated by commas, for example \"CB-0 (12), CB-9 (15)\". Tell me which bins you flagged.",
+      "prompt": "Put a note in my inbox titled \"Warm cold bins\" listing every cold bin running above 8 degrees, written as BIN (TEMP) and sorted by bin, like \"CB-90 (12), CB-91 (15)\". A bin at exactly 8 is still within limits, so leave it out.",
       "capture": [
         {
           "kind": "documents",
           "name": "notices",
           "collection": "MailboxItem",
-          "filter": {},
-          "fields": [
-            "item_key",
-            "title",
-            "summary",
-            "payload",
-            "status",
-            "kind",
-            "source_kind"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "inner_notices",
-          "collection": "AgentToolCall",
           "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "file_mailbox_item"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
+            "title": {
+              "_eq": "Warm cold bins"
             }
           },
           "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
+            "title",
+            "summary",
+            "payload",
+            "status"
           ]
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "query",
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -135,10 +292,6 @@
                 "capture": "notices",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "inner_notices",
-                "min": 1
               }
             ],
             "rows": [
@@ -150,31 +303,13 @@
                   {
                     "field": "summary",
                     "fallback_field": "payload",
-                    "equals": "CB-2 (9), CB-4 (11), CB-6 (10)"
+                    "matches": "^(?:[^C]|C[^B])*CB-14 \\(9\\),\\s*CB-23 \\(12\\),\\s*CB-30 \\(10\\),\\s*CB-41 \\(9\\)(?:[^C]|C[^B]|C$)*$"
                   },
                   {
                     "field": "status",
                     "equals": "open"
                   }
                 ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "CB-2"
-              },
-              {
-                "matches": "CB-4"
-              },
-              {
-                "matches": "CB-6"
               }
             ]
           },

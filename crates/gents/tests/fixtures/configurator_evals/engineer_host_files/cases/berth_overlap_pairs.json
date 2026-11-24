@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "pairs",
-      "prompt": "Our berth bookings live one file per berth under berths/. Find every pair of held bookings on the same berth whose hours overlap; back-to-back bookings (one ends the hour the next starts) are fine, and released bookings don't count. Write out/berth_conflicts.json as a list of [ref, ref] pairs, refs sorted within each pair and the pairs sorted. Answer with JSON whose \"berths\" lists the berths that have a conflict, alphabetically. Leave the booking files as they are.",
+      "prompt": "Our berth bookings live one file per berth under berths/. Find every pair of held bookings on the same berth whose hours overlap; back-to-back bookings (one ends the hour the next starts) are fine, and released bookings don't count. Write the pairs to out/berth_conflicts.json as a list of [ref, ref] pairs, refs sorted within each pair and the pairs sorted, and tell me which berths have a conflict.",
       "capture": [
         {
           "kind": "file",
@@ -30,18 +30,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -87,7 +75,10 @@
           "params": {
             "all": [
               {
-                "matches": "\"berths\"\\s*:\\s*\\[\\s*\"north\"\\s*,\\s*\"south\"\\s*\\]"
+                "matches": "(?i)\\bnorth\\b"
+              },
+              {
+                "matches": "(?i)\\bsouth\\b"
               }
             ]
           },

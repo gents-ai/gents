@@ -23,7 +23,6 @@
         "./cases/budget_headroom.json",
         "./cases/cleared_handover_recovery.json",
         "./cases/manual_final_step.json",
-        "./cases/trimmed_outputs_report.json",
         "./cases/cleared_manifest_recovery.json",
         "./cases/rotated_log_last_event.json",
         "./cases/slimmed_rotation_recovery.json",
