@@ -261,7 +261,7 @@
     },
     {
       "stage_id": "notify",
-      "prompt": "Send this note to the existing \"Tool Repair Intake\" thread only: \"The wrench W72 is in locker B6 instead of the workbench. Please acknowledge W72.\" Have them answer exactly \"ACK W72\", and tell me their answer when it arrives.",
+      "prompt": "Send this note, once, to the existing \"Tool Repair Intake\" thread only: \"The wrench W72 is in locker B6 instead of the workbench. Please acknowledge W72.\" Have them answer exactly \"ACK W72\", and tell me their answer when it arrives.",
       "settle": true,
       "capture": [
         {
