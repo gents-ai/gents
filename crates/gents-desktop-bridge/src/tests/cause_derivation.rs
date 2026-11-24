@@ -12,9 +12,9 @@ fn tool_default() -> ToolCallEvidence {
 }
 
 #[test]
-fn user_cancelled_when_request_has_interrupt_latch() {
+fn interrupted_when_the_root_request_was_interrupted() {
     let req = RequestEvidence {
-        interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
+        interrupted_at: Some("2026-05-20T10:32:14Z".into()),
     };
     let tool = ToolCallEvidence {
         lifecycle_state: Some("cancelled".into()),
@@ -23,13 +23,10 @@ fn user_cancelled_when_request_has_interrupt_latch() {
         timed_out: false,
     };
     let cause = derive_tool_call_cause(&req, &tool).expect("derives");
-    assert_eq!(cause.cause, "userCancelled");
+    assert_eq!(cause.cause, "interrupted");
     assert_eq!(cause.source, "requestInterrupt");
     assert_eq!(cause.confidence, "direct");
-    assert!(cause
-        .evidence
-        .iter()
-        .any(|e| e.contains("interrupt_requested_at")));
+    assert_eq!(cause.at.as_deref(), Some("2026-05-20T10:32:14Z"));
 }
 
 #[test]
@@ -47,9 +44,9 @@ fn deadline_when_tool_lifecycle_is_timedout() {
 }
 
 #[test]
-fn deadline_wins_over_interrupt_latch_when_both_signals_present() {
+fn deadline_wins_over_an_interrupted_root_when_both_signals_present() {
     let req = RequestEvidence {
-        interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
+        interrupted_at: Some("2026-05-20T10:32:14Z".into()),
     };
     let tool = ToolCallEvidence {
         timed_out: true,
@@ -73,7 +70,7 @@ fn unknown_when_cancelled_but_no_evidence() {
     assert!(cause
         .evidence
         .iter()
-        .any(|e| e.contains("no interrupt_requested_at")));
+        .any(|e| e.contains("root request not interrupted")));
 }
 
 #[test]
@@ -101,7 +98,6 @@ fn none_for_failed_tool_calls() {
 fn request_cause_uses_interrupted_lifecycle_and_terminal_timestamp() {
     let cause = derive_request_cause(
         Some(RequestLifecycleState::Interrupted),
-        &req_default(),
         Some("2026-05-20T10:36:11Z".into()),
     )
     .expect("derives");
@@ -119,6 +115,6 @@ fn request_cause_none_without_cancellation_evidence() {
         Some(RequestLifecycleState::Completed),
         Some(RequestLifecycleState::Failed),
     ] {
-        assert!(derive_request_cause(state, &req_default(), None).is_none());
+        assert!(derive_request_cause(state, None).is_none());
     }
 }

@@ -228,7 +228,7 @@ pub(super) async fn generated_request_recovery_cases_drive_request_owner() {
             .await;
         if input.interrupt_requested {
             actors
-                .set_interrupt_requested_at(&doc_id, "2026-07-09T00:00:00Z")
+                .interrupt_request_session_at(&doc_id, "2026-07-09T00:00:00Z")
                 .await;
         }
         let recover = || {
@@ -589,7 +589,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     let doc_id = seed_scoped_request(&actors, request_id, session_id, "processing").await;
     seed_expired_execution_tuple(&actors, &doc_id).await;
     actors
-        .set_interrupt_requested_at(&doc_id, "2026-03-23T00:00:30Z")
+        .interrupt_request_session_at(&doc_id, "2026-03-23T00:00:30Z")
         .await;
     seed_recovery_session(
         &actors,

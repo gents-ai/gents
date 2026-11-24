@@ -55,6 +55,8 @@ import Proofs.Conformance.ToolAdmission
 import Proofs.Conformance.StartupPublication
 import Proofs.Conformance.RequestRepairScope
 import Proofs.Conformance.InterruptRequestDrain
+import Proofs.Conformance.InterruptGenerationClaim
+import Proofs.Conformance.Identity.SessionInterruptAccess
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
 import Proofs.Conformance.PathNamespace

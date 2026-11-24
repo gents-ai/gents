@@ -569,14 +569,27 @@
   {
     "read": {
       "path": "crates/gents-session/src/request/hooks/owed.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, agent_did: { _eq: \"$GENTS_agent_did$\" }, interrupt_requested_at: { _ne: null } }, order: { interrupt_requested_at: DESC }, limit: $GENTS_bound$"
+      "collection": "AgentSessionInterrupt",
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, interrupted_at: { _ge: \"$GENTS_horizon$\" } }, order: { interrupted_at: DESC }, limit: $GENTS_bound$"
     },
     "bindings": [
       {
         "node": "probe",
-        "agent_did": "probe",
+        "horizon": "probe",
         "bound": "64"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-automation/src/triggers/engine/durable.rs",
+      "collection": "TriggerFire",
+      "arguments": "filter: { owner_did: { _eq: \"$GENTS_owner$\" }, trigger_id: { _eq: \"$GENTS_trigger$\" } }, order: { fire_sequence: DESC }, limit: 1"
+    },
+    "bindings": [
+      {
+        "owner": "probe",
+        "trigger": "probe"
       }
     ]
   }

@@ -857,7 +857,7 @@ fn session_snapshot_retains_modeled_terminal_provider_evidence() {
 fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
     let mut interrupted = request("req-2", RequestLifecycleState::Interrupted);
     interrupted.failure_reason = Some("completion cancelled".into());
-    interrupted.interrupt_requested_at = Some("2026-04-21T12:03:00Z".into());
+    interrupted.terminalized_at = Some("2026-04-21T12:03:00Z".into());
     let snapshot = build_session_snapshot_from_store(
         &ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(None)],
@@ -888,14 +888,14 @@ fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
         Some("completion cancelled")
     );
     let cause = outcome.cancel_cause.expect("cancel cause");
-    assert_eq!(cause.cause, "userCancelled");
-    assert_eq!(cause.source, "requestInterrupt");
+    assert_eq!(cause.cause, "interrupted");
+    assert_eq!(cause.source, "requestLifecycle");
     assert_eq!(snapshot.tool_calls.len(), 1);
     let tool_cause = snapshot.tool_calls[0]
         .cancel_cause
         .as_ref()
         .expect("cancelled tool retains request interrupt evidence");
-    assert_eq!(tool_cause.cause, "userCancelled");
+    assert_eq!(tool_cause.cause, "interrupted");
     assert_eq!(tool_cause.source, "requestInterrupt");
     assert_eq!(tool_cause.at.as_deref(), Some("2026-04-21T12:03:00Z"));
 }
@@ -904,7 +904,7 @@ fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
 fn tool_cancel_cause_uses_only_its_physical_request_owner() {
     for request_doc_id in [Some("req-1"), Some("missing-request"), None] {
         let mut latest = request("req-2", RequestLifecycleState::Interrupted);
-        latest.interrupt_requested_at = Some("2026-04-21T12:03:00Z".into());
+        latest.terminalized_at = Some("2026-04-21T12:03:00Z".into());
         let snapshot = build_session_snapshot_from_store(
             &ClientStore::from_rows(ClientStoreRows {
                 sessions: vec![session(None)],

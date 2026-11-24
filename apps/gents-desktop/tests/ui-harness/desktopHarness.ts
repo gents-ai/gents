@@ -4125,7 +4125,7 @@ export function createDesktopUiHarness(
       const result: InterruptRequestResult = {
         requestId: request.requestId,
         accepted: true,
-        interruptRequestedAt: new Date().toISOString(),
+        interruptedAt: new Date().toISOString(),
         alreadyInterrupted: false,
       };
       return result;

@@ -416,7 +416,7 @@ pub(super) async fn validate_parent(
                     .field(fields::LIFECYCLE_STATE)
                     .field(fields::EXECUTION_GENERATION)
                     .field(fields::EXECUTION_LEASE_EXPIRES_AT)
-                    .field(fields::INTERRUPT_REQUESTED_AT),
+                    .field(fields::INTERRUPT_GENERATION),
             )
             .filter(session_scope(
                 &binding.node_did,
@@ -435,11 +435,19 @@ pub(super) async fn validate_parent(
     anyhow::ensure!(rows.len() == 1, "plugin request is missing or ambiguous");
     let request = &rows[0];
     if require_live && parent["await_mode"] != "background" {
+        let interrupted = gents_session::request::interrupt::request_interrupted_at_in_txn(
+            txn,
+            &binding.node_did,
+            &binding.session_id,
+            request["interrupt_generation"].as_i64(),
+        )
+        .await?
+        .is_some();
         anyhow::ensure!(
             RequestLifecycleState::parse_opt(request["lifecycle_state"].as_str())
                 == Some(RequestLifecycleState::Processing)
                 && request["execution_generation"].as_str() == Some(generation)
-                && request["interrupt_requested_at"].is_null()
+                && !interrupted
                 && DateTime::parse_from_rfc3339(
                     request["execution_lease_expires_at"].as_str().unwrap_or("")
                 )?

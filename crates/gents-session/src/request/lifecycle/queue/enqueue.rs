@@ -65,8 +65,8 @@ pub(crate) async fn enqueue_steering_request(
     access
         .transact_write("lifecycle.enqueue_steering", move |txn| {
             Box::pin(async move {
-                // Read the session's current hop under the write gate so a
-                // higher append committed first is never missed.
+                // A filtered read the store does not validate: an append
+                // committing beside this one may carry the same hop.
                 let hop = crate::session::load_session_current_hop_in_txn(
                     txn,
                     &parent.node_did,

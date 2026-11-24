@@ -319,10 +319,34 @@ impl ChatNode {
     pub(super) async fn session(&self, id: &str, agent: &str) {
         let (id, agent) = (escape_graphql_string(id), did(agent));
         let at = self.next_at();
+        let doc = self
+            .create(
+                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                serde_json::json!({"input": {"session_id": id, "node_did": OWNER, "requester_did": OWNER, "agent_did": agent, "created_at": at}}),
+                "AgentSession",
+            )
+            .await;
         self.run(&format!(
-            r#"mutation {{ create_AgentSession(input: {{ session_id: "{id}", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", created_at: "{at}" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentSessionInterrupt(input: {{ session_doc_id: "{doc}", session_id: "{id}", node_did: "{OWNER}", generation: 0 }}) {{ _docID }} }}"#
         ))
         .await;
+    }
+
+    /// Whether the session's interrupt passed the generation the request
+    /// `id` recorded.
+    pub(super) async fn interrupted(&self, id: &str) -> bool {
+        let row = self.request_row(id).await;
+        let marker = self
+            .run(&format!(
+                r#"{{ AgentSessionInterrupt(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ generation }} }}"#,
+                escape_graphql_string(row.session_id.as_deref().unwrap())
+            ))
+            .await;
+        let current = marker["AgentSessionInterrupt"][0]["generation"]
+            .as_i64()
+            .unwrap();
+        row.interrupt_generation
+            .is_some_and(|recorded| recorded < current)
     }
 
     /// The runtime's request `id` in `session`, in `state`, on agent `a`.
@@ -342,7 +366,7 @@ impl ChatNode {
         let at = self.next_at();
         let agent = did("a");
         self.run(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{id}", purpose: "normal", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", session_id: "{session}", {fields}, lifecycle_state: "{state}", execution_generation: "g-{id}", execution_lease_secs: 300, execution_lease_expires_at: "2126-01-01T00:00:00Z", created_at: "{at}" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{id}", purpose: "normal", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", session_id: "{session}", {fields}, lifecycle_state: "{state}", interrupt_generation: 0, execution_generation: "g-{id}", execution_lease_secs: 300, execution_lease_expires_at: "2126-01-01T00:00:00Z", created_at: "{at}" }}) {{ _docID }} }}"#
         ))
         .await;
         self.request_row(id).await
@@ -357,7 +381,7 @@ impl ChatNode {
 
     /// The requests `filter` picks.
     async fn requests(&self, filter: &str) -> Vec<AgentRequestRow> {
-        let fields = "_docID request_id node_did requester_did agent_did session_id content input lifecycle_state interrupt_requested_at";
+        let fields = "_docID request_id node_did requester_did agent_did session_id content input lifecycle_state interrupt_generation";
         let rows = self
             .run(&format!(
                 "{{ AgentRequest(filter: {{ {filter} }}) {{ {fields} }} }}"
@@ -1891,11 +1915,7 @@ async fn interrupt_stops_the_running_turn() {
     shell.intend(interrupt("s1", "t1"));
 
     assert_eq!(shell.next().await, ended("s1", "t1"));
-    let stopped = node.request_row("t1").await;
-    assert!(
-        stopped.interrupt_requested_at.is_some(),
-        "the request is latched: {stopped:?}"
-    );
+    assert!(node.interrupted("t1").await, "the request is interrupted");
 }
 
 /// Stopping exactly the tab's turn leaves another client's newer turn running.
@@ -1912,8 +1932,7 @@ async fn interrupt_clears_a_turn_that_has_ended_without_stopping_another() {
 
     assert_eq!(shell.next().await, ended("s1", "t1"));
     for request in ["t1", "t2"] {
-        let row = node.request_row(request).await;
-        assert_eq!(row.interrupt_requested_at, None, "{request}");
+        assert!(!node.interrupted(request).await, "{request}");
     }
 }
 

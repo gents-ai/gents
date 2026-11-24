@@ -1,4 +1,4 @@
-type TriggerFire @policy(id: "$household", resource: "children") @index(fields: ["fire_key"], unique: true) {
+type TriggerFire @policy(id: "$household", resource: "children") @index(fields: ["fire_key"], unique: true) @index(fields: ["owner_did", "trigger_id", "fire_sequence"], unique: true) {
     fire_key: String @immutable
     owner_did: String @index @immutable
     trigger_id: String @index @immutable
@@ -20,4 +20,5 @@ type TriggerFire @policy(id: "$household", resource: "children") @index(fields: 
     shard_id: String @immutable
     attempt: Int @immutable
     created_at: DateTime @index @immutable
+    fire_sequence: Int @immutable
 }

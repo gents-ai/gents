@@ -1,0 +1,4 @@
+---- MODULE MCFireBudgetAdmission ----
+EXTENDS FireBudgetAdmission
+
+====

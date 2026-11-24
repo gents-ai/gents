@@ -212,7 +212,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub retry_count: Option<i64>,
     #[serde(default)]
-    pub interrupt_requested_at: Option<String>,
+    pub interrupt_generation: Option<i64>,
     /// Positive terminal-owner evidence that no provider-capable work began.
     /// Missing/false never licenses inference from absent provider rows.
     #[serde(default)]

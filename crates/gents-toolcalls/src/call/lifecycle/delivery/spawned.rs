@@ -283,7 +283,7 @@ impl ToolCallLifecycle {
                     let request_row = &crate::call::hook::persistence::reserve_background_slot_in_txn(
                         txn, &request_doc_id, crate::call::hook::persistence::BackgroundSlot::Requested,
                         background_limit,
-                        "node_did session_id request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at",
+                        "node_did session_id request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_generation",
                     ).await?;
                     anyhow::ensure!(
                         request_row["node_did"].as_str() == Some(node_did.as_str())
@@ -298,7 +298,14 @@ impl ToolCallLifecycle {
                     if RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
                         != Some(RequestLifecycleState::Processing)
                         || request_row["execution_generation"].as_str() != Some(generation.as_str())
-                        || !request_row["interrupt_requested_at"].is_null()
+                        || gents_session::request::interrupt::request_interrupted_at_in_txn(
+                            txn,
+                            &node_did,
+                            &session_id,
+                            request_row["interrupt_generation"].as_i64(),
+                        )
+                        .await?
+                        .is_some()
                         || DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) <= now
                     {
                         return Err(crate::call::hook::persistence::BackgroundSlotRefusal::RequestStopped.into());

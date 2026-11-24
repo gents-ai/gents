@@ -22,7 +22,7 @@ pub(crate) struct RequestRowDiagnostics {
     failure_reason: Option<String>,
     created_at: Option<String>,
     claimed_at: Option<String>,
-    interrupt_requested_at: Option<String>,
+    interrupt_generation: Option<i64>,
     valid_until: Option<String>,
     terminal_output: Option<serde_json::Value>,
 }
@@ -459,7 +459,7 @@ async fn build_request_diagnostics(
             failure_reason: row.failure_reason.clone(),
             created_at: row.created_at.clone(),
             claimed_at: row.claimed_at.clone(),
-            interrupt_requested_at: row.interrupt_requested_at.clone(),
+            interrupt_generation: row.interrupt_generation,
             valid_until: row.valid_until.clone(),
             terminal_output: row
                 .terminal_output

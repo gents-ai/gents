@@ -1,9 +1,15 @@
 import Proofs.Automation.EventDelivery.Durable
+import Proofs.Store.TransactionFence
 
 /-! Rolling fire budget. Admission counts its own receipts in the window, so
-budget accounting commits atomically with the receipt it limits. `dispatch` is
-sequential per source and a Trigger has one source, so concurrent admissions of
-one Trigger are not modeled. Exhaustion stops the Trigger through `enabled`,
+budget accounting commits atomically with the receipt it limits. That count is
+a filtered read the store does not validate, so two admissions of one Trigger
+running at once could each count the other's receipt as absent
+(`count_by_scan_over_admits`). Each receipt therefore takes `fire_sequence` one
+past the receipts its admission read, and `(owner_did, trigger_id,
+fire_sequence)` is a unique index: an admission commits only on a read of every
+receipt committed before it (`TransactionFence.uniqueIndex`), and concurrent
+admissions keep the bound (`concurrent_admission_preserves_bound`). Exhaustion stops the Trigger through `enabled`,
 the existing owner of "no further delivery": the cursor keeps its position and
 re-enabling resumes exactly the undelivered arrivals. Requests already admitted
 are not this budget's concern; gents-ai/gents#3548 owns stopping an accepted
@@ -208,5 +214,97 @@ theorem trace_stays_within_budget (state : State) (trigger : Trigger) (configure
       exact ih _ _ time next rest now
         (fun entry mem => hall entry (List.mem_cons_of_mem _ mem))
         (hall (time, fire) (by simp))
+
+/-- The admission of one fire on the receipts `seen` it read. -/
+def admitOn (trigger : Trigger) (configured : Option Nat) (reason : String) (now : Nat)
+    (seen : List Nat) : Trigger :=
+  match decideFire (effective configured) (windowCount seen now) with
+  | .admit => { trigger with admittedAt := now :: trigger.admittedAt }
+  | .exhausted => stop trigger reason
+
+theorem admission_on_every_receipt_preserves_bound (trigger : Trigger)
+    (configured : Option Nat) (reason : String) (earlier now : Nat)
+    (bounded : Bounded trigger (effective configured) earlier) (forward : earlier ≤ now) :
+    Bounded (admitOn trigger configured reason now trigger.admittedAt)
+      (effective configured) now := by
+  obtain ⟨past, within⟩ := bounded
+  have shifted : windowCount trigger.admittedAt now ≤ effective configured :=
+    Nat.le_trans (windowCount_antitone _ forward) within
+  have monotone : ∀ time ∈ trigger.admittedAt, time ≤ now :=
+    fun time mem => Nat.le_trans (past time mem) forward
+  unfold admitOn
+  cases hdecide : decideFire (effective configured) (windowCount trigger.admittedAt now) with
+  | admit =>
+      have under : windowCount trigger.admittedAt now < effective configured := by
+        by_contra over
+        simp [decideFire, over] at hdecide
+      refine ⟨?_, ?_⟩
+      · intro time mem
+        simp only [List.mem_cons] at mem
+        rcases mem with rfl | old
+        · exact Nat.le_refl _
+        · exact monotone time old
+      · have count : windowCount (now :: trigger.admittedAt) now =
+            windowCount trigger.admittedAt now + 1 := by
+          simp [windowCount, List.filter_cons, windowSeconds]
+        show windowCount (now :: trigger.admittedAt) now ≤ effective configured
+        rw [count]
+        omega
+  | exhausted => exact ⟨monotone, shifted⟩
+
+/-- An admission's commit when other admissions of the Trigger run at once.
+It read `seen`, the receipts committed before its read, and inserts its
+receipt at sequence `seen.length`; the receipts of a Trigger hold the dense
+sequences below `trigger.admittedAt.length`, so the unique index admits that
+sequence only when no receipt committed after the read. An aborted commit is
+`none`: its owner runs the admission again on a fresh read. -/
+def commitConcurrent (trigger : Trigger) (configured : Option Nat) (reason : String)
+    (now : Nat) (seen : List Nat) : Option Trigger :=
+  if seen.length = trigger.admittedAt.length then
+    some (admitOn trigger configured reason now seen)
+  else none
+
+/-- What an admission reads is a suffix of what is committed when it commits:
+receipts are only ever added at the front. A commit the unique sequence lets
+through therefore decided on exactly the committed receipts. -/
+theorem committed_admission_read_every_receipt (trigger : Trigger)
+    (configured : Option Nat) (reason : String) (now : Nat) (seen : List Nat)
+    (after : Trigger) (read : seen <:+ trigger.admittedAt)
+    (h : commitConcurrent trigger configured reason now seen = some after) :
+    seen = trigger.admittedAt := by
+  unfold commitConcurrent at h
+  split at h
+  · exact read.eq_of_length (by assumption)
+  · contradiction
+
+/-- However admissions of one Trigger interleave, every commit keeps the
+rolling window within the budget. -/
+theorem concurrent_admission_preserves_bound (trigger : Trigger) (configured : Option Nat)
+    (reason : String) (earlier now : Nat) (seen : List Nat) (after : Trigger)
+    (bounded : Bounded trigger (effective configured) earlier) (forward : earlier ≤ now)
+    (read : seen <:+ trigger.admittedAt)
+    (h : commitConcurrent trigger configured reason now seen = some after) :
+    Bounded after (effective configured) now := by
+  have same := committed_admission_read_every_receipt trigger configured reason now seen after
+    read h
+  subst same
+  simp only [commitConcurrent, if_true, Option.some.injEq] at h
+  subst h
+  exact admission_on_every_receipt_preserves_bound trigger configured reason earlier now
+    bounded forward
+
+/-- Without the unique sequence an admission commits on whatever it read: two
+admissions that each read one receipt under a budget of two both commit, and
+three receipts sit in the window. -/
+theorem count_by_scan_over_admits :
+    let seen := [10]
+    let first := admitOn { admittedAt := seen } (some 2) "" 20 seen
+    let second := admitOn first (some 2) "" 20 seen
+    windowCount second.admittedAt 20 = 3 := by decide
+
+theorem the_unique_sequence_aborts_the_stale_twin :
+    let seen := [10]
+    let first := commitConcurrent { admittedAt := seen } (some 2) "" 20 seen
+    (first.bind fun trigger => commitConcurrent trigger (some 2) "" 20 seen) = none := by decide
 
 end Triggers.FireBudget

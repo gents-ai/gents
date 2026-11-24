@@ -40,7 +40,6 @@ pub use coalescing::{
     reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
 };
 pub use draining::drain_all_pending_session_requests_in_txn;
-pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub use edit_submission::{
     publish_edit_command, submit_pending_user_edit, submit_pending_user_steer, SteeredMessage,
 };
@@ -60,7 +59,9 @@ pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use input::queue_is_automated_wakeup;
 pub use input::row_is_automated_wakeup;
-pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
+pub(crate) use input::{
+    background_wake_queue, is_automated_wakeup, is_scheduled_automated_wake, row_queue,
+};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
 pub(crate) use intake::{pending_ids_in_txn, pending_with_new_candidate_in_txn};
