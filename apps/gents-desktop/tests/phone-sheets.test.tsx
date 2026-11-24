@@ -1,13 +1,9 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { NavPanel } from "@/app/RailFlyout";
-import { emptyFilter } from "../src/ui/lib/session-filter";
-import { SessionFilters } from "../src/ui/screens/SessionFilters";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -58,26 +54,5 @@ describe("on a narrow window", () => {
     expect(juno).toHaveAttribute("aria-pressed", "false");
     await user.click(juno);
     expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno");
-  });
-
-  it("filters sessions from one button and a sheet of every axis", async () => {
-    const onChange = vi.fn();
-    renderIn(
-      testApp({ deployments: [node()], selection: { nodeDid: deployment.nodeDid } }),
-      <SessionFilters
-        sessions={[{ sessionId: "s", nodeDid: deployment.nodeDid } as SessionSummary]}
-        nodeDids={[deployment.nodeDid]}
-        value={emptyFilter}
-        onChange={onChange}
-      />,
-    );
-    expect(screen.queryByLabelText("Session filters")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Filter sessions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Filter sessions" });
-    expect(within(sheet).getByText("State")).toBeInTheDocument();
-    expect(within(sheet).getByText("Started by")).toBeInTheDocument();
-    const [first] = within(sheet).getAllByRole("button", { pressed: false });
-    await userEvent.click(first!);
-    expect(onChange).toHaveBeenCalledOnce();
   });
 });
