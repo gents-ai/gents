@@ -544,6 +544,25 @@ impl ScriptedBackend {
         self.state.chunk_count(marker)
     }
 
+    /// The most completions the backend has run at once, each counted from
+    /// its arrival until its last event is produced.
+    pub fn peak_in_flight(&self) -> usize {
+        self.state.lock().peak_in_flight
+    }
+
+    /// Waits until exactly `expected` completions are running.
+    pub async fn wait_for_in_flight(&self, expected: usize) {
+        let observed = self
+            .state
+            .wait_within_stall_ceiling(|inner| (inner.in_flight == expected).then_some(()))
+            .await;
+        assert!(
+            observed.is_some(),
+            "{expected} completion(s) never ran at once within {STALL_CEILING:?}; running {}",
+            self.state.lock().in_flight
+        );
+    }
+
     pub fn observed_requests(&self, marker: &str) -> usize {
         self.state.request_count(marker)
     }
@@ -658,6 +677,45 @@ struct StreamingStateInner {
     held_entries: RapidHashMap<String, usize>,
     dynamic_followups: RapidHashSet<String>,
     dynamic_responses: RapidHashMap<String, VecDeque<StreamResponse>>,
+    in_flight: usize,
+    peak_in_flight: usize,
+}
+
+/// A completion the backend is running. It ends before the completion's last
+/// event is produced, so a client never sees its call end while it still
+/// counts.
+pub(super) struct InFlight {
+    state: Arc<StreamingState>,
+    ended: bool,
+}
+
+impl InFlight {
+    fn start(state: &Arc<StreamingState>) -> Self {
+        {
+            let mut inner = state.lock();
+            inner.in_flight += 1;
+            inner.peak_in_flight = inner.peak_in_flight.max(inner.in_flight);
+        }
+        state.notify.notify_waiters();
+        Self {
+            state: Arc::clone(state),
+            ended: false,
+        }
+    }
+
+    pub(super) fn end(&mut self) {
+        if std::mem::replace(&mut self.ended, true) {
+            return;
+        }
+        self.state.lock().in_flight -= 1;
+        self.state.notify.notify_waiters();
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.end();
+    }
 }
 
 impl StreamingState {
@@ -1154,6 +1212,7 @@ async fn handle_completion(
     let body =
         serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({ "__unparsed__": raw }));
     state.record_completion_body(&body);
+    let in_flight = InFlight::start(&state);
     let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let title = body_is_session_title(&body);
     if !title {
@@ -1180,7 +1239,7 @@ async fn handle_completion(
         streaming,
         ordinal,
     };
-    answer(state, request, reply, response).await
+    answer(state, request, reply, response, in_flight).await
 }
 
 async fn answer(
@@ -1188,11 +1247,12 @@ async fn answer(
     request: Request,
     reply: wire::Reply,
     response: StreamResponse,
+    in_flight: InFlight,
 ) -> Response {
     let mut response = response;
     loop {
         match response {
-            StreamResponse::Stream(script) => return wire::stream(script, state, reply),
+            StreamResponse::Stream(script) => return wire::stream(script, state, reply, in_flight),
             StreamResponse::Held { gate, then } => match state.released(&gate).await {
                 Some(Release::Complete) => response = *then,
                 Some(Release::Fail { status, message }) => {

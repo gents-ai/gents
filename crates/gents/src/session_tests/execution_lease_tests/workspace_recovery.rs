@@ -376,7 +376,11 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
-        dispatchers: std::iter::once((agent_did.to_owned(), dispatcher)).collect(),
+        dispatchers: std::iter::once((
+            agent_did.to_owned(),
+            gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(dispatcher),
+        ))
+        .collect(),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     });

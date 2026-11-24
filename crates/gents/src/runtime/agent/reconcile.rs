@@ -23,8 +23,7 @@ mod slot;
 use diff::diff_counts;
 pub(in crate::runtime::agent) use slot::SlotFailurePolicy;
 use slot::{
-    agent_executor_capacity, spawn_slot_with_capacity, spawn_slots, AgentSlot, AgentSlotState,
-    SlotConfig,
+    spawn_slot_with_layout, spawn_slots, AgentSlot, AgentSlotState, SlotConfig, WorkerLayout,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -352,22 +351,19 @@ where
         resolved_snapshot.validate_node_readiness_source()?;
 
         let mut recreated_agent_dids = Vec::new();
-        for (agent_did, agent) in &resolved_snapshot.agents {
+        for agent_did in resolved_snapshot.agents.keys() {
             let tool_surface = resolved_snapshot
                 .tool_surfaces
                 .get(agent_did)
                 .expect("validated runnable/tool-surface keyset parity");
-            let executor_capacity =
-                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             let agent = resolved_snapshot
                 .agent_with_tools(agent_did)
                 .expect("validated runnable/tool-configuration keyset parity");
-            if self.active_slots.get(agent_did).is_none_or(|slot| {
-                recreate_slot(
-                    slot.matches(&agent, tool_surface, executor_capacity),
-                    slot.parked(),
-                )
-            }) {
+            if self
+                .active_slots
+                .get(agent_did)
+                .is_none_or(|slot| recreate_slot(slot.matches(&agent, tool_surface), slot.parked()))
+            {
                 recreated_agent_dids.push(agent_did.clone());
             }
         }
@@ -388,20 +384,14 @@ where
         }
 
         for agent_did in &recreated_agent_dids {
-            let agent = resolved_snapshot
-                .agents
-                .get(agent_did)
-                .expect("recreation plan references a runnable agent");
             let tool_surface = resolved_snapshot
                 .tool_surfaces
                 .get(agent_did)
                 .cloned()
                 .expect("validated runnable/tool-surface keyset parity");
-            let executor_capacity =
-                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             staged.insert(
                 agent_did.clone(),
-                spawn_slot_with_capacity(
+                spawn_slot_with_layout(
                     SlotConfig {
                         agent_config: resolved_snapshot
                             .agent_with_tools(agent_did)
@@ -411,7 +401,7 @@ where
                         retry_policy: self.retry_policy.clone(),
                         failure_policy: self.slot_failure_policy.clone(),
                     },
-                    executor_capacity,
+                    WorkerLayout::AGENT,
                     self.runner.clone(),
                     shutdown.clone(),
                 ),

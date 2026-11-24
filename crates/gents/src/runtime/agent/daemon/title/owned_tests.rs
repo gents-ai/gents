@@ -2152,7 +2152,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 active_tasks: Default::default(),
                 dispatchers: rapidhash::RapidHashMap::from_iter([(
                     fixture.agent_config.agent_did.clone(),
-                    dispatch,
+                    gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(dispatch),
                 )]),
                 agent_executor_capacities: Default::default(),
                 agent_executor_queue_capacities: Default::default(),
@@ -2354,7 +2354,7 @@ async fn start_owned_title_daemon(
         active_tasks: Default::default(),
         dispatchers: rapidhash::RapidHashMap::from_iter([(
             fixture.agent_config.agent_did.clone(),
-            dispatch.clone(),
+            gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(dispatch.clone()),
         )]),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
