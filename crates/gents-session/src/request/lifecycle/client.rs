@@ -52,8 +52,6 @@ fn request_actor(access: &ConfigAccess, create: &AgentRequestCreate) -> anyhow::
     Ok(actor)
 }
 
-/// Posts a request's three relationships (parent Agent, session, working
-/// Agent). They are independent, so they go out together.
 pub async fn stage_request_relationships_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request: &str,
@@ -61,12 +59,17 @@ pub async fn stage_request_relationships_in_txn(
     session: &str,
     agent_did: &str,
 ) -> anyhow::Result<()> {
-    let working_agent = identity::Did::new(agent_did)?;
-    tokio::try_join!(
-        txn.add_resource_relationship("AgentRequest", request, "parent", "agents", agent),
-        txn.add_resource_relationship("AgentRequest", request, "session", "sessions", session),
-        txn.add_actor_relationship("AgentRequest", request, "working_agent", &working_agent),
-    )?;
+    txn.add_resource_relationship("AgentRequest", request, "parent", "agents", agent)
+        .await?;
+    txn.add_resource_relationship("AgentRequest", request, "session", "sessions", session)
+        .await?;
+    txn.add_actor_relationship(
+        "AgentRequest",
+        request,
+        "working_agent",
+        &identity::Did::new(agent_did)?,
+    )
+    .await?;
     Ok(())
 }
 
