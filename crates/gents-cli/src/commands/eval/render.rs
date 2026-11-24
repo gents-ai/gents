@@ -1,11 +1,11 @@
 use std::io::{self, Write};
 
 use crate::shared::wire;
-use gents::eval::TrialUsage;
+use gents::eval::{SubjectUsage, ToolCount, TrialUsage};
 use gents_eval::optimization::Decision;
 use gents_eval::report::{
     CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotClass, SlotCounts, SlotReport,
-    SlotScore, StageDiff,
+    SlotScore, StageDiff, SubjectSpend,
 };
 use gents_eval::runner::divergence::{Divergence, Severity};
 use gents_eval::runner::{
@@ -182,6 +182,8 @@ pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Resu
         }
     }
     writeln!(out)?;
+    subject_table(report, out)?;
+    writeln!(out)?;
     writeln!(
         out,
         "exposure {} (non-invalidated runs of {} v{} on the {} split)",
@@ -189,6 +191,145 @@ pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Resu
         run.definition.definition_id,
         run.definition.comparability_version,
         wire(&run.split)
+    )
+}
+
+fn seconds(millis: Option<u64>) -> String {
+    millis.map_or_else(
+        || "-".to_owned(),
+        |millis| format!("{}.{}s", millis / 1_000, millis % 1_000 / 100),
+    )
+}
+
+fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
+    writeln!(
+        out,
+        "subject's own work per trial (medians; tokens_in/out above is every call in the trial homes)"
+    )?;
+    writeln!(
+        out,
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        "cell",
+        "set",
+        "trials",
+        "first_prompt",
+        "tool_schemas",
+        "input",
+        "output",
+        "turns",
+        "tools d/s/in",
+        "failed d/s/in",
+        "wall"
+    )?;
+    let run = (report.cells.len() > 1).then_some(("run", &report.subject_usage));
+    for (label, summary) in report
+        .cells
+        .iter()
+        .map(|cell| (cell.cell_id.as_str(), &cell.subject_usage))
+        .chain(run)
+    {
+        for (set, spend) in [
+            ("evidence", &summary.evidence),
+            ("passing", &summary.passing),
+        ] {
+            subject_row(label, set, spend, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn subject_row(
+    label: &str,
+    set: &str,
+    spend: &SubjectSpend,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    let median = |name: &str| spend.figures.get(name).and_then(|figure| figure.median);
+    let split = |names: [&str; 3]| {
+        names
+            .iter()
+            .map(|name| count(median(name)))
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    writeln!(
+        out,
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        label,
+        set,
+        spend.trials,
+        count(median("first_request_prompt_tokens")),
+        count(median("first_request_tool_schema_estimate")),
+        count(median("input_tokens")),
+        count(median("output_tokens")),
+        count(median("model_turns")),
+        split(["direct_tool_calls", "script_calls", "inside_script_calls"]),
+        split([
+            "failed_direct_tool_calls",
+            "failed_script_calls",
+            "failed_inside_script_calls"
+        ]),
+        seconds(median("wall_ms"))
+    )
+}
+
+fn tool_count(label: &str, count: &ToolCount) -> String {
+    format!("{label} {} ({} failed)", count.calls, count.failed)
+}
+
+fn subject_lines(subject: &SubjectUsage, out: &mut dyn Write) -> io::Result<()> {
+    let turns = &subject.turns;
+    writeln!(
+        out,
+        "subject requests {} turns {} tokens {} cached {} unreported {} compaction {} tokens {}",
+        subject.requests,
+        turns.calls,
+        tokens(&TrialUsage {
+            input_tokens: turns.input_tokens,
+            output_tokens: turns.output_tokens,
+        }),
+        count(turns.cached_input_tokens),
+        turns.unreported,
+        subject.compaction.calls,
+        tokens(&TrialUsage {
+            input_tokens: subject.compaction.input_tokens,
+            output_tokens: subject.compaction.output_tokens,
+        })
+    )?;
+    if let Some(first) = &subject.first_request {
+        let estimate = first.estimate.as_ref().map_or_else(
+            || "-".to_owned(),
+            |estimate| {
+                format!(
+                    "messages {} documents {} tool_schemas {} other {} ({})",
+                    estimate.messages,
+                    estimate.documents,
+                    estimate.tool_schemas,
+                    estimate.additional_parameters + estimate.output_schema,
+                    estimate.estimator
+                )
+            },
+        );
+        writeln!(
+            out,
+            "subject first_request prompt_tokens {} estimate {estimate}",
+            count(first.prompt_tokens)
+        )?;
+    }
+    let tools = &subject.tool_calls;
+    writeln!(
+        out,
+        "subject tools {} {} {}",
+        tool_count("direct", &tools.direct),
+        tool_count("script", &tools.script),
+        tool_count("inside_script", &tools.inside_script)
+    )?;
+    writeln!(
+        out,
+        "subject wall {} model {} tool {}",
+        seconds(subject.wall_ms),
+        seconds(subject.model_ms),
+        seconds(subject.tool_ms)
     )
 }
 
@@ -276,6 +417,9 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
             "evidence_digest {}",
             latest.evidence_digest.as_deref().unwrap_or("-")
         )?;
+        if let Some(subject) = &latest.subject_usage {
+            subject_lines(subject, out)?;
+        }
         for stage in &latest.stages {
             writeln!(
                 out,
@@ -474,6 +618,29 @@ pub(crate) fn comparison_table(comparison: &Comparison, out: &mut dyn Write) -> 
             yes_or(gates.cost_ok, "skipped"),
             yes(gates.significant),
             yes_or(gates.min_effect, "undetermined")
+        )?;
+    }
+    writeln!(
+        out,
+        "subject's own work on passing trials (medians; not gated)"
+    )?;
+    writeln!(
+        out,
+        "{:<34} {:>9} {:>9} {:>9} {:>6} {:>13}",
+        "figure", "baseline", "candidate", "change", "paired", "paired_change"
+    )?;
+    for change in &comparison.subject_usage {
+        let signed =
+            |value: Option<i64>| value.map_or_else(|| "-".to_owned(), |value| format!("{value:+}"));
+        writeln!(
+            out,
+            "{:<34} {:>9} {:>9} {:>9} {:>6} {:>13}",
+            change.figure,
+            count(change.baseline_median),
+            count(change.candidate_median),
+            signed(change.change),
+            change.paired,
+            signed(change.paired_median_change)
         )?;
     }
     Ok(())

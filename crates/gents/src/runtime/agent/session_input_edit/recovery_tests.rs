@@ -11,8 +11,9 @@ async fn temp_home() -> EmbeddedHome {
     let home = EmbeddedHome::create_temp("input-edit-recovery")
         .await
         .unwrap();
-    let binding = gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
-    let access = client_access(&home, home.identity.as_ref());
+    let binding =
+        gents_store::identity::provision_agent_identity(home.node_identity.as_ref()).unwrap();
+    let access = client_access(&home, home.node_identity.as_ref());
     gents_documents::test_support::bootstrap_signed_test_node(&access, home.did()).await;
     gents_inference::test_support::install_test_agent_binding_with_access(
         home.did(),
@@ -31,10 +32,12 @@ async fn temp_home() -> EmbeddedHome {
 }
 
 async fn agent_for(home: &EmbeddedHome) -> Arc<dyn NodeIdentity> {
-    let binding =
-        gents_inference::test_support::ensure_test_default_agent(&home.node, home.identity.did())
-            .await;
-    gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap()
+    let binding = gents_inference::test_support::ensure_test_default_agent(
+        &home.node,
+        home.node_identity.did(),
+    )
+    .await;
+    gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding).unwrap()
 }
 
 async fn active_agents(
@@ -44,8 +47,8 @@ async fn active_agents(
 > {
     let agent_identity = agent_for(home).await;
     let node = Arc::new(gents_store::identity::RuntimeNode {
-        node_did: home.identity.did().into(),
-        identity: home.identity.clone(),
+        node_did: home.node_identity.did().into(),
+        identity: home.node_identity.clone(),
         default_agent_did: agent_identity.did().into(),
         display_name: None,
         enabled: true,
@@ -101,7 +104,7 @@ async fn active_agents(
             Default::default(),
         )
         .with_node(node)
-        .with_local_did(home.identity.did().into())
+        .with_local_did(home.node_identity.did().into())
         .activate(1, Default::default());
     let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
     receiver
@@ -110,7 +113,7 @@ async fn active_agents(
 fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess {
     ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
-            home.graphql_endpoint().unwrap(),
+            home.graphql_endpoint(),
             signer.did(),
         )
         .with_client_signing_capability(signer.client_signing_capability().unwrap())
@@ -120,9 +123,9 @@ fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess
 }
 
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
-    let did = home.identity.did();
+    let did = home.node_identity.did();
     let binding = gents_inference::test_support::ensure_test_default_agent(&home.node, did).await;
-    let access = client_access(home, home.identity.as_ref());
+    let access = client_access(home, home.node_identity.as_ref());
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "original",
@@ -166,7 +169,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         .unwrap();
     create.agent_doc_id = Some(agent_doc);
     gents_session::request::admission::sign_agent_request_create(
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         &mut create,
     )
     .await
@@ -198,7 +201,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     };
     let replacements = gents_session::request::lifecycle::queue::prepare_pending_user_edit(
         &access,
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         AgentRequestAdmissionRecord::client(did),
         did,
         "edit-session",
@@ -210,7 +213,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
         test_signed_replacement_fields(
             &access,
-            home.identity.as_ref(),
+            home.node_identity.as_ref(),
             did,
             "edit-session",
             &replacements,
@@ -235,7 +238,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         signature: Vec::new(),
     };
     command.signature = home
-        .identity
+        .node_identity
         .sign(&command.signing_payload())
         .await
         .unwrap();
@@ -282,11 +285,11 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     let home = temp_home().await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.node_identity.as_ref(), &command).await;
     let before = requests(&home.node).await;
     let deferred = process_command(
         &home.node,
-        &home.identity,
+        &home.node_identity,
         &id,
         agent_for(&home).await.as_ref(),
     )
@@ -302,7 +305,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     let cancel = CancellationToken::new();
     let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         Some(active_agents(&home).await),
         gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
@@ -329,10 +332,10 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
 async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
     let home = temp_home().await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.node_identity.as_ref(), &command).await;
     process_command(
         &home.node,
-        &home.identity,
+        &home.node_identity,
         &id,
         agent_for(&home).await.as_ref(),
     )
@@ -347,7 +350,7 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
             escape_graphql_string(&id), escape_graphql_string(&overwrite))).await.unwrap();
         process_command(
             &home.node,
-            &home.identity,
+            &home.node_identity,
             &id,
             agent_for(&home).await.as_ref(),
         )
@@ -367,10 +370,10 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
 async fn duplicate_command_id_after_apply_preserves_receipt_and_effects() {
     let home = temp_home().await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let prior = submit(&home, home.identity.as_ref(), &command).await;
+    let prior = submit(&home, home.node_identity.as_ref(), &command).await;
     process_command(
         &home.node,
-        &home.identity,
+        &home.node_identity,
         &prior,
         agent_for(&home).await.as_ref(),
     )
@@ -382,8 +385,12 @@ async fn duplicate_command_id_after_apply_preserves_receipt_and_effects() {
     twin.issued_at = (DateTime::parse_from_rfc3339(&command.issued_at).unwrap()
         - chrono::Duration::seconds(1))
     .to_rfc3339();
-    twin.signature = home.identity.sign(&twin.signing_payload()).await.unwrap();
-    let access = client_access(&home, home.identity.as_ref());
+    twin.signature = home
+        .node_identity
+        .sign(&twin.signing_payload())
+        .await
+        .unwrap();
+    let access = client_access(&home, home.node_identity.as_ref());
     assert!(
         gents_session::request::lifecycle::queue::publish_edit_command(&access, &twin)
             .await
@@ -406,7 +413,7 @@ async fn reconcile_until_verified(
     let cancel = CancellationToken::new();
     let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         Some(active_agents(home).await),
         gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
@@ -414,9 +421,10 @@ async fn reconcile_until_verified(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     let receipt = loop {
         let raw = raw_receipt(&home.node, id).await;
-        if let Some(receipt) = verified_receipt(home.identity.as_ref(), command, raw.as_deref())
-            .await
-            .unwrap()
+        if let Some(receipt) =
+            verified_receipt(home.node_identity.as_ref(), command, raw.as_deref())
+                .await
+                .unwrap()
         {
             break receipt;
         }
@@ -435,7 +443,7 @@ async fn reconcile_until_verified(
 async fn receipt_overwritten_while_stopped_is_reissued_at_restart() {
     let home = temp_home().await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.node_identity.as_ref(), &command).await;
     let applied = reconcile_until_verified(&home, &command, &id).await;
     assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
     let effects = requests(&home.node).await;
@@ -453,7 +461,7 @@ async fn future_issued_command_with_invalid_receipt_is_processed_at_its_deadline
     let home = temp_home().await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.node_identity.as_ref(), &command).await;
     overwrite_receipt(&home.node, &id, "{}").await;
 
     let receipt = reconcile_until_verified(&home, &command, &id).await;

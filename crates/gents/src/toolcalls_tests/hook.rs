@@ -27,7 +27,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     use gents_protocol::goal_status::GoalStatus;
 
     // The hook's session is signed by the runtime it runs as.
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "goal-output-gate",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -246,7 +246,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             other => panic!("unsupported modeled completion probe {other}"),
         };
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let node_db = gents_inference::test_support::test_db(
+            let node_db = gents_store::test_support::TestStore::start(
                 "dispatch-receipt-scripts-bind-call-hook-",
                 gents_automation::lifecycle_hooks::composition(),
             )

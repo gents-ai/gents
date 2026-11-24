@@ -623,7 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_data_caller_never_uses_a_node_identity() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "agent-data-caller-never-uses-a-node-iden",
             gents_session::test_support::no_lifecycle_plugins(),
         )

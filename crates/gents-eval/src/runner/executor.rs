@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::runner::embedded::observe::{InferenceCallEvidence, MessageEvidence, ToolCallEvidence};
 use crate::runner::progress::StageProgress;
 use crate::runner::scripted::ScriptKey;
-use crate::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
+use crate::{Anchor, OutcomeKind, ProviderReason, SubjectUsage, TrialUsage};
 use gents_documents::EvalCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,6 +272,10 @@ pub struct TrialEvidence {
     pub usage: TrialUsage,
     pub anchor: Anchor,
     pub evidence_digest: String,
+    /// Outside the digest: its timings differ between trials whose evidence
+    /// is the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_usage: Option<SubjectUsage>,
 }
 
 impl TrialEvidence {
@@ -321,6 +325,7 @@ impl TrialEvidence {
             usage,
             anchor,
             evidence_digest,
+            subject_usage: None,
         }
     }
 

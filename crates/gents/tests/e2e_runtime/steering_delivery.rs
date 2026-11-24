@@ -23,10 +23,10 @@ use crate::support::builder_runtime::{
 };
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
-};
 use crate::support::test_db;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
 use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
@@ -79,7 +79,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
     let user_did = fixture.user.did();
     let agent_did = fixture.binding.agent_did.as_str();
     let access = fixture.access.clone();
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![StreamPlan::new(
             name,
@@ -357,7 +357,7 @@ fn held_runtime(
 async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
     let name = "agent-steer-past-queue";
     let db = test_db(name).await;
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![
             StreamPlan::new(

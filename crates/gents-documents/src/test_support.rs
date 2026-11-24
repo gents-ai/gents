@@ -1,4 +1,7 @@
 pub mod event_cursor;
+mod signed_home;
+
+pub use signed_home::SignedHome;
 
 /// Admits every advertised profile: the provider rules live in the inference
 /// owner, and documents-level fixtures publish documents without a provider.
@@ -159,6 +162,34 @@ pub fn test_agent_documents(
             json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}}),
         ),
     ]
+}
+
+/// Installs the fixture Agent's documents for `binding` through `access`'s
+/// desired-state apply owner, admitting its profile with `profiles`.
+pub async fn install_test_agent_as(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    display_name: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    profiles: &dyn crate::inference_backend::AdvertisedProfilePolicy,
+) {
+    use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let documents = test_agent_documents(owner, display_name, binding)
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+    let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    access
+        .transact_write("test.install_agent", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::apply_desired_state_plan(txn, plan, profiles).await })
+        })
+        .await
+        .unwrap();
 }
 
 /// Desired-state fixtures shared by the documents tests and the tests of the

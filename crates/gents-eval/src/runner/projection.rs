@@ -74,5 +74,6 @@ pub(super) fn completion(case: &EvalCase, evidence: &TrialEvidence) -> TrialComp
         usage: evidence.usage.clone(),
         anchor: evidence.anchor.clone(),
         evidence_digest: Some(evidence.evidence_digest.clone()),
+        subject_usage: evidence.subject_usage.clone(),
     }
 }

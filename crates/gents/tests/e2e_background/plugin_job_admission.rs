@@ -16,8 +16,10 @@ use super::plugin_job_support::{
 use crate::support::accepted_turn::{
     boot_managed_accepted_turn_with_backend_capacity, AcceptedTurnSpec,
 };
-use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::{test_db, TestDb};
+use gents_inference::test_support::scripted_backend::{
+    StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
 use gents_store::test_support::STALL_CEILING;
 
 const CAPACITY_EXCEEDED: &str = "background_tool_budget_exceeded";

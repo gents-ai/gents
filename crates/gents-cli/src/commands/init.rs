@@ -2458,10 +2458,10 @@ mod tests {
     #[tokio::test]
     async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2541,10 +2541,10 @@ mod tests {
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2635,10 +2635,10 @@ mod tests {
         engineer: bool,
     ) -> gents_tools::surface::ToolSurfaceExplanation {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())

@@ -569,7 +569,7 @@ mod tests {
     /// read as the node root that wrote them.
     struct Materialized {
         _identities: tempfile::TempDir,
-        db: gents_inference::test_support::TestDb,
+        db: gents_store::test_support::TestStore,
         access: gents_store::config_client::ConfigAccess,
         root: identity::Did,
         parent_doc: String,
@@ -634,7 +634,7 @@ mod tests {
         let identities = tempfile::tempdir().unwrap();
         let root_identity =
             gents_store::test_support::pin_fixed_signing_identity(identities.path());
-        let db = gents_inference::test_support::test_db_as(
+        let db = gents_store::test_support::TestStore::start_as(
             "title-usage",
             gents_store::test_support::PIN_FIXED_DID,
             gents_session::test_support::no_lifecycle_plugins(),

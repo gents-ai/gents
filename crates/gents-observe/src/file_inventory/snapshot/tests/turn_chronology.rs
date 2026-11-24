@@ -258,7 +258,7 @@ async fn check_turn_chronology(retry: bool) -> Option<Vec<u64>> {
     node.shutdown().await.expect("node shutdown");
     drop(node);
     drop(fixture.home);
-    let reopened = gents_inference::test_support::test_db_at(
+    let reopened = gents_store::test_support::TestStore::open_at(
         &fixture.path,
         None,
         gents_automation::lifecycle_hooks::composition(),

@@ -1768,6 +1768,7 @@ mod tests {
                     inference_calls: 0,
                 },
                 evidence_digest: None,
+                subject_usage: None,
             }),
         };
         let usage = |input, output| TrialUsage {

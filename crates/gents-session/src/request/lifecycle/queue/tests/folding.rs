@@ -23,7 +23,7 @@ const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
-async fn insert_row(db: &TestDb, input: serde_json::Value) -> String {
+async fn insert_row(db: &AgentHome, input: serde_json::Value) -> String {
     db.agent_access.transact_write("test.fold.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
@@ -40,7 +40,7 @@ async fn insert_row(db: &TestDb, input: serde_json::Value) -> String {
     .unwrap()
 }
 
-fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
+fn requester_did(db: &AgentHome, requester: Option<u64>) -> Option<String> {
     match requester {
         Some(1) => Some(db.agent_did().to_owned()),
         Some(2) => Some(FOREIGN_REQUESTER.to_owned()),
@@ -77,7 +77,7 @@ pub(super) fn generated_input(entry: &ModeledEntry) -> RequestInput {
 }
 
 pub(super) async fn enqueue(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
     entry: &ModeledEntry,
     arrival: usize,
@@ -93,7 +93,7 @@ pub(super) async fn enqueue(
 }
 
 async fn enqueue_with_ttl(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
     entry: &ModeledEntry,
     arrival: usize,
@@ -122,7 +122,7 @@ async fn enqueue_with_ttl(
 }
 
 async fn enqueue_signed(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
     entry: &ModeledEntry,
     arrival: usize,
@@ -157,7 +157,7 @@ struct FoldRow {
     failure_reason: Option<String>,
 }
 
-async fn fold_rows(db: &TestDb, session_id: &str) -> Vec<FoldRow> {
+async fn fold_rows(db: &AgentHome, session_id: &str) -> Vec<FoldRow> {
     let response = db
         .agent_access
         .execute(&format!(
@@ -186,7 +186,7 @@ pub(super) struct ActiveTurn {
 }
 
 pub(super) async fn claim_head(
-    db: &TestDb,
+    db: &AgentHome,
     bound: &RapidHashMap<u64, String>,
     head: u64,
     admitted: &[u64],
@@ -204,7 +204,7 @@ pub(super) async fn claim_head(
 /// Signed fixture rows are verified by the Agent's admission owner before
 /// claim, as the daemon does; unsigned fixture rows carry no admission.
 async fn verify_claim_admission(
-    db: &TestDb,
+    db: &AgentHome,
     request: gents_protocol::row::AgentRequest,
 ) -> (
     gents_protocol::row::AgentRequest,
@@ -227,7 +227,7 @@ async fn verify_claim_admission(
     let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         db.node.clone(),
-        db.identity.clone(),
+        db.node_identity.clone(),
         authority,
     );
     verifier
@@ -237,7 +237,7 @@ async fn verify_claim_admission(
 }
 
 async fn claim_request(
-    db: &TestDb,
+    db: &AgentHome,
     bound: &RapidHashMap<u64, String>,
     request: gents_protocol::row::AgentRequest,
     admitted: &[u64],
@@ -256,7 +256,7 @@ async fn claim_request(
         lifecycle.set_steering_admission(
             crate::request::admission::AgentRequestAdmissionVerifier::new(
                 db.node.clone(),
-                db.identity.clone(),
+                db.node_identity.clone(),
                 authority,
             ),
             db.agent_identity.clone(),
@@ -328,7 +328,7 @@ async fn drive(
     >,
 ) -> gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldObservation {
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
-    let db = test_db(&case.name).await;
+    let db = AgentHome::start(&case.name).await;
     let session_id = case.session_id.to_string();
     let mut bound: RapidHashMap<u64, String> = RapidHashMap::new();
     let mut arrivals: Vec<u64> = Vec::new();
@@ -486,7 +486,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
         String,
         String,
     >() {
-        let db = test_db(&case.input.name).await;
+        let db = AgentHome::start(&case.input.name).await;
         let session_id = format!("handover-{}", case.input.name);
         let mut bound = RapidHashMap::new();
         for (arrival, entry) in case.input.pending.iter().enumerate() {
@@ -529,7 +529,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
     }
 }
 
-async fn authored_keys(db: &TestDb, request_doc_id: &str) -> Vec<String> {
+async fn authored_keys(db: &AgentHome, request_doc_id: &str) -> Vec<String> {
     let response = db
         .agent_access
         .execute(&format!(
@@ -546,7 +546,7 @@ async fn authored_keys(db: &TestDb, request_doc_id: &str) -> Vec<String> {
         .collect()
 }
 
-async fn durable_facts(db: &TestDb, session_id: &str) -> serde_json::Value {
+async fn durable_facts(db: &AgentHome, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
     let response = db
         .agent_access
@@ -571,13 +571,13 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         gents_lean_vocab::families::fold_queue_contracts_publication_script::cases::<String>()
     {
         let input = &case.input;
-        let db = test_db(&input.name).await;
+        let db = AgentHome::start(&input.name).await;
         let session_id = format!("fold-publication-{}", input.name);
         let (_authority_owner, authority) =
             gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
             db.node.clone(),
-            db.identity.clone(),
+            db.node_identity.clone(),
             authority,
         );
         let mut bound = RapidHashMap::new();
@@ -902,7 +902,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
 
 #[tokio::test]
 async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
-    let db = test_db("fold-selected-after-head").await;
+    let db = AgentHome::start("fold-selected-after-head").await;
     let session_id = "fold-selected-after-head";
     let mut bound = RapidHashMap::new();
     for (arrival, (id, context, queued_after)) in
@@ -976,7 +976,7 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
     for case in
         gents_lean_vocab::families::contracts_steering_boundary_publication::cases::<String>()
     {
-        let db = test_db("direct-steer-queued-followups").await;
+        let db = AgentHome::start("direct-steer-queued-followups").await;
         let session_id = "direct-steer-queued-followups";
         let entry = |id, delivery: &str| ModeledEntry {
             request_id: id,
@@ -1018,7 +1018,7 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
             db.node.clone(),
-            db.identity.clone(),
+            db.node_identity.clone(),
             authority,
         );
         let snapshot = super::super::intake::steering_snapshot(
@@ -1116,7 +1116,7 @@ async fn generated_intake_cases_bind_to_the_steering_snapshot() {
             .enumerate()
         {
             let name = &format!("{}-{variant}", input.name);
-            let db = test_db(name).await;
+            let db = AgentHome::start(name).await;
             let session_id = name;
             let head_doc = enqueue_signed(&db, session_id, &head, 0).await;
             let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
@@ -1142,7 +1142,7 @@ async fn generated_intake_cases_bind_to_the_steering_snapshot() {
             let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
             let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
                 db.node.clone(),
-                db.identity.clone(),
+                db.node_identity.clone(),
                 authority,
             );
             let snapshot = super::super::intake::steering_snapshot(

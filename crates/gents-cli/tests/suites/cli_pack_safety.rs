@@ -49,7 +49,10 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home)?;
-    let endpoint = MockModelEndpoint::start("pack-safety")?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("pack-safety")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home,
         &[
@@ -333,7 +336,10 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("client");
     std::fs::create_dir_all(&home)?;
-    let endpoint = MockModelEndpoint::start("plugin-session")?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("plugin-session")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let user_home = temp.path().join("user");
     let user_home_arg = user_home.to_string_lossy().into_owned();
     let init_user_home = user_home_arg.clone();
@@ -437,7 +443,10 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home)?;
-    let endpoint = MockModelEndpoint::start("pack-preview")?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("pack-preview")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home,
         &[
@@ -491,7 +500,10 @@ async fn hosted_pack_install_ignores_the_runtime_environment() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home)?;
-    let endpoint = MockModelEndpoint::start("pack-env")?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("pack-env")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home,
         &[
@@ -599,7 +611,10 @@ async fn a_session_install_grants_its_planned_root_agents_reader_on_the_installe
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home)?;
-    let endpoint = MockModelEndpoint::start("pack-roots")?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("pack-roots")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home,
         &[

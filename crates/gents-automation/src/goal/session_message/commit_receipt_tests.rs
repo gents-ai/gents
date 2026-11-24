@@ -22,7 +22,7 @@ async fn rows(
 #[tokio::test]
 async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inherits_the_caller_directory(
 ) {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "goal-commit-receipt",
         crate::lifecycle_hooks::composition(),
     )

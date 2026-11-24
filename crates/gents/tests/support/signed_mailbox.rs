@@ -21,8 +21,10 @@ use gents_store::{
 };
 
 use super::accepted_turn::PreparedAcceptedTurn;
-use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 use super::TestDb;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 
 pub struct SignedMailboxTurn {
     pub user: KeyIdentity,
@@ -121,7 +123,7 @@ pub async fn prepare_signed_mailbox_turn(
             StreamResponse::completes(prompt, ["parent complete"]),
         ],
     )];
-    let backend = MockStreamingBackend::start_with_plans(model, plans)?;
+    let backend = ScriptedBackend::start_with_plans(model, plans)?;
     let tools = Tools {
         tools_id: tools_id.clone(),
         node_did: node_did.clone(),

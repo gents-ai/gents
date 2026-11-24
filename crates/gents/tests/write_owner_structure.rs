@@ -14,6 +14,8 @@ mod environment;
 mod error_holders;
 #[path = "write_owner_structure/executables.rs"]
 mod executables;
+#[path = "write_owner_structure/fixtures.rs"]
+mod fixtures;
 #[path = "write_owner_structure/layers.rs"]
 mod layers;
 #[path = "write_owner_structure/lean_runtime.rs"]

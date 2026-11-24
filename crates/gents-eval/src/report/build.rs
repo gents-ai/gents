@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::report::evidence::{cell_usage, counted_slots, CellUsage, RunRows};
 use crate::report::refused;
+use crate::report::subject::SubjectSummary;
 use crate::runner::freeze::documents::definition_ref;
 use crate::{
     case_means_bp, case_trial_score, classify, exposure, headline_bp, CaseTrialScore, CellSpec,
     DefinitionRef, EvidenceClass, Invalidation, OutcomeKind, ProviderReason, RunHeader, RunRecord,
-    StageCompletion, SubjectRef, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
+    StageCompletion, SubjectRef, SubjectUsage, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
 };
 use gents_documents::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
 
@@ -27,6 +28,7 @@ pub struct EvalReport {
     pub report_version: u32,
     pub run: RunSummary,
     pub cells: Vec<CellReport>,
+    pub subject_usage: SubjectSummary,
     /// Non-invalidated runs of this definition version on this split.
     pub exposure: usize,
     /// Set by `report::store` from the run's frozen copy when the installed
@@ -66,6 +68,7 @@ pub struct CellReport {
     pub usage: TrialUsage,
     /// Shared with the optimizer.
     pub cell_usage: CellUsage,
+    pub subject_usage: SubjectSummary,
     pub attempts: u32,
     pub counts: SlotCounts,
 }
@@ -175,6 +178,7 @@ pub struct AttemptSummary {
     pub evidence_digest: Option<String>,
     pub stages: Vec<StageCompletion>,
     pub usage: TrialUsage,
+    pub subject_usage: Option<SubjectUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,11 +267,13 @@ pub fn build(
         trials: trials.to_vec(),
         verdicts: verdicts.to_vec(),
     };
-    let cells = origin
+    let cells: Vec<CellReport> = origin
         .cells
         .iter()
         .map(|cell| cell_report(definition, &rows, cell, origin.trials_per_case))
         .collect();
+    let subject_usage =
+        SubjectSummary::of(cells.iter().flat_map(|cell| slot_subjects(&cell.slots)));
     Ok(EvalReport {
         report_version: REPORT_VERSION,
         run: RunSummary {
@@ -286,6 +292,7 @@ pub fn build(
             source_dirty: origin.source_dirty,
         },
         cells,
+        subject_usage,
         exposure: exposure(
             peers,
             &origin.definition.definition_id,
@@ -366,6 +373,7 @@ fn cell_report(
         headline_bp: None,
         usage: TrialUsage::default(),
         cell_usage: cell_usage(rows, &cell.cell_id),
+        subject_usage: SubjectSummary::default(),
         attempts: in_cell.len() as u32,
         counts: SlotCounts::default(),
     };
@@ -435,7 +443,21 @@ fn cell_report(
         scores.extend(case_scores);
     }
     report.headline_bp = headline_bp(&scores);
+    report.subject_usage = SubjectSummary::of(slot_subjects(&report.slots));
     report
+}
+
+/// A slot is classed by its latest attempt, and every class that is evidence
+/// is of a completed latest attempt: the counted one.
+fn slot_subjects(slots: &[SlotReport]) -> impl Iterator<Item = (SlotClass, Option<&SubjectUsage>)> {
+    slots.iter().map(|slot| {
+        (
+            slot.class,
+            slot.latest
+                .as_ref()
+                .and_then(|latest| latest.subject_usage.as_ref()),
+        )
+    })
 }
 
 fn slot_class(latest: Option<&TrialRecord>, counted: Option<&Counted<'_>>) -> SlotClass {
@@ -469,6 +491,7 @@ fn attempt_summary(record: &TrialRecord) -> AttemptSummary {
         usage: completion
             .map(|completion| completion.usage.clone())
             .unwrap_or_default(),
+        subject_usage: completion.and_then(|completion| completion.subject_usage.clone()),
     }
 }
 

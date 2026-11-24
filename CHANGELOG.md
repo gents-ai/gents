@@ -6,6 +6,16 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Eval trials record what the subject agent itself spent, beside the
+  home-wide `usage`: each completion's `subject_usage` holds its first request's
+  prompt tokens and estimated component split (tool schemas among them), its
+  turns' input, output and cached tokens, its tool calls split into direct,
+  `script` and inside-script calls with failures, and its wall, model and tool
+  time in milliseconds. A count some call left unrecorded is null beside the
+  number of calls that left it. `eval show` reports medians and totals per
+  cell and run over the trials that are evidence and over the passing ones,
+  `eval trial` prints the trial's figures, and `eval compare` shows the
+  change on passing trials without gating on it.
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) set the limits of
   the Goals a Task creates. Every Goal a Task creates pins them, including Task

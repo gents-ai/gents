@@ -548,7 +548,7 @@ fn the_value_holds_no_secret() {
 }
 
 async fn embedded() -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     ConfigAccess,
     Vec<String>,

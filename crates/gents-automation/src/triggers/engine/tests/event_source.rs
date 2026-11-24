@@ -358,7 +358,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 
 #[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-does-not-acknowledge-failed",
         crate::lifecycle_hooks::composition(),
     )
@@ -553,8 +553,8 @@ fn configured_event_agent(node_did: &str) -> Arc<ResolvedAgent> {
 }
 
 /// A node whose identity, Node row and Agent match `configured_event_agent`.
-/// The returned `TestDb` keeps the node running.
-async fn configured_event_node() -> gents_inference::test_support::TestDb {
+/// The returned store keeps the node running.
+async fn configured_event_node() -> gents_store::test_support::TestStore {
     let db = crate::triggers::callback::test_node_builder("event-source").await;
     crate::triggers::callback::seed_test_agent(&db.node, db.node_identity.did()).await;
     db
@@ -803,7 +803,7 @@ async fn admit_selected_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-reconciles-subscriptions-on",
         crate::lifecycle_hooks::composition(),
     )
@@ -1609,7 +1609,7 @@ fn group_state_identity_changes_only_with_membership_definition() {
 
 #[tokio::test]
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "generation-bump-recovers-only-when-group",
         crate::lifecycle_hooks::composition(),
     )
@@ -1903,7 +1903,7 @@ async fn create_event_trigger_doc(
 
 #[tokio::test]
 async fn concurrent_trigger_fire_count_updates_are_not_lost() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "concurrent-trigger-fire-count-updates-ar",
         crate::lifecycle_hooks::composition(),
     )
@@ -2356,7 +2356,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
 #[tokio::test]
 async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-reconcile-excludes-invalid-",
         crate::lifecycle_hooks::composition(),
     )

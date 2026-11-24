@@ -13,13 +13,14 @@ use std::sync::Arc;
 use crate::support::agent_requests::{RequestActors, RequestSeed};
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::fixtures::configure_agent_tools;
-use crate::support::live_inference::rows_when;
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, PreparedAcceptedTurn},
-    first_row,
-    streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
-    test_db, BACKEND_ID,
+    first_row, test_db, BACKEND_ID,
 };
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
+use gents_store::test_support::rows_when;
 
 type StatusRow = AgentRequestRow;
 
@@ -496,7 +497,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     })
     .to_string();
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         "wake-backoff-model",
         vec![StreamPlan::current_authored_user(
             "continue",

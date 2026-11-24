@@ -160,7 +160,7 @@ impl Launching {
     }
 
     pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        gents_store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
+        gents_store::identity::provision_agent_identity(self.home.node_identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -235,7 +235,7 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
     .unwrap();
     let outsider = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
-            launching.home.graphql_endpoint().unwrap(),
+            launching.home.graphql_endpoint(),
             stranger.did(),
         )
         .with_client_signing_capability(stranger.client_signing_capability().unwrap())

@@ -1,6 +1,3 @@
-use gents_documents::test_support::enroll_test_user;
-use gents_inference::test_support::embedded::install_user_default_agent;
-
 #[cfg(test)]
 const CAPTURED_EVENT_TARGETS: &[&str] = &[
     gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
@@ -39,67 +36,4 @@ impl tracing::Subscriber for CapturedTargetSubscriber {
     fn enter(&self, _span: &tracing::Id) {}
 
     fn exit(&self, _span: &tracing::Id) {}
-}
-
-#[cfg(test)]
-pub(crate) async fn signed_test_node(
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    let db = crate::support::test_db(name).await;
-    signed_test_node_from_db(db, name).await
-}
-
-#[cfg(test)]
-pub(crate) async fn signed_test_node_without_agent(
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-) {
-    let db = crate::support::test_db(name).await;
-    signed_test_node_without_agent_from_db(db, name).await
-}
-
-pub(crate) async fn signed_test_node_without_agent_from_db(
-    db: crate::support::TestDb,
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-) {
-    use gents_store::identity::NodeIdentity;
-
-    let fixture_name = name.to_owned();
-    let user = tokio::task::spawn_blocking(move || {
-        gents_store::test_support::test_identity(&fixture_name)
-    })
-    .await
-    .unwrap();
-    let runtime = db.node_identity.as_ref();
-    assert_ne!(runtime.did(), user.did());
-    let access = db.client_access(&user);
-    enroll_test_user(&db.node, runtime, &user, &access).await;
-    (db, user, access)
-}
-
-pub async fn signed_test_node_from_db(
-    db: crate::support::TestDb,
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
-    let binding =
-        install_user_default_agent(&db.node, db.node_identity.as_ref(), &user, &access).await;
-    (db, user, access, binding)
 }

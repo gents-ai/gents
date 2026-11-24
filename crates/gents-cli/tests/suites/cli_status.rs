@@ -14,7 +14,10 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-status-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-status-{}", Uuid::new_v4().simple());
@@ -85,7 +88,10 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-p2p-status-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-status-{}", Uuid::new_v4().simple());
@@ -214,7 +220,10 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-p2p-admission-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-admission-{}", Uuid::new_v4().simple());
@@ -351,7 +360,10 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-liveness-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-liveness-{}", Uuid::new_v4().simple());
@@ -530,7 +542,10 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-progress-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-progress-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);

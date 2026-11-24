@@ -27,7 +27,9 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 const MODEL: &str = "canary-model";
 const SOLO_MARKER: &str = "canary-solo";
 const REPORT_MARKER: &str = "canary-report";
@@ -387,7 +389,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
 }
 #[tokio::test]
 async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, Vec::new()).unwrap();
+    let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-quiet").await;
     canary
         .install(vec![(
@@ -442,7 +444,7 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
 }
 #[tokio::test]
 async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, Vec::new()).unwrap();
+    let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-unreconciled").await;
     canary
         .install(vec![(
@@ -516,7 +518,7 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
             StreamResponse::service_unavailable("HTTP status 503 for the canary report stage"),
         ],
     );
-    let backend = MockStreamingBackend::start_with_plans(MODEL, plans).unwrap();
+    let backend = ScriptedBackend::start_with_plans(MODEL, plans).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-provider-down").await;
     let executor = canary.executor();
 
@@ -600,7 +602,7 @@ async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_messa
             ],
         )],
     );
-    let backend = MockStreamingBackend::start_with_plans(MODEL, plans).unwrap();
+    let backend = ScriptedBackend::start_with_plans(MODEL, plans).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-export").await;
     let outcome = run(
         &canary.access,

@@ -4,7 +4,7 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 /// Seeds an Agent-owned row through the Agent's own signed access.
-async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) -> serde_json::Value {
+async fn agent_write(db: &AgentHome, operation: &'static str, mutation: &str) -> serde_json::Value {
     db.agent_access
         .transact_write(operation, |txn| {
             Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
@@ -14,7 +14,7 @@ async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) -> se
 }
 
 async fn queue_image(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
     active: Option<&super::folding::ActiveTurn>,
 ) -> gents_lean_vocab::QueueImage {
@@ -110,7 +110,7 @@ async fn replay_replacement(
             .map(|entry| entry.request_id)
             .collect::<Vec<_>>()
     };
-    let db = test_db(&format!("{}-{variant}", case.name)).await;
+    let db = AgentHome::start(&format!("{}-{variant}", case.name)).await;
     let session_id = format!("management-{}", case.name);
     let ttl = |entry: &super::folding::ModeledEntry| match (entry.fresh, variant) {
         (true, 0) => None,
@@ -222,11 +222,9 @@ async fn replay_replacement(
             })
             .collect(),
     };
-    let user_key = gents_store::identity::KeyIdentity::load_or_create(
-        db._tempdir.path().join("other-user.key"),
-        None,
-    )
-    .unwrap();
+    let user_key =
+        gents_store::identity::KeyIdentity::load_or_create(db.path().join("other-user.key"), None)
+            .unwrap();
     // Modeled requester 1 is the Agent that authored its own queued work;
     // it edits through its managed signer.
     let (signer, access): (&dyn gents_store::identity::NodeIdentity, ConfigAccess) = match caller {

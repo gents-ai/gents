@@ -14,7 +14,10 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-workspace-root-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-workspace-root-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);

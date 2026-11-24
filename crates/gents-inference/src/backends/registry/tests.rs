@@ -409,12 +409,12 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let other_db = crate::test_support::test_db(
+    let other_db = gents_store::test_support::TestStore::start(
         "registry-other-node",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let stranger_db = crate::test_support::test_db(
+    let stranger_db = gents_store::test_support::TestStore::start(
         "registry-stranger",
         gents_store::node_extension::Extensions::none(),
     )
@@ -701,7 +701,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
         }],
     };
     record_catalog_for_runtime(&node, &backend, catalog.clone()).await?;
-    let other_db = crate::test_support::test_db(
+    let other_db = gents_store::test_support::TestStore::start(
         "registry-other-node",
         gents_store::node_extension::Extensions::none(),
     )

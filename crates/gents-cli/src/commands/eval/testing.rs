@@ -79,7 +79,7 @@ impl Fixture {
             client_signing,
         };
         let binding =
-            gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+            gents_store::identity::provision_agent_identity(home.node_identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
         initial.extend(documents(&owner));
         install(&ctx.access, initial).await;

@@ -3,11 +3,12 @@ use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
-use gents::support::live_inference::{live_target, rows_when, wait_for_request_terminal};
+use gents::support::live_inference::{live_target, wait_for_request_terminal};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
 use gents_store::config_client::ConfigAccess;
+use gents_store::test_support::rows_when;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};

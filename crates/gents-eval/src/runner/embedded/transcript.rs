@@ -536,16 +536,15 @@ async fn trial_inference_calls(access: &ConfigAccess) -> Result<Vec<TimelineInfe
              completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens } }",
         )
         .await?;
-    let data = response
-        .get("data")
-        .cloned()
-        .context("trial usage query omitted data")?;
-    let rows = super::executor::evidence::without_title_audit_calls(access, data)
-        .await?
-        .get("InferenceCall")
+    let rows = response
+        .pointer("/data/InferenceCall")
         .cloned()
         .context("trial usage query omitted inference calls")?;
-    serde_json::from_value(rows).context("decoding the trial's inference calls")
+    let mut calls: Vec<TimelineInferenceCallRow> =
+        serde_json::from_value(rows).context("decoding the trial's inference calls")?;
+    let requests = super::executor::usage::home_rows(access).await?.requests;
+    calls.retain(|call| super::executor::usage::charged(&requests, call.request_doc_id.as_deref()));
+    Ok(calls)
 }
 
 impl TokenUsage {

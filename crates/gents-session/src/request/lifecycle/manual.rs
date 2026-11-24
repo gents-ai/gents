@@ -119,11 +119,11 @@ mod tests {
     use gents_store::identity::NodeIdentity;
 
     async fn test_node() -> (
-        gents_inference::test_support::TestDb,
+        gents_store::test_support::TestStore,
         String,
         Arc<dyn NodeIdentity>,
     ) {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "manual-task-fixture-node",
             crate::test_support::no_lifecycle_plugins(),
         )

@@ -1,7 +1,7 @@
 use chrono::Utc;
 use gents_session::request::lifecycle::execution_lease::*;
 use gents_session::request::lifecycle::test_support::{
-    agent_access, agent_write_value, claimed_owner, observed_execution, test_node,
+    agent_access, agent_write_value, observed_execution, test_node,
 };
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage,
@@ -137,10 +137,14 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     };
     use gents_protocol::tool_call::AwaitMode;
 
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = gents_session::test_support::ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(gents_session::test_support::Stage::Claimed)
+        .await
+        .lifecycle;
     let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)

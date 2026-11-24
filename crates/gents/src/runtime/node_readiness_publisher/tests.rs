@@ -147,11 +147,11 @@ async fn generated_process_writes_follow_the_lean_transition() {
 }
 
 async fn test_publisher() -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     NodeReadinessPublisherOwner,
     NodeReadinessPublisherHandle,
 ) {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "node-readiness-publisher",
         gents_automation::lifecycle_hooks::composition(),
     )

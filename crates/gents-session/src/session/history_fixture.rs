@@ -237,7 +237,7 @@ pub async fn import_history_observation_as(
 }
 
 pub async fn publish_signed_history(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -279,7 +279,7 @@ pub async fn publish_signed_history(
 }
 
 pub async fn signed_claimed_authored_request(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -293,7 +293,7 @@ pub async fn signed_claimed_authored_request(
 }
 
 pub async fn signed_claimed_authored_request_with_retry(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -314,7 +314,7 @@ pub async fn signed_claimed_authored_request_with_retry(
 }
 
 pub async fn signed_claimed_request(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,

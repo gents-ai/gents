@@ -806,7 +806,10 @@ fn pack_wire_without_targets_writes_no_job_block() -> Result<()> {
 fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
     // A reachable backend keeps every other check green, so only plugin_jobs can degrade status.
     let model_name = "mock-plugin-jobs-model";
-    let endpoint = MockModelEndpoint::start(model_name)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let fixture = wire_fixture_with(
         false,
         &[

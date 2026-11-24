@@ -2,7 +2,7 @@ use super::*;
 
 /// Reads through the Agent's own access: the queued rows are Agent-owned, so
 /// the node identity does not see them.
-async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
+async fn agent_data(db: &AgentHome, query: &str) -> serde_json::Value {
     let response = db
         .agent_access
         .execute(query)
@@ -13,7 +13,7 @@ async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
 }
 
 async fn enqueue_test_steering(
-    db: &TestDb,
+    db: &AgentHome,
     parent: &gents_protocol::row::AgentRequest,
     content: &str,
     input: RequestInput,
@@ -27,7 +27,7 @@ async fn enqueue_test_steering(
 
 #[tokio::test]
 async fn steering_admission_keeps_signed_content_queued_without_transcript_publication() {
-    let db = test_db("steering-admission-only").await;
+    let db = AgentHome::start("steering-admission-only").await;
     let mut parent = parent_request(db.node_did(), db.agent_did(), "steering-session");
     parent.doc_id = insert_agent_queue_request(
         &db,
@@ -89,7 +89,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         gents_lean_vocab::families::contracts_queued_steering_trace_pending_terminal::cases()
     {
         let name = case.input.name.clone();
-        let db = test_db("generated-steering-terminal").await;
+        let db = AgentHome::start("generated-steering-terminal").await;
         let mut parent =
             parent_request(db.node_did(), db.agent_did(), "generated-steering-session");
         parent.doc_id = insert_agent_queue_request(
@@ -201,7 +201,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             crate::request::lifecycle::RequestTerminalOutcome::Failed
         };
 
-        let db = test_db("generated-owned-steering-terminal").await;
+        let db = AgentHome::start("generated-owned-steering-terminal").await;
         // The session is Agent-owned: created through the Agent's access so the
         // parent request's own session check finds the same physical row.
         let node_did = db.node_did().to_owned();
