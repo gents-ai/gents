@@ -794,7 +794,7 @@ async fn serve_foreground(
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
         .with_authenticated_routes(extra_routes)
         .with_router_transform(Arc::new(move |router| {
-            authority.wrap(streams.wrap(edge.wrap(router)))
+            crate::http::gzip_requests::wrap(authority.wrap(streams.wrap(edge.wrap(router))))
         }));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),

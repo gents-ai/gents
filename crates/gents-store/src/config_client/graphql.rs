@@ -1,5 +1,5 @@
 use gents_protocol::delegation_audience::HeldRecord;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
 
 use super::retry;
@@ -174,21 +174,15 @@ async fn send_query(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     let authorization = endpoint.authorization()?;
-    Ok(match variables {
-        Some(variables) => {
-            gents_protocol::graphql::execute_graphql_with_variables_async(
-                endpoint.url(),
-                authorization.as_deref(),
-                query,
-                variables,
-                options,
-            )
-            .await?
-        }
-        None => {
-            execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?
-        }
-    })
+    Ok(gents_protocol::graphql::execute_graphql_encoded(
+        &endpoint.request_encoding.0,
+        endpoint.url(),
+        authorization.as_deref(),
+        query,
+        variables,
+        options,
+    )
+    .await?)
 }
 
 pub(super) async fn txn_begin(

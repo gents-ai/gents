@@ -111,7 +111,34 @@ pub async fn execute_graphql_async(
     options: GraphqlRequestOptions,
 ) -> Result<serde_json::Value> {
     ensure_query_document(query)?;
-    execute_graphql_async_with_tx(graphql, authorization, query, None, options, None).await
+    execute_graphql_async_with_tx(graphql, authorization, query, None, options, None, None).await
+}
+
+/// [`execute_graphql_async`], with or without variables, by a client whose
+/// handle for this endpoint holds `encoding`: what the endpoint's answers said
+/// of gzip request bodies. A large body then goes gzipped once the endpoint
+/// has said it accepts that (Lean `RequestEncoding`); the functions without
+/// an `encoding` always send plain bodies.
+#[cfg(feature = "native")]
+pub async fn execute_graphql_encoded(
+    encoding: &RequestEncoding,
+    graphql: &str,
+    authorization: Option<&str>,
+    query: &str,
+    variables: Option<&serde_json::Value>,
+    options: GraphqlRequestOptions,
+) -> Result<serde_json::Value> {
+    ensure_query_document(query)?;
+    execute_graphql_async_with_tx(
+        graphql,
+        authorization,
+        query,
+        variables,
+        options,
+        None,
+        Some(encoding),
+    )
+    .await
 }
 
 /// [`execute_graphql_async`] with GraphQL variables for the document.
@@ -131,6 +158,7 @@ pub async fn execute_graphql_with_variables_async(
         Some(variables),
         options,
         None,
+        None,
     )
     .await
 }
@@ -143,6 +171,7 @@ pub(super) async fn execute_graphql_async_with_tx(
     variables: Option<&serde_json::Value>,
     options: GraphqlRequestOptions,
     txn_id: Option<&str>,
+    encoding: Option<&RequestEncoding>,
 ) -> Result<serde_json::Value> {
     let client = graphql_http_client().await?;
     let mut last_error: Option<GraphqlError> = None;
@@ -152,7 +181,21 @@ pub(super) async fn execute_graphql_async_with_tx(
             Some(variables) => serde_json::json!({ "query": query, "variables": variables }),
             None => serde_json::json!({ "query": query }),
         };
-        let mut request = client.post(graphql).json(&body);
+        let encoded = serde_json::to_vec(&body).unwrap_or_default();
+        let mut request = client
+            .post(graphql)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT_ENCODING, "gzip");
+        request = match encoding
+            .is_some_and(|encoding| encoding.gzip_body(encoded.len()))
+            .then(|| gzip(&encoded))
+            .flatten()
+        {
+            Some(compressed) => request
+                .header(reqwest::header::CONTENT_ENCODING, "gzip")
+                .body(compressed),
+            None => request.body(encoded),
+        };
         if let Some(timeout) = options.timeout {
             request = request.timeout(timeout);
         }
@@ -167,7 +210,14 @@ pub(super) async fn execute_graphql_async_with_tx(
         }
         let response = request.send().await;
         let response = match response {
-            Ok(response) => response,
+            Ok(response) => {
+                if let Some(encoding) = encoding {
+                    encoding.observe(names_gzip(
+                        response.headers().get(reqwest::header::ACCEPT_ENCODING),
+                    ));
+                }
+                response
+            }
             Err(error)
                 if graphql_transport_error_is_retryable(&error)
                     && attempt + 1 < options.max_attempts =>
@@ -236,7 +286,16 @@ pub(super) async fn execute_graphql_async_with_tx(
             }
         };
 
-        let value = match response.json().await {
+        /* a plain answer decodes as before; only a gzipped one is inflated here */
+        let read = if names_gzip(response.headers().get(reqwest::header::CONTENT_ENCODING)) {
+            match response.bytes().await {
+                Ok(bytes) => Ok(inflate_json(graphql, &bytes)?),
+                Err(error) => Err(error),
+            }
+        } else {
+            response.json().await
+        };
+        let value = match read {
             Ok(value) => value,
             Err(error)
                 if graphql_transport_error_is_retryable(&error)
@@ -373,4 +432,100 @@ pub fn graphql_transport_source<'a>(
 fn scale_backoff(base: Duration, attempt: usize) -> Duration {
     let multiplier = attempt.saturating_add(1) as u32;
     base.saturating_mul(multiplier)
+}
+
+/// Request bodies larger than this many bytes travel gzipped to an endpoint
+/// that accepts them (Lean `RequestEncoding.threshold`).
+#[cfg(feature = "native")]
+const GZIP_REQUEST_BODIES_OVER: usize = 8 * 1024;
+
+/// What a client knows of one GraphQL endpoint: whether its latest answer
+/// said it accepts gzip request bodies (`Accept-Encoding: gzip` on a response,
+/// RFC 7694). The client's handle for the endpoint holds it, shared by the
+/// handle's clones. An endpoint not yet heard from accepts nothing, so a host
+/// that never says so, an older Gents host or a plain DefraDB endpoint, never
+/// receives a gzipped body (Lean `RequestEncoding`).
+#[cfg(feature = "native")]
+#[derive(Debug, Default)]
+pub struct RequestEncoding {
+    accepts_gzip: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(feature = "native")]
+impl RequestEncoding {
+    /// Records what an answer from the endpoint said (Lean `remember`).
+    pub fn observe(&self, accepts_gzip: bool) {
+        self.accepts_gzip
+            .store(accepts_gzip, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a body of `length` bytes goes to the endpoint gzipped (Lean
+    /// `gzipBody`).
+    pub fn gzip_body(&self, length: usize) -> bool {
+        length > GZIP_REQUEST_BODIES_OVER
+            && self.accepts_gzip.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Whether a `Content-Encoding` or `Accept-Encoding` value names gzip.
+#[cfg(feature = "native")]
+fn names_gzip(value: Option<&reqwest::header::HeaderValue>) -> bool {
+    value
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|coding| {
+                coding
+                    .split(';')
+                    .next()
+                    .is_some_and(|name| name.trim().eq_ignore_ascii_case("gzip"))
+            })
+        })
+}
+
+#[cfg(feature = "native")]
+fn gzip(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(bytes).ok()?;
+    encoder.finish().ok()
+}
+
+/// The JSON of a response body the host gzipped.
+#[cfg(feature = "native")]
+fn inflate_json(graphql: &str, bytes: &[u8]) -> Result<serde_json::Value> {
+    let failed = |source: std::io::Error| GraphqlError::DecodeContent {
+        graphql: graphql.to_owned(),
+        source,
+    };
+    let mut inflated = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(bytes), &mut inflated)
+        .map_err(failed)?;
+    serde_json::from_slice(&inflated).map_err(|error| failed(error.into()))
+}
+
+#[cfg(all(test, feature = "native"))]
+mod request_encoding_tests {
+    use super::*;
+
+    /// The client gzips exactly as the Lean model does
+    /// (`RequestEncoding.Contracts.gzip`).
+    #[test]
+    fn request_encoding_matches_the_lean_model() {
+        use gents_lean_vocab::families::request_encoding_contracts_gzip as family;
+        family::replay(|input: &family::Input| {
+            let encoding = RequestEncoding::default();
+            for &accepts in &input.answers {
+                encoding.observe(accepts);
+            }
+            encoding.gzip_body(input.length as usize)
+        });
+    }
+
+    #[test]
+    fn a_gzipped_answer_is_inflated() {
+        let body = br#"{"data":{"Agent":[]}}"#;
+        let value = inflate_json("graphql", &gzip(body).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"data": {"Agent": []}}));
+        assert!(inflate_json("graphql", body).is_err());
+    }
 }
