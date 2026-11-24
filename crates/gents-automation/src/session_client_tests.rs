@@ -10,11 +10,13 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
     for case in gents_lean_vocab::families::contracts_goal_backed_runtime::cases() {
         let name = case.input.name.as_str();
-        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("runtime-goal-opening-{name}"),
             crate::lifecycle_hooks::composition(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let node = db.node.clone();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -555,7 +557,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,

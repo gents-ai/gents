@@ -96,9 +96,9 @@ export function errorWords(raw: string | null | undefined): string {
 const GOAL_STATUS: Record<string, string> = {
   active: "Working",
   paused: "Paused",
-  blocked: "Blocked",
+  blocked: "Waiting for you: it said it is blocked",
   usage_limited: "Stopped at the account's usage limit",
-  budget_limited: "Stopped at its token budget",
+  budget_limited: "Paused at its token budget",
   complete: "Met",
 };
 

@@ -162,11 +162,12 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "claude-missing",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let err = ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, None)
@@ -181,11 +182,12 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
 
 #[tokio::test]
 async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "claude-subscription",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -219,11 +221,12 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
 
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "claude-subscription",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -333,11 +336,12 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
 
 #[tokio::test]
 async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "claude-usage",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential = crate::auth::credential::OAuthCredential {

@@ -92,38 +92,6 @@ impl GoalSource {
         Ok(false)
     }
 
-    pub(super) async fn reset_blocked_audits(
-        &self,
-        actor: &identity::Did,
-        goal: &mut GoalDocument,
-        status: GoalStatus,
-        terminal: GoalRequestTerminal,
-        latest: &AgentRequestRow,
-    ) -> Result<bool> {
-        if terminal == GoalRequestTerminal::Completed
-            && goal.consecutive_blocked_audits.unwrap_or_default() > 0
-            && goal.last_blocked_request_id.as_deref() != Some(latest.request_id.as_str())
-        {
-            let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-            if !update_goal_fields_if_status_from_access(
-                &self.agent_access(actor)?,
-                goal,
-                status,
-                &format!(
-                    r#"consecutive_blocked_audits: 0, last_blocked_request_id: null, last_blocked_reason: null, updated_at: "{updated_at}""#
-                ),
-            )
-            .await?
-            {
-                return Ok(false);
-            }
-            goal.consecutive_blocked_audits = Some(0);
-            goal.last_blocked_request_id = None;
-            goal.last_blocked_reason = None;
-        }
-        Ok(true)
-    }
-
     pub(super) async fn begin_wrapup(
         &self,
         actor: &identity::Did,

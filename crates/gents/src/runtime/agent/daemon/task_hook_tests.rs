@@ -59,12 +59,13 @@ impl Harness {
 
     async fn with_deadline(deadline: Duration) -> Self {
         use gents_store::config_client::NodePermission;
-        let (db, user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                crate::support::trial_store("task-hooks").await,
-                "task-hooks",
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store("task-hooks").await,
+            "task-hooks",
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, user_access) = signed_home.into_parts();
         let node = db.node.clone();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -212,7 +213,6 @@ impl Harness {
                 goal_id: None,
                 goal_objective: None,
                 goal_token_budget: None,
-                goal_blocked_audit_threshold: None,
                 goal_max_infrastructure_retries: None,
                 goal_assignment_applied: false,
                 emit_outcome: false,

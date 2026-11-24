@@ -9,7 +9,7 @@ use crate::support::agent_requests::{canonical_now, RequestSeed};
 use crate::support::live_inference::{
     bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const PROMPT: &str = "Acknowledge this sealed workspace request in one short sentence. Do not inspect files or call tools.";
 
@@ -33,7 +33,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_binds_an_agent_authored_workspace_request() {
-    let db = test_db("workspace-binding-recovery").await;
+    let db = trial_store("workspace-binding-recovery").await;
     let target = live_target().await;
     let actors = bind_target(&db, &target).await;
     let did = actors.node_did().to_owned();

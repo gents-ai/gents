@@ -5,11 +5,13 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
     use gents_store::identity::NodeIdentity;
-    let (db, user, access, default) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "event-args-rollback",
         gents_store::node_extension::Extensions::default(),
     )
     .await;
+    let default = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let owner = db.node_identity.did().to_owned();
     let binding = gents_store::identity::provision_agent_identity_authorized(
         &db.node,

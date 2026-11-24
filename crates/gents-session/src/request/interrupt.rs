@@ -57,14 +57,14 @@ pub enum RequestInterrupt {
 }
 
 /// Interrupts a session (Lean `InterruptGeneration`): reads the session's
-/// marker by id, writes one past its generation and stages the session-halt
-/// hook. It reads no request, writes no request and decides on no scan; the marker's access
-/// check reads the session document, so another interrupt or a write of the
-/// session document aborts an attempt, and it commits while fewer of those
-/// land than it has attempts
-/// (`only_marker_and_session_writers_abort_an_interrupt`). The request active at its commit and
-/// the automated wakes pending at its commit recorded the generation it
-/// passed; pending user input runs as the next turn.
+/// marker by the session key it carries and then by id, writes one past its
+/// generation and stages the session-halt hook. It reads no session document
+/// and no request and decides on no scan, so only another interrupt of the
+/// session aborts an attempt (`only_another_interrupt_aborts_an_interrupt`);
+/// a caller who reads no marker is refused after reading the session, in an
+/// attempt that writes nothing. The request active at its commit and the
+/// automated wakes pending at its commit recorded the generation it passed;
+/// pending user input runs as the next turn.
 pub async fn interrupt_session_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
@@ -74,16 +74,20 @@ pub async fn interrupt_session_in_txn(
     let refused = || SessionInterruptRefusal::NotPermitted {
         session_id: session_id.to_owned(),
     };
-    let Some(session_doc_id) =
-        session_doc_id_in_txn(txn, node_did, session_id, requester_did).await?
-    else {
-        return Ok(Err(refused()));
-    };
-    let Some(marker) = interrupt_marker::read_in_txn(txn, &session_doc_id).await? else {
-        return Ok(Err(SessionInterruptRefusal::NoMarker {
-            session_id: session_id.to_owned(),
-        }));
-    };
+    let marker =
+        match interrupt_marker::read_by_session_key_in_txn(txn, node_did, session_id).await? {
+            Some(marker) => marker,
+            None => {
+                return Ok(Err(
+                    match session_doc_id_in_txn(txn, node_did, session_id, requester_did).await? {
+                        None => refused(),
+                        Some(_) => SessionInterruptRefusal::NoMarker {
+                            session_id: session_id.to_owned(),
+                        },
+                    },
+                ))
+            }
+        };
     let Some(bumped) = bump_in_txn(txn, &marker).await? else {
         return Ok(Err(refused()));
     };
@@ -322,7 +326,7 @@ async fn interrupt_request_matching_in_txn(
         }
         _ => {
             let marker =
-                match interrupt_marker::session_marker_in_txn(txn, node_did, session_id).await? {
+                match interrupt_marker::interrupt_marker_in_txn(txn, node_did, session_id).await? {
                     interrupt_marker::SessionMarker::Found(marker) => marker,
                     interrupt_marker::SessionMarker::NoSession => {
                         return Ok(Err(SessionInterruptRefusal::NotPermitted {

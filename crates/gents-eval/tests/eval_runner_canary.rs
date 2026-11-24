@@ -728,7 +728,7 @@ async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_messa
 
 #[tokio::test]
 async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
-    let backend = support::mock_endpoint::MockModelEndpoint::start(MODEL).unwrap();
+    let backend = ScriptedBackend::start(MODEL, Vec::new()).unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;
     let mut responses = backend_document(
         &canary.owner,
@@ -798,8 +798,10 @@ async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
 
 #[tokio::test]
 async fn a_responses_reasoning_backend_runs_a_second_request_in_the_session() {
-    let backend =
-        support::mock_endpoint::MockModelEndpoint::start_with_reasoning_tool_turns(MODEL).unwrap();
+    let backend = ScriptedBackend::builder(MODEL)
+        .unscripted(gents_inference::test_support::scripted_backend::Unscripted::ReasoningToolTurn)
+        .start()
+        .unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-responses-replay").await;
     let mut responses = backend_document(
         &canary.owner,

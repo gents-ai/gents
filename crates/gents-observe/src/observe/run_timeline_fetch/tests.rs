@@ -15,11 +15,13 @@ fn bindings() -> BTreeMap<String, String> {
 #[tokio::test]
 async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "timeline-fork",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let messages = (1..=3)
         .map(|sequence| format!("message {sequence}"))
@@ -71,11 +73,13 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
 #[tokio::test]
 async fn timeline_batches_request_local_events_and_restores_request_sequence_order() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "timeline-batch",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let agent_access = ConfigAccess::local_managed_agent(
@@ -291,11 +295,13 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     use gents_store::identity::NodeIdentity;
     use std::time::Duration;
 
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "timeline-pending-tool",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent =

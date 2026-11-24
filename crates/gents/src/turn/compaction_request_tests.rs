@@ -21,11 +21,13 @@ impl CompactionFixture {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
-        let (db, user, client, binding) = gents_inference::test_support::signed_test_node_from_db(
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
             crate::support::trial_store(name).await,
             name,
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

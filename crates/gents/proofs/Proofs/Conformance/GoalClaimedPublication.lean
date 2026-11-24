@@ -7,13 +7,13 @@ open GoalAutomation.OperatorResume
 open Conformance.GoalOperatorResumeContracts (parentBinding SnapshotWire SnapshotWire.ofModel SnapshotWire.toModel)
 
 def claimed : Snapshot :=
-  ⟨⟨.active, 2, false, false⟩, 1, some 10, 10, [], 37, some 1000⟩
+  ⟨⟨.active, false, false⟩, 1, some 10, 10, [], 37, some 1000⟩
 def request : ClaimedRequest :=
   ⟨⟨.active, 1, true, true, true, true, parentBinding⟩, some 10, some "requester"⟩
 def published : Snapshot :=
-  ⟨⟨.active, 2, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
+  ⟨⟨.active, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
 def budgetClaimed : Snapshot :=
-  { claimed with goal := ⟨.budgetLimited, 2, true, false⟩ }
+  { claimed with goal := ⟨.budgetLimited, true, false⟩ }
 def paused : Snapshot := { claimed with goal := {claimed.goal with status := .paused} }
 def laterEpoch : Snapshot := {claimed with sequence := 3}
 def changedWatermark : Snapshot := {claimed with lastContinuedFrom := some 30}

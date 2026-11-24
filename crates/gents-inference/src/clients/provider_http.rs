@@ -22,11 +22,23 @@ pub struct ProviderHttpClient {
     usage: Option<Arc<UsageReporter>>,
 }
 
+/// External premise: local model servers close a kept-alive connection once it
+/// has been idle for 5 s (uvicorn's `timeout_keep_alive`, which vLLM serves
+/// under; cpp-httplib's keep-alive timeout in llama.cpp's server). A request
+/// written onto a connection as the server closes it is dropped unanswered,
+/// and since the server may have read it, the transport never sends it again:
+/// hyper resends only a request it had not begun to write on a reused
+/// connection. Dropping connections idle for less than that makes a call after
+/// a pause open a fresh one; hosted providers keep connections longer, and a
+/// fresh connection costs them one handshake.
+const POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
 impl ProviderHttpClient {
     /// Credentials are scoped to their configured provider destination.
     pub(crate) fn credential_client() -> Result<ReqwestClient, reqwest_provider::Error> {
         ReqwestClient::builder()
             .redirect(reqwest_provider::redirect::Policy::none())
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .build()
     }
 

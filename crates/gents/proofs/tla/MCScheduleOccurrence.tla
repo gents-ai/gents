@@ -1,0 +1,4 @@
+---- MODULE MCScheduleOccurrence ----
+EXTENDS ScheduleOccurrence
+
+====

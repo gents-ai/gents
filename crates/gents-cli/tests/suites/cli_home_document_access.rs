@@ -96,7 +96,10 @@ async fn a_home_is_initialized_served_used_and_reopened(document_acp: &str) -> R
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-home-access-{}", Uuid::new_v4().simple());
-    let model = MockChatEndpoint::start(&model_name, REPLY)?;
+    let model =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies(REPLY)
+            .start()?;
 
     let init = run_init_json(
         &home_dir,
@@ -159,7 +162,10 @@ async fn a_home_on_an_embedded_vera_node_is_initialized_served_used_and_reopened
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<()> {
     let home = tempfile::tempdir()?;
-    let model = MockChatEndpoint::start("device-group", REPLY)?;
+    let model =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("device-group")
+            .replies(REPLY)
+            .start()?;
     let init = run_init_json(
         home.path(),
         &[
@@ -221,7 +227,10 @@ async fn publish_test_peer(
 async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()> {
     let host = tempfile::tempdir()?;
     let follower = tempfile::tempdir()?;
-    let model = MockChatEndpoint::start("paired-home", REPLY)?;
+    let model =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("paired-home")
+            .replies(REPLY)
+            .start()?;
     let port = allocate_port()?.to_string();
     let init_args = [
         "--model-name",

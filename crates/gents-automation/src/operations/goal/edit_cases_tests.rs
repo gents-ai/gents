@@ -55,11 +55,13 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             auto_resume: row.auto_resume,
             ..Default::default()
         };
-        let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             "goal-edit-contract",
             crate::lifecycle_hooks::composition(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, access) = signed_home.into_parts();
         let node = db.node.clone();
         let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
@@ -147,7 +149,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         let before = durable_rows(&access).await;
         let edit = match row.origin {
             Origin::Agent => {
-                super::set_as_working_agent(&agent_access, &observed, &input, None, "request").await
+                super::set_as_working_agent(&agent_access, &observed, &input, None).await
             }
             Origin::Client => {
                 let input = GoalSetInput {

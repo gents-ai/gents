@@ -815,9 +815,18 @@ describe("configuration panels", () => {
           wrapper: withApp(app),
         });
         await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        /* a snapshot whose account backends for the node changed re-lists */
+        const snapshot = app.stores.client.getState().snapshot!;
         act(() =>
           publishSnapshot(app, {
-            ...app.stores.client.getState().snapshot!,
+            ...snapshot,
+            client: {
+              ...snapshot.client!,
+              deployments: [
+                ...snapshot.client!.deployments,
+                { ...rowsDeployment, nodeDid: "agent-a" },
+              ],
+            },
           }),
         );
         expect(result.current.accounts).toEqual(accounts);

@@ -98,7 +98,7 @@ describe("words for what the runtime reports", () => {
     expect(goalStatusText("usage_limited")).toBe(
       "Stopped at the account's usage limit",
     );
-    expect(goalStatusText("budget_limited")).toBe("Stopped at its token budget");
+    expect(goalStatusText("budget_limited")).toBe("Paused at its token budget");
     expect(goalStatusText("waiting_on_review")).toBe("Waiting on review");
     expect(cancelCauseText("userCancelled")).toBe("You stopped it");
     expect(cancelCauseText("somethingElse")).toBe("It was stopped");
@@ -113,14 +113,13 @@ describe("where the words are used", () => {
       objective: "Make the import resumable",
       status: "usage_limited",
       tokenBudget: null,
-      blockedAuditThreshold: "3",
       maxInfrastructureRetries: "2",
       tokensUsed: "0",
       activeTimeSeconds: "0",
       continuationSequence: "0",
       wrapupRequested: false,
       wrapupCompleted: false,
-      lastBlockedReason: "verification_failed: the resume test still fails",
+      blockedReason: "verification_failed: the resume test still fails",
       lastFailure: "usage_limited: every Claude account has reached its usage limit",
       completionEvidence: null,
     };

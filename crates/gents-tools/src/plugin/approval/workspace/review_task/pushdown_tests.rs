@@ -18,7 +18,6 @@ fn document(input: &TaskInput) -> Task {
             .goal_token_budget
             .map(|budget| i64::try_from(budget).unwrap()),
         command: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         hooks: document
             .hooks

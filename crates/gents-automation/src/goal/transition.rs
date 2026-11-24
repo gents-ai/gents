@@ -59,10 +59,6 @@ pub fn decide_model_goal_create(
             .is_some_and(|budget| budget <= 0 || budget > i64::MAX as i128)
         || request
             .limits
-            .blocked_audit_threshold
-            .is_some_and(|threshold| threshold <= 0)
-        || request
-            .limits
             .max_infrastructure_retries
             .is_some_and(|retries| retries < 0)
     {

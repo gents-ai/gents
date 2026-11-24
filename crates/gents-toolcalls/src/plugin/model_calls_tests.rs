@@ -489,11 +489,13 @@ fn malformed_model_calls_are_named() {
 
 #[tokio::test]
 async fn a_profile_resolves_to_its_chat_completions_endpoint() {
-    let (db, user, _access, agent) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "plugin-model-profile",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let agent = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let models = AccessModels(ConfigAccess::local(node.clone()));
@@ -916,11 +918,13 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
             Box::pin(async move { Ok(self.fake.endpoint(1)) })
         }
     }
-    let (db, client, owner, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "plugin-model-selected-agent",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, client, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let selected = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;

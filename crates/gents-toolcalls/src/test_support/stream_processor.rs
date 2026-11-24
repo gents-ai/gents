@@ -41,11 +41,13 @@ pub async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         name,
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime_did = db.node_identity.did().to_owned();
     let agent =

@@ -18,8 +18,8 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 use crate::goal::{
     goal_session_is_idle, load_canonical_goal_in_txn, load_goal_creation_claim_for_key_in_txn,
-    load_session_requests, same_goal_assignment, GoalAction, GoalAuditObservation,
-    GoalBackedRequestDisposition, GoalCreationFingerprint, GoalDocument, GoalState,
+    load_session_requests, same_goal_assignment, GoalAction, GoalBackedRequestDisposition,
+    GoalCreationFingerprint, GoalDocument, GoalState,
 };
 
 type Refusal<T> = std::result::Result<T, GoalOperationError>;
@@ -68,18 +68,22 @@ pub fn start_decision(
 
 /// Lean `GoalAutomation.Edit.editable` through `Operations.origin`.
 fn editable(actor: GoalActor, status: GoalStatus) -> bool {
-    status == GoalStatus::Active || actor == GoalActor::Person && status == GoalStatus::Paused
+    status == GoalStatus::Active
+        || actor == GoalActor::Person
+            && matches!(
+                status,
+                GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::BudgetLimited
+            )
 }
 
 /// Lean `GoalAutomation.Operations.action`.
-fn action(actor: GoalActor, target: GoalTarget) -> Option<GoalAction> {
+fn action(_actor: GoalActor, target: GoalTarget) -> Option<GoalAction> {
     match target {
         GoalTarget::Keep | GoalTarget::Activate => None,
         GoalTarget::Pause => Some(GoalAction::Pause),
         GoalTarget::Stop => Some(GoalAction::Stop),
         GoalTarget::Complete => Some(GoalAction::Complete),
-        GoalTarget::Block if actor == GoalActor::Person => Some(GoalAction::OperatorBlock),
-        GoalTarget::Block => Some(GoalAction::BlockedAudit(GoalAuditObservation::NewCondition)),
+        GoalTarget::Block => Some(GoalAction::Block),
         GoalTarget::UsageLimited => Some(GoalAction::UsageLimit),
         GoalTarget::BudgetLimited => Some(GoalAction::BudgetExhausted),
     }
@@ -89,7 +93,6 @@ fn action(actor: GoalActor, target: GoalTarget) -> Option<GoalAction> {
 fn legal(actor: GoalActor, status: GoalStatus, target: GoalTarget) -> bool {
     let observed = GoalState {
         status,
-        blocked_audits: 0,
         wrapup_requested: false,
         wrapup_completed: false,
     };
@@ -424,7 +427,7 @@ pub struct GoalSetPlan {
     post: GoalState,
     auto_resume: Option<bool>,
     completion_evidence: Option<Option<String>>,
-    blocked: Option<(String, String)>,
+    blocked_reason: Option<String>,
 }
 
 fn target_name(target: GoalTarget) -> &'static str {
@@ -440,30 +443,15 @@ fn target_name(target: GoalTarget) -> &'static str {
     }
 }
 
-pub(crate) fn audit_observation(
-    goal: &GoalDocument,
-    reason: &str,
-    request_id: &str,
-) -> GoalAuditObservation {
-    if goal.last_blocked_request_id.as_deref() == Some(request_id) {
-        GoalAuditObservation::SameRequest
-    } else if goal.last_blocked_reason.as_deref() == Some(reason) {
-        GoalAuditObservation::SameCondition
-    } else {
-        GoalAuditObservation::NewCondition
-    }
-}
-
 /// Decides a set on the session's current Goal. `obligations_unmet` is the
 /// working Agent's unmet output obligations, as text it reads, when it asks to
-/// complete; `request_id` is its calling request.
+/// complete.
 pub async fn admit_set_in_txn(
     txn: &ConfigApplyTxn<'_>,
     actor: GoalActor,
     goal: &GoalDocument,
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
-    request_id: Option<&str>,
 ) -> anyhow::Result<Refusal<GoalSetPlan>> {
     let current = match input.expected.as_ref() {
         None => true,
@@ -488,7 +476,7 @@ pub async fn admit_set_in_txn(
     if !current {
         return Ok(Err(GoalOperationError::Stale));
     }
-    Ok(plan_set(actor, goal, input, obligations_unmet, request_id))
+    Ok(plan_set(actor, goal, input, obligations_unmet))
 }
 
 fn plan_set(
@@ -496,7 +484,6 @@ fn plan_set(
     goal: &GoalDocument,
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
-    request_id: Option<&str>,
 ) -> Refusal<GoalSetPlan> {
     validate_objective_and_budget(input.objective.as_deref(), input.token_budget.flatten())?;
     let target = input.target();
@@ -542,22 +529,9 @@ fn plan_set(
             ))
         }
     }
-    let mut blocked = None;
-    let action = match (action(actor, target), reason, request_id) {
-        (Some(GoalAction::BlockedAudit(_)), Some(reason), Some(request_id)) => {
-            blocked = Some((reason.to_owned(), request_id.to_owned()));
-            Some(GoalAction::BlockedAudit(audit_observation(
-                goal, reason, request_id,
-            )))
-        }
-        (Some(GoalAction::BlockedAudit(_)), _, _) => return Err(GoalOperationError::Denied),
-        (action, _, _) => action,
-    };
-    let post = match action {
+    let post = match action(actor, target) {
         None => pre,
-        Some(action) => pre
-            .step_with_blocked_audit_threshold(action, goal.blocked_audit_threshold())
-            .ok_or(illegal)?,
+        Some(action) => pre.step(action).ok_or(illegal)?,
     };
     Ok(GoalSetPlan {
         goal: goal.clone(),
@@ -571,7 +545,9 @@ fn plan_set(
         auto_resume: input.auto_resume,
         completion_evidence: (target == GoalTarget::Complete)
             .then(|| reason.map(ToOwned::to_owned)),
-        blocked,
+        blocked_reason: (target == GoalTarget::Block)
+            .then(|| reason.map(ToOwned::to_owned))
+            .flatten(),
     })
 }
 
@@ -604,7 +580,7 @@ pub async fn apply_set_in_txn(
             .auto_resume
             .is_none_or(|enabled| current.auto_resume_at_reset == Some(enabled))
         && plan.completion_evidence.is_none()
-        && plan.blocked.is_none()
+        && plan.blocked_reason.is_none()
     {
         return Ok(Some(current));
     }
@@ -616,7 +592,6 @@ pub async fn apply_set_in_txn(
         "token_budget": token_budget,
         "active_time_seconds": current.current_active_time_seconds(now),
         "active_started_at": post.status.accrues_active_time().then_some(now_string.as_str()),
-        "consecutive_blocked_audits": post.blocked_audits,
         "wrapup_requested": post.wrapup_requested,
         "wrapup_completed": post.wrapup_completed,
         "updated_at": now_string,
@@ -628,9 +603,8 @@ pub async fn apply_set_in_txn(
         input["completion_evidence"] = evidence.clone().into();
         input["last_failure"] = serde_json::Value::Null;
     }
-    if let Some((reason, request_id)) = &plan.blocked {
-        input["last_blocked_reason"] = reason.clone().into();
-        input["last_blocked_request_id"] = request_id.clone().into();
+    if let Some(reason) = &plan.blocked_reason {
+        input["blocked_reason"] = reason.clone().into();
     }
     let doc_id = gents_store::graphql::escape_graphql_string(&current.doc_id);
     let node_did = gents_store::graphql::escape_graphql_string(&current.node_did);
@@ -660,10 +634,7 @@ pub async fn apply_set_in_txn(
         txn,
         &updated.node_did,
         &updated.goal_id,
-        updated
-            .last_blocked_reason
-            .as_deref()
-            .unwrap_or(&updated.status),
+        &updated.status,
         &now_string,
     )
     .await?;
@@ -678,16 +649,14 @@ pub async fn set_in_txn(
     session_id: &str,
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
-    request_id: Option<&str>,
 ) -> anyhow::Result<Refusal<GoalDocument>> {
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
         return Ok(Err(GoalOperationError::NoGoal(session_id.to_owned())));
     };
-    let plan =
-        match admit_set_in_txn(txn, actor, &goal, input, obligations_unmet, request_id).await? {
-            Ok(plan) => plan,
-            Err(refusal) => return Ok(Err(refusal)),
-        };
+    let plan = match admit_set_in_txn(txn, actor, &goal, input, obligations_unmet).await? {
+        Ok(plan) => plan,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
     Ok(apply_set_in_txn(txn, &plan)
         .await?
         .ok_or(GoalOperationError::Stale))
@@ -714,7 +683,7 @@ pub async fn set(
                     )));
                 };
                 let actor = acting_in_txn(txn, node_did, &session.session.agent_did).await?;
-                set_in_txn(txn, actor, node_did, session_id, input, None, None).await
+                set_in_txn(txn, actor, node_did, session_id, input, None).await
             })
         })
         .await
@@ -728,7 +697,6 @@ pub async fn set_as_working_agent(
     observed: &GoalDocument,
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
-    request_id: &str,
 ) -> Result<GoalDocument, GoalOperationError> {
     let input = GoalSetInput {
         expected: Some(GoalExpected::Assignment {
@@ -770,7 +738,6 @@ pub async fn set_as_working_agent(
                     &observed.session_id,
                     input,
                     obligations_unmet,
-                    Some(request_id),
                 )
                 .await
             })

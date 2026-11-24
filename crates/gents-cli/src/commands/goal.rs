@@ -43,6 +43,12 @@ async fn goal_show_value(
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(gents_automation::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
+    if let Some(status) = goal
+        .parsed_status()
+        .filter(|status| *status != GoalStatus::Active)
+    {
+        value["resume"] = gents_protocol::operations::goal::resume_path(status).into();
+    }
     let blocked = gents_automation::goal::blocked_turn::blocked_goal_turn(
         access, node_did, session_id,
     )

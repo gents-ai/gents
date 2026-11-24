@@ -1,0 +1,4 @@
+---- MODULE MCGoalBlockedPause ----
+EXTENDS GoalBlockedPause
+
+====

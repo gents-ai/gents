@@ -12,12 +12,12 @@ use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writer_recovers_complete_large_task_contract_through_live_tool_calls() {
     let target = live_target().await;
-    let db = test_db("live-field-recovery-writer").await;
+    let db = trial_store("live-field-recovery-writer").await;
     let actors = bind_target(&db, &target).await;
     let access = &actors.fixture.access;
     const SDL: &str = "type ReaderWork { instructions: String owned_files: String }";

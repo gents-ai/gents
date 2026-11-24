@@ -8,11 +8,13 @@ async fn retry_frontier_matches_lean_admission() {
     use gents_toolcalls::call::lifecycle::admission_fixture::{
         publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "retry-frontier",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node = &db.node;
     let node_did = db.node_identity.did();
     let other = tokio::task::spawn_blocking(|| {

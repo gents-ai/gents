@@ -74,6 +74,7 @@ pub(super) fn runtime_context(
 pub(super) fn spawn_health_probes(
     agent: &Gents,
     health_map: &ServiceHealthMap,
+    admission: &gents_inference::admission::AdmissionRegistry,
     cancel: &CancellationToken,
 ) -> (
     AbortOnDropHandle<()>,
@@ -101,6 +102,7 @@ pub(super) fn spawn_health_probes(
             backend_health_events_tx,
             cancel.child_token(),
             agent.node_did().to_string(),
+            std::sync::Arc::new(admission.clone()),
         ));
     (health_checker, backend_prober, backend_health_events_rx)
 }

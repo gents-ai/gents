@@ -9,8 +9,13 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     use gents_store::identity::NodeIdentity;
     use serde_json::json;
 
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-session-usage").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "goal-session-usage",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let owner = db.node_identity.did();
@@ -198,8 +203,13 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
     };
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-selected-agent-delete").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "goal-selected-agent-delete",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = gents_store::config_client::ConfigAccess::local_as(
@@ -290,8 +300,13 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     };
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-user-delete").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "goal-user-delete",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = gents_store::config_client::ConfigAccess::local_as(
@@ -424,8 +439,13 @@ async fn goal_and_claim_publication_links_match_lean() {
         commit: bool,
         steps: &[[bool; 3]],
     ) -> LinkRun {
-        let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("goal-links").await;
+        let signed_home = gents_documents::test_support::SignedHome::start(
+            "goal-links",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, user_access) = signed_home.into_parts();
         let node = db.node.clone();
         let runtime = db.node_identity.clone();
         let agent =
@@ -571,7 +591,6 @@ async fn goal_and_claim_publication_links_match_lean() {
                             },
                             initial_state: GoalState {
                                 status: GoalStatus::Active,
-                                blocked_audits: 0,
                                 wrapup_requested: false,
                                 wrapup_completed: false,
                             },
@@ -849,8 +868,13 @@ async fn signed_relationship_repair_rebuilds_after_a_concurrent_goal_write() {
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-repair-race").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "goal-repair-race",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

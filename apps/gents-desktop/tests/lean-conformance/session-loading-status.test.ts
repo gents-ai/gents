@@ -15,6 +15,7 @@ import {
   UNREGISTERED_READ_MS,
   startClientObservation,
 } from "../../src/hooks/clientObservation";
+import { BURST_MS } from "../../src/hooks/projectionController";
 import { waitingRereadDelay } from "../../src/hooks/sessionReads";
 import { readSession, writeSession } from "../../src/hooks/sessionStore";
 import { node, testApp } from "../app-fixture";
@@ -50,7 +51,7 @@ type Reply = "found" | "missing" | "pending" | "failed" | "refused" | "mismatch"
 
 type Act =
   | { kind: "select"; drop: boolean }
-  | { kind: "notice" | "fire" | "retry" | "drop" | "stop" | "restart" }
+  | { kind: "notice" | "fire" | "retry" | "drop" | "stop" | "restart" | "elapse" }
   | { kind: "complete"; reply: Reply };
 
 type Observation = {
@@ -150,7 +151,9 @@ type Fetch = {
 
 /* The production observer, session reads and drain loop, driven through the
    bridge they read from: each session read waits for the trace to answer it,
-   and registration and store events are the trace's notices. */
+   registration and store events are the trace's notices, and the fake clock
+   moves only where the model's does: `elapse` passes the drain loop's burst
+   window, `fire` reaches the next timer, `restart` the registration deadline. */
 async function replay(acts: Act[]): Promise<Observation[]> {
   const fetches: Fetch[] = [];
   let client = RUNNING;
@@ -231,8 +234,10 @@ async function replay(acts: Act[]): Promise<Observation[]> {
   const observed: Observation[] = [];
   try {
     /* the observer's first read: the model owes it from the start, and the
-       observer runs it by its deadline when the trace has not registered */
+       observer requests it by its deadline when the trace has not registered;
+       the model starts the replay once that request's window has passed */
     await vi.advanceTimersByTimeAsync(UNREGISTERED_READ_MS);
+    await vi.advanceTimersByTimeAsync(BURST_MS);
     observed.push(observe());
     for (const act of acts) {
       switch (act.kind) {
@@ -296,6 +301,9 @@ async function replay(acts: Act[]): Promise<Observation[]> {
           client = RUNNING;
           app.stores.client.setState({ snapshot: RUNNING });
           await vi.advanceTimersByTimeAsync(UNREGISTERED_READ_MS);
+          break;
+        case "elapse":
+          await vi.advanceTimersByTimeAsync(BURST_MS);
           break;
       }
       await flush();

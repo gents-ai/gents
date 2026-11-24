@@ -558,7 +558,13 @@ async fn embedded() -> (
         RequestSpec,
     };
 
-    let (db, user, access, primary) = crate::test_support::signed_test_node("blocked-turn").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "blocked-turn",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let primary = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did).unwrap())
         .grant_node_permission(

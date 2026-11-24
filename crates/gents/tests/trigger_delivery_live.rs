@@ -194,7 +194,7 @@ struct DeliveryAgents {
 }
 
 /// The fixture User's held access to the qualification's retained home.
-async fn user_access(db: &support::TestDb) -> ConfigAccess {
+async fn user_access(db: &gents_store::test_support::TestStore) -> ConfigAccess {
     let user = support::load_managed_fixture_user(db).await;
     db.client_access(&user)
 }
@@ -252,7 +252,7 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
 /// Provisions the lead and two worker Agents as the household-owner User and
 /// configures their lanes, tasks and triggers under that User's signature.
 async fn configure(
-    db: &support::TestDb,
+    db: &gents_store::test_support::TestStore,
     lanes: &[InferenceTarget; 2],
 ) -> Result<(support::ManagedAgentFixture, DeliveryAgents)> {
     let fixture = support::managed_agent_fixture(db).await;
@@ -364,9 +364,7 @@ async fn configure(
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
     let lanes = delivery_lanes().await?;
     let artifacts = tokio::task::spawn_blocking(|| artifact_directory("burst")).await??;
-    let home =
-        gents::runtime::embedded::EmbeddedHome::create_retained(&artifacts.join("home")).await?;
-    let db = support::test_db_from_home(home);
+    let db = support::trial_store_at(&artifacts.join("home")).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let (fixture, agents) = configure(&db, &lanes).await?;

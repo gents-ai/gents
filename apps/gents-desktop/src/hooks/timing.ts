@@ -6,6 +6,9 @@ export type AppTiming = {
       updates keep arriving for it and a live read can stand in; null leaves
       a live session to live reads until one asks for a full read */
   sessionReadGapMs: number | null;
+  /** how long startup waits on reading this device's own saved settings
+      before it says so and offers a retry; a later answer still lands */
+  configurationReadTimeoutMs: number;
 };
 
 const DEFAULT_TIMING_CONFIG: AppTiming = {
@@ -13,6 +16,7 @@ const DEFAULT_TIMING_CONFIG: AppTiming = {
   clientRestartMaxAttempts: 10,
   clientRestartBackoffMs: 250,
   sessionReadGapMs: 1_500,
+  configurationReadTimeoutMs: 20_000,
 };
 
 let timingConfigOverrides: Partial<AppTiming> | null = null;

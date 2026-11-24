@@ -76,6 +76,24 @@ fn account_label_is_display_only_and_prefers_email() {
     assert_eq!(account_display_label(&credential), None);
 }
 
+/// A refresh copies the email its tokens show, and one whose tokens show
+/// none leaves the stored email as it was (Lean `AccountListing.write`).
+#[test]
+fn a_refresh_writes_the_email_its_tokens_show() {
+    use base64::Engine;
+    let mut credential = sample_credential();
+    let mutation = refresh_update_mutation(&credential, "refresh-old", false);
+    assert!(!mutation.contains("account_email"), "{mutation}");
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(r#"{"email":"person@example.test"}"#);
+    credential.id_token = Some(format!("header.{payload}.signature"));
+    let mutation = refresh_update_mutation(&credential, "refresh-old", false);
+    assert!(
+        mutation.contains(r#"account_email: "person@example.test""#),
+        "{mutation}"
+    );
+}
+
 #[tokio::test]
 async fn a_shared_bearer_neither_retains_its_node_nor_crosses_nodes() {
     use super::test_support::test_node;
@@ -232,11 +250,12 @@ fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
 
 #[tokio::test]
 async fn account_fields_are_kept_when_a_row_is_stored_again() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "credential-fields",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let access = super::rows::runtime_credential_access(&node, db.node_identity.did()).unwrap();
     let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();

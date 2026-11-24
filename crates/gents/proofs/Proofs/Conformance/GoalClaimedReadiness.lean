@@ -12,11 +12,11 @@ structure Case where
   before : ClaimedRecovery
 
 private def active : ClaimedRecovery :=
-  { goal := ⟨.active, 0, false, false⟩, retries := 1,
+  { goal := ⟨.active, false, false⟩, retries := 1,
     lastFailure := some "failed", sequence := 1, parent := some "claimed-parent" }
 
 private def wrapup : ClaimedRecovery :=
-  { active with goal := ⟨.budgetLimited, 0, true, false⟩ }
+  { active with goal := ⟨.budgetLimited, true, false⟩ }
 
 def cases : List Case :=
   [ ⟨"claimed_ready_materializes_retry", .ready true, true, false, active⟩
@@ -60,7 +60,6 @@ deriving instance ToJson for ClaimedDecision
 
 structure RecoveryWire where
   status : String
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
   infrastructureRetries : Nat
@@ -70,13 +69,13 @@ structure RecoveryWire where
   deriving ToJson
 
 def RecoveryWire.ofModel (state : ClaimedRecovery) : RecoveryWire :=
-  { status := state.goal.status.toDefraDB, blockedAudits := state.goal.blockedAudits
+  { status := state.goal.status.toDefraDB
     wrapupRequested := state.goal.wrapupRequested, wrapupCompleted := state.goal.wrapupCompleted
     infrastructureRetries := state.retries, lastFailure := state.lastFailure
     continuationSequence := state.sequence, parent := state.parent }
 
 def RecoveryWire.toModel (state : RecoveryWire) : ClaimedRecovery :=
-  { goal := ⟨(Goals.Status.fromDefraDB? state.status).getD .active, state.blockedAudits,
+  { goal := ⟨(Goals.Status.fromDefraDB? state.status).getD .active,
       state.wrapupRequested, state.wrapupCompleted⟩
     retries := state.infrastructureRetries, lastFailure := state.lastFailure
     sequence := state.continuationSequence, parent := state.parent }

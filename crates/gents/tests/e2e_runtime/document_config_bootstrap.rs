@@ -7,11 +7,11 @@ use gents_store::collection::Collection;
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;
-use crate::support::{managed_agent_fixture, test_db};
+use crate::support::{managed_agent_fixture, trial_store};
 
 #[tokio::test]
 async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_default() {
-    let db = test_db("document-config-scoped-roundtrip").await;
+    let db = trial_store("document-config-scoped-roundtrip").await;
     // The enrolled User creates the Node and its Agent (with its creation
     // nonce) and authors the rest of the configuration through its client.
     let fixture = managed_agent_fixture(&db).await;
@@ -187,7 +187,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
 
 #[tokio::test]
 async fn session_create_returns_its_physical_receipt() {
-    let db = test_db("session-create-receipt").await;
+    let db = trial_store("session-create-receipt").await;
     let actors = RequestActors::new(&db).await;
     let input = json!({
         "session_id": "receipt-session",

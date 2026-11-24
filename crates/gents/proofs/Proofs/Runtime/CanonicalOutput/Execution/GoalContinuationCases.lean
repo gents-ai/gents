@@ -13,7 +13,7 @@ def goalBinding : GoalAutomation.OperatorResume.Binding :=
   , semanticFingerprint := "signed-goal-child", child := 20, sequence := 1 }
 
 def claimedGoal : Snapshot :=
-  { goal := ⟨.active, 0, false, false⟩, sequence := 1
+  { goal := ⟨.active, false, false⟩, sequence := 1
   , lastContinuedFrom := some 10, latestRequest := 10, children := []
   , tokensUsed := 0, tokenBudget := some 100 }
 

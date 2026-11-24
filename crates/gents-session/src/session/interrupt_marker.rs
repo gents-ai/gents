@@ -92,18 +92,60 @@ pub async fn read_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_doc_id: &str,
 ) -> Result<Option<InterruptMarker>> {
-    let located = txn
-        .run(
-            &Query::select(Selection::doc_id())
-                .filter(Filter::eq(fields::SESSION_DOC_ID, session_doc_id))
-                .limit(2)
-                .render(),
+    let locate = Query::select(Selection::doc_id())
+        .filter(Filter::eq(fields::SESSION_DOC_ID, session_doc_id))
+        .limit(2)
+        .render();
+    let Some(row) = locate_and_read(txn, &locate).await? else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row["session_doc_id"].as_str() == Some(session_doc_id),
+        "interrupt marker names another session"
+    );
+    marker_of(&row).map(Some)
+}
+
+/// Reads the marker of the session `(node_did, session_id)` by the session key
+/// the marker carries, and then by its own id, without reading the session
+/// document: an interrupt that reads only its marker is aborted by no write of
+/// the session (`InterruptGeneration.interruptFootprint`). `None` when the
+/// actor reads no such marker.
+pub async fn read_by_session_key_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<InterruptMarker>> {
+    let locate = Query::select(Selection::doc_id())
+        .filter(
+            Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::SESSION_ID, session_id)),
         )
-        .await?;
-    let rows = located
-        .pointer(&format!("/data/{COLLECTION}"))
-        .and_then(serde_json::Value::as_array)
-        .context("interrupt marker lookup omitted rows")?;
+        .limit(2)
+        .render();
+    let Some(row) = locate_and_read(txn, &locate).await? else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row["node_did"].as_str() == Some(node_did)
+            && row["session_id"].as_str() == Some(session_id),
+        "interrupt marker names another session"
+    );
+    marker_of(&row).map(Some)
+}
+
+/// External premise: DefraDB omits from its response a collection the actor
+/// may not read at all (`{"data":{}}`), which is a caller who reads no marker.
+async fn locate_and_read(
+    txn: &ConfigApplyTxn<'_>,
+    locate: &gents_protocol::document_query::Rendered,
+) -> Result<Option<serde_json::Value>> {
+    let located = txn.run(locate).await?;
+    let Some(rows) = located.pointer(&format!("/data/{COLLECTION}")) else {
+        return Ok(None);
+    };
+    let rows = rows
+        .as_array()
+        .context("interrupt marker lookup returned no row list")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "session has more than one interrupt marker"
@@ -113,24 +155,27 @@ pub async fn read_in_txn(
     };
     let read = txn
         .execute(&format!(
-            r#"{{ {COLLECTION}(docID: "{}") {{ _docID session_doc_id generation interrupted_at }} }}"#,
+            r#"{{ {COLLECTION}(docID: "{}") {{ _docID session_doc_id node_did session_id generation interrupted_at }} }}"#,
             escape_graphql_string(doc_id)
         ))
         .await?;
-    let row = read
-        .pointer(&format!("/data/{COLLECTION}/0"))
-        .context("interrupt marker disappeared between its lookup and its read")?;
-    anyhow::ensure!(
-        row["session_doc_id"].as_str() == Some(session_doc_id),
-        "interrupt marker names another session"
-    );
-    Ok(Some(InterruptMarker {
-        doc_id: doc_id.to_owned(),
+    read.pointer(&format!("/data/{COLLECTION}/0"))
+        .cloned()
+        .context("interrupt marker disappeared between its lookup and its read")
+        .map(Some)
+}
+
+fn marker_of(row: &serde_json::Value) -> Result<InterruptMarker> {
+    Ok(InterruptMarker {
+        doc_id: row["_docID"]
+            .as_str()
+            .context("interrupt marker has no id")?
+            .to_owned(),
         generation: row["generation"]
             .as_i64()
             .context("interrupt marker has no generation")?,
         interrupted_at: row["interrupted_at"].as_str().map(str::to_owned),
-    }))
+    })
 }
 
 /// What a reader of a session's marker finds (`InterruptGeneration.MarkerRead`).
@@ -187,6 +232,26 @@ pub async fn read_for_session_in_txn(
         }
         .into()),
     }
+}
+
+/// The marker an interrupt bumps: found by the session key alone, so the
+/// interrupt reads no session document; only when no marker is readable is
+/// the session read, to tell a caller who reads no session from a session
+/// whose marker its reader cannot read. That refusal writes nothing.
+pub async fn interrupt_marker_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<SessionMarker> {
+    if let Some(marker) = read_by_session_key_in_txn(txn, node_did, session_id).await? {
+        return Ok(SessionMarker::Found(marker));
+    }
+    Ok(
+        match session_marker_in_txn(txn, node_did, session_id).await? {
+            SessionMarker::Found(_) | SessionMarker::Unreadable => SessionMarker::Unreadable,
+            SessionMarker::NoSession => SessionMarker::NoSession,
+        },
+    )
 }
 
 /// The generation a claim records, or `None` when it refuses the request

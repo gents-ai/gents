@@ -10,7 +10,7 @@ use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, result, spawn, wait_job, JobHarness,
     PlanEntry, PLUGIN,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{StreamPlan, StreamResponse};
 use gents_store::test_support::STALL_CEILING;
 
@@ -43,7 +43,7 @@ async fn completed_harness(name: &str, value: Value) -> (JobHarness, String) {
     ];
     let plugin_home = tempfile::tempdir().expect("plugin home");
     let h = boot_job_harness(
-        test_db(name).await,
+        trial_store(name).await,
         plugin_home.keep(),
         &format!("{name}-session"),
         vec![job_call(TOOL_CALL, &plan)],

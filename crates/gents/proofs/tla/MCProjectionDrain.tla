@@ -1,0 +1,4 @@
+---- MODULE MCProjectionDrain ----
+EXTENDS ProjectionDrain
+
+====

@@ -112,8 +112,8 @@ pub(crate) use load::sort_goals_canonical;
 pub use load::{load_canonical_goal, load_canonical_goal_in_txn, load_goals_for_session};
 pub use question_wait::awaiting_goal_question_ids;
 pub use state::{
-    apply_operator_status_transition, decide_goal_continuation, next_blocked_audit, GoalAction,
-    GoalAuditObservation, GoalDecision, GoalRequestTerminal, GoalState,
+    apply_operator_status_transition, decide_goal_continuation, goal_budget_reached, GoalAction,
+    GoalDecision, GoalRequestTerminal, GoalState,
 };
 pub(crate) use task_fire::task_goal_fire_key;
 pub use task_fire::{
@@ -137,9 +137,6 @@ pub(crate) use usage::{refresh_goal_usage_observed, GoalUsageObservation};
 pub use write::seed_goal_from_access;
 pub use write::{delete_goal_from_access, delete_goals_for_session_from_access};
 
-/// Lean `Goals.blockedAuditThreshold`: the threshold of a Goal whose Task
-/// declares no `goal_blocked_audit_threshold`.
-pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
 /// Lean `Goals.maxInfrastructureRetries`: the limit of a Goal whose Task
 /// declares no `goal_max_infrastructure_retries`.
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;

@@ -36,7 +36,7 @@ def interruptDeliveryGoal (localTarget : Bool) (goal : Goals.State) : Goals.Stat
   if localTarget then (Goals.step? goal .pause).getD goal else goal
 
 theorem idle_local_interrupt_pauses_goal :
-    (interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status = .paused := by decide
+    (interruptDeliveryGoal true ⟨.active, false, false⟩).status = .paused := by decide
 
 def interruptDeliveryCases : List (Option Nat × Option Nat) :=
   [(none, none), (none, some 1), (some 1, some 1), (some 1, none), (some 1, some 2)]

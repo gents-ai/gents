@@ -256,9 +256,10 @@ pub async fn claim_applied(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::row::AgentRequest,
     claimed_at: &str,
+    client: bool,
 ) -> anyhow::Result<()> {
     let registry = Registry::for_transaction(txn, "request.claim.applied")?;
-    claim_applied_in(txn, &registry, request, claimed_at).await
+    claim_applied_in(txn, &registry, request, claimed_at, client).await
 }
 
 /// `claim_applied` against an explicit registry.
@@ -267,6 +268,7 @@ pub async fn claim_applied_in(
     registry: &Registry,
     request: &gents_protocol::row::AgentRequest,
     claimed_at: &str,
+    client: bool,
 ) -> anyhow::Result<()> {
     use gents_protocol::document_query::{
         fields::trigger_fire as fields, Filter, Query, Selection,
@@ -279,7 +281,6 @@ pub async fn claim_applied_in(
                     .field(fields::GOAL_ID)
                     .field(fields::GOAL_OBJECTIVE)
                     .field(fields::GOAL_TOKEN_BUDGET)
-                    .field(fields::GOAL_BLOCKED_AUDIT_THRESHOLD)
                     .field(fields::GOAL_MAX_INFRASTRUCTURE_RETRIES)
                     .field(fields::GOAL_ASSIGNMENT_APPLIED),
             )
@@ -294,6 +295,7 @@ pub async fn claim_applied_in(
         request: request.clone(),
         fire: fires.pop(),
         actor: txn.actor_did().map(str::to_owned),
+        client,
         at: claimed_at.to_owned(),
     };
     let host = TxnHost::new(txn, registry, OperationContext::default());

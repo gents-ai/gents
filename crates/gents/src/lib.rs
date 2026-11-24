@@ -6,7 +6,6 @@ extern crate self as gents;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[path = "../tests/support/mod.rs"]
 pub mod support;
 
 #[cfg(any(test, feature = "test-fixtures"))]

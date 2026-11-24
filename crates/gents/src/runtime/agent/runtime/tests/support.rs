@@ -18,7 +18,7 @@ pub(super) fn test_identity(name: &str) -> KeyIdentity {
 }
 
 pub(super) struct PluginRuntimeFixture {
-    pub db: crate::support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub node: Arc<defra_node::Node>,
     pub runtime: Arc<dyn NodeIdentity>,
     pub user_access: gents_store::config_client::ConfigAccess,
@@ -28,7 +28,7 @@ pub(super) struct PluginRuntimeFixture {
 
 impl PluginRuntimeFixture {
     pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
-        self.db.home.backend_admission()
+        self.db.backend_admission()
     }
 }
 
@@ -43,7 +43,7 @@ pub(super) async fn plugin_runtime_fixture(
     use gents_store::identity::GrantSet;
     use serde_json::json;
 
-    let db = crate::support::test_db(name).await;
+    let db = crate::support::trial_store(name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let user = test_identity(&format!("{name}-user"));
@@ -334,11 +334,13 @@ pub(super) async fn held_runtime_fixture_with_status(
     probe_status: &str,
 ) -> HeldRuntimeFixture {
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store(name).await,
         name,
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [
