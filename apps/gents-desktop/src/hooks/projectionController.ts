@@ -96,8 +96,13 @@ export function createProjectionController({
 
   const enqueue = (work: number) => {
     pending |= work;
-    if (pending & (SESSION | REREAD)) {
+    if (pending & (SESSION | REREAD) && pending & SESSION_DELTA) {
+      /* a full read of the session covers a store update's delta, but not
+         the index read the update owes once the tracked turn ends (alone, a
+         due delta reads as a session event): the session read pays it when
+         it finds the turn ended */
       pending &= ~SESSION_DELTA;
+      pending |= INDEX_AFTER_TERMINAL;
     }
   };
 
