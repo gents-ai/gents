@@ -4,7 +4,7 @@
 
 Engineer schema experience eval definition: create and additively evolve collections, then write and read their records. The subject is the Engineer `gents init --engineer` makes at the commit under test, every core pack installed as init installs them (`scripts/evals/suites.py`).
 
-Every case that creates or changes a collection has a later stage that stores records in it and reads them back through the feature it set up. The Engineer holds no write grant at the start, so the first writing stage has it grant itself the collection; the grant applies from its next request, so that stage settles and may send one "OK, go ahead." turn before it is graded.
+Every case that creates or changes a collection has a later stage that stores records in it and reads them back through the feature it set up. The Engineer holds no write grant at the start, so the first writing stage has it grant itself the collection; the grant applies from its next turn, so that stage settles and may send one "OK, go ahead." turn before it is graded.
 
 ## Cases
 

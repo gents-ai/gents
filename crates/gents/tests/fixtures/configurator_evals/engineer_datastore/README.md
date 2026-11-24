@@ -4,7 +4,7 @@
 
 Application datastore eval definition: the Engineer counts, pages, links, updates and deletes application records, and sets up what other agents may read and change. The subject is the Engineer `gents init --engineer` makes at the commit under test, every core pack installed as init installs them (`scripts/evals/suites.py`).
 
-No stage asks the Engineer to set up its own access. Its query tool reads every application collection from the start. It holds no write grant, so the first stage of a case that changes records has it grant itself the collection; the grant applies from its next request, so that stage settles and may send one "OK, go ahead." turn before it is graded.
+No stage asks the Engineer to set up its own access. Its query tool reads every application collection from the start. It holds no write grant, so the first stage of a case that changes records has it grant itself the collection; the grant applies from its next turn, so that stage settles and may send one "OK, go ahead." turn before it is graded.
 
 ## Cases
 
