@@ -52,7 +52,11 @@
             "correlation": {
               "_eq": "val-seed-006"
             }
-          }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
         }
       ],
       "checks": [

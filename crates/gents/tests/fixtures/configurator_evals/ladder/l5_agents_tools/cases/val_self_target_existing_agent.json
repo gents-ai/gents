@@ -19,7 +19,13 @@
             "agent_did": {
               "_eq": "gents:agent-slot:engineer"
             }
-          }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
         },
         {
           "kind": "documents",
@@ -41,7 +47,18 @@
             "purpose": {
               "_eq": "normal"
             }
-          }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id",
+            "request_hop"
+          ]
         },
         {
           "kind": "documents",
@@ -60,7 +77,13 @@
             "request_id": {
               "_eq": "$request"
             }
-          }
+          },
+          "fields": [
+            "_docID",
+            "tool_name",
+            "lifecycle_state",
+            "completion_notification_delivered_at"
+          ]
         }
       ],
       "checks": [

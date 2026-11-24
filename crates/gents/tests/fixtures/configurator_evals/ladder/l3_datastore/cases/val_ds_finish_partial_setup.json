@@ -25,7 +25,14 @@
             "surface_id": {
               "_nlike": "%engineer-mailbox"
             }
-          }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "enabled",
+            "entries"
+          ]
         }
       ],
       "checks": [
@@ -120,7 +127,14 @@
             "node_did": {
               "_eq": "$trial"
             }
-          }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "enabled",
+            "entries"
+          ]
         },
         {
           "kind": "documents",
@@ -142,7 +156,14 @@
                 }
               }
             }
-          }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
         },
         {
           "kind": "documents",
@@ -155,7 +176,14 @@
             "surface_id": {
               "_nlike": "%engineer-mailbox"
             }
-          }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "enabled",
+            "entries"
+          ]
         }
       ],
       "checks": [
@@ -282,7 +310,11 @@
             "correlation": {
               "_eq": "val-delta-005"
             }
-          }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
         }
       ],
       "checks": [

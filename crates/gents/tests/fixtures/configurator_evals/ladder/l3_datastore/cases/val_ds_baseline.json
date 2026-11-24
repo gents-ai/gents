@@ -41,7 +41,11 @@
             "correlation": {
               "_eq": "val-alpha-002"
             }
-          }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
         }
       ],
       "checks": [

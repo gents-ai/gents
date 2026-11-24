@@ -40,7 +40,11 @@
             "tracking": {
               "_eq": "PX-4410"
             }
-          }
+          },
+          "fields": [
+            "tracking",
+            "depot"
+          ]
         }
       ],
       "checks": [

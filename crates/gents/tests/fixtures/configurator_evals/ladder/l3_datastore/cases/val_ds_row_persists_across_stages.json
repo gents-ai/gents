@@ -40,7 +40,11 @@
             "correlation": {
               "_eq": "val-foxtrot-007"
             }
-          }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
         }
       ],
       "checks": [
@@ -105,7 +109,11 @@
             "correlation": {
               "_eq": "val-foxtrot-007"
             }
-          }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
         }
       ],
       "checks": [

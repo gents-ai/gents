@@ -80,7 +80,14 @@
                 }
               }
             }
-          }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
         }
       ],
       "checks": [
@@ -158,7 +165,13 @@
                 }
               }
             }
-          }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
         },
         {
           "kind": "documents",
@@ -189,7 +202,17 @@
             "lifecycle_state": {
               "_eq": "completed"
             }
-          }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
         },
         {
           "kind": "documents",
@@ -208,7 +231,13 @@
             "request_id": {
               "_eq": "$request"
             }
-          }
+          },
+          "fields": [
+            "_docID",
+            "tool_name",
+            "lifecycle_state",
+            "completion_notification_delivered_at"
+          ]
         }
       ],
       "checks": [
@@ -315,7 +344,13 @@
                 }
               }
             }
-          }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
         },
         {
           "kind": "documents",
@@ -346,7 +381,17 @@
             "lifecycle_state": {
               "_eq": "completed"
             }
-          }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
         },
         {
           "kind": "documents",
@@ -365,7 +410,13 @@
             "request_id": {
               "_eq": "$request"
             }
-          }
+          },
+          "fields": [
+            "_docID",
+            "tool_name",
+            "lifecycle_state",
+            "completion_notification_delivered_at"
+          ]
         }
       ],
       "checks": [

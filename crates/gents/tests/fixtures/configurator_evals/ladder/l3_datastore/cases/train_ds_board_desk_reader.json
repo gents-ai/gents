@@ -110,7 +110,14 @@
             "node_did": {
               "_eq": "$trial"
             }
-          }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "enabled",
+            "entries"
+          ]
         },
         {
           "kind": "documents",
@@ -132,13 +139,24 @@
                 }
               }
             }
-          }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
         },
         {
           "kind": "documents",
           "name": "DispatchThread",
           "collection": "DispatchThread",
-          "filter": {}
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
         }
       ],
       "checks": [
@@ -259,7 +277,11 @@
           "kind": "documents",
           "name": "DispatchThread",
           "collection": "DispatchThread",
-          "filter": {}
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
         }
       ],
       "checks": [
