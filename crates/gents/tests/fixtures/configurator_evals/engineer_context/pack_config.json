@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-context",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Context: budget, trimmed results and long files",
       "subject": {
         "kind": "agent",

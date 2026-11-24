@@ -23,7 +23,6 @@
     "cases/reefer_tally_fan_in.json",
     "cases/west_loading_reconcile.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"

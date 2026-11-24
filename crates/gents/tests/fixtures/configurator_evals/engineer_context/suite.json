@@ -7,6 +7,5 @@
     "a stubbed earlier tool result recovered through sessions after its source is gone",
     "a recovered output paged past its first page",
     "files longer than the read cap read past the cap"
-  ],
-  "subject": "engineer_full"
+  ]
 }

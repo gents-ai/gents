@@ -99,30 +99,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         if !agent.enabled {
             configuration_issues.insert(agent.agent_did.clone(), "agent is disabled".to_owned());
         }
-        let resolved = (|| -> Result<_> {
-            let (context, tools) = agent_tools_document(&bundle, &node_did, agent)?;
-            let tools_id = context.and_then(|context| context.tools_id.as_deref());
-            let config = if let Some(tools) = tools {
-                AgentToolSurfaceConfig::from_tools_documents(
-                    &agent.agent_did,
-                    tools,
-                    &bundle.config.datastore_tool_surfaces,
-                    &bundle.config.agent_targets,
-                    tool_ceiling,
-                    Vec::new(),
-                )?
-            } else {
-                AgentToolSurfaceConfig::from_tools_documents(
-                    &agent.agent_did,
-                    &gents_documents::Tools::default(),
-                    &[],
-                    &[],
-                    tool_ceiling,
-                    Vec::new(),
-                )?
-            };
-            Ok((tools_id, config))
-        })();
+        let resolved = agent_surface_config(&bundle, &node_did, agent, tool_ceiling);
         let (tools_id, config) = match resolved {
             Ok(value) => value,
             Err(error) => {
@@ -213,6 +190,69 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     };
     print_json(&output)?;
     Ok(())
+}
+
+fn agent_surface_config<'a>(
+    bundle: &'a crate::shared::ConfigExportBundle,
+    node_did: &str,
+    agent: &gents_documents::Agent,
+    tool_ceiling: &ToolCeiling,
+) -> Result<(Option<&'a str>, AgentToolSurfaceConfig)> {
+    let (context, tools) = agent_tools_document(bundle, node_did, agent)?;
+    let tools_id = context.and_then(|context| context.tools_id.as_deref());
+    let config = match tools {
+        Some(tools) => AgentToolSurfaceConfig::from_tools_documents(
+            &agent.agent_did,
+            tools,
+            &bundle.config.datastore_tool_surfaces,
+            &bundle.config.agent_targets,
+            tool_ceiling,
+            Vec::new(),
+        )?,
+        None => AgentToolSurfaceConfig::from_tools_documents(
+            &agent.agent_did,
+            &gents_documents::Tools::default(),
+            &[],
+            &[],
+            tool_ceiling,
+            Vec::new(),
+        )?,
+    };
+    Ok((tools_id, config))
+}
+
+#[cfg(test)]
+pub(crate) async fn explain_agent(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+    tool_ceiling: &ToolCeiling,
+) -> Result<gents_tools::surface::ToolSurfaceExplanation> {
+    let bundle = build_config_export_bundle(access, node_did).await?;
+    let agent = bundle
+        .config
+        .agents
+        .iter()
+        .find(|agent| agent.agent_did == agent_did)
+        .with_context(|| format!("agent {agent_did} is not on node {node_did}"))?;
+    let enabled = bundle
+        .config
+        .agents
+        .iter()
+        .filter(|agent| agent.enabled)
+        .map(|agent| agent.agent_did.clone())
+        .collect::<RapidHashSet<_>>();
+    let (_, config) = agent_surface_config(&bundle, node_did, agent, tool_ceiling)?;
+    Ok(config.explain_with_runtime_availability(
+        RuntimeToolAvailability::from_online_mcp_services(Vec::<String>::new()),
+        node_did,
+        &enabled,
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn configured_ceiling(home_dir: &Path) -> Result<ToolCeiling> {
+    Ok(HostCeiling::configured(home_dir)?.ceiling)
 }
 
 /// The agent's Context, then that Context's Tools document, each when named.

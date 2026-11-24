@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use gents::eval::OutcomeKind;
-use gents_documents::{EvalDefinition, SurfaceToolDecl};
+use gents_documents::EvalDefinition;
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::ScriptedExecutor;
 use gents_pack::pack::{
@@ -15,20 +15,6 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents")
         .join("tests/fixtures/configurator_evals/factory_setup")
-}
-
-fn subjects() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.join("manifest.json").exists() && !path.ends_with("definition"))
-        .collect();
-    dirs.sort();
-    assert!(
-        dirs.len() >= 2,
-        "expected one subject pack per variant: {dirs:?}"
-    );
-    dirs
 }
 
 fn load(dir: &Path) -> (PackManifest, AuthoredPackConfig) {
@@ -51,97 +37,6 @@ fn load(dir: &Path) -> (PackManifest, AuthoredPackConfig) {
     )
     .unwrap_or_else(|error| panic!("{}: {error:#}", dir.display()));
     (manifest, config)
-}
-
-#[test]
-fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
-    for dir in subjects() {
-        let (manifest, config) = load(&dir);
-        let name = dir.display();
-        let [behavior] = config.value["agents"].as_array().unwrap().as_slice() else {
-            panic!("{name}: one behavior, the Engineer");
-        };
-        assert_eq!(behavior["agent_slot"], "engineer", "{name}");
-        assert!(behavior.get("agent_did").is_none(), "{name}");
-        let config = &config.documents;
-        assert_eq!(
-            config.default_agent_selection, None,
-            "{name}: the trial selects the cell's behavior as the default"
-        );
-        assert!(
-            behavior["tags"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG),
-            "{name}: the Engineer carries the protected Setup tag"
-        );
-        assert_eq!(
-            manifest.metadata.inference_slots.len(),
-            1,
-            "{name}: one slot binds the Engineer and, through its backend, the crew"
-        );
-        let context = &config.contexts[0];
-        let prompt = context.system_prompt.as_deref().unwrap_or_default();
-        if dir.to_string_lossy().ends_with("_preview") {
-            assert!(
-                prompt.starts_with(gents_protocol::ENGINEER_PROMPT.trim_end())
-                    && prompt.trim_end().ends_with(
-                        "Preview every configuration write and apply it only after the preview is clean."
-                    ),
-                "{name}: the shipped Setup prompt plus the preview line"
-            );
-        } else {
-            assert_eq!(
-                prompt,
-                gents_protocol::ENGINEER_PROMPT,
-                "{name}: engineer/system_prompt.md must equal the shipped Setup prompt"
-            );
-        }
-        let tools = &config.tools[0];
-        assert_eq!(
-            tools.self_config,
-            Some(gents_tools::builtin::self_config::engineer_self_config()),
-            "{name}: the Setup self-config grant"
-        );
-        assert_eq!(
-            tools.agents.as_ref().and_then(|agents| agents.enabled),
-            Some(true),
-            "{name}"
-        );
-        let built_ins = tools.built_ins.as_ref().unwrap();
-        assert_eq!(built_ins.enable_session_history_tool, Some(true), "{name}");
-        assert_eq!(built_ins.enable_schema_tool, Some(true), "{name}");
-        let datastore = tools.datastore.as_ref().unwrap();
-        assert_eq!(datastore.enable_defra_query, Some(true), "{name}");
-        assert_eq!(
-            datastore.datastore_tool_surface_ids.as_deref(),
-            Some(&["engineer-mailbox".to_string()][..]),
-            "{name}"
-        );
-        let host = tools.host.as_ref().unwrap();
-        assert_eq!(
-            host.bash.as_ref().map(|bash| bash.mode),
-            Some(gents_documents::BashMode::Off),
-            "{name}"
-        );
-        let [surface] = config.datastore_tool_surfaces.as_slice() else {
-            panic!("{name}: one surface, engineer-mailbox");
-        };
-        let expected = vec![SurfaceToolDecl::Create(
-            gents_documents::mailbox_write_decl::canonical_mailbox_write_decl(),
-        )];
-        assert_eq!(
-            surface.entries.as_ref(),
-            Some(&expected),
-            "{name}: the canonical mailbox declaration, serialized as {}",
-            serde_json::to_string(&expected).unwrap()
-        );
-        assert!(
-            dir.join("factory/kickoff.md").is_file(),
-            "{name}: every variant's kickoff is factory/kickoff.md"
-        );
-    }
 }
 
 pub(super) fn definition() -> EvalDefinition {

@@ -21,11 +21,15 @@
 # GENTS_EVAL_WEB_PORT: local dashboard port (default 9495).
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
 # GENTS_EVAL_SHA: commit label for run ids when the tree has no .git.
-# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs as, sessions
-#   and factory-setup included; select one suite to override only its subject.
+# Every suite runs the Engineer this checkout's `gents init --engineer` makes, written by
+#   `gents utils eval subject`, with the fixtures its suite.json declares; each trial
+#   installs every core pack, so the binary must carry them (`make core-packs` first).
+# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs instead; select
+#   one suite to override only its subject.
 # GENTS_EVAL_DEFINITION_SOURCE: definition directory every selected suite applies.
-# GENTS_EVAL_COMMAND_EXECUTION: off (default) or unrestricted, the mode every
-#   subject's Engineer runs commands in; unrestricted holds only inside an
+# GENTS_EVAL_COMMAND_EXECUTION: off (default: no bash, no background processes) or
+#   unrestricted (the bash and background processes init gives the Engineer), the mode
+#   every subject's Engineer runs commands in; unrestricted holds only inside an
 #   isolating container (scripts/evals/run-container.sh).
 # Suites are the suite.json files under the eval fixtures (scripts/evals/suites.py);
 # scripts/evals/matrix.json holds the default list `all` runs.
@@ -235,7 +239,7 @@ fi
 for level in "${SELECTED[@]}"; do
   SUITE_PATH=$(python3 "$SUITES" field "$level" path)
   DEFINITION_ID=$(python3 "$SUITES" field "$level" definition_id)
-  RUN_SUBJECT=$(python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
+  RUN_SUBJECT=$(GENTS_BIN="$GENTS" python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
   python3 - "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID" "$COMMAND_EXECUTION" <<'PYDEFINITION'
@@ -248,65 +252,6 @@ for definition in config["eval_definitions"]:
     definition["subject"]["host_bash"] = mode == "unrestricted"
 json.dump(config, open(path, "w"), indent=2)
 PYDEFINITION
-  python3 - "$DEFINITION" "$RUN_SUBJECT" <<'PYENGINEERBASELINE'
-import json, pathlib, sys
-root, subject = map(pathlib.Path, sys.argv[1:])
-config = json.loads((subject / "pack_config.json").read_text())
-engineers = [agent for agent in config.get("agents", []) if agent.get("agent_slot") == "engineer"]
-if len(engineers) == 1:
-    contexts = [context for context in config.get("contexts", []) if context.get("context_id") == engineers[0].get("context_id")]
-    tools = [tool for tool in config.get("tools", []) if len(contexts) == 1 and tool.get("tools_id") == contexts[0].get("tools_id")]
-    if len(tools) == 1:
-        definition = json.loads((root / "pack_config.json").read_text())
-        for evaluation in definition.get("eval_definitions", []):
-            for relative in evaluation.get("cases", []):
-                path = root / relative
-                case = json.loads(path.read_text())
-                changed = False
-                for stage in case.get("stages", []):
-                    captures = {capture.get("name"): capture for capture in stage.get("capture", [])}
-                    for check in stage.get("checks", []):
-                        group = check.get("params", {}).get("agents", {})
-                        if check.get("check") != "crew_spec_match" or not isinstance(group, dict):
-                            continue
-                        if not all(captures.get(group.get(key), {}).get("collection") == collection
-                                   and captures.get(group.get(key), {}).get("filter") == {"node_did": {"_eq": "$trial"}}
-                                   for key, collection in [("agents", "Agent"), ("contexts", "AgentContext"), ("tools", "Tools")]):
-                            continue
-                        for expected in group.get("expect", []):
-                            if expected.get("agent_did") != "gents:agent-slot:engineer" or not any(
-                                item.get("field") == "tools_id" and item.get("equals") == tools[0]["tools_id"]
-                                for item in expected.get("context", [])
-                            ):
-                                continue
-                            for assertion in expected.get("tools", []):
-                                if "equals" not in assertion:
-                                    continue
-                                value = tools[0]
-                                for part in assertion["field"].split("."):
-                                    value = value.get(part) if isinstance(value, dict) else None
-                                if assertion["equals"] == value:
-                                    continue
-                                # Frozen case expectations predate the shipped grant; each may be restaged only to it.
-                                pre_policy = ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
-                                known_baselines = {
-                                    "built_ins": ([None], {"enable_schema_tool": True}),
-                                    "self_config.self_config_categories": (
-                                        [["agent", "tools", "profile", "node", "backend", "mcp_service", "automation"], pre_policy],
-                                        pre_policy + ["policy"],
-                                    ),
-                                }
-                                baseline = known_baselines.get(assertion["field"])
-                                if baseline is None or assertion["equals"] not in baseline[0] or value != baseline[1]:
-                                    raise ValueError(
-                                        f"{path}: unexpected Engineer invariant mismatch for {assertion['field']}: "
-                                        f"expected {assertion['equals']!r}, input {value!r}"
-                                    )
-                                assertion["equals"] = value
-                                changed = True
-                if changed:
-                    path.write_text(json.dumps(case, indent=2) + "\n")
-PYENGINEERBASELINE
   apply_config "$DEFINITION"
   for split in $SPLITS; do
     if ! python3 - "$DEFINITION" "$split" <<'PYSPLIT'

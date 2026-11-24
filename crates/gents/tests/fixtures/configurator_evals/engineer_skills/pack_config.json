@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-skills",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Skills: load the instructions a task needs",
       "subject": {
         "kind": "agent",

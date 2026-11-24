@@ -56,10 +56,6 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
         ScriptedExecutor::passed_evidence("did:key:eval-owner", "configure", "unused", vec![])
             .stages
             .remove(0);
-    let subject: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root().join("engineer_subject/pack_config.json")).unwrap(),
-    )
-    .unwrap();
     let instructions = "You are Analyst, a read-only file assistant for research notes. Read and report; never modify files.";
     evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"agent_did":"scope:analyst", "display_name":"analyst", "enabled":true, "context_id":"analyst-context"}),
@@ -71,13 +67,7 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     ]});
     evidence.captures.insert("tools".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"tools_id":"analyst-tools", "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}),
-        serde_json::to_value(serde_json::from_value::<gents_documents::Tools>(serde_json::json!({
-            "node_did": "did:key:eval-owner",
-            "tools_id": "engineer-tools",
-            "host": {"bash": {"mode":"Off"}, "root":"/eval/workspace"},
-            "self_config": subject["tools"][0]["self_config"],
-            "built_ins": subject["tools"][0]["built_ins"],
-        })).unwrap()).unwrap(),
+        serde_json::json!({"tools_id":"engineer-tools", "host":{"files":{"mode":"ReadWrite"},"bash":{"mode":"Off"}}}),
     ]});
     let registry = CheckRegistry::builtin();
     evidence.subject_agent = Some(gents_eval::runner::subject_binding::SubjectAgent {
@@ -552,7 +542,7 @@ fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states()
         .into_iter()
         .find(|d| d.definition_id == "configurator-l4-automation")
         .unwrap();
-    assert_eq!(definition.comparability_version, 13);
+    assert_eq!(definition.comparability_version, 14);
     let registry = CheckRegistry::builtin();
     let grader = registry.get("crew_spec_match").unwrap();
     let mut checked = 0;

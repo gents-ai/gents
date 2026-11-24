@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-workflows",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Workflows: background jobs over worker agents",
       "subject": {
         "kind": "agent",
@@ -17,6 +17,9 @@
           "gents/charts",
           "gents/data_tables",
           "gents/script"
+        ],
+        "enabled_core_packs": [
+          "gents/dynamic_workflows"
         ]
       },
       "cases": [

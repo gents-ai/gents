@@ -58,7 +58,6 @@ IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 SPLITS = {"train", "validation", "held_out"}
 COMMAND_EXECUTION = {"off", "unrestricted"}
 FIXTURES = str(registry.FIXTURES)
-ENGINEER_SUBJECT = "ladder/engineer_subject"
 
 
 class Untrusted(Exception):
@@ -323,14 +322,12 @@ class Run:
         return override if override.is_dir() else self.source(FIXTURES, suite["path"])
 
     def suite_view(self, suite):
-        """The fixtures one suite's trials see: its definition and subjects only."""
+        """The fixtures one suite's trials see: its own directory only; its subject is generated in the container."""
         view = self.dir / "suites" / suite["id"]
         if not view.exists():
             staging = view.with_name(view.name + ".tmp")
             shutil.rmtree(staging, ignore_errors=True)
-            wanted = {ENGINEER_SUBJECT, suite["subject"], suite["path"]}
-            for relative in sorted(wanted):
-                shutil.copytree(self.source(FIXTURES, relative), staging / relative, symlinks=True)
+            shutil.copytree(self.source(FIXTURES, suite["path"]), staging / suite["path"], symlinks=True)
             os.replace(staging, view)
         return view
 

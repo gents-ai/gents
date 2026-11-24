@@ -9,6 +9,14 @@
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

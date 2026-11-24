@@ -2,9 +2,10 @@
 
 ## Configuration
 
-Use the bundled pack_config.json. The subject is `../engineer_full` with every
-core pack installed, so the Engineer holds `config` (pages, datastore
-surfaces), `charts` and `data_tables` as `gents init --engineer` leaves them.
+Use the bundled pack_config.json. The subject is the Engineer `gents init --engineer` makes at the commit under
+test, every core pack installed as init installs them (`scripts/evals/suites.py`). It holds
+`config` (pages, datastore surfaces), and `charts` and `data_tables`, which
+its Tools hide behind `script`.
 
 A case that repairs or edits a page starts with a `setup` stage in which the
 Engineer writes the starting surface and Page documents itself, in one

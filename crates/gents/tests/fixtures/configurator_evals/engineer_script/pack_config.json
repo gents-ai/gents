@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-script",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Script: JavaScript over the caller's own tools",
       "subject": {
         "kind": "agent",

@@ -7,7 +7,5 @@
     "empty results",
     "schema recovery",
     "protected collection refusal"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+  ]
 }

@@ -8,7 +8,5 @@
     "in-place edits",
     "reentry",
     "restore a prompt in place"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+  ]
 }
