@@ -60,6 +60,8 @@ pub fn run() {
     // open no browser at all while still reporting success.
     prefer_host_tools();
     install_runtime();
+    #[cfg(target_os = "ios")]
+    crate::backup_exclusion::exclude_app_data();
 
     #[cfg(all(feature = "native-e2e", debug_assertions))]
     let native_e2e = native_e2e_launch();
