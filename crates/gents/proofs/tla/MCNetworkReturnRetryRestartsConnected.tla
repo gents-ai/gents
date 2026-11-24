@@ -1,0 +1,4 @@
+---- MODULE MCNetworkReturnRetryRestartsConnected ----
+EXTENDS NetworkReturnRetry
+
+====

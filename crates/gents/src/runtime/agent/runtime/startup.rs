@@ -469,6 +469,7 @@ async fn run_agent_owned(
     // retired slot exits only once they close: the watch takes the only
     // startup copy, so replacing it releases generation 1.
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot);
+    runtime.active_snapshots.bind(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
         gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
             active_snapshot_rx.clone(),

@@ -197,7 +197,7 @@ export function MailboxScreen() {
 }
 
 /* a step below the kit's tabs, as navigation rather than headings */
-const TAB = "text-[13px]";
+const TAB = "text-[13px] max-md:flex-none max-md:px-2";
 
 function Count({ n }: { n: number }) {
   return <span className="text-xs text-muted-foreground tabular-nums">{n}</span>;

@@ -291,6 +291,15 @@ export function NodeHoverCard({
           pressedBy.current = event.pointerType;
         }}
         onClick={(event) => {
+          /* touch has no hover: a tap on a trigger that isn't a link shows the card */
+          if (
+            pressedBy.current === "touch" &&
+            !event.currentTarget.hasAttribute("href")
+          ) {
+            pressedBy.current = null;
+            setOpen((shown) => !shown);
+            return;
+          }
           const parked =
             event.detail > 0 &&
             pressedBy.current !== null &&
@@ -390,7 +399,15 @@ export function AgentHoverCard({
   };
   return (
     <HoverCard open={open} onOpenChange={setOpen}>
-      <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
+      <HoverCardTrigger
+        delay={500}
+        render={children}
+        onFocus={() => setOpen(true)}
+        onPointerDown={(event) => {
+          /* touch has no hover: a tap shows or hides the card */
+          if (event.pointerType === "touch") setOpen((shown) => !shown);
+        }}
+      />
       <HoverCardContent
         side={side}
         align="start"
