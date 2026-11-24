@@ -25,6 +25,13 @@ impl Connections {
         }
     }
 
+    /// Every connection open now fails its next read or write.
+    pub(super) fn close_all(&self) {
+        for closed in self.lock().values() {
+            closed.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, RapidHashMap<SocketAddr, Arc<AtomicBool>>> {
         self.0
             .lock()
