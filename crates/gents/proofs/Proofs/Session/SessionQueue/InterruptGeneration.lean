@@ -15,6 +15,15 @@ What an interrupt covers is unchanged from `SessionQueue.latchInterrupt`: the
 request active at its commit and the automated wakes pending at its commit;
 pending user input survives as the next turn. Its cut-off is its commit, not
 its scan: a wake committed after the scan and before the commit is drained.
+
+A session interrupt reads no request, so no write of a request delays it. An
+interrupt by request id also reads that request by id: a request that settles
+meanwhile aborts it, rather than its bump passing a request claimed after the
+one it named. Every other write of that request, such as a lease renewal,
+aborts it as well and it is rebuilt from fresh reads; it lands while fewer such
+writes land in one series of attempts than it has attempts, the renewal
+cadence premise `InterruptLatchContention.tla` checks (its `Exhausted`
+configuration drops the premise and loses the interrupt).
 -/
 
 namespace SessionQueue.InterruptGeneration
@@ -28,6 +37,26 @@ def bump (current : Generation) : Generation := current + 1
 claim recorded. -/
 def runningInterrupted (recorded current : Generation) : Bool :=
   decide (recorded < current)
+
+/-- What a reader reports of a request. A request that settled other than
+interrupted was not active at an interrupt that passes its record later, so
+it is not interrupted: the marker counts the session's interrupts, and only
+the request a generation covered at its commit is interrupted by it. A
+running request's terminal reads the marker by id, so it settles knowing
+every interrupt that committed first. -/
+def observedInterrupted (settledOtherwise : Bool) (recorded current : Generation) : Bool :=
+  !settledOtherwise && runningInterrupted recorded current
+
+/-- A request that completed before an interrupt is not reported interrupted
+by it. -/
+theorem settled_before_the_interrupt_is_not_interrupted (g : Generation) :
+    observedInterrupted true g (bump g) = false := by
+  simp [observedInterrupted]
+
+/-- An unsettled request reads exactly as the running decision. -/
+theorem unsettled_reads_the_running_decision (recorded current : Generation) :
+    observedInterrupted false recorded current = runningInterrupted recorded current := by
+  simp [observedInterrupted]
 
 inductive WakeAtClaim where
   | runs

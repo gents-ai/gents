@@ -167,7 +167,8 @@ impl RequestActors {
         .await
     }
 
-    /// Writes one session row as the Agent and relates it to that Agent.
+    /// Writes one session row as the Agent, relates it to that Agent and
+    /// creates its interrupt marker, as every session is created.
     pub async fn create_session_with(&self, input: serde_json::Value) -> String {
         let agent_did = self.agent_did().to_owned();
         self.agent_access
@@ -197,6 +198,13 @@ impl RequestActors {
                         &session_doc,
                         "working_agent",
                         &agent_did.parse()?,
+                    )
+                    .await?;
+                    gents_session::session::interrupt_marker::create_in_txn(
+                        txn,
+                        &session_doc,
+                        input["node_did"].as_str().unwrap_or_default(),
+                        input["session_id"].as_str().unwrap_or_default(),
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(session_doc)
@@ -358,7 +366,8 @@ impl RequestActors {
     }
 
     pub async fn interrupt_request_session_at(&self, doc_id: &str, at: &str) {
-        gents_session::test_support::interrupt_session_of_request_at(&self.node, doc_id, at).await;
+        gents_session::test_support::interrupt_session_of_request_as(&self.agent_access, doc_id, at)
+            .await;
     }
 
     /// Patches request fields as the working Agent, the only actor that

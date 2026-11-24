@@ -44,7 +44,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
             let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
             let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
-            "agent_did":agent,"lifecycle_state":if source.is_none() && requester.is_none() && id == "same-parent-label" {"processing"} else {"pending"},"interrupt_generation":0,"execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
+            "agent_did":agent,"content":format!("request {id}"),"lifecycle_state":if source.is_none() && requester.is_none() && id == "same-parent-label" {"processing"} else {"pending"},"interrupt_generation":0,"execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
             let root = ::identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap();
             gents_store::config_client::ConfigAccess::transact_local_write(
             node, Some(root), "test.interrupt.scope_fixture", |txn| { let (value, agent) = (value.clone(), agent.clone()); Box::pin(async move {

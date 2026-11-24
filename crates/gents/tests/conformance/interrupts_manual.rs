@@ -375,6 +375,15 @@ async fn interrupt_request_follows_the_lean_drain_model() {
             r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
         );
         let non_wakeup_input = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
+        actors
+            .create_session_with(json!({
+                "node_did": actors.node_did(),
+                "session_id": session_id,
+                "agent_did": actors.agent_did(),
+                "created_at": "2026-03-23T00:00:00Z",
+                "relationships_pending": false,
+            }))
+            .await;
         let parent_doc = create_pending_queue_row(
             &db,
             &actors,
@@ -391,7 +400,7 @@ async fn interrupt_request_follows_the_lean_drain_model() {
         let mut request_ids = Vec::new();
         for (index, row) in case.input.rows.iter().enumerate() {
             let request_id = format!("drain-row-{index}");
-            create_pending_queue_row(
+            let doc = create_pending_queue_row(
                 &db,
                 &actors,
                 &request_id,
@@ -413,7 +422,7 @@ async fn interrupt_request_follows_the_lean_drain_model() {
                 },
             )
             .await;
-            request_ids.push(request_id);
+            request_ids.push((request_id, doc));
         }
         let target = if case.input.active {
             "drain-parent"
@@ -438,8 +447,13 @@ async fn interrupt_request_follows_the_lean_drain_model() {
         .await
         .unwrap()
         .is_some();
+        for (row, (_, doc)) in case.input.rows.iter().zip(&request_ids) {
+            if !row.foreign {
+                claim_own_pending(&actors, doc).await;
+            }
+        }
         let mut rows = Vec::new();
-        for request_id in &request_ids {
+        for (request_id, _) in &request_ids {
             let row = fetch_drain_row(&actors, request_id).await;
             rows.push(interrupt_request_drain_drain::RowObservation {
                 state: row.lifecycle_state,
@@ -485,6 +499,7 @@ async fn create_pending_queue_row(
         "execution_origin": execution_origin,
         "created_at": "2026-03-23T00:00:00Z",
         "retry_count": 0,
+        "interrupt_generation": 0,
     });
     let agent = ::identity::Did::new(actors.agent_did()).unwrap();
     gents_store::config_client::ConfigAccess::local_as(
@@ -508,6 +523,28 @@ async fn create_pending_queue_row(
     })
     .await
     .expect("create pending queue row as runtime root")
+}
+
+/// Runs the production claim of an own pending row as the working Agent: a
+/// wake an interrupt covered is drained (`InterruptGeneration.wakeAtClaim`),
+/// and with the parent still running every other row stays queued.
+async fn claim_own_pending(actors: &support::agent_requests::RequestActors, doc: &str) {
+    let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &actors.agent_access,
+        doc,
+    )
+    .await
+    .expect("load own pending row")
+    .expect("own pending row");
+    let origin = ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
+        .expect("fixture execution origin");
+    let mut lifecycle = actors.lifecycle(request, 60, origin, "drain-backend");
+    let outcome = lifecycle.claim_with_identity().await.expect("claim own pending row");
+    assert_ne!(
+        outcome,
+        gents_session::request::lifecycle::ClaimOutcome::Claimed,
+        "the parent still runs"
+    );
 }
 
 #[derive(Debug, Deserialize)]

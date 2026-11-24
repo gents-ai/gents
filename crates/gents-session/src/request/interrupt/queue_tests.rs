@@ -597,9 +597,9 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let reached_in = Arc::clone(&reached);
         let release_in = Arc::clone(&release);
         let paused_in = Arc::clone(&paused);
-        // The interrupt reads the running parent by id, and the parent's
-        // lease renewal may commit inside the pause; like the production
-        // owner, the interrupt then rebuilds (InterruptLatchContention.tla).
+        // A write committed inside the pause can abort the interrupt; like
+        // the production owner, it then rebuilds from fresh reads
+        // (InterruptLatchContention.tla).
         let interrupt = tokio::spawn(async move {
             access
                 .transact_signed_conflict_rebuild("test.http_interrupt_overlap", |txn| {
@@ -1188,4 +1188,55 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
         assert_eq!(state(&wake), Some(json!("interrupted")), "{after:?}");
     }
     node.shutdown().await.expect("shut down test node");
+}
+
+/// A session's marker is read in the session's requester scope, so a request
+/// whose requester is not its session's would record no generation and a
+/// session interrupt could not cover it. Client submission refuses such a
+/// request: it is never created.
+#[tokio::test]
+async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
+    use crate::request::lifecycle::RequestIdentity;
+    let UnclaimedFixture {
+        db,
+        user,
+        client,
+        agent,
+        ..
+    } = unclaimed_fixture("requester-mismatch", "1".into(), "requester-mismatch".into()).await;
+    let mut spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        RequestIdentity {
+            request_id: "2".into(),
+            node_did: db.node_identity.did().to_owned(),
+            requester_did: Some(agent.did().to_owned()),
+            agent_did: agent.did().to_owned(),
+            session_id: "requester-mismatch".into(),
+            content: "another requester".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-09-01T00:00:01Z".into(),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    spec.input = RequestInput::default();
+    let submitted = match crate::request::lifecycle::build_signed_client_request(
+        &client,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    {
+        Ok(create) => crate::request::lifecycle::submit_client_request(&client, &create)
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::from),
+        Err(error) => Err(anyhow::Error::from(error)),
+    };
+    assert!(submitted.is_err(), "{submitted:?}");
+    let rows = db
+        .client_access(agent.as_ref())
+        .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "2" } }) { _docID } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["AgentRequest"], json!([]));
 }

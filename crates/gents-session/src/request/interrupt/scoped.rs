@@ -16,7 +16,7 @@ pub async fn observe_request_interrupted_at_with_access(
 ) -> Result<ScopedInterruptObservation> {
     let filter = super::scoped_request_filter(request_id, node_did, requester_did)?;
     let query = format!(
-        r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ _docID node_did session_id requester_did interrupt_generation }} }}"#
+        r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ _docID node_did session_id requester_did lifecycle_state interrupt_generation }} }}"#
     );
     access
         .transact_readonly("interrupt.observe_scoped_request", |txn| {
@@ -41,11 +41,14 @@ pub async fn observe_request_interrupted_at_with_access(
                     .filter(|id| !id.is_empty())
                     .map(str::to_owned)
                     .context("scoped interrupt observation omitted physical request identity")?;
-                let interrupted_at = super::request_interrupted_at_in_txn(
+                let interrupted_at = super::observed_interrupted_at_in_txn(
                     txn,
                     row["node_did"].as_str().unwrap_or_default(),
                     row["session_id"].as_str().unwrap_or_default(),
                     row["requester_did"].as_str(),
+                    gents_protocol::request_lifecycle::RequestLifecycleState::parse_opt(
+                        row["lifecycle_state"].as_str(),
+                    ),
                     row["interrupt_generation"].as_i64(),
                 )
                 .await?;

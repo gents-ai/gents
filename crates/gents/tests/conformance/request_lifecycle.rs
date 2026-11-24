@@ -531,10 +531,7 @@ async fn drive_request_legal_transition(
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
         }
         "interruptBeforeClaim" => {
-            let interrupt_at = chrono::Utc::now().to_rfc3339();
-            actors
-                .interrupt_request_session_at(&doc_id, &interrupt_at)
-                .await;
+            gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id).await;
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
         }
         "interruptClaimed" => {
@@ -745,11 +742,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 .unwrap();
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
             }
-            if writer == "claim_after_interrupt" {
-                actors
-                    .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
-                    .await;
-            }
             if writer == "repair_terminal_requests" {
                 let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
                 actors
@@ -787,7 +779,12 @@ async fn production_request_writers_only_reach_contracted_edges() {
             );
 
             match writer {
-                "claim" | "claim_after_interrupt" => {
+                "claim" => {
+                    let _ = lifecycle.claim().await;
+                }
+                "claim_after_interrupt" => {
+                    gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id)
+                        .await;
                     let _ = lifecycle.claim().await;
                 }
                 "admission_reject" => {
@@ -1687,7 +1684,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
 
     let automated_id = case.pre_pending_request_ids[0];
     let user_id = case.pre_pending_request_ids[1];
-    create_queue_request(
+    let automated_doc = create_queue_request(
         &actors,
         support::agent_requests::RequestSeed {
             input: Some(&automated_queue_input(
@@ -1731,12 +1728,44 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    let interrupted = gents_session::request::interrupt::interrupt_request(
-        &db.node,
-        actors.agent().as_ref(),
-        parent_request_id,
+    // The wake recorded the marker's generation at its publication; the
+    // session interrupt passes it, and the wake's claim drains it
+    // (`InterruptGeneration.wakeAtClaim`).
+    actors
+        .update_request(&automated_doc, json!({ "interrupt_generation": 0 }))
+        .await;
+    let scope = actors
+        .request_row(&automated_doc, "node_did requester_did")
+        .await;
+    let interrupted = actors
+        .agent_access
+        .transact_signed_conflict_rebuild("test.queue_deadline.session_interrupt", |txn| {
+            let (scope, session_id) = (&scope, &session_id);
+            Box::pin(async move {
+                gents_session::request::interrupt::interrupt_session_in_txn(
+                    txn,
+                    session_id,
+                    scope["node_did"].as_str().unwrap_or_default(),
+                    scope["requester_did"].as_str(),
+                )
+                .await
+            })
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|refused| refused.map_err(anyhow::Error::from));
+    let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &actors.agent_access,
+        &automated_doc,
     )
-    .await;
+    .await
+    .unwrap()
+    .unwrap();
+    let mut lifecycle = actors.lifecycle(request, 60, ExecutionOrigin::Scheduled, "queue-deadline");
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Interrupted
+    );
 
     let post = fetch_queue_runtime_snapshot(
         &actors,
@@ -1948,6 +1977,17 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
                 actors
                     .set_lifecycle_state(&doc, RequestLifecycleState::Claimed)
                     .await;
+                if row.interrupt_requested {
+                    actors
+                        .create_session_with(json!({
+                            "node_did": gents_store::identity::NodeIdentity::did(&foreign),
+                            "session_id": session_id,
+                            "agent_did": actors.agent_did(),
+                            "created_at": created_at,
+                            "relationships_pending": false,
+                        }))
+                        .await;
+                }
                 doc
             };
             if row.lease_expired || !row.own_node {

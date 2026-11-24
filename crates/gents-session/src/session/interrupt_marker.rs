@@ -31,6 +31,16 @@ pub fn running_interrupted(recorded: Option<i64>, current: i64) -> bool {
     recorded.is_some_and(|recorded| recorded < current)
 }
 
+/// A request in `state` that settled other than interrupted is not
+/// interrupted by a generation that passes its record later
+/// (`InterruptGeneration.observedInterrupted`).
+pub(crate) fn settled_otherwise(
+    state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
+) -> bool {
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+    state.is_some_and(|state| state.is_terminal() && state != RequestLifecycleState::Interrupted)
+}
+
 /// A wake whose publication recorded an older generation than the marker
 /// holds when it is claimed was pending at an interrupt's commit
 /// (`InterruptGeneration.wakeAtClaim`).

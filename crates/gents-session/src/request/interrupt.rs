@@ -498,6 +498,23 @@ pub async fn request_interrupted_at_in_txn(
     )
 }
 
+/// [`request_interrupted_at_in_txn`] for a request in `state`: one that
+/// settled other than interrupted was not active at an interrupt that passes
+/// its record later (`InterruptGeneration.observedInterrupted`).
+pub async fn observed_interrupted_at_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    state: Option<RequestLifecycleState>,
+    recorded: Option<i64>,
+) -> Result<Option<String>> {
+    if interrupt_marker::settled_otherwise(state) {
+        return Ok(None);
+    }
+    request_interrupted_at_in_txn(txn, node_did, session_id, requester_did, recorded).await
+}
+
 /// Whether the session's interrupt passed the generation `row` recorded,
 /// read by id so an interrupt committing meanwhile aborts the caller.
 pub async fn row_interrupted_in_txn(
@@ -508,17 +525,16 @@ pub async fn row_interrupted_in_txn(
     else {
         return Ok(false);
     };
-    Ok(
-        request_interrupted_at_in_txn(
-            txn,
-            node_did,
-            session_id,
-            row.requester_did.as_deref(),
-            row.interrupt_generation,
-        )
-            .await?
-            .is_some(),
+    Ok(observed_interrupted_at_in_txn(
+        txn,
+        node_did,
+        session_id,
+        row.requester_did.as_deref(),
+        row.lifecycle_state,
+        row.interrupt_generation,
     )
+    .await?
+    .is_some())
 }
 
 /// [`row_interrupted_in_txn`] in a read-only transaction of its own.
@@ -543,7 +559,7 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
         "interrupt fetch requires a physical request document id"
     );
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id requester_did interrupt_generation }} }}"#,
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id requester_did lifecycle_state interrupt_generation }} }}"#,
         escape_graphql_string(request_doc_id)
     );
     access
@@ -558,11 +574,12 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
                 let Some(row) = rows.first() else {
                     return Ok(None);
                 };
-                request_interrupted_at_in_txn(
+                observed_interrupted_at_in_txn(
                     txn,
                     row["node_did"].as_str().unwrap_or_default(),
                     row["session_id"].as_str().unwrap_or_default(),
                     row["requester_did"].as_str(),
+                    RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str()),
                     row["interrupt_generation"].as_i64(),
                 )
                 .await
