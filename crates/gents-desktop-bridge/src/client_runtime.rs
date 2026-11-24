@@ -292,7 +292,7 @@ impl ClientRuntime {
 /// the list only when a row changed.
 pub(crate) fn session_list_fingerprint(stores: &ObservedStores) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rapidhash::fast::RapidHasher::default();
     for node_did in stores.node_dids() {
         let store = stores.snapshot(&node_did);
         node_did.hash(&mut hasher);
