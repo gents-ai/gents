@@ -183,11 +183,17 @@ mod tests {
         )
     }
 
-    async fn read(graphql: &str) -> serde_json::Value {
-        gents_protocol::graphql::execute_graphql_async(
+    /// One read by a client whose handle for `graphql` holds `encoding`.
+    async fn read(
+        encoding: &gents_protocol::graphql::RequestEncoding,
+        graphql: &str,
+    ) -> serde_json::Value {
+        gents_protocol::graphql::execute_graphql_encoded(
+            encoding,
             graphql,
             None,
             &large_read(),
+            None,
             gents_protocol::graphql::GraphqlRequestOptions::default(),
         )
         .await
@@ -203,8 +209,9 @@ mod tests {
             seen.clone(),
         ))
         .await;
+        let encoding = gents_protocol::graphql::RequestEncoding::default();
         for _ in 0..3 {
-            assert_eq!(read(&graphql).await, answer);
+            assert_eq!(read(&encoding, &graphql).await, answer);
         }
         assert_eq!(*seen.encodings.lock().unwrap(), vec![None, None, None]);
         assert_eq!(*seen.answers.lock().unwrap(), vec![None, None, None]);
@@ -221,8 +228,9 @@ mod tests {
         ))
         .await;
         /* the first request learns that the host accepts gzip */
-        assert_eq!(read(&graphql).await, answer);
-        assert_eq!(read(&graphql).await, answer);
+        let encoding = gents_protocol::graphql::RequestEncoding::default();
+        assert_eq!(read(&encoding, &graphql).await, answer);
+        assert_eq!(read(&encoding, &graphql).await, answer);
         assert_eq!(
             *seen.encodings.lock().unwrap(),
             vec![None, Some("gzip".to_owned())]
