@@ -20,5 +20,6 @@ import Proofs.Clients.ClientShell.Settings
 import Proofs.Clients.ClientShell.InterruptControl
 import Proofs.Clients.ClientShell.PackWatch
 import Proofs.Clients.ClientShell.AuthorityRestart
+import Proofs.Clients.ClientShell.ViewRest
 
 import Proofs.Clients.ClientShell.Telemetry
