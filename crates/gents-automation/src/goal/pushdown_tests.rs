@@ -150,6 +150,73 @@ fn generated_goal_budget_cases_fence_budget_reached() {
     });
 }
 
+#[test]
+fn generated_goal_progress_cases_fence_the_no_progress_pause() {
+    use crate::goal::progress::{progress_step, CallPrint, ProgressRecord};
+    use gents_lean_vocab::families::contracts_goal_progress as family;
+    let prints = |calls: &[family::CallPrintWire]| {
+        calls
+            .iter()
+            .map(|call| CallPrint {
+                tool: call.tool.clone(),
+                arguments: call.arguments.clone(),
+                result: call.result.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    family::replay(|case| {
+        let record = ProgressRecord {
+            streak: case.streak,
+            previous: prints(&case.previous),
+        };
+        let (next, pause) = progress_step(
+            &record,
+            prints(&case.calls),
+            case.goal_state_changed,
+            case.live_deadline,
+            case.now,
+        );
+        family::GoalProgressOutput {
+            streak: next.streak,
+            pause,
+        }
+    });
+}
+
+#[test]
+fn generated_goal_on_blocked_cases_fence_the_blocked_report() {
+    use gents_lean_vocab::families::contracts_goal_on_blocked as family;
+    family::replay(|case| {
+        let policy = gents_protocol::goal::OnBlocked::parse(&case.on_blocked)
+            .expect("modeled settings parse");
+        family::GoalOnBlockedOutput {
+            outcome: crate::goal::stop_policy::on_blocked_report(policy, case.confirming)
+                .as_str()
+                .to_owned(),
+        }
+    });
+}
+
+#[test]
+fn generated_goal_effective_budget_cases_fence_the_users_ceiling() {
+    use gents_lean_vocab::families::contracts_goal_effective_budget as family;
+    let signed = |value: u64| i64::try_from(value).expect("modeled budgets fit i64");
+    family::replay(|case| {
+        let policy = gents_protocol::goal::GoalStopPolicy {
+            token_ceiling: case.token_ceiling.map(signed),
+            lifted: case.lifted,
+            ..Default::default()
+        };
+        family::GoalEffectiveBudgetOutput {
+            budget: crate::goal::stop_policy::effective_goal_budget(
+                &policy,
+                case.goal_budget.map(signed),
+            )
+            .map(|budget| u64::try_from(budget).expect("budgets are positive")),
+        }
+    });
+}
+
 fn family_budget(budget: Option<&gents_lean_vocab::family::Json>) -> Option<i128> {
     budget.map(|budget| {
         budget

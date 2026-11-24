@@ -86,3 +86,50 @@ pub enum RequestAssignmentScope {
     Unresolved { entry_doc_id: String },
     Referenced(crate::request_input::GoalAssignmentInput),
 }
+
+/// Lean `GoalStopPolicy.OnBlocked`: what one blocked report does, set per Goal
+/// by its user in the Goal's stop policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum OnBlocked {
+    /// The report pauses the Goal as `blocked`.
+    #[default]
+    StopFirst,
+    /// The first report gets one confirmation turn; a report in that turn
+    /// pauses the Goal.
+    ConfirmOnce,
+    /// The report is kept for the user and the Goal continues; the
+    /// no-progress pause and any budget still bound it.
+    KeepTrying,
+}
+
+impl OnBlocked {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StopFirst => "stop_first",
+            Self::ConfirmOnce => "confirm_once",
+            Self::KeepTrying => "keep_trying",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "stop_first" => Some(Self::StopFirst),
+            "confirm_once" => Some(Self::ConfirmOnce),
+            "keep_trying" => Some(Self::KeepTrying),
+            _ => None,
+        }
+    }
+}
+
+/// A Goal's stop policy as its user set it. A Goal without one runs under
+/// the default: `stop_first`, no ceiling.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct GoalStopPolicy {
+    pub on_blocked: OnBlocked,
+    pub token_ceiling: Option<i64>,
+    pub turn_ceiling: Option<i64>,
+    pub lifted: bool,
+}
