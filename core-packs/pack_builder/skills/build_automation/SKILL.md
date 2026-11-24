@@ -1,9 +1,4 @@
----
-name: automate
-description: Load before schedules, event sources, triggers or tasks. Routes events to one consumer and stops loops.
----
-
-# Automate
+# Build automation
 
 A source (a schedule or a new document) fires a trigger. The trigger starts a task, which runs an agent with a prompt rendered from the firing document.
 
@@ -30,4 +25,4 @@ Its Tools carry only what its task needs. A routine job is one tool call and a s
 
 Enable one trigger, cause one event, and inspect its request, session and output. Count the fires. If there are more than expected, disable the trigger first. Then enable the rest. Send any failure someone must know about to the mailbox.
 
-Next: `control-access`.
+If one never fires or fires too often, load `troubleshoot`. Next: `control-access`.

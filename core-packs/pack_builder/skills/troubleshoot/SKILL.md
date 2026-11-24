@@ -1,9 +1,4 @@
----
-name: diagnose-node
-description: Load when a trigger, tool, request or session didn't work as expected. Gives the order of checks.
----
-
-# Diagnose the node
+# Troubleshoot
 
 Find the first step that didn't happen. Change nothing until you know which one it is. For a trigger, start with `trigger explain`. If sessions or fires are multiplying, disable the trigger first.
 
@@ -32,3 +27,5 @@ Run the preview (see `design-page`), and check the manifest lists every surface 
 - Keep what you observed apart from what you concluded. Don't name a cause until a test separates it from the alternatives.
 - Ask for a restart only when you can say what it will prove.
 - Still stuck after three attempts at the same step? Stop and ask, with what you tried and ruled out.
+
+Once you know the failing step, fix it with that part's skill: `build-automation`, `design-page`, `package-or-install`.

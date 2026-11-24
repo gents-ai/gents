@@ -1,9 +1,4 @@
----
-name: plan-work
-description: Load first when asked to build or automate an app for people. Sets the checks and build order.
----
-
-# Plan the work
+# Plan an app
 
 App: what the person asked for, by their name. Page: a screen in the desktop app. Plugin: compiled code for logic that must be exact. Pack: how a finished app is carried to another node.
 
@@ -38,14 +33,14 @@ Rules, calculations and validation go in the database or a plugin. Agents are fo
 
 Build live on this node. Every piece is a document you create through your tools, so it works the moment it exists and you can test it before adding the next. Nothing needs a file or a pack yet.
 
-1. Data: `use-database`, and `connect-data` if it comes from outside this node.
-2. Exact logic: `write-plugin`.
+1. Data: `design-data`, and `import-data` if it comes from outside this node.
+2. Exact logic: `exact-rules`.
 3. Page: `design-page`.
-4. Running on its own: `automate`.
+4. Running on its own: `build-automation`.
 5. Who can see it: `control-access`.
-6. Clean up what you tried and dropped, then `package-pack` exports the working app as a pack.
+6. Clean up what you tried and dropped, then `package-or-install` exports the working app as a pack.
 
-Load a step's skill when you reach it. On a long build, hand independent steps to a helper (`delegate-work`), and have one that did not build it check `ACCEPTANCE.md`.
+Load each step's skill with `load_skill` as you start that step, before its tool help. On a long build, hand independent steps to a helper (`use-helpers`), and have one that did not build it check `ACCEPTANCE.md`.
 
 For syntax, use `config help <resource>` or `--help`. Don't read the gents binary (no `strings`) or look for Gents source anywhere. Use tool help.
 
@@ -55,7 +50,7 @@ Don't wait by sleeping or polling for a person. If you need someone, file one ma
 
 ## 5. Prove it
 
-Check each ACCEPTANCE line by running the thing the way it will really run. Config read-backs show setup; only a run shows it works. Never drive it with a script, manual call or helper agent and report that as the automation working. If the same step fails twice, stop changing things and load `diagnose-node`.
+Check each ACCEPTANCE line by running the thing the way it will really run. Config read-backs show setup; only a run shows it works. Never drive it with a script, manual call or helper agent and report that as the automation working. If a step fails twice, stop changing things and load `troubleshoot`.
 
 ## 6. Hand over
 

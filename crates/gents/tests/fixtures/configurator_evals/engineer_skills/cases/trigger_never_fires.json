@@ -39,7 +39,7 @@
               "_eq": "$session"
             },
             "payload": {
-              "_like": "Skill: diagnose-node%"
+              "_like": "Skill: troubleshoot%"
             }
           },
           "fields": [

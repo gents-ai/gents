@@ -1,9 +1,4 @@
----
-name: use-database
-description: Load before designing an app's data. What DefraDB does for you, and how to shape collections.
----
-
-# Use the database
+# Design the data
 
 DefraDB is what you build apps from. Reach for it before writing code. Most apps are collections, datastore tools and a page, with a plugin where rules must be exact.
 
@@ -23,7 +18,7 @@ DefraDB is what you build apps from. Reach for it before writing code. Most apps
 | A record of every change | `@branchable` | `collections branchable` |
 | Who can see what | `@policy` | `collections policy` |
 
-A page's `useQuery` refreshes when documents change, so live pages need no extra work. A new document can start work through an event source (`automate`). Selected collections can sync to another node.
+A page's `useQuery` refreshes when documents change, so live pages need no extra work. A new document can start work through an event source (`build-automation`). Selected collections can sync to another node.
 
 ## Shape each collection
 
@@ -52,4 +47,4 @@ Derive what can be computed on read: an age, a count, an overdue flag. Store tim
 
 Write two or three realistic documents, read them back with your page's query, and confirm filters and sort order.
 
-Next: `connect-data` if the data comes from outside, otherwise `design-page`.
+Next: load `import-data` if the data comes from outside, otherwise `design-page` before the page.

@@ -1,9 +1,4 @@
----
-name: write-plugin
-description: Load when logic must be exact: rules, calculations, validation, anything replayable. Contract, data, tests.
----
-
-# Write a plugin
+# Exact rules: write a plugin
 
 A plugin is code the node runs sealed: the same input always gives the same answer, so agents and pages can trust it. Use one wherever a rule must hold no matter who calls it.
 
@@ -39,4 +34,4 @@ Put `writes` on the final output: `"writes": [ { "op": "insert", "collection": "
 - To give an agent the tool, select it in that agent's Tools. A rebuild changes the digest, so update the selection after it.
 - If you can't run the tests, report the plugin as not tested.
 
-Then return to `plan-work`.
+Then return to `plan-app`'s build order.

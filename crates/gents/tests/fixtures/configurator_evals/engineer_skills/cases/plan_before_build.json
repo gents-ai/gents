@@ -16,7 +16,7 @@
               "_eq": "$session"
             },
             "payload": {
-              "_like": "Skill: plan-work%"
+              "_like": "Skill: plan-app%"
             }
           },
           "fields": [

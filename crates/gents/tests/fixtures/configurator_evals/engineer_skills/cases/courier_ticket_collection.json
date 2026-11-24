@@ -16,7 +16,7 @@
               "_eq": "$session"
             },
             "payload": {
-              "_like": "Skill: use-database%"
+              "_like": "Skill: design-data%"
             }
           },
           "fields": [

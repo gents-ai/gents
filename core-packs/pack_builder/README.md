@@ -8,4 +8,4 @@ Install the pack, then add its skill IDs to the Engineer's Context `skill_ids`.
 
 ## Usage
 
-Ask the Engineer to build something. It starts with `plan-work`, which names the skill for each later step.
+Ask the Engineer to build something. It starts with `plan-app`, which names the skill for each later step.

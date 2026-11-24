@@ -1,9 +1,4 @@
----
-name: delegate-work
-description: Load before a long build, or when parts of a job can run on their own. When and how to use helpers.
----
-
-# Delegate work
+# Use helpers
 
 Every call resends your whole context, so a long session gets slow and expensive. A helper starts clean and comes back with a short answer.
 
