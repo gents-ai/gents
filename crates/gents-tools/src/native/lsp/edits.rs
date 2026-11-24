@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use super::super::file_tools::{file_content_hash, file_mutation_lock_for};
 use crate::native::shared::{ToolContext, ToolError};
+use gents_fs_runner::beneath::Intent;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_session::file_contents::content_hash;
 
@@ -27,12 +28,17 @@ pub enum RenameDestination {
     ContentHash(String),
 }
 
-pub fn prepare_rename(from: PathBuf, to: PathBuf) -> Result<PreparedEdit, String> {
-    let source = file_content_hash(&from).map_err(|error| error.to_string())?;
-    let destination = match file_content_hash(&to) {
-        Ok(hash) => RenameDestination::ContentHash(hash),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RenameDestination::Missing,
-        Err(error) => return Err(error.to_string()),
+pub fn prepare_rename(
+    context: &ToolContext,
+    from: PathBuf,
+    to: PathBuf,
+) -> Result<PreparedEdit, String> {
+    let source = file_content_hash(context, &from)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("{} does not exist", context.display_path(&from)))?;
+    let destination = match file_content_hash(context, &to).map_err(|error| error.to_string())? {
+        Some(hash) => RenameDestination::ContentHash(hash),
+        None => RenameDestination::Missing,
     };
     Ok(PreparedEdit {
         path: to,
@@ -69,7 +75,7 @@ pub fn prepare_workspace_edit(
                         .ok_or_else(|| "rename missing newUri".to_string())?;
                     let old_path = resolve_inbound_path(context, old)?;
                     let new_path = resolve_inbound_path_allow_create(context, new)?;
-                    prepared.push(prepare_rename(old_path, new_path)?);
+                    prepared.push(prepare_rename(context, old_path, new_path)?);
                     continue;
                 }
                 return Err(format!("resource operation {kind} is not applied"));
@@ -167,12 +173,8 @@ fn validate_edit_paths(context: &ToolContext, prepared: &[PreparedEdit]) -> Resu
             .path
             .to_str()
             .ok_or_else(|| policy_error("the edit path is not valid UTF-8"))?;
-        let current = context
-            .resolve_path_allow_create(path)
-            .map_err(policy_error)?;
-        if current != edit.path
-            || (current.try_exists().map_err(policy_error)? && !current.is_file())
-        {
+        let current = context.locate(path, Intent::Create).map_err(policy_error)?;
+        if current.path() != edit.path || current.is_dir() {
             return Err(policy_error(
                 "The edit target changed. Retry the language-server action.",
             ));
@@ -228,10 +230,10 @@ pub(super) async fn apply_prepared_with_held_locks(
     for edit in prepared {
         if let Some(expected) = &edit.expected_hash {
             let checked_path = edit.rename_from.as_ref().unwrap_or(&edit.path);
-            let current = file_content_hash(checked_path).map_err(|err| {
+            let current = file_content_hash(context, checked_path).map_err(|err| {
                 ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
             })?;
-            if &current != expected {
+            if current.as_ref() != Some(expected) {
                 return Err(ToolError::reported_failure(
                     FailureClass::ArgumentInvalid,
                     format!(
@@ -242,11 +244,9 @@ pub(super) async fn apply_prepared_with_held_locks(
             }
         }
         if edit.rename_from.is_some() {
-            let actual = match file_content_hash(&edit.path) {
-                Ok(hash) => RenameDestination::ContentHash(hash),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    RenameDestination::Missing
-                }
+            let actual = match file_content_hash(context, &edit.path) {
+                Ok(Some(hash)) => RenameDestination::ContentHash(hash),
+                Ok(None) => RenameDestination::Missing,
                 Err(error) => {
                     return Err(ToolError::reported_failure(
                         FailureClass::ToolReturnedError,
@@ -288,21 +288,44 @@ pub(super) async fn apply_prepared_with_held_locks(
         }
     }
 
+    let context = context.clone();
+    let prepared = prepared.to_vec();
+    tokio::task::spawn_blocking(move || apply_located(&context, &prepared))
+        .await
+        .map_err(|err| {
+            ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
+        })?
+}
+
+/// Writes and renames each edit through the handles its paths resolve to.
+fn apply_located(context: &ToolContext, prepared: &[PreparedEdit]) -> Result<usize, ToolError> {
+    let failed = |err: anyhow::Error| {
+        ToolError::reported_failure(FailureClass::ToolReturnedError, format!("{err:#}"))
+    };
     let mut applied = 0usize;
     for edit in prepared {
-        if let Some(parent) = edit.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
-            })?;
-        }
+        let target = context
+            .locate(
+                edit.path
+                    .to_str()
+                    .ok_or_else(|| policy_error("the edit path is not valid UTF-8"))?,
+                Intent::Create,
+            )
+            .map_err(failed)?;
         if let Some(from) = &edit.rename_from {
-            std::fs::rename(from, &edit.path).map_err(|err| {
-                ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
-            })?;
+            let source = context
+                .locate_existing_file(
+                    from.to_str()
+                        .ok_or_else(|| policy_error("the rename path is not valid UTF-8"))?,
+                )
+                .map_err(failed)?;
+            source
+                .rename_to(&target)
+                .map_err(|err| failed(err.into()))?;
         } else {
-            std::fs::write(&edit.path, &edit.new_bytes).map_err(|err| {
-                ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
-            })?;
+            target
+                .write(&edit.new_bytes)
+                .map_err(|err| failed(err.into()))?;
         }
         applied += 1;
     }
@@ -386,10 +409,12 @@ fn prepare_uri(
     encoding: PositionEncoding,
 ) -> Result<PreparedEdit, String> {
     let path = file_uri_to_path(uri)?;
-    let resolved = context
-        .resolve_path(&path.to_string_lossy())
+    let located = context
+        .locate_existing_file(&path.to_string_lossy())
         .map_err(|err| err.to_string())?;
-    let original = std::fs::read_to_string(&resolved).map_err(|err| err.to_string())?;
+    let resolved = located.path();
+    let original = String::from_utf8(located.read().map_err(|err| err.to_string())?)
+        .map_err(|err| err.to_string())?;
     let new_text = apply_text_edits(&original, edits, encoding)?;
     Ok(PreparedEdit {
         path: resolved,

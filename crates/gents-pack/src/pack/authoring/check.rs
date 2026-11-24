@@ -1,6 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{ChildKind, OpenRoot, RootDir, Walk};
 use serde::Serialize;
 
 use crate::pack::archive::{pack_built_dir, PackArchive};
@@ -20,15 +21,27 @@ pub struct CheckReport {
     pub unbuilt: Vec<String>,
 }
 
-pub async fn check_dir(dir: &Path) -> CheckReport {
+pub async fn check_dir(dir: impl OpenRoot) -> CheckReport {
     let mut report = CheckReport {
-        dir: dir.to_path_buf(),
+        dir: PathBuf::new(),
         pack: None,
         digest: None,
         problems: Vec::new(),
         unverified: Vec::new(),
         unbuilt: Vec::new(),
     };
+    let dir = match dir
+        .open_root()
+        .context("opening the pack directory that holds manifest.json")
+    {
+        Ok(dir) => dir,
+        Err(error) => {
+            report.problems.push(format!("{error:#}"));
+            return report;
+        }
+    };
+    report.dir = dir.path().to_path_buf();
+    let dir = &dir;
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
@@ -87,16 +100,17 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
             Err(error) => report.problems.push(format!("{error:#}")),
         }
     }
-    if dir.join("experiment.json").is_file() {
+    if dir.is_file("experiment.json") {
         report.unverified.push("experiment_scenario");
     }
     check_readme(dir, &mut report.problems);
     report
 }
 
-pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
-    let path = dir.join("manifest.json");
-    let mut file = crate::pack::open_pack_asset(dir, "manifest.json")
+pub fn read_manifest(dir: impl OpenRoot) -> Result<PackManifest> {
+    let dir = dir.open_root()?;
+    let path = dir.path().join("manifest.json");
+    let mut file = crate::pack::open_pack_asset(&dir, "manifest.json")
         .with_context(|| format!("reading {}", path.display()))?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut file, &mut bytes)
@@ -104,11 +118,15 @@ pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
+pub fn check_files(
+    dir: &RootDir,
+    manifest: &PackManifest,
+    problems: &mut Vec<String>,
+) -> Vec<String> {
     let declared = declared_paths(manifest);
     let mut unbuilt = Vec::new();
     for path in &declared {
-        if dir.join(path).is_file() {
+        if dir.is_file(path) {
             continue;
         }
         match manifest
@@ -129,7 +147,7 @@ pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Strin
         .map(|source| format!("{}/", source.trim_end_matches('/')))
         .collect();
     let mut present = Vec::new();
-    if let Err(error) = walk(dir, dir, &mut present) {
+    if let Err(error) = present_files(dir, &mut present) {
         problems.push(format!("{error:#}"));
     }
     for path in present {
@@ -144,31 +162,23 @@ pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Strin
     unbuilt
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let relative = path
-            .strip_prefix(root)
-            .context("walked outside the pack")?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let name = entry.file_name().to_string_lossy().into_owned();
+fn present_files(dir: &RootDir, out: &mut Vec<String>) -> Result<()> {
+    dir.walk(|entry| {
+        let name = entry.name().to_string_lossy();
         if name.starts_with('.')
             || matches!(
-                name.as_str(),
+                name.as_ref(),
                 "runs" | "target" | "node_modules" | "__pycache__"
             )
         {
-            continue;
+            return Ok(Walk::Skip);
         }
-        if entry.file_type()?.is_dir() {
-            walk(root, &path, out)?;
-        } else {
-            out.push(relative);
+        if entry.kind() != ChildKind::Directory {
+            out.push(entry.relative().to_string_lossy().into_owned());
         }
-    }
-    Ok(())
+        Ok(Walk::Enter)
+    })
+    .with_context(|| format!("reading {}", dir.path().display()))
 }
 
 pub fn load_config(archive: &PackArchive) -> Result<crate::pack::AuthoredPackConfig> {
@@ -184,7 +194,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::pack::AuthoredPackCon
     Ok(config)
 }
 
-pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
+pub fn check_readme(dir: &RootDir, problems: &mut Vec<String>) {
     match read_pack_text_asset(dir, "README.md") {
         Ok(text) if text.contains("## ") => {}
         Ok(_) => problems.push("README.md needs sections on configuration and usage".into()),
@@ -192,7 +202,7 @@ pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
     }
 }
 
-fn read_pack_text_asset(dir: &Path, path: &str) -> Result<String> {
+fn read_pack_text_asset(dir: &RootDir, path: &str) -> Result<String> {
     let mut file = crate::pack::open_pack_asset(dir, path)?;
     let mut text = String::new();
     std::io::Read::read_to_string(&mut file, &mut text)
@@ -202,7 +212,7 @@ fn read_pack_text_asset(dir: &Path, path: &str) -> Result<String> {
 
 /// The static lint every file-produced UX plugin must pass: what the
 /// webview would refuse at load, reported here at the pack instead.
-fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) {
+fn check_ux_plugins(dir: &RootDir, manifest: &PackManifest, problems: &mut Vec<String>) {
     if manifest.metadata.ux.is_empty() {
         return;
     }
@@ -315,7 +325,7 @@ mod tests {
         assert!(self_write_warnings(&self_writing_config(&["Scoreboard"])).is_empty());
     }
 
-    fn scaffold_minimal(dir: &Path, name: &str) {
+    fn scaffold_minimal(dir: &std::path::Path, name: &str) {
         super::super::scaffold::scaffold(
             dir,
             name,

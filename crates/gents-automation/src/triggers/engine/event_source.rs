@@ -2052,91 +2052,113 @@ impl TriggerSource for EventSource {
                     }
                     continue;
                 }
-                self.durable_ready = true;
                 let message = message.expect("subscription recv branch sets message");
-
-                if dropped > 0 {
-                    tracing::warn!(
-                        dropped = dropped,
-                        "event source dropped messages; periodic rescan will recover created docs",
-                    );
+                if let Some(intent) = self.on_notification(message, dropped).await {
+                    return Some(intent);
                 }
-
-                let Some(update) = message.as_update() else {
-                    continue;
-                };
-
-                // A `@branchable` collection publishes a second, collection-level
-                // update per write with an empty doc id. The document-level update
-                // of the same write carries the document; this one names none.
-                if update.doc_id.is_empty() {
-                    continue;
-                }
-                let collection_id = update.collection_id.clone();
-                let doc_id = update.doc_id.clone();
-                let Some(collection_name) = self.resolve_collection_name(&collection_id).await
-                else {
-                    tracing::trace!(
-                        collection_id = %collection_id,
-                        doc_id = %doc_id,
-                        "event source could not resolve collection_id to name; skipping event",
-                    );
-                    continue;
-                };
-
-                if !self.desired_collections.contains(&collection_name) {
-                    continue;
-                }
-                self.release_parked_document(&collection_name, &doc_id)
-                    .await;
-                if self
-                    .subscription_seed_failures
-                    .contains_key(&collection_name)
-                {
-                    tracing::debug!(
-                        source_collection = %collection_name,
-                        doc_id = %doc_id,
-                        "event source withholding delivery until forward-only seed succeeds",
-                    );
-                    continue;
-                }
-
-                if self.has_seen(&collection_name, &doc_id) {
-                    tracing::debug!(
-                        source_collection = %collection_name,
-                        source_doc_id = %doc_id,
-                        "event source treating non-first-seen event as update; skipping",
-                    );
-                    continue;
-                }
-
-                let snapshot = self.snapshot_rx.borrow().clone();
-                let event_kind = "created";
-                let mut build = self
-                    .build_intents_for_all_matching(
-                        snapshot.as_ref(),
-                        &collection_name,
-                        &doc_id,
-                        event_kind,
-                    )
-                    .await;
-                let startup_deferred =
-                    self.startup_deferred_documents
-                        .contains(&SourceDocumentKey {
-                            source_collection: collection_name.clone(),
-                            source_doc_id: doc_id.clone(),
-                        });
-                build
-                    .intents
-                    .retain(|intent| startup_deferred || intent.group_vars.is_some());
-                self.commit_delivery_seen_state(&collection_name, &doc_id, &build);
-                if build.intents.is_empty() {
-                    continue;
-                }
-
-                return self.take_first_and_queue_rest(build.intents);
             }
         })
+    }
+}
+
+impl EventSource {
+    /// Serves one change notification. A notification only wakes the
+    /// durable scan (`EventDelivery.Wake.action`); it delivers a document
+    /// directly only to a grouped or startup-deferred consumer.
+    async fn on_notification(
+        &mut self,
+        message: events::Message,
+        dropped: u64,
+    ) -> Option<FireIntent> {
+        self.durable_ready = true;
+
+        if dropped > 0 {
+            tracing::warn!(
+                dropped = dropped,
+                "event source dropped messages; periodic rescan will recover created docs",
+            );
+        }
+
+        let update = message.as_update()?;
+
+        // A `@branchable` collection publishes a second, collection-level
+        // update per write with an empty doc id. The document-level update
+        // of the same write carries the document; this one names none.
+        if update.doc_id.is_empty() {
+            return None;
+        }
+        let collection_id = update.collection_id.clone();
+        let doc_id = update.doc_id.clone();
+        let Some(collection_name) = self.resolve_collection_name(&collection_id).await else {
+            tracing::trace!(
+                collection_id = %collection_id,
+                doc_id = %doc_id,
+                "event source could not resolve collection_id to name; skipping event",
+            );
+            return None;
+        };
+
+        if !self.desired_collections.contains(&collection_name) {
+            return None;
+        }
+        self.release_parked_document(&collection_name, &doc_id)
+            .await;
+        if self
+            .subscription_seed_failures
+            .contains_key(&collection_name)
+        {
+            tracing::debug!(
+                source_collection = %collection_name,
+                doc_id = %doc_id,
+                "event source withholding delivery until forward-only seed succeeds",
+            );
+            return None;
+        }
+
+        if self.has_seen(&collection_name, &doc_id) {
+            tracing::debug!(
+                source_collection = %collection_name,
+                source_doc_id = %doc_id,
+                "event source treating non-first-seen event as update; skipping",
+            );
+            return None;
+        }
+
+        let snapshot = self.snapshot_rx.borrow().clone();
+        let event_kind = "created";
+        let mut build = self
+            .build_intents_for_all_matching(
+                snapshot.as_ref(),
+                &collection_name,
+                &doc_id,
+                event_kind,
+            )
+            .await;
+        let startup_deferred = self
+            .startup_deferred_documents
+            .contains(&SourceDocumentKey {
+                source_collection: collection_name.clone(),
+                source_doc_id: doc_id.clone(),
+            });
+        build
+            .intents
+            .retain(|intent| startup_deferred || intent.group_vars.is_some());
+        self.commit_delivery_seen_state(&collection_name, &doc_id, &build);
+        self.take_first_and_queue_rest(build.intents)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn conformance_notification(&mut self) -> Option<FireIntent> {
+        self.finish_durable_checkpoint().await;
+        let message = self.subscription.as_mut()?.recv().await?;
+        if let Some(intent) = self.on_notification(message, 0).await {
+            return Some(intent);
+        }
+        if self.durable_ready {
+            self.next_durable_fire().await
+        } else {
+            None
+        }
     }
 }
 

@@ -394,4 +394,28 @@ mod tests {
         let second = next_cron_run_after("30 1 * * *", "America/Los_Angeles", first).unwrap();
         assert_eq!(second, Utc.with_ymd_and_hms(2024, 11, 3, 9, 30, 0).unwrap());
     }
+
+    #[test]
+    fn schedule_cursor_advances_as_the_cadence_model() {
+        use crate::automation::advance_schedule_next_run_at;
+        use crate::schedule::ScheduleCadence;
+        let at = |secs: u64| Utc.timestamp_opt(i64::try_from(secs).unwrap(), 0).unwrap();
+        for case in gents_lean_vocab::families::schedule_cadence_advance_cursor::cases::<String>() {
+            let cadence = match case.input.cadence.as_str() {
+                "interval" => ScheduleCadence::Interval {
+                    interval_secs: i64::try_from(case.input.interval_secs).unwrap(),
+                },
+                "every_minute" => ScheduleCadence::Cron {
+                    expression: "* * * * *".into(),
+                    timezone: "UTC".into(),
+                    missed_run_policy: Some(CronMissedRunPolicy::LatestOnly),
+                },
+                other => panic!("unmodelled cadence {other}"),
+            };
+            let next =
+                advance_schedule_next_run_at(&cadence, at(case.input.due), at(case.input.now))
+                    .unwrap();
+            case.check(u64::try_from(next.timestamp()).unwrap());
+        }
+    }
 }

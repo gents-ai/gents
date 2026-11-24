@@ -50,7 +50,10 @@ impl ConfigCommandTool {
         let context = crate::native::ToolContext::new(root.into(), false)
             .map(|context| context.for_call(&self.envelope))?;
         let resolve = |path: &std::path::Path| {
-            context.resolve_path(path.to_str().context("skill path must be UTF-8")?)
+            context.locate(
+                path.to_str().context("skill path must be UTF-8")?,
+                gents_fs_runner::beneath::Intent::Existing,
+            )
         };
         let import = SkillImport {
             owner: &self.node_did,

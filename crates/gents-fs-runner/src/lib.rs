@@ -3,6 +3,10 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 
+#[cfg(not(unix))]
+compile_error!("gents-fs-runner resolves paths beneath a root through directory handles, which it implements only on Unix");
+
+pub mod beneath;
 pub mod protocol;
 
 #[cfg(feature = "test-fixtures")]
@@ -16,9 +20,9 @@ mod traversal;
 #[cfg(feature = "test-fixtures")]
 pub use blocker::TraversalBlocker;
 pub use output::{error_response_line, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
-#[cfg(feature = "test-fixtures")]
-pub use tools::execute_request_with_blocker;
 pub use tools::{execute_request, execute_request_with_base};
+#[cfg(feature = "test-fixtures")]
+pub use tools::{execute_request_in_root, execute_request_with_blocker};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
 

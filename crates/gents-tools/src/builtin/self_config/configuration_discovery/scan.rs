@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
+use std::fs;
+
+use gents_fs_runner::beneath::{Access, BeneathError, RootDir};
 use std::io::Read;
 use std::path::Path;
 
@@ -121,32 +123,34 @@ impl Scanner {
             ));
             return;
         }
-        let root_metadata = match fs::symlink_metadata(&root) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => metadata,
-            _ => {
-                self.warning(
-                    DiscoveryNoticeCode::InvalidRoot,
-                    Some(&input.source_id),
-                    None,
-                    "selected source root changed while it was being resolved",
-                    None,
-                    None,
-                );
-                self.inventory.sources.push(source_inventory(
-                    &input,
-                    DiscoverySourceOutcome::Rejected,
-                    0,
-                    0,
-                    0,
-                ));
-                return;
-            }
+        let held = match &self.containment_root {
+            Some(containment) => RootDir::open(containment)
+                .and_then(|containment| containment.existing(&root))
+                .and_then(|located| located.subroot()),
+            None => RootDir::open(&root),
+        };
+        let Ok(held) = held else {
+            self.warning(
+                DiscoveryNoticeCode::InvalidRoot,
+                Some(&input.source_id),
+                None,
+                "selected source root changed while it was being resolved",
+                None,
+                None,
+            );
+            self.inventory.sources.push(source_inventory(
+                &input,
+                DiscoverySourceOutcome::Rejected,
+                0,
+                0,
+                0,
+            ));
+            return;
         };
 
         let mut source = SourceScan {
             input,
-            root,
-            root_metadata,
+            held: held.without_links(),
             observed_files: 0,
             observed_bytes: 0,
             emitted_items: 0,
@@ -220,24 +224,12 @@ impl Scanner {
             );
             return None;
         }
-        if !source_root_unchanged(source) {
-            source.partial = true;
-            self.warning(
-                DiscoveryNoticeCode::FileChanged,
-                Some(&source.input.source_id),
-                None,
-                "selected source root changed during inspection",
-                None,
-                None,
-            );
-            return None;
-        }
-        let path = source.root.join(relative);
         let relative_string = path_string(relative);
-        let metadata = match reject_symlink_components(&source.root, relative) {
-            Ok(Some(metadata)) => metadata,
-            Ok(None) => return None,
-            Err(SafePathError::Symlink) => {
+        let located = match source.held.existing(relative) {
+            Ok(located) => located,
+            Err(error) if error.is_not_found() => return None,
+            Err(BeneathError::NotADirectory { .. }) => return None,
+            Err(BeneathError::Loop { .. } | BeneathError::Outside { .. }) => {
                 source.partial = true;
                 self.warning(
                     DiscoveryNoticeCode::SymlinkRejected,
@@ -249,7 +241,7 @@ impl Scanner {
                 );
                 return None;
             }
-            Err(SafePathError::Io) => {
+            Err(_) => {
                 source.partial = true;
                 self.warning(
                     DiscoveryNoticeCode::ReadFailed,
@@ -262,60 +254,14 @@ impl Scanner {
                 return None;
             }
         };
-        if !metadata.is_file() {
+        if located.is_dir() {
             return None;
         }
         source.observed_files += 1;
-        if metadata.len() > self.limits.max_file_bytes {
-            source.partial = true;
-            self.truncation(
-                DiscoveryNoticeCode::FileTooLarge,
-                Some(&source.input.source_id),
-                Some(&relative_string),
-                "allowlisted file exceeded the per-file byte limit",
-                Some(metadata.len()),
-                Some(self.limits.max_file_bytes),
-            );
-            return None;
-        }
-        if self.total_bytes.saturating_add(metadata.len()) > self.limits.max_total_bytes {
-            source.partial = true;
-            self.truncation(
-                DiscoveryNoticeCode::TotalBytesLimit,
-                Some(&source.input.source_id),
-                Some(&relative_string),
-                "discovery total byte limit reached",
-                Some(self.total_bytes.saturating_add(metadata.len())),
-                Some(self.limits.max_total_bytes),
-            );
-            return None;
-        }
-        run_preopen_test_hook(&path);
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-        }
-        let mut file = match options.open(&path) {
+        run_preopen_test_hook(&located.path());
+        let file = match located.open(Access::Read) {
             Ok(file) => file,
             Err(_) => {
-                source.partial = true;
-                self.warning(
-                    DiscoveryNoticeCode::ReadFailed,
-                    Some(&source.input.source_id),
-                    Some(&relative_string),
-                    "allowlisted file could not be opened",
-                    None,
-                    None,
-                );
-                return None;
-            }
-        };
-        let opened_metadata = match file.metadata() {
-            Ok(metadata) if metadata.is_file() => metadata,
-            _ => {
                 source.partial = true;
                 self.warning(
                     DiscoveryNoticeCode::ReadFailed,
@@ -328,21 +274,33 @@ impl Scanner {
                 return None;
             }
         };
-        if !metadata_same_file(&metadata, &opened_metadata) {
+        let len = file.metadata().map_or(0, |metadata| metadata.len());
+        if len > self.limits.max_file_bytes {
             source.partial = true;
-            self.warning(
-                DiscoveryNoticeCode::FileChanged,
+            self.truncation(
+                DiscoveryNoticeCode::FileTooLarge,
                 Some(&source.input.source_id),
                 Some(&relative_string),
-                "allowlisted file changed before inspection and was discarded",
-                None,
-                None,
+                "allowlisted file exceeded the per-file byte limit",
+                Some(len),
+                Some(self.limits.max_file_bytes),
             );
             return None;
         }
-        let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+        if self.total_bytes.saturating_add(len) > self.limits.max_total_bytes {
+            source.partial = true;
+            self.truncation(
+                DiscoveryNoticeCode::TotalBytesLimit,
+                Some(&source.input.source_id),
+                Some(&relative_string),
+                "discovery total byte limit reached",
+                Some(self.total_bytes.saturating_add(len)),
+                Some(self.limits.max_total_bytes),
+            );
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(len as usize);
         if file
-            .by_ref()
             .take(self.limits.max_file_bytes + 1)
             .read_to_end(&mut bytes)
             .is_err()
@@ -358,19 +316,7 @@ impl Scanner {
             );
             return None;
         }
-        let path_metadata = reject_symlink_components(&source.root, relative)
-            .ok()
-            .flatten();
-        let final_metadata = file.metadata().ok();
-        if bytes.len() as u64 > self.limits.max_file_bytes
-            || !source_root_unchanged(source)
-            || path_metadata
-                .as_ref()
-                .is_none_or(|current| !metadata_same_file(&opened_metadata, current))
-            || final_metadata
-                .as_ref()
-                .is_none_or(|current| !metadata_unchanged(&opened_metadata, current))
-        {
+        if bytes.len() as u64 > self.limits.max_file_bytes {
             source.partial = true;
             self.warning(
                 DiscoveryNoticeCode::FileChanged,

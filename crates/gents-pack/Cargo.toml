@@ -29,6 +29,7 @@ axum = "0.8"
 base64.workspace = true
 chrono.workspace = true
 defra-core.workspace = true
+gents-fs-runner = { path = "../gents-fs-runner" }
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 defra-node.workspace = true
