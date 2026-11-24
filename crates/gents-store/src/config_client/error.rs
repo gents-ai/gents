@@ -99,6 +99,11 @@ pub enum ConfigClientError {
     SubscriptionStream(#[source] eventsource_stream::EventStreamError<reqwest::Error>),
     #[error("unexpected GraphQL subscription event: {0}")]
     SubscriptionEvent(String),
+    /// The runtime ended the stream because its subscriber no longer holds
+    /// node read permission (`gents-end: revoked`): a refusal, not a
+    /// transport failure to renew past.
+    #[error("the runtime ended this subscription: its subscriber lost node read permission")]
+    SubscriptionRevoked,
     #[error("invalid authorization header")]
     AuthorizationHeader(#[source] reqwest::header::InvalidHeaderValue),
     #[error("expected GraphQL endpoint ending in /graphql, got {graphql}")]
@@ -563,7 +568,7 @@ impl ConfigClientError {
             // A local relationship change the actor may not manage is the
             // native counterpart of the HTTP relationship endpoint's 401/403.
             Self::Node(error) => native_permission_denied(error),
-            Self::RelationshipNotManaged(_) => true,
+            Self::RelationshipNotManaged(_) | Self::SubscriptionRevoked => true,
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
             }),

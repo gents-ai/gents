@@ -416,3 +416,21 @@ pub(super) async fn admit_permission_grant(
     }
     Ok(guard)
 }
+
+/// Whether `did` still holds node read permission on `node`, which a
+/// subscription's handshake checked once (`tla/SubscriptionStreamEnd.tla`).
+/// A node with NAC disabled grants it to every caller, as the handshake does.
+/// A DID that does not parse holds nothing. A check that fails reports held:
+/// a stream ends on a decision, never on an error reading one.
+pub async fn holds_node_read(node: &defra_node::Node, did: &str) -> bool {
+    let nac = node.nac_manager();
+    if !nac.is_enabled().await {
+        return true;
+    }
+    let Ok(did) = identity::Did::new(did) else {
+        return false;
+    };
+    nac.check_permission(&did, acp::nac::NodePermission::DocumentRead)
+        .await
+        .unwrap_or(true)
+}

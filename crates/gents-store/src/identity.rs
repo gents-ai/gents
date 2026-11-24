@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
@@ -358,6 +359,59 @@ pub(crate) fn defradb_bearer_authorization_with_config(
     audience: &str,
     config: &SigningConfig,
 ) -> Result<String> {
+    reused_defradb_bearer(did, audience, config, DEFRADB_BEARER_LIFETIME)
+}
+
+/// Bearers minted for requests, by identity, audience and lifetime, with when
+/// each was minted. Minting derives a public key and signs a token, both
+/// elliptic-curve work, and a client makes a request about every second; a
+/// bearer is reused until half its lifetime has passed. DefraDB bearers carry
+/// no nonce, so a captured one is usable for its whole lifetime either way.
+type MintedBearers =
+    std::sync::Mutex<rapidhash::RapidHashMap<(String, String, Duration), (Instant, String)>>;
+
+fn minted_bearers() -> &'static MintedBearers {
+    static MINTED: std::sync::OnceLock<MintedBearers> = std::sync::OnceLock::new();
+    MINTED.get_or_init(Default::default)
+}
+
+/// A request bearer of `lifetime`, reused while it is younger than half of
+/// it. A subscription mints its own with [`fresh_defradb_bearer`].
+pub(crate) fn reused_defradb_bearer(
+    did: &str,
+    audience: &str,
+    config: &SigningConfig,
+    lifetime: Duration,
+) -> Result<String> {
+    let key = (did.to_owned(), audience.to_owned(), lifetime);
+    let reusable = |minted: &Instant| minted.elapsed() < lifetime / 2;
+    if let Some((_, bearer)) = minted_bearers()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+        .filter(|(minted, _)| reusable(minted))
+    {
+        return Ok(bearer.clone());
+    }
+    let bearer = fresh_defradb_bearer(did, audience, config, lifetime)?;
+    let mut minted = minted_bearers()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    minted.retain(|_, (at, _)| reusable(at));
+    minted.insert(key, (Instant::now(), bearer.clone()));
+    Ok(bearer)
+}
+
+/// A bearer minted now, as each subscription handshake uses: its renewal,
+/// half a lifetime after its arm, then falls before the runtime ends the
+/// stream at the bearer's expiry (Lean
+/// `SubscriptionStream.a_fresh_bearer_renews_before_the_cut`).
+pub(crate) fn fresh_defradb_bearer(
+    did: &str,
+    audience: &str,
+    config: &SigningConfig,
+    lifetime: Duration,
+) -> Result<String> {
     let identity = raw_identity_from_signing_config(config).map_err(|source| {
         IdentityError::LoadSigningIdentity {
             did: did.to_owned(),
@@ -371,16 +425,11 @@ pub(crate) fn defradb_bearer_authorization_with_config(
             derived_did,
         });
     }
-    let token = identity::new_token(
-        &identity,
-        DEFRADB_BEARER_LIFETIME,
-        Some(audience.to_string()),
-        None,
-    )
-    .map_err(|source| IdentityError::MintBearer {
-        did: did.to_owned(),
-        source,
-    })?;
+    let token = identity::new_token(&identity, lifetime, Some(audience.to_string()), None)
+        .map_err(|source| IdentityError::MintBearer {
+            did: did.to_owned(),
+            source,
+        })?;
     let token = String::from_utf8(token).map_err(IdentityError::BearerNotUtf8)?;
     Ok(format!("Bearer {token}"))
 }

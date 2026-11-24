@@ -16,6 +16,18 @@ use std::{sync::Arc, time::Duration};
 async fn served_observer(
     home: &crate::client_test_support::ServedRuntimeHome,
 ) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
+    served_observer_with(home, None).await
+}
+
+/// The bearer lifetime of the observers whose tests reach a renewal: its
+/// subscriptions renew every half of it, in seconds rather than the default
+/// half minute.
+const SHORT_BEARER_LIFETIME: Duration = Duration::from_secs(6);
+
+async fn served_observer_with(
+    home: &crate::client_test_support::ServedRuntimeHome,
+    bearer_lifetime: Option<Duration>,
+) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
     let directory = tempfile::tempdir().unwrap();
     let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
         label: ("runtime").to_string(),
@@ -32,15 +44,13 @@ async fn served_observer(
     peers.upsert(peer).await.unwrap();
     let configured = peers;
     let store = ObservedStores::new();
-    let handle = spawn_observer(
-        store.clone(),
-        configured,
-        Arc::new(
-            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
-                home.user().client_signing_capability().unwrap(),
-            ),
-        ),
+    let mut endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+        home.user().client_signing_capability().unwrap(),
     );
+    if let Some(lifetime) = bearer_lifetime {
+        endpoints = endpoints.with_bearer_lifetime(lifetime);
+    }
+    let handle = spawn_observer(store.clone(), configured, Arc::new(endpoints));
     (directory, store, handle)
 }
 
@@ -59,12 +69,15 @@ async fn node_doc_id(home: &crate::client_test_support::ServedRuntimeHome) -> St
         .to_owned()
 }
 
-/// Locally minted bearers last `DEFRADB_BEARER_LIFETIME` (60s) and each
-/// subscription ends for renewal at half of it; this waits for a real one.
+/// A subscription is renewed at half its bearer's lifetime, and that renewal
+/// is not a transport failure: the node stays connected and changes keep
+/// arriving. The observer's bearers last [`SHORT_BEARER_LIFETIME`], so this
+/// waits for a real renewal within seconds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn planned_renewal_keeps_the_runtime_connected() {
     let home = crate::client_test_support::ServedRuntimeHome::start().await;
-    let (_directory, store, handle) = served_observer(&home).await;
+    let (_directory, store, handle) =
+        served_observer_with(&home, Some(SHORT_BEARER_LIFETIME)).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     let before = handle.metrics_snapshot();
     let mut shown = vec![RuntimeConnectionStatus::Connected];
@@ -156,10 +169,14 @@ async fn revoked_user_is_refused_by_the_served_runtime() {
     home.shutdown().await;
 }
 
+/// A revoked User reads as refused within one renewal period: the runtime
+/// keeps a revoked subscriber's silent stream, so the renewal's handshake is
+/// what refuses it (`tla/SubscriptionStreamEnd.tla`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoked_user_sees_access_unavailable_and_recovers_after_approval() {
     let home = crate::client_test_support::ServedRuntimeHome::start().await;
-    let (_directory, store, handle) = served_observer(&home).await;
+    let (_directory, store, handle) =
+        served_observer_with(&home, Some(SHORT_BEARER_LIFETIME)).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     assert!(!store.snapshot(home.node_did()).nodes.is_empty());
     let user = ::identity::Did::new(home.user().did()).unwrap();
@@ -168,16 +185,11 @@ async fn revoked_user_sees_access_unavailable_and_recovers_after_approval() {
         .await
         .unwrap();
     let mut changes = store.subscribe();
-    tokio::time::timeout(
-        gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD + Duration::from_secs(15),
-        async {
-            while store.runtime_connection(home.node_did())
-                != Some(RuntimeConnectionStatus::Refused)
-            {
-                changes.changed().await.unwrap();
-            }
-        },
-    )
+    tokio::time::timeout(SHORT_BEARER_LIFETIME / 2 + Duration::from_secs(15), async {
+        while store.runtime_connection(home.node_did()) != Some(RuntimeConnectionStatus::Refused) {
+            changes.changed().await.unwrap();
+        }
+    })
     .await
     .expect("renewal reports unavailable access to the selected Node");
     gents_store::identity::GrantSet::HouseholdOwner

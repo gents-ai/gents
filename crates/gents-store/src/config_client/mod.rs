@@ -72,6 +72,7 @@ pub mod home_status;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
+pub use node_permissions::holds_node_read;
 pub mod node_readiness;
 pub mod owed;
 #[cfg(test)]
@@ -227,6 +228,10 @@ pub struct GraphqlEndpoint {
     delegation_audience: held_audience::HeldAudienceCell,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
+    /// How long a bearer this endpoint mints lives, in seconds (kept small:
+    /// `ConfigAccess` holds an endpoint inline). A subscription is renewed at
+    /// half of it and the runtime ends it at its expiry.
+    bearer_lifetime_secs: u32,
 }
 
 impl GraphqlEndpoint {
@@ -243,6 +248,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
         }
     }
 
@@ -263,6 +269,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
         }
     }
 
@@ -289,6 +296,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
         })
     }
 
@@ -308,6 +316,25 @@ impl GraphqlEndpoint {
     /// **Must end with `/graphql`**: begin/commit/discard derive the REST base by stripping this suffix.
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Mint this endpoint's bearers with `lifetime`; a subscription is then
+    /// renewed every half of it. A test reaches a renewal or an expiry in
+    /// seconds this way instead of the default minute.
+    /// Whole seconds; at least one.
+    pub fn with_bearer_lifetime(mut self, lifetime: std::time::Duration) -> Self {
+        self.bearer_lifetime_secs = u32::try_from(lifetime.as_secs()).unwrap_or(u32::MAX).max(1);
+        self
+    }
+
+    fn bearer_lifetime(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.bearer_lifetime_secs))
+    }
+
+    /// How long a subscription authorized by this endpoint's own bearer is
+    /// kept before it re-authenticates: half the bearer lifetime.
+    pub fn subscription_renewal_period(&self) -> std::time::Duration {
+        self.bearer_lifetime() / 2
     }
 
     /// Require the client principal to sign Agent, AgentContext and Tools
@@ -460,13 +487,45 @@ impl GraphqlEndpoint {
                     self.delegation_audience.device_now()
                 )?
             ),
-            None => crate::identity::defradb_bearer_authorization_with_config(
+            None => crate::identity::reused_defradb_bearer(
                 did,
                 &self.audience()?,
                 &capability.config,
+                self.bearer_lifetime(),
             )?,
         };
         Ok(Some(authorization))
+    }
+
+    /// Authorize a subscription handshake. A minted identity bearer is fresh
+    /// for each handshake, never reused, so the renewal falls half a lifetime
+    /// before the runtime ends the stream at the bearer's expiry; delegated and
+    /// delegation credentials are as for any request.
+    pub(crate) fn authorize_subscription(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder> {
+        let minted = match (&self.principal_did, &self.client_signing_capability) {
+            (Some(did), Some(capability))
+                if self.delegated_authorization.is_none()
+                    && self.delegation_audience.record().audience.is_none() =>
+            {
+                Some(crate::identity::fresh_defradb_bearer(
+                    did,
+                    &self.audience()?,
+                    &capability.config,
+                    self.bearer_lifetime(),
+                )?)
+            }
+            _ => None,
+        };
+        let Some(authorization) = minted else {
+            return self.authorize(request);
+        };
+        let mut value = reqwest::header::HeaderValue::from_str(&authorization)
+            .map_err(ConfigClientError::BearerHeader)?;
+        value.set_sensitive(true);
+        Ok(request.header(reqwest::header::AUTHORIZATION, value))
     }
 
     fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {
