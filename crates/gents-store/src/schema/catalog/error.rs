@@ -13,6 +13,9 @@ pub enum SchemaError {
         source: Box<defra_node::Error>,
     },
 
+    #[error("shared transport admission could not be verified for {collection}")]
+    SharedTransportAdmission { collection: String },
+
     #[error("managed collection {collection} missing after baseline registration")]
     CollectionMissing { collection: String },
 
@@ -95,6 +98,7 @@ impl SchemaError {
                 Some(IncompatibleStoreKind::OtherVersionSchema)
             }
             Self::BaselineRegister { .. }
+            | Self::SharedTransportAdmission { .. }
             | Self::CollectionMissing { .. }
             | Self::VersionPinMismatch { .. }
             | Self::Node(_)

@@ -46,6 +46,7 @@ pub struct HomePolicyIds {
     mailbox: &'static str,
     client_journal: &'static str,
     tool_file_change: &'static str,
+    transport_v2: bool,
 }
 
 impl HomePolicyIds {
@@ -58,6 +59,7 @@ impl HomePolicyIds {
             mailbox: "10f15ba2901821f2265d8dccc2cc49878960a5d99a489e1c6a03a7c0767dc0f2",
             client_journal: "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c",
             tool_file_change: "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82",
+            transport_v2: false,
         };
         &NODE_STORE
     }
@@ -72,8 +74,20 @@ impl HomePolicyIds {
             mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
             client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
             tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",
+            transport_v2: false,
         };
         &EMBEDDED_VERA
+    }
+
+    pub fn embedded_vera_transport_v2() -> &'static Self {
+        static V2: HomePolicyIds = HomePolicyIds {
+            household: "a73982505ab1cbfc13f34febde550d7a5a7d9042801d00d4bc9fa6d9d8c41947",
+            mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
+            client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
+            tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",
+            transport_v2: true,
+        };
+        &V2
     }
 
     pub fn id(&self, policy: BuiltInPolicy) -> &str {
@@ -89,6 +103,21 @@ impl HomePolicyIds {
     /// ID. Any other policy ID is left as written.
     pub fn render(&self, sdl: &str) -> String {
         let mut rendered = sdl.to_owned();
+        if self.transport_v2 {
+            // Device admission binds the account-signed Node to its original device.
+            rendered = rendered.replace(
+                "@policy(id: \"$household\", resource: \"nodes\") {\n    node_did: String @index(unique: true)",
+                "@policy(id: \"$household\", resource: \"nodes\") {\n    node_did: String @index(unique: true) @immutable",
+            );
+            for resource in ["discovery", "scoped_discovery", "enrollment_records"] {
+                let before =
+                    format!("@policy(id: \"$household\", resource: \"{resource}\") @branchable {{");
+                let after = format!(
+                    "@policy(id: \"$household\", resource: \"{resource}\", parentField: \"publisher_node_id\") @branchable {{\n    publisher_node_id: String! @immutable"
+                );
+                rendered = rendered.replace(&before, &after);
+            }
+        }
         for policy in BuiltInPolicy::ALL {
             rendered = rendered.replace(
                 &format!("id: \"{}\"", policy.placeholder()),
@@ -102,6 +131,61 @@ impl HomePolicyIds {
 #[cfg(test)]
 mod tests {
     use super::{BuiltInPolicy, HomePolicyIds};
+
+    #[test]
+    fn transport_v2_selects_parent_gates_without_changing_legacy_sdl() {
+        let legacy = HomePolicyIds::embedded_vera();
+        let v2 = HomePolicyIds::embedded_vera_transport_v2();
+        assert_ne!(
+            legacy.id(BuiltInPolicy::Household),
+            v2.id(BuiltInPolicy::Household)
+        );
+        let mut gated = 0;
+        for (path, sdl) in bundled_sdl() {
+            let v2_sdl = v2.render(&sdl);
+            let old_sdl = legacy.render(&sdl);
+            let transport = ["discovery", "scoped_discovery", "enrollment_records"]
+                .iter()
+                .any(|resource| sdl.contains(&format!("resource: \"{resource}\") @branchable {{")));
+            gated += usize::from(transport);
+            assert_eq!(
+                v2_sdl.contains("parentField: \"publisher_node_id\""),
+                transport,
+                "{}",
+                path.display()
+            );
+            assert!(
+                !old_sdl.contains("parentField: \"publisher_node_id\""),
+                "{}",
+                path.display()
+            );
+            assert_eq!(
+                v2_sdl.contains("publisher_node_id: String! @immutable"),
+                transport,
+                "{}",
+                path.display()
+            );
+        }
+        assert_eq!(gated, 9);
+    }
+
+    #[test]
+    fn shared_node_registration_keeps_its_device_identity() {
+        let node = include_str!("../schemas/agent/node.graphql");
+        let shared = HomePolicyIds::embedded_vera_transport_v2().render(node);
+        let original = HomePolicyIds::embedded_vera().render(node);
+        assert_eq!(
+            HomePolicyIds::embedded_vera_transport_v2().render(&shared),
+            shared
+        );
+        assert!(shared.contains("node_did: String @index(unique: true) @immutable"));
+        assert!(!original.contains("@immutable"));
+        let foreign = node.replace("$household", "other-policy");
+        assert_eq!(
+            HomePolicyIds::embedded_vera_transport_v2().render(&foreign),
+            foreign
+        );
+    }
 
     /// Every SDL file the build script bundles, as written.
     fn bundled_sdl() -> Vec<(std::path::PathBuf, String)> {

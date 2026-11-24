@@ -19,6 +19,7 @@ structure ResourceDefinition where
   name : String
   relations : List RelationDefinition
   permissions : List PermissionDefinition
+  create : Option (String × String) := none
   deriving BEq, Repr
 
 def permission (name : String) (relations : List String)
@@ -236,6 +237,13 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" [] [("parent", "read")],
         permission "update" [] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] } ]
+
+def transportV2Policy : List ResourceDefinition := policy.map fun resource =>
+  if resource.name == "nodes" then
+    { resource with relations := resource.relations ++ [⟨"transport_publisher", ["actor:individual"], []⟩] }
+  else if ["discovery", "scoped_discovery", "enrollment_records"].contains resource.name then
+    { resource with create := some ("parent", "transport_publisher") }
+  else resource
 
 structure Object where
   resource : String
@@ -465,6 +473,14 @@ query DAC bypass. Native conformance observes named document permissions; ordina
 client query isolation also depends on the native node permissions it holds. -/
 def allowed (fuel : Nat) (state : State) (actor resource id permission : String) : Bool :=
   allowedIn policy fuel state actor resource id permission
+
+theorem transport_v2_requires_an_explicit_publisher_grant :
+    let initial : State := { objects := [⟨"nodes", "node", "account"⟩], relations := [], enrolled := [] }
+    let delegated := { initial with relations := [⟨"nodes", "node", "transport_publisher", .actor "device"⟩] }
+    (allowedIn transportV2Policy 5 initial "account" "nodes" "node" "transport_publisher",
+     allowedIn transportV2Policy 5 initial "device" "nodes" "node" "transport_publisher",
+     allowedIn transportV2Policy 5 delegated "device" "nodes" "node" "transport_publisher") =
+      (false, false, true) := by native_decide
 
 /-- What a read observes, given whether the reader bypasses document ACP and
 what the document policy answers.
@@ -1195,9 +1211,14 @@ def policyYamlOf (definitions : List ResourceDefinition) : String :=
       "      - name: " ++ permission.name ++ "\n" ++
       (let expression := String.intercalate " + " (permission.relations ++
           permission.parents.map (fun (relation, inherited) => relation ++ "->" ++ inherited))
-       if expression.isEmpty then "" else "        expr: " ++ expression ++ "\n")))
+       if expression.isEmpty then "" else "        expr: " ++ expression ++ "\n")) ++
+    (match resource.create with
+     | none => ""
+     | some (parent, required) => "    create: {parent: " ++ parent ++ ", requires: " ++ required ++ "}\n"))
 
 def policyYaml : String := policyYamlOf policy
+
+def transportV2PolicyYaml : String := policyYamlOf transportV2Policy
 
 /-- The Go-compatible ID input deliberately excludes relation types and
 management metadata. Equality of this projection is sufficient for a collision
@@ -1243,9 +1264,17 @@ def typeAdmitted (definitions : List ResourceDefinition) (resource relation type
   | none => false
 
 def subjectAdmittedIn (definitions : List ResourceDefinition) (relation : Relation) : Bool :=
-  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject)
+  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject) ||
+    match relation.subject with
+    | .actor _ => typeAdmitted definitions relation.resource relation.relation "actor:individual"
+    | _ => false
 
 def subjectAdmitted (relation : Relation) : Bool := subjectAdmittedIn policy relation
+
+theorem transport_v2_admits_individuals_not_wildcards :
+    (subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .actor "device"⟩,
+     subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .wildcard⟩) =
+      (true, false) := by native_decide
 
 /-- A relation's declared types name subject shapes, never kinds of actor: no
 policy admits one actor DID as a relation's subject and refuses another. A

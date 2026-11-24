@@ -43,6 +43,8 @@ pub const AGENT_SESSION_INTERRUPT: &str =
     include_str!("../schemas/agent/agent_session_interrupt.graphql");
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
+pub const AGENT_OWNERSHIP_POLICY_TRANSPORT_V2: &str =
+    include_str!("../schemas/agent/agent_ownership_policy_v2.yaml");
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
