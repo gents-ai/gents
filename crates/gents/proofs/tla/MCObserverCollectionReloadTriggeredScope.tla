@@ -1,0 +1,4 @@
+---- MODULE MCObserverCollectionReloadTriggeredScope ----
+EXTENDS ObserverCollectionReload
+
+====

@@ -18,6 +18,8 @@ structure Op where
   op : String
   node : Nat := 0
   result : String := "rows"
+  /-- Whether every session scope a partial read read derives alone. -/
+  derivable : Bool := true
   deriving FromJson
 
 structure Trace where
@@ -62,9 +64,9 @@ def reloadNode (m : Machine) (read : Read) (node : Nat) (incoming : List String)
   else (outcome, m)
 
 /-- A collection reload of `node`'s backend observations, captured at `read`. -/
-def reloadCollections (m : Machine) (read : Read) (node : Nat) (result : LoadResult) :
-    CollectionSettlement × Machine :=
-  let outcome := collectionSettlement (m.pubs node) read result
+def reloadCollections (m : Machine) (read : Read) (node : Nat) (derivable : Bool)
+    (result : LoadResult) : CollectionSettlement × Machine :=
+  let outcome := collectionSettlement (m.pubs node) read derivable result
   if outcome = .published then
     (outcome, { onStore m node dataChange with
                 observations := update m.observations node (observationRows node) })
@@ -89,6 +91,7 @@ def collectionSettlementName : CollectionSettlement → String
   | .published => "published"
   | .superseded => "superseded"
   | .failed => "failed"
+  | .deferred => "deferred"
 
 def statusName : Status → String
   | .connecting => "connecting"
@@ -133,7 +136,7 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
   | "finish_collections" =>
       match slot.reloadingCollections, m.reads n with
       | true, some read =>
-          let (outcome, next) := reloadCollections m read n (loadResult op.result)
+          let (outcome, next) := reloadCollections m read n op.derivable (loadResult op.result)
           (dropRead (withSlot next n (settleCollections slot outcome)) n,
             some (Json.mkObj [("collection_settlement",
               toJson (collectionSettlementName outcome))]))

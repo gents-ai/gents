@@ -1,0 +1,4 @@
+---- MODULE MCObserverCollectionReloadCollections ----
+EXTENDS ObserverCollectionReload
+
+====
