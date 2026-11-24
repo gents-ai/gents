@@ -13,8 +13,7 @@ pub async fn pending_rows_in_txn(
         };
         Query::select(
             Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
-                .field(fields::EXECUTION_LEASE_SECS)
-                .field(fields::INTERRUPT_REQUESTED_AT),
+                .field(fields::EXECUTION_LEASE_SECS),
         )
         .filter(Filter::eq(fields::NODE_DID, node_did))
         .filter(Filter::eq(fields::SESSION_ID, session_id))
@@ -321,7 +320,6 @@ pub fn steering_compatible(
         && row.workspace_authority == head.workspace_authority
         && row.workspace_seal_hash == head.workspace_seal_hash
         && row.execution_generation.is_none()
-        && row.interrupt_requested_at.is_none()
         && row.retry_parent_request.is_none()
         && row.caused_by_trigger_id.is_none()
         && row.caused_by_source_doc_id.is_none()

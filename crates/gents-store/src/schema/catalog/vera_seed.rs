@@ -30,6 +30,14 @@ pub fn seed(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
     }
 }
 
+pub fn seed_transport_v2(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
+    let mut seed = seed(policy);
+    if *policy == BuiltInPolicy::Household {
+        seed.definition = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_TRANSPORT_V2.to_owned();
+    }
+    seed
+}
+
 #[cfg(test)]
 mod tests {
     use gents_protocol::schemas::BuiltInPolicy;
@@ -48,6 +56,16 @@ mod tests {
                     .expect("a built-in policy compiles"),
                 ids.id(policy),
                 "{policy:?}"
+            );
+        }
+        let transport_v2 = gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2();
+        for policy in BuiltInPolicy::ALL {
+            assert_eq!(
+                super::seed_transport_v2(&policy)
+                    .id()
+                    .expect("a built-in policy compiles"),
+                transport_v2.id(policy),
+                "transport v2 {policy:?}"
             );
         }
     }

@@ -123,7 +123,6 @@ async fn authority_rejection(
             ));
         }
     }
-    gents_store::graphql::fence_arrivals(txn, "AgentSession").await?;
     let Some(session) = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &command.node_did,
@@ -427,7 +426,6 @@ pub(crate) async fn process_command(
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
-            gents_store::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
             let rendered = Query::select(Selection::doc_id().field(edit_fields::COMMAND_ID))
                 .filter(Filter::eq(edit_fields::NODE_DID, &row.node_did))
                 .filter(Filter::eq(edit_fields::REQUESTER_DID, &row.requester_did))

@@ -266,7 +266,10 @@ async fn tick_endpoint(
         .sign(&record.signing_payload())
         .await
         .context("signing PeerRegistry endpoint binding")?;
-    let mutation = peer_registry_endpoint_upsert_mutation(&record);
+    let mutation = peer_registry_endpoint_upsert_mutation_for_publisher(
+        &record,
+        gents_store::local::document_acp::transport_publisher_node(node)?.as_deref(),
+    );
     gents_store::config_client::ConfigAccess::write_local_response(
         node,
         "p2p.upsert_endpoint_heartbeat",
@@ -283,6 +286,14 @@ async fn tick_endpoint(
 }
 
 pub fn peer_registry_endpoint_upsert_mutation(record: &EndpointRecord) -> String {
+    peer_registry_endpoint_upsert_mutation_for_publisher(record, None)
+}
+
+pub(super) fn peer_registry_endpoint_upsert_mutation_for_publisher(
+    record: &EndpointRecord,
+    publisher: Option<&str>,
+) -> String {
+    let publisher = super::publisher_field_for_id(publisher);
     let did = escape_graphql_string(&record.did);
     let node_id = escape_graphql_string(&record.node_id);
     let address = escape_graphql_string(&record.address);
@@ -298,6 +309,7 @@ pub fn peer_registry_endpoint_upsert_mutation(record: &EndpointRecord) -> String
             upsert_PeerRegistry(
                 filter: {{ peer_id: {{ _eq: "{node_id}" }}, node_did: {{ _eq: "{did}" }} }},
                 add: {{
+                    {publisher}
                     node_did: "{did}",
                     peer_id: "{node_id}",
                     addresses: ["{address}"],
@@ -389,6 +401,12 @@ mod tests {
             sig: vec![1, 2, 3],
         };
         let mutation = peer_registry_endpoint_upsert_mutation(&record);
+        assert!(!mutation.contains("publisher_node_id"));
+        let shared =
+            peer_registry_endpoint_upsert_mutation_for_publisher(&record, Some("device-node"));
+        let (create, update) = shared.split_once("update:").unwrap();
+        assert!(create.contains(r#"publisher_node_id: "device-node""#));
+        assert!(!update.contains("publisher_node_id"));
         assert!(mutation.contains(r#"node_did: "did:key:z\"member""#));
         assert!(mutation.contains(r#"peer_id: { _eq: "peer\"one" }"#));
         assert!(mutation.contains("binding_sig: \"Ldp\""));

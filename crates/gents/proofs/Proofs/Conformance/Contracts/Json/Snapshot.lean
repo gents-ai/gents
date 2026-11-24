@@ -55,8 +55,11 @@ import Proofs.Conformance.ToolAdmission
 import Proofs.Conformance.StartupPublication
 import Proofs.Conformance.RequestRepairScope
 import Proofs.Conformance.InterruptRequestDrain
+import Proofs.Conformance.InterruptGenerationClaim
+import Proofs.Conformance.Identity.SessionInterruptAccess
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.PathNamespace
 import Proofs.Conformance.MCPHealthShutdown
 import Proofs.Conformance.DatastoreWrite
 import Proofs.Conformance.LspConsent
@@ -91,6 +94,7 @@ import Proofs.Conformance.InferenceProviderLimit
 import Proofs.Conformance.ProviderUsageRefusal
 import Proofs.Conformance.Identity.ProviderUsageEvidence
 import Proofs.Conformance.EventSourceCursor
+import Proofs.Conformance.ScheduleCadence
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
 import Proofs.Conformance.SessionObservation

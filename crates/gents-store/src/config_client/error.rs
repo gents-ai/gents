@@ -7,6 +7,8 @@ use super::write_telemetry::{ConflictSource, WriteTelemetryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigClientError {
+    #[error("shared device enrollment requires the account that owns the group and device Node")]
+    SharedDeviceAdmission,
     #[error("reading the runtime's client authentication audience")]
     RuntimeAuthenticationRead(#[source] Box<defra_node::Error>),
     #[error("runtime endpoint cache is unavailable")]

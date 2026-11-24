@@ -1,0 +1,3 @@
+---- MODULE MCPathNamespaceRaceByPath ----
+EXTENDS PathNamespaceRace
+====

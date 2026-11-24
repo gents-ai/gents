@@ -29,6 +29,12 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pPairingsCommand::Remove(args) => pairings::remove_application_pairing(args).await,
         },
         P2pCommand::Enrollment { command } => match command {
+            P2pEnrollmentCommand::AdmitDevice(args) => {
+                enrollment_admin::device_membership(args, true).await
+            }
+            P2pEnrollmentCommand::RemoveDevice(args) => {
+                enrollment_admin::device_membership(args, false).await
+            }
             P2pEnrollmentCommand::Pending(args) => {
                 enrollment_admin::pending_enrollments(args).await
             }

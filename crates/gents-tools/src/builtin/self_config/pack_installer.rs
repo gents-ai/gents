@@ -87,14 +87,15 @@ impl PackInstaller {
         let context = crate::native::ToolContext::new(root.into(), false)
             .map(|context| context.for_call(&self.envelope))?;
         let requested = requested_path.to_str().context("pack path is not UTF-8")?;
-        let path = context.resolve_path(requested)?;
+        let admitted = context.locate(requested, gents_fs_runner::beneath::Intent::Existing)?;
+        let path = admitted.path();
         // Local built artifacts flow through the same installers as
         // registry-resolved packs. Plugin authority follows the agent's pack
         // authority grant: without it preview reports installation_blockers
         // and commit refuses them; with it the install grants what the pack
         // asks for and the receipt lists it.
         packs
-            .open_path(requested_path, &path)
+            .open_path(requested_path, &admitted)
             .map_err(|error| match error {
                 LocalPackError::PluginSource { sources, built } => {
                     let (step, next_call) = match built {

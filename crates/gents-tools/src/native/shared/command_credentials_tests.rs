@@ -1,8 +1,10 @@
 use super::*;
-use crate::native::shared::command::command_launch::macos_workspace_write_policy;
+use crate::native::shared::command::command_launch::{
+    kernel_network, macos_workspace_write_policy, render_seatbelt_profile, seatbelt_profile,
+    select_sandbox, SeatbeltWrites,
+};
 use crate::{
-    native::shared::command::CommandExecutionMode, native::shared::command::CommandExecutionPolicy,
-    native::shared::command::CommandNetworkMode,
+    native::shared::command::CommandExecutionMode, native::shared::command::CommandNetworkMode,
 };
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
@@ -87,18 +89,25 @@ async fn command_isolation_seatbelt_matches_lean() {
     for case in gents_lean_vocab::families::command_isolation_seatbelt::cases::<
         CommandExecutionMode,
         CommandNetworkMode,
+        SeatbeltWrites,
     >() {
-        let policy = CommandExecutionPolicy::write_capable()
-            .with_mode(case.input.mode)
-            .with_network_mode(case.input.network);
-        let mut profile = macos_workspace_write_policy(policy.effective_network_mode());
+        let sandbox = select_sandbox(case.input.mode, true, "").unwrap();
+        let network = kernel_network(
+            case.input.mode,
+            case.input.network,
+            case.input.reaches_network,
+        );
+        let mut profile = render_seatbelt_profile(&seatbelt_profile(sandbox, network).unwrap());
         let mut parameters = vec![format!("-DWRITABLE_ROOT={}", root.display())];
-        protection.apply(&mut profile, &mut parameters).unwrap();
+        if case.input.mode.protects_credentials() {
+            protection.apply(&mut profile, &mut parameters).unwrap();
+        }
         let script = r#"import errno, os, pathlib, socket, sys
 protected = True
 for name in sys.argv[2:]:
+    path = pathlib.Path(name)
     try:
-        pathlib.Path(name).read_bytes()
+        os.listdir(path) if path.is_dir() else path.read_bytes()
     except PermissionError:
         pass
     else:
@@ -115,8 +124,11 @@ for operation in [
         pass
     else:
         protected = False
-pathlib.Path('ordinary').write_text('workspace write')
-assert pathlib.Path('ordinary').read_text() == 'workspace write'
+try:
+    pathlib.Path('ordinary').write_text('workspace write')
+    writes = 'writable_root'
+except PermissionError:
+    writes = 'nothing'
 network = 'enabled'
 with socket.socket() as connection:
     connection.settimeout(2)
@@ -125,7 +137,7 @@ with socket.socket() as connection:
     except PermissionError as error:
         assert error.errno in (errno.EPERM, errno.EACCES), error
         network = 'disabled'
-print('credentials_protected=%s network=%s' % (protected, network))
+print('credentials_protected=%s network=%s writes=%s' % (protected, network, writes))
 "#;
         let args = [vec![port.to_string()], targets.clone()].concat();
         let output = run(profile, parameters, &root, script, &args).await;
@@ -142,10 +154,17 @@ print('credentials_protected=%s network=%s' % (protected, network))
             "network=enabled" => CommandNetworkMode::Enabled,
             other => panic!("{:?}: unexpected network observation {other}", case.input),
         };
+        let writes = match observed[2] {
+            "writes=writable_root" => SeatbeltWrites::WritableRoot,
+            "writes=nothing" => SeatbeltWrites::Nothing,
+            other => panic!("{:?}: unexpected write observation {other}", case.input),
+        };
+        let _ = std::fs::remove_file(root.join("ordinary"));
         case.check(
             gents_lean_vocab::families::command_isolation_seatbelt::SeatbeltOutput {
                 credentials_protected: observed[0] == "credentials_protected=True",
                 network,
+                writes,
             },
         );
     }

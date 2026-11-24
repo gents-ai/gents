@@ -2734,11 +2734,13 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
 }
 
 /// Premise evidence for the ledger rows `boundary.plugin-data.transaction`
-/// and `boundary.storage.observation-daemon-visible`: two transactions that
-/// both read a unique key as absent and insert it cannot both commit, the
-/// acknowledged commit is read back and the refused one leaves nothing.
+/// and `boundary.storage.observation-daemon-visible`: of two concurrent
+/// transactions inserting the same unique key, the unique index lets one
+/// commit, which reads back, and refuses the other, which leaves nothing. Each
+/// first reads the key as absent; the plain read is not validated at commit, so
+/// the refusal is the index's.
 #[tokio::test]
-async fn defradb_refuses_a_concurrent_duplicate_after_read_then_insert() {
+async fn defradb_unique_index_refuses_a_concurrent_duplicate_insert() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
         .add_collection("type UniqueKeyProbe { key: String @index(unique: true) writer: String }")

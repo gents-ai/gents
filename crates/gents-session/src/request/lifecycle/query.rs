@@ -57,7 +57,9 @@ pub(super) async fn request_view(
     Ok(rows.into_iter().next())
 }
 
-/// The read and winning request CAS must share the transaction's mutation gate.
+/// The read is a filtered read the store does not validate; the claim it
+/// decides is fenced by the claim's own writes, the request CAS and the
+/// session projection every claim writes (`TransactionFence.commonWrite`).
 pub async fn claim_queue_allows(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,

@@ -161,7 +161,10 @@ async fn session_observation_traces_match_the_lean_model() {
         let node = node_db.node.clone();
         let trace = case.input.clone();
         let observed = ConfigAccess::transact_local_idempotent(
-            &node, None, IdempotentTransactionRetry::Standard, "test.session.observation_trace",
+            &node,
+            node.node_identity_did().map(|did| ::identity::Did::new(did).expect("node DID")),
+            IdempotentTransactionRetry::Standard,
+            "test.session.observation_trace",
             |txn| {
                 let trace = trace.clone();
                 Box::pin(async move {

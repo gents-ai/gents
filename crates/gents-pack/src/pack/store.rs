@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
+use gents_fs_runner::beneath::{Access, Intent, RootDir};
 
 use crate::pack::archive::{
     digest_hex, peek_header, read_pack, Bounds, PackArchive, PackHeader, EXTENSION,
@@ -177,31 +178,6 @@ impl PackStore {
 
     pub fn import_file(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
         self.import_file_accepting(file, expected, |_| Ok(()))
-    }
-
-    pub fn import_file_no_follow(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let input = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(file)
-                .with_context(|| format!("opening {}", file.display()))?;
-            self.import_accepting(io::BufReader::new(input), expected, |_| Ok(()))
-                .with_context(|| format!("{} is not a valid pack", file.display()))
-        }
-        #[cfg(not(unix))]
-        {
-            let metadata = std::fs::symlink_metadata(file)
-                .with_context(|| format!("opening {}", file.display()))?;
-            anyhow::ensure!(
-                metadata.file_type().is_file(),
-                "{} is not a regular file",
-                file.display()
-            );
-            self.import_file(file, expected)
-        }
     }
 
     pub fn import_file_accepting(
@@ -574,18 +550,13 @@ impl PackStore {
             .prefix(".unpacking-")
             .tempdir_in(parent)
             .with_context(|| format!("staging an unpacked pack in {}", parent.display()))?;
+        let staged = RootDir::open(staging.path())?;
         let verified = read_pack(
             io::BufReader::new(file),
             Bounds::default(),
             |entry, content| {
-                let out = staging.path().join(entry);
-                if let Some(dir) = out.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-                io::copy(
-                    content,
-                    &mut io::BufWriter::new(std::fs::File::create(&out)?),
-                )?;
+                let out = staged.locate_relative(Path::new(entry), Intent::Create)?;
+                io::copy(content, &mut io::BufWriter::new(out.open(Access::Replace)?))?;
                 Ok(())
             },
         )

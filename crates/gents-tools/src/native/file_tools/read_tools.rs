@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::super::args::{GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs};
 use super::super::native_runner::NativeFsRunner;
-use super::super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
+use super::super::shared::{cap_output, on_blocking, render_file_contents, ToolContext, ToolError};
 use super::render_tool_output;
 use gents_session::file_contents::content_hash;
 
@@ -255,8 +255,9 @@ impl Tool for ReadFileTool {
         call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let context = self.context.for_call(call);
-        let path = context.resolve_existing_file(&args.path)?;
-        let bytes = tokio::fs::read(&path).await?;
+        let located = context.locate_existing_file(&args.path)?;
+        let path = located.path();
+        let bytes = on_blocking(move || located.read()).await?;
         let content_hash = content_hash(&bytes);
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);

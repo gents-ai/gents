@@ -107,8 +107,8 @@ theorem watcher_release_keeps_unrelated_marks
 verified local signing identities remain scan actors so their requests can be
 rejected. A disabled agent is not one: DefraDB answers its request scan
 without AgentRequest rows, so scanning as it fails on every pass and observes
-nothing (fresh-node smoke of #3670, 2026-11-13, where a not-enabled core pack
-leaves its agents disabled, `Pack.CorePacks.initWiring`). -/
+nothing. A core pack that is not enabled leaves its agents disabled
+(`Pack.CorePacks.initWiring`). -/
 structure ActorCandidate where
   did : String
   configured : Bool
@@ -158,7 +158,7 @@ agent. A missing root or denied query is not an empty authorized result. Rows
 selected for a different agent do not become work for this actor even if it can
 read them. The caller supplies configured agents with verified resolved
 signing identities, including unavailable enabled agents; an unresolved or disabled agent is not scanned. This does not fence a
-configuration change racing a previously started native scan. -/
+configuration change racing a native scan already in progress. -/
 def collectScoped : List String → List ScopedScan → ScopedBatch
   | [], _ => {}
   | actor :: rest, scans =>

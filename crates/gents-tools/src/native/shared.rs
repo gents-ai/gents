@@ -8,8 +8,6 @@ pub(crate) use command::apply_workspace_authority;
 pub(super) use command::command_env::{build_shell_env_from_vars, FALLBACK_PATH};
 pub(crate) use command::command_host_executable::admit_host_executable;
 pub(crate) use command::command_launch::prepare_declared_cli_command;
-#[cfg(test)]
-pub(crate) use command::command_launch::select_sandbox;
 pub(crate) use command::command_output::shell_join;
 pub(super) use command::command_output::{captured_channel, stopped_stream, truncate_stream};
 pub(super) use command::command_run::run_command;
@@ -27,6 +25,7 @@ pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
     WorkspaceAuthority,
 };
+pub(crate) use context::on_blocking;
 pub use context::ToolContext;
 pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};

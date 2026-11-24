@@ -446,7 +446,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
+                interrupt_generation: None,
                 valid_until: None,
                 workspace_id: None,
                 workspace_authority: None,

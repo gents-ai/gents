@@ -154,7 +154,10 @@ fn signed_invocation_authorized(
 /// endpoint as the User (`Background.ProcessControl.ClientIntent`); the
 /// runtime holds no client key and never writes an intent on a client's
 /// behalf. The signed scope is checked against the client's own native ACP
-/// read in the transaction that creates the intent.
+/// read in the transaction that creates the intent. A held intent of the same
+/// `(client_did, intent_id)` is observed, never created again
+/// (`Background.ProcessControl.submitIntent`); that pair is a unique index, so
+/// a concurrent twin aborts this transaction and the rebuilt attempt finds it.
 pub async fn submit(
     access: &ConfigAccess,
     intent: &gents_protocol::process_control::ToolControlIntent,
@@ -169,11 +172,10 @@ pub async fn submit(
         .map_err(|error| ClientControlError::Unavailable(error.into()))?;
     let signed = serde_json::to_string(intent)
         .map_err(|error| ClientControlError::Unavailable(error.into()))?;
-    let (document, created) = access.transact_write("tool_control.submit", |txn| {
+    let (document, created) = access.transact_signed_conflict_rebuild("tool_control.submit", |txn| {
         let signed = &signed;
         let actor = &actor;
         Box::pin(async move {
-            gents_store::graphql::fence_arrivals(txn, "AgentToolControl").await?;
             let prior = {
                 use gents_protocol::document_query::{fields::agent_tool_control as fields, Filter, Query, Selection};
                 let query = Query::select(Selection::doc_id().field(fields::INTENT_JSON))
@@ -400,7 +402,6 @@ async fn claim_inner(
     );
     access.transact_write("tool_control.claim", |txn| {
         Box::pin(async move {
-            gents_store::graphql::fence_arrivals(txn, "AgentToolControlClaim").await?;
             let response = {
                 use gents_protocol::document_query::{
                     fields::{agent_tool_control as control, agent_tool_control_claim as control_claim},

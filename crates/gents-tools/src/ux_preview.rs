@@ -27,7 +27,8 @@ use tokio::sync::{mpsc, OnceCell};
 use self::browser::{Browser, Cdp, Event};
 use self::report::{Audit, ConsoleEntry, DoorCall, PageStatus, ThemeReport, UxPreviewReport};
 use super::ux_data::{self, UxDataCall};
-use gents_pack::plugin::ux::{self, file_module, UxDoor, UxListing, UxModule, UxProducer};
+use gents_fs_runner::beneath::{Intent, Located};
+use gents_pack::plugin::ux::{self, UxDoor, UxListing, UxModule};
 use gents_store::config_client::ConfigAccess;
 
 const AUDIT_JS: &str = include_str!("ux_preview/audit.js");
@@ -145,24 +146,14 @@ where
         "no ux plugin {target:?} under {} and no such file; `ux list` names the installed plugins, or pass the path to a plugin.js",
         home.display()
     );
-    let file = path
-        .canonicalize()
-        .with_context(|| format!("resolving {}", path.display()))?
-        .to_string_lossy()
-        .into_owned();
-    let draft = UxListing {
-        id: file.clone(),
-        door: UxDoor::Dev,
-        producer: UxProducer::File,
-        file: file.clone(),
-        pack: None,
-        description: None,
-        contributes: None,
-        default_enabled: None,
-        data: Vec::new(),
-        digest: None,
-    };
-    let module = file_module(home, &draft, None)?;
+    draft_target(&Located::at(path, Intent::Existing)?)
+}
+
+/// A draft plugin.js resolved beneath a root: its module is read through the
+/// handle of the directory it was resolved in.
+pub fn draft_target(entry: &Located) -> Result<PreviewTarget> {
+    let file = entry.path().to_string_lossy().into_owned();
+    let module = ux::draft_module(entry)?;
     Ok(PreviewTarget {
         label: file.clone(),
         file,

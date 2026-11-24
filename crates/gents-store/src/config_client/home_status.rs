@@ -32,7 +32,9 @@ impl AuthenticatedHome {
             (ClientAuthentication::Unavailable, _)
             | (_, ReportedDelegationAudience::Unavailable) => return Ok(None),
             (
-                ClientAuthentication::Vera { worker, deployment },
+                ClientAuthentication::Vera {
+                    worker, deployment, ..
+                },
                 ReportedDelegationAudience::Absent,
             ) => {
                 self.reported.audience = ReportedDelegationAudience::Named(DelegationAudience {
@@ -43,7 +45,9 @@ impl AuthenticatedHome {
             }
             (ClientAuthentication::Local, ReportedDelegationAudience::Absent) => {}
             (
-                ClientAuthentication::Vera { worker, deployment },
+                ClientAuthentication::Vera {
+                    worker, deployment, ..
+                },
                 ReportedDelegationAudience::Named(audience),
             ) if worker == &audience.worker && deployment == &audience.deployment => {}
             (ClientAuthentication::Vera { .. } | ClientAuthentication::Local, _) => {

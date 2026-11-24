@@ -11,7 +11,7 @@ use chrono::Utc;
 use defra_node::Node as EmbeddedNode;
 
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::{escape_graphql_string, fence_arrivals};
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
@@ -68,7 +68,6 @@ impl GraphqlPairingStateStore {
         selected: &[String],
         runtime: &identity::Did,
     ) -> Result<()> {
-        fence_arrivals(txn, "PeerPairingApplied").await?;
         let response = {
             use gents_protocol::document_query::{
                 fields::peer_pairing_applied as fields, Query, Selection,

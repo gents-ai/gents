@@ -1126,7 +1126,6 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
             let route_query = &route_query;
             Box::pin(async move {
                 txn.validate_runtime_actor(runtime)?;
-                gents_store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
                 let response = txn.run(route_query).await?;
                 let ids = gents_protocol::graphql::graphql_rows_from_response(
                     &response,

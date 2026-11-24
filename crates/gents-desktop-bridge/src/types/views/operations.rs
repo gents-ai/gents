@@ -200,7 +200,7 @@ pub struct CausedRequestView {
 pub struct InterruptRequestResult {
     pub request_id: String,
     pub accepted: bool,
-    pub interrupt_requested_at: Option<String>,
+    pub interrupted_at: Option<String>,
     pub already_interrupted: bool,
 }
 

@@ -303,6 +303,7 @@ inductive StoreWrapper where
   | clientAccessErrorAccess
   | runtimeAccessErrorConfiguration
   | ownGrantErrorUnanswered
+  | hostAdmissionErrorConfig
   deriving DecidableEq, Repr
 
 def StoreWrapper.holding : StoreWrapper → Holding

@@ -230,10 +230,17 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         )
     }
     .call();
+    let target = gents_fs_runner::beneath::RootDir::open(&root_path)
+        .unwrap()
+        .locate_relative(
+            std::path::Path::new("file"),
+            gents_fs_runner::beneath::Intent::Existing,
+        )
+        .unwrap();
     async {
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
-        let capture = FileChangeCapture::start(&scope_call, &root_path, &path)
+        let capture = FileChangeCapture::start(&scope_call, &target)
             .await
             .unwrap();
         std::fs::write(&path, "partial").unwrap();
@@ -247,7 +254,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
             root: root_path.to_str().unwrap().into(),
             path: "file".into(),
             before: FileImage::Missing,
-            after: read_image(&path),
+            after: read_image(&target),
         }],
     });
     call.stage_deferred_writes(Some(DeferredToolWrites::new(foreign)));
