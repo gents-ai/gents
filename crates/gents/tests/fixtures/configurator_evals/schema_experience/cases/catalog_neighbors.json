@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our matching prototype gives every product a three-number vector. Set up CatalogItem with sku and label (text) and coordinates (the vector) so I can ask for the items closest to a vector by straight-line distance. The catalog is small, so exact answers matter more than speed.",
+      "prompt": "Our matching prototype gives every product a three-number vector. Set up CatalogItem with sku and label (text) and coordinates (the vector), indexed for exact straight-line distance. The catalog is small, so exact answers matter more than speed. The items are coming next.",
       "checks": [
         {
           "check": "schema_matches",
