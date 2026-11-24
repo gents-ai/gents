@@ -202,8 +202,10 @@ mod tests {
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
         let db = crate::support::trial_store_at(&path).await;
-        let (db, user, client, binding) =
-            crate::test_support::signed_test_node_from_db(db, "eval-inspect-retained").await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "eval-inspect-retained").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let did = db.node_identity.did().to_owned();
         let content = "original \"prompt\"\nwith full content";
         let request_spec = |request_id: &str, body: &str, created_at: &str| {
