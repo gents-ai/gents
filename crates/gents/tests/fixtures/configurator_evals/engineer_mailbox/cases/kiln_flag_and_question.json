@@ -109,11 +109,11 @@
                 "expect": [
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Marlow Ceramics\""
+                    "matches": "\"label\"\\s*:\\s*\"Marlow Ceramics\\b"
                   },
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Tidewell Supply\""
+                    "matches": "\"label\"\\s*:\\s*\"Tidewell Supply\\b"
                   },
                   {
                     "field": "payload",

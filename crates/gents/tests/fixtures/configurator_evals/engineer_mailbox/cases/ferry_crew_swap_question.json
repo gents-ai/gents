@@ -94,11 +94,11 @@
                 "expect": [
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Dana Okafor\""
+                    "matches": "\"label\"\\s*:\\s*\"Dana Okafor\\b"
                   },
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Lucia Ferraz\""
+                    "matches": "\"label\"\\s*:\\s*\"Lucia Ferraz\\b"
                   },
                   {
                     "field": "payload",

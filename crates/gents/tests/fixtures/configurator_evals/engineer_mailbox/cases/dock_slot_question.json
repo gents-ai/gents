@@ -138,11 +138,11 @@
                 "expect": [
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Ostend Lines\""
+                    "matches": "\"label\"\\s*:\\s*\"Ostend Lines\\b"
                   },
                   {
                     "field": "payload",
-                    "contains": "\"label\":\"Harlow Freight\""
+                    "matches": "\"label\"\\s*:\\s*\"Harlow Freight\\b"
                   },
                   {
                     "field": "payload",
