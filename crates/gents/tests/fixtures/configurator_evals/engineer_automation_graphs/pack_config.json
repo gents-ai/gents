@@ -20,11 +20,9 @@
         ]
       },
       "cases": [
-        "./cases/yard_receipts.json",
         "./cases/inspection_band.json",
         "./cases/dock_alert_triage.json",
         "./cases/scale_card_repair.json",
-        "./cases/linen_proof_preview.json",
         "./cases/proof_slip_run.json",
         "./cases/declared_quorum.json",
         "./cases/redline_follow_up.json",

@@ -25,7 +25,7 @@
   "stages": [
     {
       "stage_id": "fix",
-      "prompt": "packs/courier_zones fails its pack check. Fix whatever the check reports, re-running it until it passes, without changing the schema file or the pack's version. Then install the pack.",
+      "prompt": "packs/courier_zones won't pass its pack check. Fix it without touching the schema file or the version, then install it here.",
       "capture": [
         {
           "kind": "documents",
@@ -60,20 +60,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

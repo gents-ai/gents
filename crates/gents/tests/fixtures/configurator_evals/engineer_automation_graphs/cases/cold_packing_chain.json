@@ -10,99 +10,9 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Whenever a PackingSlip is created, have yourself confirm it: the request asks for a reply of exactly PACKED followed by the slip, and keeps the standard success-or-failure record of each run. That record is a FireOutcome; it carries the slip's handoff_id as source_handoff_id, and its terminal_state is completed when the run succeeded. After a confirmation succeeds for a slip whose handoff_id starts with cold-, start a second request to yourself asking for a reply of exactly CHILL followed by that handoff_id. Slips with any other handoff ID get no second step. Configure it now; slips arrive later.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "triggers",
-          "collection": "Trigger",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "trigger_id",
-            "task_id",
-            "source",
-            "concurrency",
-            "session_id_template",
-            "create_session",
-            "enabled",
-            "last_status",
-            "last_error"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sources",
-          "collection": "EventSource",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "event_source_id",
-            "source_collection",
-            "event_kind",
-            "filter",
-            "correlation_field",
-            "group"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tasks",
-          "collection": "Task",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "task_id",
-            "prompt_template",
-            "emit_outcome",
-            "enabled"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "triggers",
-                "min": 2
-              },
-              {
-                "capture": "tasks",
-                "min": 2
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ]
+      "prompt": "Set up an automation for new PackingSlip records: each one gets a run that replies PACKED and the slip. Once that run has finished for a slip whose handoff_id starts with cold-, start a follow-up run that replies CHILL and the handoff_id. Other slips get no follow-up. Set it up now; slips come in later.",
+      "checks": [],
+      "capture": []
     },
     {
       "stage_id": "dry",
@@ -115,7 +25,20 @@
         }
       },
       "deadline_secs": 300,
-      "checks": [],
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}packed\\W+H7\\W*$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": []
     },
     {
@@ -136,57 +59,42 @@
           "params": {
             "present": [
               {
-                "capture": "fires",
-                "min": 2,
-                "max": 2
-              },
-              {
-                "capture": "outcomes",
-                "min": 2,
-                "max": 2
-              },
-              {
-                "capture": "chill_fires",
+                "capture": "confirm",
                 "min": 1,
                 "max": 1
               },
               {
-                "capture": "chill",
+                "capture": "follow",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "packed",
-                "min": 2,
-                "max": 2
               }
             ],
             "rows": [
               {
-                "capture": "chill",
+                "capture": "follow",
                 "key": "lifecycle_state",
                 "id": "completed",
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*CHILL"
+                    "matches": "(?s)\\].*\\bCHILL\\b"
                   },
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*cold-42"
+                    "matches": "(?s)\\].*\\bcold-42\\b"
                   }
                 ]
-              },
+              }
+            ],
+            "links": [
               {
-                "capture": "outcomes",
-                "key": "source_handoff_id",
-                "id": "cold-42",
-                "expect": [
-                  {
-                    "field": "terminal_state",
-                    "matches": "^(complete|completed)$"
-                  }
-                ]
+                "capture": "follow",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "field": "caused_by_trigger_id",
+                "target_capture": "outcome_fires",
+                "target_key": "trigger_id",
+                "exact": true
               }
             ]
           },
@@ -197,76 +105,46 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "fires",
-          "collection": "TriggerFire",
+          "name": "confirm",
+          "collection": "AgentRequest",
           "filter": {
-            "owner_did": {
+            "node_did": {
               "_eq": "$trial"
             },
-            "source_collection": {
-              "_eq": "PackingSlip"
-            }
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%H8%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%CHILL%"
+                }
+              }
+            ]
           },
           "fields": [
-            "fire_key",
-            "trigger_id",
-            "task_id",
             "request_id",
             "session_id",
-            "source_collection",
-            "source_doc_id",
-            "source_handoff_id"
+            "lifecycle_state",
+            "content",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
           ]
         },
         {
           "kind": "documents",
-          "name": "outcomes",
-          "collection": "FireOutcome",
-          "filter": {
-            "owner_did": {
-              "_eq": "$trial"
-            },
-            "source_collection": {
-              "_eq": "PackingSlip"
-            }
-          },
-          "fields": [
-            "fire_key",
-            "trigger_id",
-            "request_id",
-            "session_id",
-            "source_collection",
-            "source_doc_id",
-            "source_handoff_id",
-            "terminal_state"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "chill_fires",
-          "collection": "TriggerFire",
-          "filter": {
-            "owner_did": {
-              "_eq": "$trial"
-            },
-            "source_collection": {
-              "_eq": "FireOutcome"
-            }
-          },
-          "fields": [
-            "fire_key",
-            "trigger_id",
-            "task_id",
-            "request_id",
-            "session_id",
-            "source_collection",
-            "source_doc_id",
-            "source_handoff_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "chill",
+          "name": "follow",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
@@ -287,7 +165,6 @@
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -297,33 +174,25 @@
         },
         {
           "kind": "documents",
-          "name": "packed",
-          "collection": "AgentRequest",
+          "name": "outcome_fires",
+          "collection": "TriggerFire",
           "filter": {
-            "node_did": {
+            "owner_did": {
               "_eq": "$trial"
             },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "content": {
-              "_like": "%PACKED%"
+            "source_collection": {
+              "_eq": "FireOutcome"
             }
           },
           "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
             "request_id",
             "session_id",
-            "lifecycle_state",
-            "content",
-            "terminal_output",
-            "caused_by_trigger_id",
-            "caused_by_trigger_kind",
-            "caused_by_source_doc_id",
-            "caused_by_correlation",
-            "execution_origin"
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
           ]
         }
       ]

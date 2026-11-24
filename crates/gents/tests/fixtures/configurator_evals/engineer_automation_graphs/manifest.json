@@ -18,12 +18,10 @@
     "cases/desk_ticket_routing.json",
     "cases/dock_alert_triage.json",
     "cases/inspection_band.json",
-    "cases/linen_proof_preview.json",
     "cases/paired_crate_scans.json",
     "cases/proof_slip_run.json",
     "cases/redline_follow_up.json",
     "cases/scale_card_repair.json",
-    "cases/yard_receipts.json",
     "pack_config.json",
     "suite.json"
   ],

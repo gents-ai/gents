@@ -2,9 +2,13 @@
   "id": "engineer-workflows",
   "title": "Engineer workflows",
   "coverage": [
-    "zero-child workflow job",
-    "worker fan-out",
-    "fan-in from worker text",
-    "reading a finished job"
+    "one helper, then recalling the finished job",
+    "one helper, reported when the job finishes",
+    "two helpers in parallel, combined",
+    "a second helper only when the first's answer calls for it",
+    "combining helpers' data with a rule",
+    "an empty result from a helper that looked",
+    "reconciling two helpers' lists",
+    "one helper per file, fanned in"
   ]
 }

@@ -2,12 +2,15 @@
   "id": "engineer-automation-graphs",
   "title": "Engineer automation graphs",
   "coverage": [
-    "event filters with negatives and missing fields",
-    "payload templates",
-    "grouped fan-in",
-    "outcome chains",
-    "routing into existing sessions",
-    "in-place repair",
-    "manual tasks"
+    "a filter on a numeric band",
+    "a filter on a missing field",
+    "one record posted to two existing conversations",
+    "an automation changed in place and fired again",
+    "a hand-run task with arguments, then a previewed change",
+    "fan-in on a per-record count",
+    "fan-in on a fixed count",
+    "a follow-up chained on a finished run, in its conversation",
+    "routing into existing conversations with an exception",
+    "a conversation per key, created on first use"
   ]
 }

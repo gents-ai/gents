@@ -20,10 +20,9 @@
         ]
       },
       "cases": [
-        "./cases/no_goal_check.json",
+        "./cases/no_goal_needed.json",
         "./cases/pallet_totals_goal.json",
         "./cases/queue_one_per_turn.json",
-        "./cases/no_goal_needed.json",
         "./cases/narrow_report_objective.json",
         "./cases/tags_already_owned.json",
         "./cases/points_partial_blocked.json",

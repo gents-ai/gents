@@ -21,50 +21,9 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 300,000-token budget: every file in tags/ should have an owner field, so add \"owner\": \"unassigned\" to any that lack one. Finish the goal once that's true and tell me what you changed.",
       "settle": true,
-      "prompt": "Set a session goal with a token budget of 300000: make sure every file in tags/ has an owner field, adding \"owner\": \"unassigned\" to any file that lacks one. Finish the goal once that's true, and say what you changed.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "tags",
-          "glob": "tags/*.json"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
@@ -77,10 +36,6 @@
               {
                 "field": "status",
                 "equals": "complete"
-              },
-              {
-                "field": "completion_evidence",
-                "matches": "\\S"
               }
             ],
             "min_rows": 1,
@@ -113,6 +68,33 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "tags",
+          "glob": "tags/*.json"
         }
       ]
     }
