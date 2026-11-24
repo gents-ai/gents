@@ -90,6 +90,7 @@ impl Fixture {
             let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
             txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", &agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &doc, identity.did(), SESSION).await?;
             Ok::<_, anyhow::Error>(())
         })).await.unwrap();
         Self {
