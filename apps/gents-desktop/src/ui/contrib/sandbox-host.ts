@@ -185,8 +185,9 @@ function watchShell() {
   shellSubscribed = true;
   host.onShellChange(() => {
     const shell = snapshot(host);
+    const known = host.shell.knownNodes?.() ?? null;
     for (const live of liveHosts) {
-      live.selectionChanged(shell);
+      live.selectionChanged(shell, known);
       live.post({ t: "shell", shell });
     }
   });
@@ -276,15 +277,22 @@ export class SandboxHost {
     this.post({ t: "data-watch-closed", id });
   }
 
-  /** closes the watches of a node another node replaced as the selection.
-      A snapshot rebuild can leave the selection briefly empty; a watch
-      outlives that, so it is not closed and reopened (each reopen costs the
-      node a read). */
-  selectionChanged(shell: ShellSnapshot): void {
+  /** closes the watches of a node another node replaced as the selection,
+      or of a node this desktop no longer keeps (`knownNodes`, null while
+      unread). A snapshot rebuild can leave the selection briefly empty; a
+      watch on a node still kept outlives that, so it is not closed and
+      reopened (each reopen costs the node a read). */
+  selectionChanged(
+    shell: ShellSnapshot,
+    knownNodes: readonly string[] | null = null,
+  ): void {
     const node = (shell.selectedDeployment as { nodeDid?: string } | null)?.nodeDid;
-    if (!node) return;
-    for (const [id, watch] of this.watches)
-      if (watch.node !== node) this.closeWatch(id);
+    for (const [id, watch] of this.watches) {
+      const gone = node
+        ? watch.node !== node
+        : knownNodes !== null && !knownNodes.includes(watch.node);
+      if (gone) this.closeWatch(id);
+    }
   }
 
   /** build the frame and evaluate the module; the plugin's own meta */

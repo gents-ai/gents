@@ -215,6 +215,45 @@ describe("a plugin in its frame", () => {
       delete host.data!.watch;
     }
   });
+  it("closes a watch on a node no longer kept, even while nothing is selected", async () => {
+    const previous = host.shell.selectedDeployment;
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:a" }) as never;
+    const stop = vi.fn();
+    host.data!.watch = vi.fn(async () => stop);
+    const source = `export default { id: 'board', async register(ctx) {
+      let heard = 0
+      ctx.onEvent('shell-changed', () => ctx.storage.set('heard', ++heard))
+      await ctx.data.watch('board', 'list_tasks', {}, () => {})
+    } }`;
+    /* the last node removed: nothing is selected, and then it is not kept */
+    const shellChanged = (knownNodes: readonly string[] | null) => {
+      const shell = {
+        route: {},
+        deployments: [],
+        selectedDeployment: null,
+        selectedSessionId: null,
+      } as never;
+      const frame = sandboxHostOf("board")!;
+      frame.selectionChanged(shell, knownNodes);
+      frame.post({ t: "shell", shell });
+    };
+    try {
+      expect(await load(source)).toBe("board");
+      await settle();
+      /* still kept, or the kept nodes not read yet: a gap, not a removal */
+      shellChanged(["did:key:a"]);
+      shellChanged(null);
+      await settle();
+      expect(stop).not.toHaveBeenCalled();
+      shellChanged([]);
+      await settle();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(window.localStorage.getItem("gents.ux.board.heard")).toBeNull();
+    } finally {
+      host.shell.selectedDeployment = previous;
+      delete host.data!.watch;
+    }
+  });
   it("cancels a watch that finishes starting after its frame is disposed", async () => {
     let resolveStart: ((stop: () => void) => void) | undefined;
     const stop = vi.fn();
