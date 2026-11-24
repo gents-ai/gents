@@ -115,6 +115,20 @@ elif args[:2] != ["config", "apply"]:
         roots = [call[call.index("--root") + 1] for call in calls if call[:2] == ["config", "apply"]]
         return json.loads((pathlib.Path(roots[0]) / "pack_config.json").read_text())
 
+    def test_trials_run_the_shipped_backend_default_unless_overridden(self):
+        result = self.run_ladder("all", "--concurrency", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.inference_config()["inference_backends"][0]["max_concurrent"], 3)
+        self.log.unlink()
+        self.env.pop("GENTS_EVAL_PER_TRIAL")
+        result = self.run_ladder("all", "--concurrency", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("max_concurrent", self.inference_config()["inference_backends"][0])
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        batch = next(call for call in calls if call[:3] == ["utils", "eval", "batch"])
+        self.assertEqual(batch[batch.index("--concurrency") + 1], "3")
+        self.assertIn("the backend default of calls per trial", result.stderr)
+
     def test_default_sampling_sets_only_temperature(self):
         self.env.pop("GENTS_EVAL_TOP_P", None)
         self.env.pop("GENTS_EVAL_TEMPERATURE", None)
