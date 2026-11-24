@@ -229,12 +229,12 @@ impl super::VeraDeploymentAnchor {
             });
         }
         let root = super::vera_dir(data);
-        Ok(builder.with_vera_rs(defra_node::VeraRsConfig {
+        Ok(builder.with_vera(defra_node::VeraConfig {
             rpc_address: format!("http://{}:{local_port}", Ipv4Addr::LOCALHOST),
             consensus_key: self.consensus_key.clone(),
             deployment_id: self.deployment,
             genesis_id: Some(self.genesis_id),
-            actor: defra_node::VeraRsActor::Signer(Arc::new(NodeSigner {
+            actor: defra_node::VeraActor::Signer(Arc::new(NodeSigner {
                 node: Arc::clone(node),
             })),
             worker_dir: root.join(WORKER_DIR_NAME),
