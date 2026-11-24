@@ -1,0 +1,25 @@
+{
+  "case_id": "late-ferry-claim",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "settle",
+      "prompt": "Dana filed a ferry travel claim 45 days after the trip: she paid 130 and got a rebate of 20. How much do we pay her?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(^|[^\\d.])25(\\.0+)?([^\\d.]|\\.(\\s|$)|$)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

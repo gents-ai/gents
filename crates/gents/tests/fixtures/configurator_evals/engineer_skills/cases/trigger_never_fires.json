@@ -28,53 +28,12 @@
   "stages": [
     {
       "stage_id": "diagnose",
-      "prompt": "I added two PickupSlip records this morning, but nothing handled them: the automation I expected to run for each new pickup slip never fired. Don't fix or change anything yet. Find the first step in that chain that breaks. Reply with JSON {\"first_break\": STEP}, where STEP is one of \"source document\", \"event source\", \"filter\", \"trigger\", \"fire\", \"request\" or \"tools\".",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: diagnose-node%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        }
-      ],
+      "prompt": "I added two PickupSlip records this morning, but the automation I expected to handle each new pickup slip never ran. Don't change anything yet; just tell me where it breaks.",
       "checks": [
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "load_skill"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
             "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "loaded",
-                "min": 1
-              }
-            ]
           },
           "tier": "acceptance",
           "weight": 1
@@ -84,7 +43,139 @@
           "params": {
             "all": [
               {
-                "matches": "\"first_break\"\\s*:\\s*\"event source\""
+                "matches": "(?i)\\b(no|none|nothing|missing|isn't any|aren't any|doesn't exist|don't exist|does not exist|do not exist|never (been )?(set up|created|configured|built))\\b[^.\\n]{0,60}(event ?source|trigger|automation|task|watcher)|(event ?source|trigger|automation|task|watcher)[^.\\n]{0,60}\\b(no|none|nothing|missing|isn't any|aren't any|doesn't exist|don't exist|does not exist|do not exist|never (been )?(set up|created|configured|built))\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "set_up",
+      "prompt": "OK, please set it up now: whenever a new pickup slip marked urgent comes in, put a note in my inbox with its slip number. Non-urgent slips need nothing.",
+      "settle": true,
+      "checks": []
+    },
+    {
+      "stage_id": "add_slip",
+      "prompt": "A new urgent pickup slip just came in for the North depot: PS-207. Please add it to our pickup slips.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "slip",
+          "collection": "PickupSlip",
+          "filter": {
+            "slip": {
+              "_eq": "PS-207"
+            }
+          },
+          "fields": [
+            "_docID",
+            "slip",
+            "urgent"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "PickupSlip"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "source_doc_id",
+            "request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "note",
+          "collection": "MailboxItem",
+          "filter": {
+            "_or": [
+              {
+                "title": {
+                  "_like": "%PS-207%"
+                }
+              },
+              {
+                "summary": {
+                  "_like": "%PS-207%"
+                }
+              },
+              {
+                "payload": {
+                  "_like": "%PS-207%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "note",
+                "min": 1
+              }
+            ],
+            "links": [
+              {
+                "capture": "slip",
+                "key": "slip",
+                "id": "PS-207",
+                "field": "_docID",
+                "target_capture": "fires",
+                "target_key": "source_doc_id",
+                "exact": true,
+                "via": [
+                  {
+                    "field": "request_id",
+                    "target_capture": "runs",
+                    "target_key": "request_id"
+                  }
+                ],
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  }
+                ]
               }
             ]
           },

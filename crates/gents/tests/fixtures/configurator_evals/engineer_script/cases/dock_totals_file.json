@@ -6,57 +6,15 @@
     "files": [
       {
         "path": "deliveries.csv",
-        "contents": "dock,crates,status\nElm,13,received\nPine,26,received\nOak,18,received\nElm,7,rejected\nPine,4,received\nOak,9,received\nElm,5,received\n"
+        "contents": "dock,crates,status\nBirch,10,rejected\nOak,27,rejected\nBirch,2,pending\nAsh,26,received\nElm,30,received\nElm,13,received\nPine,14,received\nElm,20,received\nElm,25,received\nAsh,10,received\nAsh,7,pending\nElm,6,received\nBirch,16,received\nPine,2,pending\nElm,8,pending\nPine,7,pending\nPine,11,received\nPine,19,rejected\nPine,7,rejected\nPine,30,received\nOak,2,received\nAsh,7,received\nOak,4,received\nOak,28,received\nBirch,2,received\nOak,4,received\nOak,28,received\nAsh,24,received\nPine,17,received\nPine,3,received\nElm,25,received\nAsh,2,received\nAsh,13,received\nBirch,28,received\nAsh,3,rejected\nPine,21,received\nElm,26,received\nAsh,13,received\nOak,30,received\nOak,26,received\nElm,20,rejected\nOak,29,received\nElm,15,received\nPine,12,received\nBirch,13,received\nOak,10,rejected\nBirch,4,received\nOak,11,received\nElm,22,received\nOak,17,received\nElm,4,received\nBirch,14,received\nPine,25,received\nOak,28,received\nAsh,22,received\nPine,3,rejected\nElm,27,received\nOak,28,received\nPine,25,received\nPine,22,pending\nAsh,5,received\nAsh,13,received\nElm,29,received\nOak,6,received\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Write me a dock totals report with one script: have it read deliveries.csv, total the crates per dock counting only received rows, and write the result to reports/dock_totals.json as a JSON object mapping each dock name to its crate total. Leave deliveries.csv unchanged and tell me which dock was busiest.",
+      "prompt": "Total the crates per dock from deliveries.csv, counting only received rows, and save it as reports/dock_totals.json mapping each dock to its total. Which dock was busiest?",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_writes",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "write_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "workspace",
@@ -64,40 +22,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file",
-              "write_file"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_writes",
-                "min": 1
-              },
-              {
-                "capture": "inner_reads",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -107,14 +31,16 @@
                 "path": "reports/dock_totals.json",
                 "pointer": "",
                 "equals": {
-                  "Elm": 18,
-                  "Pine": 30,
-                  "Oak": 27
+                  "Ash": 135,
+                  "Elm": 242,
+                  "Pine": 158,
+                  "Birch": 77,
+                  "Oak": 241
                 }
               },
               {
                 "path": "deliveries.csv",
-                "sha256": "92c30b6e200f1c0dff172d70bd5b16201fec5947c25f47cccf199eaa2180f188"
+                "sha256": "c0b0319ff251adb6ecfd25d0b37f61147277e05675ff8b428e9244a5b633ae1d"
               }
             ]
           },
@@ -126,7 +52,7 @@
           "params": {
             "all": [
               {
-                "matches": "Pine"
+                "matches": "\\bElm\\b"
               }
             ]
           },

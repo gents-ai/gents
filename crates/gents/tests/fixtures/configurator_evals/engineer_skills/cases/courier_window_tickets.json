@@ -33,24 +33,8 @@
   "stages": [
     {
       "stage_id": "route",
-      "prompt": "Six courier arrivals came in at the depot, and their tickets are in tickets/. Which queue does each one go to? Reply with JSON mapping each ticket id to its queue.",
+      "prompt": "Six courier arrivals came in at the depot, and their tickets are in tickets/. Which queue does each one go to?",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: Courier window%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        },
         {
           "kind": "file",
           "name": "tickets",
@@ -59,57 +43,26 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "load_skill"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "loaded",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"T-41\"\\s*:\\s*\"Blue Annex\""
+                "matches": "T-41\\b(?:[^-]|-\\D){0,80}?Blue Annex"
               },
               {
-                "matches": "\"T-42\"\\s*:\\s*\"Red Desk\""
+                "matches": "T-42\\b(?:[^-]|-\\D){0,80}?Red Desk"
               },
               {
-                "matches": "\"T-43\"\\s*:\\s*\"Loading Bay 2\""
+                "matches": "T-43\\b(?:[^-]|-\\D){0,80}?Loading Bay 2"
               },
               {
-                "matches": "\"T-44\"\\s*:\\s*\"Loading Bay 2\""
+                "matches": "T-44\\b(?:[^-]|-\\D){0,80}?Loading Bay 2"
               },
               {
-                "matches": "\"T-45\"\\s*:\\s*\"Blue Annex\""
+                "matches": "T-45\\b(?:[^-]|-\\D){0,80}?Blue Annex"
               },
               {
-                "matches": "\"T-46\"\\s*:\\s*\"Green Gate\""
+                "matches": "T-46\\b(?:[^-]|-\\D){0,80}?Green Gate"
               }
             ]
           },

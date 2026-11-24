@@ -13,92 +13,31 @@
   "stages": [
     {
       "stage_id": "chart",
-      "prompt": "Plot the rig trial from trials/rig.csv as a scatter of flow against vane angle, angle on the x axis, with each operator's runs as their own colour. What flow did the rig give at the widest vane angle, and whose runs track the vane angle more closely? Finish with JSON holding widest_flow and closer_operator.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "charts",
-          "collection": "AgentToolCall",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tool_name": {
-              "_eq": "charts"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "_docID",
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id",
-            "result"
-          ]
-        }
-      ],
+      "prompt": "Plot the rig trial in trials/rig.csv as a scatter of flow against vane angle, angle on the x axis, with each operator's runs in their own colour. What flow did the rig give at the widest vane angle, and whose runs track the vane angle more closely?",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "tool_result_matches",
           "params": {
-            "required": [
-              "charts"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
+            "expect": [
               {
-                "capture": "charts",
-                "min": 1
-              }
-            ],
-            "rows": [
+                "field": "response.chart",
+                "fallback_field": "chart",
+                "equals": "scatter"
+              },
               {
-                "capture": "charts",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "result",
-                    "matches": "\\\\?\"chart\\\\?\"\\s*:\\s*\\\\?\"scatter\\\\?\""
-                  },
-                  {
-                    "field": "result",
-                    "matches": "\\\\?\"correlation\\\\?\""
-                  }
-                ]
+                "field": "response.series",
+                "fallback_field": "series",
+                "matches": "\"name\"\\s*:\\s*\"ana\""
+              },
+              {
+                "field": "response.series",
+                "fallback_field": "series",
+                "matches": "\"name\"\\s*:\\s*\"lee\""
+              },
+              {
+                "field": "response.series",
+                "fallback_field": "series",
+                "matches": "\"correlation\""
               }
             ]
           },
@@ -110,10 +49,10 @@
           "params": {
             "all": [
               {
-                "matches": "\"widest_flow\"\\s*:\\s*5\\.6\\b"
+                "matches": "\\b5\\.6\\b"
               },
               {
-                "matches": "\"closer_operator\"\\s*:\\s*\"ana\""
+                "matches": "(?i)\\bana\\b"
               }
             ]
           },

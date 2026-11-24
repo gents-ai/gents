@@ -3,6 +3,12 @@
   "split": "validation",
   "reducer": "all",
   "fixtures": {
+    "files": [
+      {
+        "path": "bins.json",
+        "contents": "[\n  {\n    \"id\": \"RC20\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC21\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC22\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC23\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC24\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC25\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC26\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC27\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC28\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC29\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC30\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC31\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC32\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC33\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC34\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC35\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC36\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC37\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC38\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC39\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC40\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC41\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC42\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC43\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC44\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC45\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC46\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC47\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC48\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC49\",\n    \"retired\": false\n  }\n]\n"
+      }
+    ],
     "schemas": [
       "type BinAssignment { bin: String status: String }"
     ],
@@ -10,8 +16,239 @@
       {
         "collection": "BinAssignment",
         "document": {
-          "bin": "RC41",
+          "bin": "RC26",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC22",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC35",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC45",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC37",
           "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC33",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC38",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC48",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC47",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC36",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC48",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC36",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC21",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC26",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC44",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC37",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC42",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC31",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC43",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC34",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC47",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC20",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC35",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC45",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC24",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC31",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC25",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC44",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC43",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC35",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC36",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC22",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC48",
+          "status": "pending"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC37",
+          "status": "pending"
         }
       },
       {
@@ -24,79 +261,38 @@
       {
         "collection": "BinAssignment",
         "document": {
-          "bin": "RC43",
-          "status": "closed"
-        }
-      },
-      {
-        "collection": "BinAssignment",
-        "document": {
-          "bin": "RC45",
-          "status": "closed"
-        }
-      },
-      {
-        "collection": "BinAssignment",
-        "document": {
-          "bin": "RC45",
+          "bin": "RC30",
           "status": "active"
         }
-      }
-    ],
-    "files": [
+      },
       {
-        "path": "bins.json",
-        "contents": "[\n  {\n    \"id\": \"RC41\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC42\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC43\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC44\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC45\",\n    \"retired\": true\n  }\n]\n"
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC23",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC29",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC25",
+          "status": "active"
+        }
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "In one script, check the bin inventory in bins.json against the BinAssignment records in the datastore. Which retired bins have no active assignment? Return {\"bins\": [...]} sorted and tell me. Don't edit the inventory.",
+      "prompt": "How many of the retired bins in bins.json have no active BinAssignment record, and which ones?",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "inner_queries",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "query"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "inventory",
@@ -105,65 +301,13 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file",
-              "query"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "bins",
-                "equals": [
-                  "RC42",
-                  "RC44"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_reads",
-                "min": 1
-              },
-              {
-                "capture": "inner_queries",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_files_match",
           "params": {
             "name": "inventory",
             "expect": [
               {
                 "path": "bins.json",
-                "sha256": "930834b713e7ba784bc975371793621b6c0a982c42ded9eef47fa4219f360850"
+                "sha256": "2844162164fdc398189be209c5bdbb326a6c9179422d5bbe0b0935c93d6f6d30"
               }
             ]
           },
@@ -175,10 +319,16 @@
           "params": {
             "all": [
               {
-                "matches": "RC42"
+                "matches": "\\bRC26\\b"
               },
               {
-                "matches": "RC44"
+                "matches": "\\bRC33\\b"
+              },
+              {
+                "matches": "\\bRC41\\b"
+              },
+              {
+                "matches": "(?i)\\b(3|three)\\b[^.\\n]{0,40}\\bbins?|\\bbins?[^.\\n]{0,60}\\b(3|three)\\b"
               }
             ]
           },

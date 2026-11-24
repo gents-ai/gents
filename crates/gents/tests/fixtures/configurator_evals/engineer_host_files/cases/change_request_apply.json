@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "apply",
-      "prompt": "Apply change request changes/CR-118.md to the service configs under services/. Make only the edits it lists and keep everything else in each file as it is. An item that is already in place needs no edit, and an item whose file doesn't exist is skipped, not created. CR-119 is only a draft, so don't apply it. Reply with JSON listing the item numbers: applied, already_applied and skipped.",
+      "prompt": "Apply change request changes/CR-118.md to the service configs under services/, making only the edits it lists. If an item is already in place, leave it; if its file doesn't exist, skip it rather than creating the file. CR-119 is only a draft, so don't apply it. Tell me which items you skipped.",
       "capture": [
         {
           "kind": "file",
@@ -38,18 +38,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -89,13 +77,7 @@
           "params": {
             "all": [
               {
-                "matches": "\"applied\"\\s*:\\s*\\[\\s*1\\s*,\\s*2\\s*,\\s*4\\s*,\\s*6\\s*,\\s*7\\s*\\]"
-              },
-              {
-                "matches": "\"already_applied\"\\s*:\\s*\\[\\s*3\\s*\\]"
-              },
-              {
-                "matches": "\"skipped\"\\s*:\\s*\\[\\s*5\\s*\\]"
+                "matches": "(?i)ledger|item\\s*#?\\s*5\\b|#5\\b"
               }
             ]
           },

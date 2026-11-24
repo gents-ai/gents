@@ -5,8 +5,9 @@
     "page create and lint",
     "page edit in place",
     "page data declarations",
-    "charts tool",
-    "data_tables tool"
+    "charts drawn with the right numbers",
+    "charts help topics",
+    "data_tables answers and a saved result"
   ],
   "subject": "engineer_full"
 }

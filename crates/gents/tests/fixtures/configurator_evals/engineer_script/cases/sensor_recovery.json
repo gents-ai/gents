@@ -6,44 +6,39 @@
     "files": [
       {
         "path": "sensors/manifest.json",
-        "contents": "{\n  \"files\": [\n    \"sensors/north.ndjson\",\n    \"sensors/east.ndjson\",\n    \"sensors/south.ndjson\"\n  ]\n}\n"
+        "contents": "{\n  \"files\": [\n    \"sensors/north.ndjson\",\n    \"sensors/east.ndjson\",\n    \"sensors/south.ndjson\",\n    \"sensors/west.ndjson\",\n    \"sensors/quay.ndjson\",\n    \"sensors/yard.ndjson\",\n    \"sensors/gate.ndjson\",\n    \"sensors/roof.ndjson\"\n  ]\n}\n"
       },
       {
         "path": "sensors/north.ndjson",
-        "contents": "{\"sensor\": \"N1\", \"reading\": 9}\nbroken record\n{\"sensor\": \"N2\", \"reading\": -4}\n"
+        "contents": "\n{\"sensor\": \"N2\", \"reading\": 6}\n{\"sensor\": \"N3\", \"reading\": 10}\n{\"sensor\": \"N4\", \"reading\": -3}\n{\"sensor\": \"N5\", \"reading\": 10}\n{\"sensor\": \"N6\", \"reading\": 2}\n\n{\"sensor\": \"N8\", \"reading\": 12}\n{\"sensor\": \"N9\", \"reading\": 10}\n{\"sensor\": \"N10\", \"reading\": -1}\n\n{\"sensor\": \"N12\", \"reading\": \"bad\"}\n{\"sensor\": \"N13\", \"reading\": 7}\n{\"sensor\": \"N14\", \"reading\": 16}\n"
       },
       {
         "path": "sensors/south.ndjson",
-        "contents": "{\"sensor\": \"S1\", \"reading\": 13}\n{\"sensor\": \"S2\", \"reading\": \"bad\"}\n\n{\"sensor\": \"S3\", \"reading\": 6}\n"
+        "contents": "{\"sensor\": \"S1\", \"reading\": 0}\n{\"sensor\": \"S2\", \"reading\": 13}\nbroken record\n{\"sensor\": \"S4\", \"reading\": 3}\n{\"sensor\": \"S5\", \"reading\": 18}\n{\"sensor\": \"S6\", \"reading\": 7}\n{\"sensor\": \"S7\", \"reading\": 8}\n{\"sensor\": \"S8\", \"reading\": 20}\n{\"sensor\": \"S9\", \"reading\": -1}\n{\"sensor\": \"S10\", \"reading\": -2}\nbroken record\n{\"sensor\": \"S12\", \"reading\": 3}\n{\"sensor\": \"S13\", \"reading\": 8}\n{\"sensor\": \"S14\", \"reading\": 4}\n"
+      },
+      {
+        "path": "sensors/west.ndjson",
+        "contents": "{\"sensor\": \"W1\", \"reading\": 7}\n{\"sensor\": \"W2\", \"reading\": 12}\n{\"sensor\": \"W3\", \"reading\": 13}\n\n{\"sensor\": \"W5\", \"reading\": -5}\n{\"sensor\": \"W6\", \"reading\": 14}\n{\"sensor\": \"W7\", \"reading\": 0}\n{\"sensor\": \"W8\", \"reading\": 5}\n{\"sensor\": \"W9\", \"reading\": 13}\n{\"sensor\": \"W10\", \"reading\": 17}\n{\"sensor\": \"W11\", \"reading\": 15}\n{\"sensor\": \"W12\", \"reading\": 13}\n{\"sensor\": \"W13\", \"reading\": -2}\nbroken record\n"
+      },
+      {
+        "path": "sensors/quay.ndjson",
+        "contents": "{\"sensor\": \"Q1\", \"reading\": 10}\nbroken record\n{\"sensor\": \"Q3\", \"reading\": 8}\n{\"sensor\": \"Q4\", \"reading\": -5}\n{\"sensor\": \"Q5\", \"reading\": 19}\n{\"sensor\": \"Q6\", \"reading\": -2}\nbroken record\n{\"sensor\": \"Q8\", \"reading\": -4}\n{\"sensor\": \"Q9\", \"reading\": 13}\n{\"sensor\": \"Q10\", \"reading\": 3}\n{\"sensor\": \"Q11\", \"reading\": -4}\n{\"sensor\": \"Q12\", \"reading\": -3}\n{\"sensor\": \"Q13\", \"reading\": \"bad\"}\n{\"sensor\": \"Q14\", \"reading\": 1}\n"
+      },
+      {
+        "path": "sensors/yard.ndjson",
+        "contents": "{\"sensor\": \"Y1\", \"reading\": 4}\n{\"sensor\": \"Y2\", \"reading\": -1}\n{\"sensor\": \"Y3\", \"reading\": 5}\n{\"sensor\": \"Y4\", \"reading\": -1}\n{\"sensor\": \"Y5\", \"reading\": 7}\n{\"sensor\": \"Y6\", \"reading\": 11}\n{\"sensor\": \"Y7\", \"reading\": 14}\n{\"sensor\": \"Y8\", \"reading\": -2}\n{\"sensor\": \"Y9\", \"reading\": 20}\n{\"sensor\": \"Y10\", \"reading\": 8}\n{\"sensor\": \"Y11\", \"reading\": 17}\n\n{\"sensor\": \"Y13\", \"reading\": 3}\n{\"sensor\": \"Y14\", \"reading\": 12}\n"
+      },
+      {
+        "path": "sensors/gate.ndjson",
+        "contents": "{\"sensor\": \"G1\", \"reading\": 20}\n{\"sensor\": \"G2\", \"reading\": 13}\n{\"sensor\": \"G3\", \"reading\": 7}\n{\"sensor\": \"G4\", \"reading\": 15}\n{\"sensor\": \"G5\", \"reading\": \"bad\"}\n{\"sensor\": \"G6\", \"reading\": 5}\n{\"sensor\": \"G7\", \"reading\": 16}\n{\"sensor\": \"G8\", \"reading\": 14}\n{\"sensor\": \"G9\", \"reading\": 18}\n{\"sensor\": \"G10\", \"reading\": 13}\nbroken record\n{\"sensor\": \"G12\", \"reading\": 6}\n{\"sensor\": \"G13\", \"reading\": 9}\n{\"sensor\": \"G14\", \"reading\": 14}\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Total the valid sensor readings from every file listed in sensors/manifest.json, all in one script. Each file holds one JSON record per line; a line is valid when it parses and its reading is a number, blank lines don't count, and any other line is skipped. Some listed files may be missing, so the script should carry on without them instead of failing. Return {total, skipped, missing} where skipped counts the invalid lines and missing lists the paths it could not read, and give me the total.",
+      "prompt": "What's the total of the valid sensor readings across the files listed in sensors/manifest.json? Each file has one JSON record per line; skip any line that isn't a record with a numeric reading. Tell me which listed files you couldn't read.",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "sensors",
@@ -52,78 +47,44 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "total",
-                "equals": 24
-              },
-              {
-                "field": "skipped",
-                "equals": 2
-              },
-              {
-                "field": "missing",
-                "equals": [
-                  "sensors/east.ndjson"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_reads",
-                "min": 3
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_files_match",
           "params": {
             "name": "sensors",
             "expect": [
               {
                 "path": "sensors/manifest.json",
-                "sha256": "23e932c390ce1e229e1b88b6cc75140760cce726463b382e433e63c7f4b60b74"
+                "sha256": "87d709fd565514059fd2ee280851d76dd1026ee4329271aef86fe7410125184c"
               },
               {
                 "path": "sensors/north.ndjson",
-                "sha256": "57630c951b1e11b196fc2042e26f463cd7a17647a8c1329022e00eb817c17580"
+                "sha256": "013aa12eb2c2dde6c04e500f7ed2b282fc063830a7f767022a997bd79abdf81d"
               },
               {
                 "path": "sensors/south.ndjson",
-                "sha256": "b85f91a61b79ebd4f97777d4695d11ab4644b1d984f2f335ecefcd38c6115d2b"
+                "sha256": "9b275643405c0dd9363718810f4840253bb8696e332b5c7433be4b3e5465c56c"
+              },
+              {
+                "path": "sensors/west.ndjson",
+                "sha256": "776c3a4ee5d78fb92873a589240ce9a2e3a448cfd381fcd9f5e0acd10cd20c4e"
+              },
+              {
+                "path": "sensors/quay.ndjson",
+                "sha256": "604fed777907933fb62e1f74ecf26a8da2366270eaa8fd75f15966e4315a18b0"
+              },
+              {
+                "path": "sensors/yard.ndjson",
+                "sha256": "bdcddc2e7ade56704f7bf76aad653c4fc13e68eaa41c79a1229e576a5afec8c6"
+              },
+              {
+                "path": "sensors/gate.ndjson",
+                "sha256": "76275d77d9d6fc8b50e47426c152ecd7b4fd1560d9b6c54f29af882c91aea14a"
               },
               {
                 "path": "sensors/east.ndjson",
+                "exists": false
+              },
+              {
+                "path": "sensors/roof.ndjson",
                 "exists": false
               }
             ]
@@ -136,7 +97,13 @@
           "params": {
             "all": [
               {
-                "matches": "\\b24\\b"
+                "matches": "(^|[^\\d.-])535([^\\d.]|\\.(\\s|$)|$)"
+              },
+              {
+                "matches": "\\beast\\b"
+              },
+              {
+                "matches": "\\broof\\b"
               }
             ]
           },

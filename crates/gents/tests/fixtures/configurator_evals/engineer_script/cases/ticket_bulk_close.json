@@ -6,109 +6,131 @@
     "files": [
       {
         "path": "tickets/T-101.json",
-        "contents": "{\"id\": \"T-101\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 20}\n"
+        "contents": "{\"id\": \"T-101\", \"status\": \"open\", \"waiting_on\": \"vendor\", \"idle_days\": 13}\n"
       },
       {
         "path": "tickets/T-102.json",
-        "contents": "{\"id\": \"T-102\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 3}\n"
+        "contents": "{\"id\": \"T-102\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 6}\n"
       },
       {
         "path": "tickets/T-103.json",
-        "contents": "{\"id\": \"T-103\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 30}\n"
+        "contents": "{\"id\": \"T-103\", \"status\": \"closed\", \"waiting_on\": \"customer\", \"idle_days\": 13}\n"
       },
       {
         "path": "tickets/T-104.json",
-        "contents": "{\"id\": \"T-104\", \"status\": \"closed\", \"waiting_on\": \"customer\", \"idle_days\": 40}\n"
+        "contents": "{\"id\": \"T-104\", \"status\": \"pending\", \"waiting_on\": \"agent\", \"idle_days\": 31}\n"
       },
       {
         "path": "tickets/T-105.json",
-        "contents": "{\"id\": \"T-105\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
+        "contents": "{\"id\": \"T-105\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 20}\n"
       },
       {
         "path": "tickets/T-106.json",
-        "contents": "{\"id\": \"T-106\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 13}\n"
+        "contents": "{\"id\": \"T-106\", \"status\": \"pending\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
       },
       {
         "path": "tickets/T-107.json",
-        "contents": "{\"id\": \"T-107\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 21}\n"
+        "contents": "{\"id\": \"T-107\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 14}\n"
       },
       {
         "path": "tickets/T-108.json",
-        "contents": "{\"id\": \"T-108\", \"status\": \"pending\", \"waiting_on\": \"customer\", \"idle_days\": 50}\n"
+        "contents": "{\"id\": \"T-108\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 9}\n"
       },
       {
         "path": "tickets/T-109.json",
-        "contents": "{\"id\": \"T-109\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 16}\n"
+        "contents": "{\"id\": \"T-109\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 6}\n"
       },
       {
         "path": "tickets/T-110.json",
-        "contents": "{\"id\": \"T-110\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 2}\n"
+        "contents": "{\"id\": \"T-110\", \"status\": \"pending\", \"waiting_on\": \"vendor\", \"idle_days\": 3}\n"
       },
       {
         "path": "tickets/T-111.json",
-        "contents": "{\"id\": \"T-111\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 99}\n"
+        "contents": "{\"id\": \"T-111\", \"status\": \"closed\", \"waiting_on\": \"agent\", \"idle_days\": 3}\n"
       },
       {
         "path": "tickets/T-112.json",
-        "contents": "{\"id\": \"T-112\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 0}\n"
+        "contents": "{\"id\": \"T-112\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 9}\n"
+      },
+      {
+        "path": "tickets/T-113.json",
+        "contents": "{\"id\": \"T-113\", \"status\": \"closed\", \"waiting_on\": \"agent\", \"idle_days\": 3}\n"
+      },
+      {
+        "path": "tickets/T-114.json",
+        "contents": "{\"id\": \"T-114\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
+      },
+      {
+        "path": "tickets/T-115.json",
+        "contents": "{\"id\": \"T-115\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 1}\n"
+      },
+      {
+        "path": "tickets/T-116.json",
+        "contents": "{\"id\": \"T-116\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
+      },
+      {
+        "path": "tickets/T-117.json",
+        "contents": "{\"id\": \"T-117\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 15}\n"
+      },
+      {
+        "path": "tickets/T-118.json",
+        "contents": "{\"id\": \"T-118\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 9}\n"
+      },
+      {
+        "path": "tickets/T-119.json",
+        "contents": "{\"id\": \"T-119\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 31}\n"
+      },
+      {
+        "path": "tickets/T-120.json",
+        "contents": "{\"id\": \"T-120\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 31}\n"
+      },
+      {
+        "path": "tickets/T-121.json",
+        "contents": "{\"id\": \"T-121\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 13}\n"
+      },
+      {
+        "path": "tickets/T-122.json",
+        "contents": "{\"id\": \"T-122\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 6}\n"
+      },
+      {
+        "path": "tickets/T-123.json",
+        "contents": "{\"id\": \"T-123\", \"status\": \"pending\", \"waiting_on\": \"customer\", \"idle_days\": 20}\n"
+      },
+      {
+        "path": "tickets/T-124.json",
+        "contents": "{\"id\": \"T-124\", \"status\": \"open\", \"waiting_on\": \"vendor\", \"idle_days\": 15}\n"
+      },
+      {
+        "path": "tickets/T-125.json",
+        "contents": "{\"id\": \"T-125\", \"status\": \"pending\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
+      },
+      {
+        "path": "tickets/T-126.json",
+        "contents": "{\"id\": \"T-126\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 9}\n"
+      },
+      {
+        "path": "tickets/T-127.json",
+        "contents": "{\"id\": \"T-127\", \"status\": \"closed\", \"waiting_on\": \"customer\", \"idle_days\": 31}\n"
+      },
+      {
+        "path": "tickets/T-128.json",
+        "contents": "{\"id\": \"T-128\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 31}\n"
+      },
+      {
+        "path": "tickets/T-129.json",
+        "contents": "{\"id\": \"T-129\", \"status\": \"closed\", \"waiting_on\": \"customer\", \"idle_days\": 1}\n"
+      },
+      {
+        "path": "tickets/T-130.json",
+        "contents": "{\"id\": \"T-130\", \"status\": \"open\", \"waiting_on\": \"vendor\", \"idle_days\": 31}\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Each support ticket is a JSON file in tickets/. In a single script, close every stale ticket: one whose status is open, that is waiting_on the customer, and whose idle_days is at least 14. Set its status to closed and keep its other fields as they are; leave every other ticket file exactly as it is. Have the script return {\"closed\": [...]} with the closed ticket IDs sorted, and tell me how many you closed.",
+      "prompt": "Each support ticket is a JSON file in tickets/. Close every stale one: open, waiting on the customer, and idle for 14 days or more. Only change its status to closed, and tell me how many you closed.",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_writes",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_in": [
-                "write_file",
-                "edit_file"
-              ]
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_in": [
-                "read_file",
-                "list_files",
-                "glob",
-                "grep"
-              ]
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "tickets",
@@ -117,163 +139,225 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "closed",
-                "equals": [
-                  "T-101",
-                  "T-105",
-                  "T-107",
-                  "T-109",
-                  "T-111"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_writes",
-                "min": 5
-              },
-              {
-                "capture": "inner_reads",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_files_match",
           "params": {
             "name": "tickets",
             "expect": [
               {
                 "path": "tickets/T-101.json",
+                "sha256": "411190c2b8c144759596b71a1d93e4760ae56f073d702a56504d26d300f51774"
+              },
+              {
+                "path": "tickets/T-102.json",
+                "sha256": "4638f687df1a62ffc727639ec08dbbba8dba2ae0a8c7a66cfdfc41ed263993bc"
+              },
+              {
+                "path": "tickets/T-103.json",
+                "sha256": "0932989522a5db909f3c75f101c9202a33e142c1c0c4d46898c3aaf2bdd0618c"
+              },
+              {
+                "path": "tickets/T-104.json",
+                "sha256": "cf1d9e9ab3684dd202baa65f01e15ab70b766bbb97757a810eb19c3f9757e901"
+              },
+              {
+                "path": "tickets/T-105.json",
                 "pointer": "/status",
                 "equals": "closed"
               },
               {
-                "path": "tickets/T-101.json",
+                "path": "tickets/T-105.json",
                 "pointer": "/idle_days",
                 "equals": 20
               },
               {
-                "path": "tickets/T-101.json",
+                "path": "tickets/T-105.json",
                 "pointer": "/waiting_on",
                 "equals": "customer"
               },
               {
-                "path": "tickets/T-102.json",
-                "sha256": "6a3b91a285769b19a767281e682ce00bc041bac16abe9410e3ab489cf7debc59"
-              },
-              {
-                "path": "tickets/T-103.json",
-                "sha256": "6b9719dc5ec81c49759bc9a7befe9dd87509ea3172576031479b839148f0c473"
-              },
-              {
-                "path": "tickets/T-104.json",
-                "sha256": "3e48836222219ed3bd562bbc6a17a91035b212cb1f0afd8a9df5bd0e499db196"
-              },
-              {
                 "path": "tickets/T-105.json",
+                "pointer": "/id",
+                "equals": "T-105"
+              },
+              {
+                "path": "tickets/T-106.json",
+                "sha256": "b507268f3bd8e55f241352bcfbb94569deb1e064cb706e30b16e85f40937acb6"
+              },
+              {
+                "path": "tickets/T-107.json",
+                "sha256": "f4110084982e55b91dbd767437c0465d6a3d2d1157da2260b03b53a90915be0c"
+              },
+              {
+                "path": "tickets/T-108.json",
+                "sha256": "f67e3eea74ba6c57c22103782a5f9212664787f670c783d8f2f6c5f278975279"
+              },
+              {
+                "path": "tickets/T-109.json",
+                "sha256": "5b475a7476b64bc45707ea8a9efcfae9cdbb433504ff01d7ea1657b0ae991c36"
+              },
+              {
+                "path": "tickets/T-110.json",
+                "sha256": "db8c420a0f5e89ab0837ab64cb4e12f66f431ec6cc2a1fe37a3d4948f75c0772"
+              },
+              {
+                "path": "tickets/T-111.json",
+                "sha256": "87866f088daeb23532df6980e21789eb9a76c05b1d35b5d749aee73a8a20f343"
+              },
+              {
+                "path": "tickets/T-112.json",
+                "sha256": "3fe789ed3288c33b56ef9d20a6b2179db0d2001c7f85b8afe1ac438c9f60d111"
+              },
+              {
+                "path": "tickets/T-113.json",
+                "sha256": "817e0756b109819cd4cb99723118b0da0cb19f6a381a20d338b2d5810cafb700"
+              },
+              {
+                "path": "tickets/T-114.json",
                 "pointer": "/status",
                 "equals": "closed"
               },
               {
-                "path": "tickets/T-105.json",
+                "path": "tickets/T-114.json",
                 "pointer": "/idle_days",
                 "equals": 14
               },
               {
-                "path": "tickets/T-105.json",
+                "path": "tickets/T-114.json",
                 "pointer": "/waiting_on",
                 "equals": "customer"
               },
               {
-                "path": "tickets/T-106.json",
-                "sha256": "ee86b7f322527f655a227d38350fa161fb1c99b4b6e6c8188226322c6dff9a42"
+                "path": "tickets/T-114.json",
+                "pointer": "/id",
+                "equals": "T-114"
               },
               {
-                "path": "tickets/T-107.json",
+                "path": "tickets/T-115.json",
+                "sha256": "7d2ed20f266c70934e39e47f7602e6a512b911c69cfa7f514079b5cd1d9acaae"
+              },
+              {
+                "path": "tickets/T-116.json",
                 "pointer": "/status",
                 "equals": "closed"
               },
               {
-                "path": "tickets/T-107.json",
+                "path": "tickets/T-116.json",
                 "pointer": "/idle_days",
-                "equals": 21
+                "equals": 14
               },
               {
-                "path": "tickets/T-107.json",
+                "path": "tickets/T-116.json",
                 "pointer": "/waiting_on",
                 "equals": "customer"
               },
               {
-                "path": "tickets/T-108.json",
-                "sha256": "3cfd2612c9a19c65e66ac15a1f297c764e32badbbdc1e51cef24104761cd4ced"
+                "path": "tickets/T-116.json",
+                "pointer": "/id",
+                "equals": "T-116"
               },
               {
-                "path": "tickets/T-109.json",
+                "path": "tickets/T-117.json",
+                "sha256": "b80379cb37cda8e9dd606d77ac4e28ceb93411b0d1e8f7ad3181b53cc3378c4d"
+              },
+              {
+                "path": "tickets/T-118.json",
+                "sha256": "6d06b156664ad489ec776ecb45f9cc0b6253e3a25ee4c302a54be629b2ebb3b4"
+              },
+              {
+                "path": "tickets/T-119.json",
                 "pointer": "/status",
                 "equals": "closed"
               },
               {
-                "path": "tickets/T-109.json",
+                "path": "tickets/T-119.json",
                 "pointer": "/idle_days",
-                "equals": 16
+                "equals": 31
               },
               {
-                "path": "tickets/T-109.json",
+                "path": "tickets/T-119.json",
                 "pointer": "/waiting_on",
                 "equals": "customer"
               },
               {
-                "path": "tickets/T-110.json",
-                "sha256": "0c47188e3da923644b5c7024c86c4a4f42963228dbd6712394618ff284602062"
+                "path": "tickets/T-119.json",
+                "pointer": "/id",
+                "equals": "T-119"
               },
               {
-                "path": "tickets/T-111.json",
+                "path": "tickets/T-120.json",
                 "pointer": "/status",
                 "equals": "closed"
               },
               {
-                "path": "tickets/T-111.json",
+                "path": "tickets/T-120.json",
                 "pointer": "/idle_days",
-                "equals": 99
+                "equals": 31
               },
               {
-                "path": "tickets/T-111.json",
+                "path": "tickets/T-120.json",
                 "pointer": "/waiting_on",
                 "equals": "customer"
               },
               {
-                "path": "tickets/T-112.json",
-                "sha256": "5e0550772cbc0d4abd2e85aed6042f3c48ff4804f455c4f86585b0c5e7d46730"
+                "path": "tickets/T-120.json",
+                "pointer": "/id",
+                "equals": "T-120"
+              },
+              {
+                "path": "tickets/T-121.json",
+                "sha256": "5d1016a0e5335ffddd08df5c68fce9f44fb9b0b0c3bffd0291d38cca6c4159dd"
+              },
+              {
+                "path": "tickets/T-122.json",
+                "sha256": "946869dfcdae7a0638aa28472073d7e536b45b134890ece4afbfb20240a7996e"
+              },
+              {
+                "path": "tickets/T-123.json",
+                "sha256": "fb5afe599918794281197ed6aa2942b7e645347aebfaffa37cb30caa65e9ae6e"
+              },
+              {
+                "path": "tickets/T-124.json",
+                "sha256": "7635a3a1d1edaea7941ae4bb5b96095c1771ef3097a9e48b8eafc6f8c0e52acf"
+              },
+              {
+                "path": "tickets/T-125.json",
+                "sha256": "6190b7b930a870b7b1fcb05b97c0102fab19116e42e2e719da9f8220133ad407"
+              },
+              {
+                "path": "tickets/T-126.json",
+                "sha256": "107613c126a1e209fa4904ade2e8634dfc97aa228576550141e654eddc45a0e2"
+              },
+              {
+                "path": "tickets/T-127.json",
+                "sha256": "b6af446d0f18fe1d7017d2b03f3b54a3d44764d82c20a3f9ba424c2c1930e1a4"
+              },
+              {
+                "path": "tickets/T-128.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-128.json",
+                "pointer": "/idle_days",
+                "equals": 31
+              },
+              {
+                "path": "tickets/T-128.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-128.json",
+                "pointer": "/id",
+                "equals": "T-128"
+              },
+              {
+                "path": "tickets/T-129.json",
+                "sha256": "7ecbfd43ca053a227a10743a212ce52dd6ab356fedb47b89200601fe2d2fea21"
+              },
+              {
+                "path": "tickets/T-130.json",
+                "sha256": "735182f2852dab5f8381365ae509f4b520bc5cd1ef79cd69537622f17855183d"
               }
             ]
           },
@@ -285,7 +369,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\b(5|five)\\b"
+                "matches": "(?i)\\b(6|six)\\b[^.\\n]{0,40}\\b(tickets?|closed)|\\b(tickets?|closed)[^.\\n]{0,60}\\b(6|six)\\b"
               }
             ]
           },

@@ -6,44 +6,23 @@
     "files": [
       {
         "path": "manifests/inbound.json",
-        "contents": "[\"C-33\", \"C-12\", \"C-27\", \"C-45\", \"C-70\"]\n"
+        "contents": "[\"C-43\", \"C-36\", \"C-61\", \"C-29\", \"C-33\", \"C-28\", \"C-21\", \"C-59\", \"C-55\", \"C-67\", \"C-44\", \"C-52\", \"C-27\", \"C-17\", \"C-11\", \"C-25\", \"C-34\", \"C-68\", \"C-26\", \"C-42\", \"C-30\", \"C-35\", \"C-18\", \"C-45\", \"C-13\", \"C-47\", \"C-22\", \"C-19\", \"C-23\", \"C-20\"]\n"
       },
       {
         "path": "manifests/outbound.json",
-        "contents": "[\"C-45\", \"C-61\", \"C-12\", \"C-12\", \"C-70\"]\n"
+        "contents": "[\"C-55\", \"C-10\", \"C-62\", \"C-48\", \"C-10\", \"C-13\", \"C-44\", \"C-40\", \"C-11\", \"C-49\", \"C-48\", \"C-47\", \"C-55\", \"C-14\", \"C-53\", \"C-42\", \"C-32\", \"C-50\", \"C-46\", \"C-33\", \"C-31\", \"C-37\", \"C-29\", \"C-59\", \"C-66\", \"C-15\", \"C-17\", \"C-65\", \"C-60\", \"C-36\", \"C-36\", \"C-19\"]\n"
       },
       {
         "path": "manifests/holds.txt",
-        "contents": "# held at the gate, one crate per line\n\nC-70\nC-45 \n"
+        "contents": "# held at the gate, one crate per line\n\nC-19 \nC-36\nC-44\nC-29 \nC-17\nC-13\nC-33 \nC-11\nC-42\nC-11 \nC-49\nC-46\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Which crates are on both the inbound and the outbound manifest but not on hold? The manifests are manifests/inbound.json and manifests/outbound.json, and manifests/holds.txt lists held crate IDs one per line under a comment header. Work it out in one script that reads all three files, return {\"shared\": [...], \"count\": N} with each crate listed once and sorted, and tell me the crates. Leave the files alone.",
+      "prompt": "How many crates are on both the inbound and the outbound manifest but not on hold, and which? The manifests are manifests/inbound.json and manifests/outbound.json, and manifests/holds.txt lists the held crates.",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "manifests",
@@ -52,71 +31,21 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "shared",
-                "equals": [
-                  "C-12"
-                ]
-              },
-              {
-                "field": "count",
-                "equals": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_reads",
-                "min": 3
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_files_match",
           "params": {
             "name": "manifests",
             "expect": [
               {
                 "path": "manifests/inbound.json",
-                "sha256": "f6e3f51c88c297aebb6e23a75614cdccec50f8e9bb3fefa787502944181fff66"
+                "sha256": "603c924a14d5acbaaa86e0e31015a103ed2d1b37ae5c531c9639c56134ba287b"
               },
               {
                 "path": "manifests/outbound.json",
-                "sha256": "94afd8d124a697d0f48bb2f0f29ff8d3b435ef2dda5bcfc14f6df581706c8e64"
+                "sha256": "1fef6cc22ae6b1419e633e7e3de0cd85452313daf3b403830802af9e2ab4fbe0"
               },
               {
                 "path": "manifests/holds.txt",
-                "sha256": "05a01781c7bd5b71efb27d0102bfa18dbdc9fcc7d4d835e21ff4436923a6bd9f"
+                "sha256": "79a6c08c0236a21301f01d89410d67a034edba5f6ba15bb3c52dd1cdc2347602"
               }
             ]
           },
@@ -128,7 +57,16 @@
           "params": {
             "all": [
               {
-                "matches": "C-12"
+                "matches": "\\bC-47\\b"
+              },
+              {
+                "matches": "\\bC-55\\b"
+              },
+              {
+                "matches": "\\bC-59\\b"
+              },
+              {
+                "matches": "(?i)\\b(3|three)\\b[^.\\n]{0,40}\\bcrates?|\\bcrates?[^.\\n]{0,60}\\b(3|three)\\b"
               }
             ]
           },

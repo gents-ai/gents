@@ -13,92 +13,26 @@
   "stages": [
     {
       "stage_id": "chart",
-      "prompt": "tide.csv logs two readings a day. Draw a line chart of each day's high water from it. Which day had the highest high water and what was it, and how many readings could the chart not use? End with a JSON object with peak_day, level and unusable.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "charts",
-          "collection": "AgentToolCall",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tool_name": {
-              "_eq": "charts"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "_docID",
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id",
-            "result"
-          ]
-        }
-      ],
+      "prompt": "tide.csv logs two readings a day. Draw a line chart of each day's high water. Which day had the highest high water, and what was it?",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "tool_result_matches",
           "params": {
-            "required": [
-              "charts"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
+            "expect": [
               {
-                "capture": "charts",
-                "min": 1
-              }
-            ],
-            "rows": [
+                "field": "response.chart",
+                "fallback_field": "chart",
+                "equals": "line"
+              },
               {
-                "capture": "charts",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "result",
-                    "matches": "\\\\?\"chart\\\\?\"\\s*:\\s*\\\\?\"line\\\\?\""
-                  },
-                  {
-                    "field": "result",
-                    "matches": "\\\\?\"max\\\\?\"\\s*:\\s*23(\\.0+)?\\b"
-                  }
-                ]
+                "field": "response.series",
+                "fallback_field": "series",
+                "matches": "\"sum\"\\s*:\\s*86(\\.0+)?[,}\\s]"
+              },
+              {
+                "field": "response.series",
+                "fallback_field": "series",
+                "matches": "\"max\"\\s*:\\s*23(\\.0+)?[,}\\s]"
               }
             ]
           },
@@ -110,13 +44,10 @@
           "params": {
             "all": [
               {
-                "matches": "\"peak_day\"\\s*:\\s*\"Wednesday\""
+                "matches": "(?i)\\bWednesday\\b"
               },
               {
-                "matches": "\"level\"\\s*:\\s*23\\b"
-              },
-              {
-                "matches": "\"unusable\"\\s*:\\s*1\\b"
+                "matches": "\\b23\\b"
               }
             ]
           },

@@ -3,9 +3,12 @@
   "title": "Engineer script",
   "coverage": [
     "joins and reconciliations over caller tools",
-    "effects in a loop inside one script",
-    "recovery from a failing inner call",
-    "writing a computed file"
+    "query paging past one page",
+    "batched reads with a failing read caught",
+    "effects in a loop over many files",
+    "an inbox note from computed records",
+    "a computed file written",
+    "a hidden tool's help reached through script"
   ],
   "subject": "engineer_full"
 }

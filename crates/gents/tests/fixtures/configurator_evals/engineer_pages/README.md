@@ -4,7 +4,8 @@
 
 Use the bundled pack_config.json. The subject is `../engineer_full` with every
 core pack installed, so the Engineer holds `config` (pages, datastore
-surfaces), `charts` and `data_tables` as `gents init --engineer` leaves them.
+surfaces), with `charts` and `data_tables` offered through `script`, as
+`gents init --engineer` leaves them.
 
 A case that repairs or edits a page starts with a `setup` stage in which the
 Engineer writes the starting surface and Page documents itself, in one
@@ -12,10 +13,31 @@ dictated `config` batch: a Page or DatastoreToolSurface the evaluator writes
 as a fixture is not the Engineer's to read or edit. Setup checks are
 development tier; fixtures supply only the app collections and their rows.
 
-Page cases grade the stored Page and DatastoreToolSurface documents and the
-page lint; chart cases grade the chart in the charts call's output segment;
-table cases grade the rows the SQL returned; every case also requires that no
-workspace file changed.
+Page cases grade the stored Page and DatastoreToolSurface documents and, where
+the user asks for it, a passing page lint. The trial image has no page
+renderer, so what a page shows is graded from its module and data
+declarations, not from a render. Chart cases grade the drawn chart in a
+successful charts result (`response.chart`, and the numbers in
+`response.series`) and the answer; table cases grade the answer and any file
+the user asked for.
+
+## Cases
+
+| Case | User need | Tool features | Graded by |
+| --- | --- | --- | --- |
+| ticket-board-page | a page listing tickets with a maintenance count | `config` page create, a datastore surface, page lint | one Ticket Board page reading a Ticket query surface, showing title, lane and the maintenance count; lint admitted |
+| rename-read-tool | rename a read tool and keep its page working | surface update, page data and module update, lint | the surface holds only the renamed tool; the page declares and queries it; lint admitted |
+| restore-my-holdings | bring back a hidden page, keep a retired one hidden | page update | My Holdings enabled and otherwise unchanged; the other two pages untouched |
+| fix-stale-calibrations | a page that shows no rows | page data declaration repair | the page declares the surface its module queries; module and the team page unchanged |
+| clear-lint-finding | fix what lint flags without changing the page | page lint, module and CSS edit | the page still shows the same table and badge; colours use theme variables; lint admitted |
+| dock-totals-bar | crates per dock as bars across two files | `charts` bar with aggregation | a bar chart whose series sums to 83 with a top of 34; Tern and 34 in the reply |
+| tide-line | each day's high water as a line | `charts` line over a per-day maximum, a non-numeric reading | a line chart of the five daily highs (sum 86, top 23); Wednesday and 23 |
+| pie-slice-limit | whether 15 product lines fit one pie | `charts` help topics | the 12-slice limit and the "Other" slice in the reply |
+| unbilled-parcels | shipped parcels with no live invoice | `data_tables` SQL over two CSVs (or any route) | the four parcels and their count; inputs unchanged |
+| add-chart-keep-css | a bar chart added above a page's table | page module edit, lint | the page keeps its stylesheet, table and query, adds a BarChart of vessels; lint admitted |
+| refund-aging | overdue refunds saved for finance | day/month dates, a join, `data_tables` output or a written CSV | the saved CSV holds exactly the five refunds; the count in the reply; inputs unchanged |
+| harbor-arrivals-page | a page that lists moorings and depths and logs arrivals | page with `useQuery` and `useWrite`, surfaces over two collections, lint | the Harbour Arrivals page reads and writes, its surfaces cover Mooring and QuayDepth; lint admitted |
+| rig-flow-scatter | flow against vane angle per operator | `charts` scatter with series and correlation | a scatter with a series per operator and correlations; 5.6 and ana in the reply |
 
 ## Usage
 
