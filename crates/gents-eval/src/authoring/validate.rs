@@ -175,6 +175,18 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                             }
                         }
                     },
+                    EvalCapture::Runs {
+                        source_collection: Some(collection),
+                        ..
+                    } if runtime_collections().get(collection).is_none()
+                        && !dossier.collections.contains_key(collection) =>
+                    {
+                        messages.insert(format!(
+                            "{at}: source_collection {collection:?} is neither a runtime collection nor one the subject shows (subject collections: {})",
+                            known_collections(dossier)
+                        ));
+                    }
+                    EvalCapture::Runs { .. } => {}
                     EvalCapture::File { glob, .. } => {
                         if glob.starts_with('/')
                             || glob.starts_with('\\')

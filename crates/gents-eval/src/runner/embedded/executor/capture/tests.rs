@@ -760,6 +760,7 @@ fn capture_filters_bind_only_the_selected_subject() {
         subject: Some(&subject),
         evaluator_did: Some("did:key:evaluator"),
         request_id: None,
+        ..Default::default()
     };
     let filter = json!({"agent_did":{"_ne":"gents:agent-slot:engineer"}, "session_id":{"_eq":"$session"}, "requester_did":{"_eq":"$evaluator"}});
     assert_eq!(
@@ -779,7 +780,8 @@ fn capture_filters_bind_only_the_selected_subject() {
         CaptureBindings {
             subject: Some(&subject),
             evaluator_did: None,
-            request_id: None
+            request_id: None,
+            ..Default::default()
         },
         &BTreeMap::new()
     )
@@ -842,6 +844,7 @@ async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
             subject: None,
             evaluator_did: Some(home.did()),
             request_id: None,
+            ..Default::default()
         },
     )
     .await;
@@ -859,6 +862,7 @@ async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
             subject: None,
             evaluator_did: Some(reader.did()),
             request_id: None,
+            ..Default::default()
         },
     )
     .await;
@@ -1023,6 +1027,7 @@ async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
         stage_id: "check".into(),
         prompt: String::new(),
         seed: None,
+        expect_fire: true,
         deadline_secs: None,
         settle: false,
         continuation: None,

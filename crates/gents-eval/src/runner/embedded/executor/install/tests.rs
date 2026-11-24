@@ -461,6 +461,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
         stage_id: "opening".into(),
         prompt: "hello".into(),
         seed: None,
+        expect_fire: true,
         deadline_secs: None,
         settle: false,
         continuation: None,

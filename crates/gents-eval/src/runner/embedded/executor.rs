@@ -443,6 +443,7 @@ impl TrialExecutor for EmbeddedExecutor {
                 terminal_state,
                 provider_reason: provider_reason(failure_kind, &evidence),
                 failure_kind,
+                failure_detail: None,
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,
                 inference_calls: evidence.inference_calls,
@@ -456,6 +457,7 @@ impl TrialExecutor for EmbeddedExecutor {
                         subject: subject.as_ref(),
                         evaluator_did: Some(evaluator_did),
                         request_id: Some(&request.request_id),
+                        ..Default::default()
                     },
                 )
                 .await,

@@ -340,6 +340,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         stage_id: "retained".into(),
         prompt: "x".into(),
         seed: None,
+        expect_fire: true,
         deadline_secs: None,
         settle: false,
         continuation: None,

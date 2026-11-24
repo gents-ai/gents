@@ -2,6 +2,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use gents_documents::EvalCase;
+use gents_eval::checks::stage_fields::stage_fields;
 use gents_eval::checks::CheckRegistry;
 
 use crate::cli::EvalChecksArgs;
@@ -16,8 +17,12 @@ pub(super) fn checks(
         return validate_case(registry, &read_case(source)?, out);
     }
     let catalog = registry.catalog();
+    let stage_fields = stage_fields();
     if args.json {
-        return super::write_json(out, &catalog);
+        return super::write_json(
+            out,
+            &serde_json::json!({ "checks": catalog, "stage_fields": stage_fields }),
+        );
     }
     for check in &catalog {
         writeln!(out, "{} v{}  {}", check.name, check.version, check.summary)?;
@@ -29,6 +34,15 @@ pub(super) fn checks(
         writeln!(out, "  reads   {}", check.reads.join(", "))?;
         for (code, line) in &check.reason_codes {
             writeln!(out, "  reason  {code}: {line}")?;
+        }
+    }
+    writeln!(out)?;
+    writeln!(out, "Stage fields")?;
+    for field in &stage_fields {
+        writeln!(out, "{}  ({})", field.name, field.applies_to)?;
+        writeln!(out, "  schema  {}", serde_json::to_string(&field.schema)?)?;
+        for (code, line) in &field.outcomes {
+            writeln!(out, "  {code}: {line}")?;
         }
     }
     Ok(())

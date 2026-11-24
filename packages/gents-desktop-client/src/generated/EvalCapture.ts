@@ -4,4 +4,12 @@ export type EvalCapture = { "kind": "schema", name: string, collections: Array<s
 /**
  * Empty reads every field.
  */
-fields: Array<string>, } | { "kind": "file", name: string, glob: string, };
+fields: Array<string>, } | { "kind": "file", name: string, glob: string, } | { "kind": "runs", name: string, trigger_id?: string | null,
+/**
+ * The collection the firing trigger watches.
+ */
+source_collection?: string | null,
+/**
+ * Only runs the stage's own seed document caused.
+ */
+of_seed?: boolean | null, };

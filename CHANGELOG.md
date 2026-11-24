@@ -15,6 +15,18 @@ source consistency checks, not a separate runtime compatibility version.
   panel edits them. A Goal's creation claim records both beside its token
   budget, so a replayed creation that asks for other limits conflicts, as one
   with another budget does.
+- Eval seed stages take `expect_fire` (default `true`). With `false` the stage
+  passes once the trial home is quiet with nothing fired for its seed, and
+  fails if anything fires. A seed nothing fires for, in a trial runtime that
+  kept running, now fails the subject (`model_acceptance`) instead of counting
+  as infrastructure. A failed stage's verdicts carry what ended it in
+  `raw.detail` (each failing trigger's recorded error, a seed nothing fired
+  for), which `eval trial` prints. A `runs` capture reads every trigger-fired
+  request that came into being while its stage ran, whoever started it, with
+  its session, state, final message and tool results, selected by
+  `trigger_id`, `source_collection` or `of_seed`. Breaking: `eval checks
+  --json` prints `{"checks": [...], "stage_fields": [...]}`; the text output
+  lists the stage fields after the checks.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.

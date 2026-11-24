@@ -59,6 +59,7 @@ pub(super) fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpe
                 session_agent_owned: seed.session_agent_owned,
                 expired_client_request: seed.expired_client_request,
             }),
+            expect_fire: stage.expect_fire,
             deadline_secs: stage.deadline_secs,
             settle: stage.settle,
             continuation: stage.continuation.clone(),
