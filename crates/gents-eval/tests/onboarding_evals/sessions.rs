@@ -82,10 +82,12 @@ fn session_model_fixtures_declare_cross_agent_visibility() {
     assert!(closed_release
         .iter()
         .any(|doc| doc["agent_did"] == "gents:agent-slot:partner"));
-    assert!(count["stages"][0]["checks"][0]["params"]["all"][0]["matches"]
-        .as_str()
-        .unwrap()
-        .contains(&format!("(?:{}|", closed_release.len())));
+    assert!(
+        count["stages"][0]["checks"][0]["params"]["all"][0]["matches"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("(?:{}|", closed_release.len()))
+    );
     for entry in std::fs::read_dir(&root).unwrap() {
         let path = entry.unwrap().path();
         let case: serde_json::Value =
