@@ -114,10 +114,13 @@ theorem denied_invoke_cannot_commit :
     s.committed = false ∧ s.toolRunning = false ∧ claim s grantedCommit = .unavailable := by
   native_decide
 
-/-- The parent Agent owns the session it published, so document ACP lets it
-delete the session's `parent` relation: the User loses the session through its
-Agent, and a later recovery does not restore the cleared relation. The child's
-request keeps its own relations, so the claim still succeeds. -/
+/-- The parent Agent is the native owner of the session it published and holds
+every permission on it, so document ACP lets it delete the session's `parent`
+relation: the User loses the session through its Agent, and a later recovery
+does not restore the cleared relation. The child's request keeps its own
+relations, so the claim still succeeds. The tool surface gives a managed Agent
+no operation that uses this permission to detach or delete a published session
+(`Tools.SessionCustody.relationChangeOffered`). -/
 theorem revoked_after_publication_detaches_the_session :
     let s := [good, observed, grant, .revokeSessionParent, grant].foldl step (initial true)
     allowed 5 s.household "user" "sessions" "child-session" "read" = false ∧

@@ -50,7 +50,11 @@ mod agent_target_access {
     #[tokio::test]
     async fn configured_agent_targets_grant_exactly_session_writer() {
         let (db, user, user_access) =
-            crate::test_support::root::signed_test_node_without_agent("agent-target-access").await;
+            gents_inference::test_support::signed_test_node_without_agent_from_db(
+                crate::support::trial_store("agent-target-access").await,
+                "agent-target-access",
+            )
+            .await;
         let runtime = db.node_identity.clone();
         let node_did = runtime.did().to_owned();
         let user_did = identity::Did::new(user.did()).unwrap();
@@ -232,8 +236,11 @@ mod self_config_inference {
 
     #[tokio::test]
     async fn user_grants_selected_backend_manager_without_backend_write() -> Result<()> {
-        let (db, user, owner, binding) =
-            crate::test_support::root::signed_test_node("backend-selection-manager").await;
+        let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store("backend-selection-manager").await,
+            "backend-selection-manager",
+        )
+        .await;
         let runtime = db.node_identity.did().to_owned();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;

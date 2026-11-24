@@ -107,6 +107,13 @@ fn gateways_conform_to_lean() {
     }
 }
 
+#[test]
+fn default_hidden_tools_conform_to_lean() {
+    for case in gents_lean_vocab::families::tool_presentation_defaults::cases() {
+        case.check(default_hidden(&case.input));
+    }
+}
+
 #[tokio::test]
 async fn hiding_keeps_the_tool_callable_and_names_it_once_in_script() {
     let shown = present_tools(surface(&["script", "query"]), &[]);
@@ -123,7 +130,7 @@ async fn hiding_keeps_the_tool_callable_and_names_it_once_in_script() {
     assert!(!tools[2].hidden());
     assert_eq!(
         tools[0].definition(String::new()).await.description,
-        format!("contract\n{SCRIPT_HINT}")
+        "contract\nOffered only here, not as direct tools: query. Read `tools.NAME.description` and `tools.NAME.parameters` before the first call, then `await tools.NAME({...})`."
     );
     assert_eq!(
         tools[1].definition(String::new()).await.description,

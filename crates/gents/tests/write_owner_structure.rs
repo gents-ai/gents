@@ -14,6 +14,8 @@ mod environment;
 mod error_holders;
 #[path = "write_owner_structure/executables.rs"]
 mod executables;
+#[path = "write_owner_structure/fixtures.rs"]
+mod fixtures;
 #[path = "write_owner_structure/layers.rs"]
 mod layers;
 #[path = "write_owner_structure/lean_runtime.rs"]
@@ -28,6 +30,8 @@ mod owner_errors;
 mod rapidhash;
 #[path = "write_owner_structure/rig.rs"]
 mod rig;
+#[path = "write_owner_structure/session_custody.rs"]
+mod session_custody;
 #[path = "write_owner_structure/statics.rs"]
 mod statics;
 #[path = "write_owner_structure/support.rs"]

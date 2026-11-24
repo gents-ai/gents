@@ -18,6 +18,8 @@ pub enum BackendProviderKind {
     #[default]
     #[serde(rename = "OpenAiCompatible")]
     OpenAiCompatible,
+    #[serde(rename = "Vllm")]
+    Vllm,
     #[serde(rename = "OpenRouter")]
     OpenRouter,
     #[serde(rename = "ChatGptCodex")]
@@ -45,8 +47,9 @@ pub enum BackendProviderKind {
 }
 
 impl BackendProviderKind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::OpenAiCompatible,
+        Self::Vllm,
         Self::OpenRouter,
         Self::ChatGptCodex,
         Self::XaiGrokOAuth,
@@ -65,6 +68,7 @@ impl BackendProviderKind {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
             None => Err(BackendProviderKindError::Required),
             Some("OpenAiCompatible") => Ok(Self::OpenAiCompatible),
+            Some("Vllm") => Ok(Self::Vllm),
             Some("OpenRouter") => Ok(Self::OpenRouter),
             Some("ChatGptCodex") => Ok(Self::ChatGptCodex),
             Some("XaiGrokOAuth") => Ok(Self::XaiGrokOAuth),
@@ -86,6 +90,7 @@ impl BackendProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAiCompatible => "OpenAiCompatible",
+            Self::Vllm => "Vllm",
             Self::OpenRouter => "OpenRouter",
             Self::ChatGptCodex => "ChatGptCodex",
             Self::XaiGrokOAuth => "XaiGrokOAuth",

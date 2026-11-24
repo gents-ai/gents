@@ -232,6 +232,7 @@ async fn tick_endpoint(
     graphql_url: Option<&str>,
     published: &mut Option<EndpointBinding>,
 ) -> Result<()> {
+    gents_store::local::document_acp::ensure_node_publication(node).await?;
     let peer_id = p2p
         .local_peer_id()
         .await

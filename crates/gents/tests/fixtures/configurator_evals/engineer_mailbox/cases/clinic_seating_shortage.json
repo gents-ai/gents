@@ -1,0 +1,214 @@
+{
+  "case_id": "clinic-seating-shortage",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type ClinicQueue { queue: String wing: String ready: Int }",
+      "type ClinicWing { wing: String available_now: Int status: String }"
+    ],
+    "documents": [
+      {
+        "collection": "ClinicQueue",
+        "document": {
+          "queue": "needle",
+          "wing": "Blue",
+          "ready": 3
+        }
+      },
+      {
+        "collection": "ClinicQueue",
+        "document": {
+          "queue": "post",
+          "wing": "Amber",
+          "ready": 11
+        }
+      },
+      {
+        "collection": "ClinicQueue",
+        "document": {
+          "queue": "intake",
+          "wing": "Amber",
+          "ready": 6
+        }
+      },
+      {
+        "collection": "ClinicQueue",
+        "document": {
+          "queue": "clinic",
+          "wing": "Blue",
+          "ready": 5
+        }
+      },
+      {
+        "collection": "ClinicQueue",
+        "document": {
+          "queue": "desk",
+          "wing": "Green",
+          "ready": 17
+        }
+      },
+      {
+        "collection": "ClinicWing",
+        "document": {
+          "wing": "Blue",
+          "available_now": 7,
+          "status": "open"
+        }
+      },
+      {
+        "collection": "ClinicWing",
+        "document": {
+          "wing": "Amber",
+          "available_now": 10,
+          "status": "open"
+        }
+      },
+      {
+        "collection": "ClinicWing",
+        "document": {
+          "wing": "Green",
+          "available_now": 5,
+          "status": "closed"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "review",
+      "prompt": "Which open clinics need more seats this shift? Add up ClinicQueue.ready by wing. Subtract ClinicWing.available_now, and ignore closed wings and any nonpositive difference. If there is a shortage, leave one item in my private inbox called Clinic seating 1. Use a note in the form 'Wing (+N)' for each short wing, sorted by wing and separated by commas. Reply with JSON containing \"short_wings\" as an array of wing names in alphabetical order.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Clinic seating 1",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Amber (+7), Blue (+1)"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"short_wings\"\\s*:\\s*\\[\\s*\"Amber\"\\s*,\\s*\"Blue\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -330,7 +330,6 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
     input := ({ initialTitle := some suppliedTitleValue } : RequestInput) }
   let retry := { titleRequest with retryFields := textFieldsToBytes ["retry-parent"] }
   let trigger := { titleRequest with triggerFields := textFieldsToBytes ["trigger"] }
-  let noParent := { titleEvidence with auxiliaryParent := none }
   let wrongSessionParent := { titleParentEvidence with sessionId := "different-session" }
   let wrongSession := { titleEvidence with auxiliaryParent := some wrongSessionParent }
   let stalePhysicalParent := { titleParentEvidence with physicalBindingCurrent := false }
@@ -385,7 +384,6 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
       (signTitleAdmission retry) (some titleEvidence)
   , titleRequestAdmissionCase "trigger-control-input" trigger
       (signTitleAdmission trigger) (some titleEvidence)
-  , titleRequestAdmissionCase "missing-parent-evidence" titleRequest signed (some noParent)
   , titleRequestAdmissionCase "parent-session-mismatch" titleRequest signed (some wrongSession)
   , titleRequestAdmissionCase "stale-parent-document" titleRequest signed (some stalePhysical)
   , titleRequestAdmissionCase "unsigned-title" titleRequest
@@ -398,6 +396,17 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
         { titleAdmissionUnsigned with runtimeSourceKind := .automatedTrigger })
       (some titleEvidence)
   ]
+
+/-- An auxiliary request's parent link is a signed field its shape requires,
+so the runtime observes the parent only by reading the linked document; a
+parent it cannot read is an unavailable observation, which retries
+(`pending-title-observation-unavailable`). Absent parent evidence under an
+available observation is this decision alone. -/
+theorem missing_parent_evidence_denies :
+    auxiliaryPendingDisposition true ({} : Enrollment.State) titleRequest
+      (signTitleAdmission titleRequest) (some { titleEvidence with auxiliaryParent := none })
+      "b" true true CausalHop.defaultMaxRequestHop = .deny := by
+  native_decide
 
 open Enrollment
 

@@ -1,9 +1,9 @@
 use super::slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use crate::test_support::test_db;
 use defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::TestStore;
 use serde::Deserialize;
 
 const NODE_DID: &str = "did:test:test";
@@ -20,7 +20,7 @@ struct PersistedSlotRow {
 async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
     use gents_lean_vocab::families::inference_slot_accounting_reconstruction as wire;
 
-    let db = test_db(
+    let db = TestStore::start(
         "inference-slot-accounting",
         gents_store::node_extension::Extensions::none(),
     )

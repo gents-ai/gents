@@ -1,7 +1,7 @@
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
-use gents_session::request::lifecycle::test_support::TestDb;
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestTerminalOutcome};
+use gents_session::test_support::AgentHome;
 use gents_store::identity::NodeIdentity;
 
 pub fn background_hints(parent: &AgentRequest) -> RequestQueue {
@@ -18,7 +18,7 @@ pub fn background_hints(parent: &AgentRequest) -> RequestQueue {
 }
 
 pub async fn desktop_owned_session(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
 ) -> (
     gents_store::identity::KeyIdentity,
@@ -29,11 +29,9 @@ pub async fn desktop_owned_session(
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
     };
-    let desktop = gents_store::identity::KeyIdentity::load_or_create(
-        db._tempdir.path().join("desktop.key"),
-        None,
-    )
-    .unwrap();
+    let desktop =
+        gents_store::identity::KeyIdentity::load_or_create(db.path().join("desktop.key"), None)
+            .unwrap();
     gents_session::test_support::create_agent_owned_session(
         &db.agent_access,
         db.node_did(),
@@ -112,12 +110,12 @@ pub async fn desktop_owned_session(
 }
 
 pub fn admission_verifier(
-    db: &TestDb,
+    db: &AgentHome,
 ) -> gents_session::request::admission::AgentRequestAdmissionVerifier {
     let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
     gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         db.node.clone(),
-        db.identity.clone(),
+        db.node_identity.clone(),
         authority,
     )
 }

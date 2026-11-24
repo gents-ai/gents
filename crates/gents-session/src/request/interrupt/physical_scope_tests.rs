@@ -14,7 +14,7 @@ async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> Str
 
 #[tokio::test]
 async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_requests() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "physical-interrupt-preserves-exact-scope",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -76,7 +76,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
 
 #[tokio::test]
 async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_physical() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "colliding-logical-interrupt-fetch-reject",
         crate::test_support::no_lifecycle_plugins(),
     )

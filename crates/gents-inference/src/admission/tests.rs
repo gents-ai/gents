@@ -19,7 +19,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
 pub(super) async fn test_node() -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
 ) {
     let (db, _user, _access, binding) = crate::test_support::signed_test_node(
@@ -35,7 +35,7 @@ pub(super) async fn test_node() -> (
 }
 
 pub(super) async fn grant_test_agent(
-    db: &crate::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;
@@ -516,6 +516,23 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
         .map(|state| (*state).to_owned())
         .collect();
     gents_lean_vocab::families::inference_call_state_vocabulary::replay(&owned);
+}
+
+#[test]
+fn persisted_call_start_source_follows_lean() {
+    gents_lean_vocab::families::inference_call_persistence_may_start::replay::<String>(|input| {
+        input.current == super::persistence::START_SOURCE
+    });
+}
+
+#[test]
+fn persisted_call_terminal_write_sources_follow_lean() {
+    gents_lean_vocab::families::inference_call_persistence_may_install_terminal::replay::<String>(
+        |input| {
+            super::persistence::terminal_write_sources(&input.target)
+                .is_some_and(|sources| sources.contains(&input.current.as_str()))
+        },
+    );
 }
 
 #[test]

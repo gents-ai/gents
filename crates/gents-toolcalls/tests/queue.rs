@@ -1,7 +1,7 @@
 use gents_protocol::message::Message;
 use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::test_support::test_db;
 use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::test_support::AgentHome;
 use gents_store::graphql::escape_graphql_string;
 
 use gents_session::request::lifecycle::RequestTerminalOutcome;
@@ -11,7 +11,7 @@ use gents_toolcalls::test_support::queue::*;
 
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
-    let db = test_db("atomic-background-notification").await;
+    let db = AgentHome::start("atomic-background-notification").await;
     let mut fixture = canonical_background_fixture(&db, "atomic-background-session").await;
     let parent = fixture.parent.clone();
     let first_tool = fixture
@@ -106,7 +106,7 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 
 #[tokio::test]
 async fn duplicate_notification_key_recovers_its_original_wake_binding() {
-    let db = test_db("atomic-background-idempotent-notification").await;
+    let db = AgentHome::start("atomic-background-idempotent-notification").await;
     let mut fixture =
         canonical_background_fixture(&db, "atomic-background-idempotent-notification-session")
             .await;
@@ -181,7 +181,7 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
 
 #[tokio::test]
 async fn many_concurrent_notifications_publish_one_wake_identity() {
-    let db = test_db("atomic-background-many-race").await;
+    let db = AgentHome::start("atomic-background-many-race").await;
     let mut fixture =
         canonical_background_fixture(&db, "atomic-background-many-race-session").await;
     let parent = fixture.parent.clone();
@@ -234,7 +234,7 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
 
 #[tokio::test]
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
-    let db = test_db("background-restart-before-claim").await;
+    let db = AgentHome::start("background-restart-before-claim").await;
     let node = db.node.clone();
     let mut fixture =
         canonical_background_fixture(&db, "background-restart-before-claim-session").await;
@@ -331,7 +331,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 
 #[tokio::test]
 async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
-    let db = test_db("background-response-repair-ack").await;
+    let db = AgentHome::start("background-response-repair-ack").await;
     let node = db.node.clone();
     let mut fixture =
         canonical_background_fixture(&db, "background-response-repair-ack-session").await;
@@ -484,13 +484,13 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 }
 
 struct PublishedWake {
-    db: gents_session::request::lifecycle::test_support::TestDb,
+    db: gents_session::test_support::AgentHome,
     session_id: String,
     wake_doc_id: String,
 }
 
 async fn published_wake(name: &str) -> PublishedWake {
-    let db = test_db(name).await;
+    let db = AgentHome::start(name).await;
     let session_id = format!("{name}-session");
     let mut fixture = canonical_background_fixture(&db, &session_id).await;
     let parent = fixture.parent.clone();
@@ -701,7 +701,7 @@ async fn wake_delivery_restart_boundaries_project_the_claim_snapshot() {
 
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
-    let db = test_db("wake-hop-raise").await;
+    let db = AgentHome::start("wake-hop-raise").await;
     let mut fixture = canonical_background_fixture(&db, "wake-hop-raise-session").await;
     let parent = fixture.parent.clone();
     let native_tool = fixture
@@ -789,7 +789,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
-    let db = test_db("wake-hop-refusal").await;
+    let db = AgentHome::start("wake-hop-refusal").await;
     // Node is configuration, so the fixture's User signs the cap.
     gents_documents::test_support::set_test_node_field_as(
         &db.user_access,

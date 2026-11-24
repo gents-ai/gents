@@ -24,8 +24,8 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> gents_inference::test_support::TestDb {
-    let db = gents_inference::test_support::test_db(
+async fn test_node() -> gents_store::test_support::TestStore {
+    let db = gents_store::test_support::TestStore::start(
         "status",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -391,7 +391,7 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     .unwrap();
     assert_eq!(
         restarted.process_state,
-        gents_protocol::node_readiness::NodeReadinessProcessState::Recovering,
+        gents_protocol::node_readiness::NodeReadinessProcessState::Uninitialized,
         "a prior durable Ready must be overwritten before restart work can fail"
     );
     second_owner.close().await.unwrap();

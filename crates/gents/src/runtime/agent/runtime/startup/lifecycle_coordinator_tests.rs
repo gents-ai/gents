@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::agent::ProcessLifecycleObserver;
+use crate::runtime::agent::ProcessLifecycleState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Notify, Semaphore};
@@ -43,7 +44,7 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for PendingRe
 async fn generated_startup_admission_opens_only_after_a_durable_ready() {
     use gents_lean_vocab::families::runtime_startup_admission_become_ready as family;
     for case in family::cases() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "startup-ready-family",
             gents_automation::lifecycle_hooks::composition(),
         )
@@ -109,4 +110,109 @@ async fn generated_startup_admission_opens_only_after_a_durable_ready() {
         status_owner.close().await.unwrap();
         db.node.shutdown().await.unwrap();
     }
+}
+
+struct AcceptWriter;
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptWriter {
+    async fn upsert(
+        &self,
+        _: &str,
+        _: &gents_protocol::node_readiness::NodeReadinessSnapshot,
+        _: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Run {
+    StuckStartThenOrderedStop,
+    StopBeforeReady,
+    TeardownCutAfterAdmission,
+}
+
+/// What each run leaves durable and tells the observer: Recovering only when
+/// startup recovery found stuck work, and Shutdown only once nothing this
+/// process admitted can still be active.
+#[tokio::test]
+async fn the_durable_process_state_and_the_observer_tell_the_same_story() {
+    use gents_protocol::node_readiness::NodeReadinessProcessState as Durable;
+    let db = gents_store::test_support::TestStore::start(
+        "process-lifecycle-runs",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    for run in [
+        Run::StuckStartThenOrderedStop,
+        Run::StopBeforeReady,
+        Run::TeardownCutAfterAdmission,
+    ] {
+        let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+            db.node.clone(),
+            "did:test:process-lifecycle",
+            Arc::new(AcceptWriter),
+            std::time::Duration::from_millis(1),
+            crate::runtime::storage_fault::StorageFaultObservation::new(),
+        );
+        status.initialize_startup("general").await.unwrap();
+        let observer = Arc::new(RecordingObserver::default());
+        let coordinator = RuntimeLifecycleCoordinator::new(
+            super::super::router::RuntimeAdmissionGate::closed(),
+            status.clone(),
+            Some(observer.clone()),
+        );
+        let (durable, story) = match run {
+            Run::StuckStartThenOrderedStop => {
+                coordinator.startup_recovered(true).await.unwrap();
+                let recovering = status.readiness().observation().process_state();
+                assert!(coordinator.become_ready().await.unwrap());
+                coordinator.begin_shutdown().await.unwrap();
+                coordinator.finish_shutdown().await.unwrap();
+                coordinator.finish_run().await.unwrap();
+                assert_eq!(recovering, Durable::Recovering, "{run:?}");
+                (
+                    Durable::Shutdown,
+                    vec![
+                        ProcessLifecycleState::Recovering,
+                        ProcessLifecycleState::Ready,
+                        ProcessLifecycleState::ShuttingDown,
+                        ProcessLifecycleState::Shutdown,
+                    ],
+                )
+            }
+            Run::StopBeforeReady => {
+                coordinator.startup_recovered(false).await.unwrap();
+                coordinator.finish_run().await.unwrap();
+                (
+                    Durable::Shutdown,
+                    vec![
+                        ProcessLifecycleState::ShuttingDown,
+                        ProcessLifecycleState::Shutdown,
+                    ],
+                )
+            }
+            Run::TeardownCutAfterAdmission => {
+                coordinator.startup_recovered(false).await.unwrap();
+                assert!(coordinator.become_ready().await.unwrap());
+                coordinator.begin_shutdown().await.unwrap();
+                coordinator.finish_run().await.unwrap();
+                (
+                    Durable::ShuttingDown,
+                    vec![
+                        ProcessLifecycleState::Ready,
+                        ProcessLifecycleState::ShuttingDown,
+                    ],
+                )
+            }
+        };
+        assert_eq!(
+            status.readiness().observation().process_state(),
+            durable,
+            "{run:?}"
+        );
+        assert_eq!(*observer.states.lock().unwrap(), story, "{run:?}");
+        status_owner.close().await.unwrap();
+    }
+    db.node.shutdown().await.unwrap();
 }

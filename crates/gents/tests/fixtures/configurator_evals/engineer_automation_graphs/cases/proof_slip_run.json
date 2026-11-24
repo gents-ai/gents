@@ -1,0 +1,297 @@
+{
+  "case_id": "proof-slip-run",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "slips/pending.json",
+        "contents": "[\n  {\n    \"ref\": \"J5\",\n    \"units\": 7,\n    \"status\": \"open\"\n  },\n  {\n    \"ref\": \"K8\",\n    \"units\": 3,\n    \"status\": \"closed\"\n  },\n  {\n    \"ref\": \"Q2\",\n    \"units\": 13,\n    \"status\": \"open\"\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "create_and_run",
+      "prompt": "Create a manual task called proof-slip for yourself, with no trigger and no schedule. Given args units and ref, it asks for a reply of exactly SLIP, then the units, then the ref, separated by spaces. Then run it once now for each open slip listed in slips/pending.json, with that slip's units and ref; closed slips get no run. The runs are answered after your turn ends, so don't wait for their replies, and leave the file as it is.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "manual_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "j5",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%J5%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "q2",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%Q2%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "k8",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%K8%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "manual_runs",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "j5",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "q2",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "k8",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "triggers",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": [
+              {
+                "capture": "tasks",
+                "key": "task_id",
+                "id": "proof-slip",
+                "expect": [
+                  {
+                    "field": "prompt_template",
+                    "matches": "args\\.units[\\s\\S]*args\\.ref"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "j5",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)SLIP"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\b7\\b"
+                  }
+                ]
+              },
+              {
+                "capture": "q2",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)SLIP"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\b13\\b"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

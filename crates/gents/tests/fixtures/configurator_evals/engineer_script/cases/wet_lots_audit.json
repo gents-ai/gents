@@ -1,0 +1,236 @@
+{
+  "case_id": "wet-lots-audit",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type FloorLot { lot: String hold: String }",
+      "type LotRelease { lot: String revision: Int approved: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM41",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM42",
+          "hold": "clear"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM43",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM44",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM45",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM46",
+          "hold": "dry"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM47",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM41",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM43",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM44",
+          "revision": 1,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM46",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM43",
+          "revision": 2,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM44",
+          "revision": 3,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM42",
+          "revision": 1,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM47",
+          "revision": 2,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM44",
+          "revision": 2,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM47",
+          "revision": 1,
+          "approved": false
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Before the floor handoff I need the wet lots that are not released. Write one script that queries the FloorLot and LotRelease records with your query tool and joins them. A lot can have several releases and only its newest one, the highest revision, counts: the lot is released when that release is approved. Have the script return {\"lots\": [...]} with the unreleased wet lot IDs sorted, and list them for me.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_queries",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "query"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "query"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file",
+              "file_mailbox_item"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "lots",
+                "equals": [
+                  "FM43",
+                  "FM45"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_queries",
+                "min": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "FM43"
+              },
+              {
+                "matches": "FM45"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,183 @@
+{
+  "case_id": "reefer-tally-fan-in",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "tallies/east.txt",
+        "contents": "quay: east\nreefer: 12\ndry: 40\n"
+      },
+      {
+        "path": "tallies/west.txt",
+        "contents": "quay: west\ndry: 31\nreefer: 21\n"
+      },
+      {
+        "path": "tallies/south.txt",
+        "contents": "quay: south\nreefer: 14\ndry: 9\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "The quay tallies are in tallies/, one file per quay. As one background job named reefer-tally, fan out one worker agent per tally file to report that quay's reefer count, then fan the reports in: the job should end with JSON holding reefer_total, the sum over all quays, and busiest, the quay name with the most reefers. Report both when it finishes.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "finished",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_eq": "workflow"
+            },
+            "session_id": {
+              "_eq": "$session"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "_docID",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "children",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_like": "job-session:%"
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "segments",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "_docID",
+            "source",
+            "payload",
+            "close"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "workflow"
+            ],
+            "forbidden": [
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "finished",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "children",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "links": [
+              {
+                "capture": "finished",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "field": "_docID",
+                "target_capture": "segments",
+                "target_key": "source.tool_call_doc_id",
+                "expect": [
+                  {
+                    "field": "close",
+                    "matches": "\\\\?\"outcome\\\\?\"\\s*:\\s*\\\\?\"complete\\\\?\""
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"reefer_total\\\\?\"\\s*:\\s*47\\b"
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"busiest\\\\?\"\\s*:\\s*\\\\?\"west\\\\?\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 2
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "47",
+              "west"
+            ]
+          },
+          "tier": "development",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

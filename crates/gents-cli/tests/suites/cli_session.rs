@@ -15,7 +15,10 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-session-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-session-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -153,10 +156,18 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     Ok(())
 }
 
-fn init_fork_home(home_dir: &std::path::Path) -> Result<(MockModelEndpoint, String)> {
+fn init_fork_home(
+    home_dir: &std::path::Path,
+) -> Result<(
+    gents_inference::test_support::scripted_backend::ScriptedBackend,
+    String,
+)> {
     fs::create_dir_all(home_dir)?;
     let model_name = format!("mock-session-fork-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         home_dir,
         &[

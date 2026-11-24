@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_goals",
+  "version": "0.1.0",
+  "description": "Native eval definition engineer-goals: the Engineer reads, creates, edits, completes and blocks its session goal through the goal tools, with goal creation on.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "cases/no_goal_check.json",
+    "cases/pallet_totals_goal.json",
+    "cases/queue_one_per_turn.json",
+    "cases/no_goal_needed.json",
+    "cases/narrow_report_objective.json",
+    "cases/tags_already_owned.json",
+    "cases/points_partial_blocked.json",
+    "cases/blocked_manifest.json",
+    "cases/crate_budget_raise.json",
+    "cases/greenhouse_water_goal.json",
+    "cases/shelf_budget_raise.json",
+    "pack_config.json",
+    "subject_patch.json",
+    "suite.json"
+  ],
+  "config": "pack_config.json"
+}

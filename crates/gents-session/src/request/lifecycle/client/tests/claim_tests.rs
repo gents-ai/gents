@@ -12,7 +12,7 @@ type ClaimInput =
 /// the request's signer is the user or a `collaborator` whose update on the
 /// user's session is a relation the user grants.
 struct ClaimWorld {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     runtime: Arc<dyn NodeIdentity>,
     admin: ConfigAccess,

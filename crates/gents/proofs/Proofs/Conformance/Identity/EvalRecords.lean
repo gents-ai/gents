@@ -31,17 +31,13 @@ def publishOutput (i : PublishInput) : PublishOutput :=
     userRead := allowed 5 s "user" i.resource i.name "read"
     strangerRead := allowed 5 s "stranger" i.resource i.name "read" }
 
+/-- The held fixture creates each record as its modeled creator; it fails the
+run's Node parent relationship inside the creating transaction for
+`relationship-failed`, and pauses the run's commit behind a concurrent Node
+write for `commit-failed`. -/
 @[conformance_family]
 def published : Family PublishInput PublishOutput where
-  inputs := (cases.filter (·.name != "relationship-failed")).map PublishInput.ofCase
-  model := publishOutput
-
-/-- The Node parent is a native relationship change inside the creating
-transaction, and the store's fault seams fail only document mutations, so no
-fixture fails that relationship alone. -/
-@[conformance_family]
-def publishedUnreached : Family PublishInput PublishOutput where
-  inputs := (cases.filter (·.name == "relationship-failed")).map PublishInput.ofCase
+  inputs := cases.map PublishInput.ofCase
   model := publishOutput
 
 end Conformance.EvalRecords

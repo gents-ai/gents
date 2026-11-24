@@ -13,7 +13,10 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-diagnose-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-diagnose-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
@@ -106,7 +109,10 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-live-diagnose-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home_dir,
         &[
@@ -243,7 +249,10 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-p2p-diagnose-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-diagnose-{}", Uuid::new_v4().simple());

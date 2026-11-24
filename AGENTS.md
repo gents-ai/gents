@@ -13,7 +13,7 @@ owns everything it uses.
 
 | Layer (bottom up) | Crate | Owns |
 | --- | --- | --- |
-| Vocabulary | `gents-schemas`, `gents-protocol`, `gents-lean-vocab`, `gents-loop` | SDL and access policy; wire types, operation contracts, typed queries; Lean case decoders; the provider turn loop and provider input |
+| Vocabulary | `gents-schemas`, `gents-protocol`, `gents-lean-vocab`, `gents-loop`, `gents-claude` | SDL and access policy; wire types, operation contracts, typed queries; Lean case decoders; the provider turn loop and provider input; the Claude wire protocol |
 | Store | `gents-store` | DefraDB access, transactions, identity, ACP |
 | Documents | `gents-documents` | Configuration documents, desired state |
 | Inference, P2P | `gents-inference`, `gents-p2p` | Backends and accounts; peers, enrollment, sync |
@@ -24,11 +24,12 @@ owns everything it uses.
 | Automation | `gents-automation` | Triggers, tasks, callbacks, Goals |
 | Observe | `gents-observe` | Timelines, trace export |
 | Root | `gents` | The runtime and its composition |
-| Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-eval`, `gents-desktop-*`, `gents-client-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
+| Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-shell`, `gents-eval`, `gents-desktop*`, `gents-client-host`, `gents-media-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
+| Unlayered leaves | `gents-chatgpt-login`, `gents-claude-login`, `gents-login-ui`, `gents-fs-runner`, `gents-core-packs`, `gents-lean-contract`, `gents-workspace-hack` | Login flows, the filesystem runner, core pack archives, the Lean contract loader, hakari feature unification |
 
 Lean models live in `crates/gents/proofs/Proofs/`, one directory per layer,
-and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`. The
-[proof map](crates/gents/proofs/README.md) names the modelled surfaces. Read
+and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`; the
+[proof map](crates/gents/proofs/AGENTS.md) names the modelled surfaces. Read
 versions from `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`.
 
 **Worktrees.** One tree per change, created from the main checkout with
@@ -128,7 +129,7 @@ an exception names its file, its exact count and its reason.
 | Maps and sets are `rapidhash`; trait bounds live in `where` clauses. | `hash_maps_use_rapidhash`, `trait_bounds_live_in_where_clauses` |
 | Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
 | OAuth credentials are picked through the resolver. | `oauth_credential_picks_go_through_the_resolver` |
-| Test fixtures never reach a production build. | `gents_test_fixtures_stay_dev_only` |
+| Test fixtures never reach a production build. | `test_fixtures_stay_dev_only` |
 | Tests never touch the host's service manager: whatever reaches `gents-service` or spawns `gents` enables its `test-home-guard` from dev-dependencies. | `service_isolation_stays_test_only`, `tests_reaching_the_service_manager_are_isolated` |
 | One integration binary per crate (`tests/integration.rs` with `#[path]` modules); separate binaries only for process-wide state, listed with the reason. | `integration_tests_share_one_binary_per_crate` |
 | Log with `tracing`, never `println!`. | review |
@@ -202,12 +203,11 @@ completed runs are the measurement for flakes and speed. Native changes pass `ma
 pushing: a lower crate is not verified until its consumers, clients included,
 pass.
 
-**Runners** are chosen by role from `.github/ci-runners.json` (capability
-labels, never host names); a machine joins by registering with a role's labels.
-Pull request jobs also require `ci-pr`; the few runners without it
-(`gate.py runners`) serve only the merge queue and the nightly run.
-A fork pull request never runs on a self-hosted runner; a maintainer pushes it
-to a branch here to test it.
+**Runners** are chosen by role from `.github/ci-runners.json` (capability labels,
+never host names); a machine joins by registering with a role's labels. Pull
+request jobs also require `ci-pr`; the few runners without it (`gate.py runners`)
+serve only the merge queue and the nightly run. A fork pull request never runs on
+a self-hosted runner; a maintainer pushes it to a branch here to test it.
 
 ## Delivering a change
 

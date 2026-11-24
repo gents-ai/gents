@@ -3,11 +3,11 @@ use crate::call::hook::fixtures::r4c_private_support::{
 };
 use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use gents_inference::llm::ToolCallHookAction;
-use gents_inference::test_support::test_db;
 use gents_loop::tool::BoxFuture;
 use gents_loop::tool::ToolDefinition;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::TestStore;
 use serde_json::{json, Value};
 
 struct StaticTool {
@@ -184,12 +184,12 @@ async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     DefraSessionHook,
     String,
     String,
 ) {
-    let db = test_db(
+    let db = TestStore::start(
         test_name,
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -542,7 +542,7 @@ async fn list_background_tools_reports_running_live_output_bytes() {
 
 #[tokio::test]
 async fn list_background_tools_rejects_sibling_requests() {
-    let db = test_db(
+    let db = TestStore::start(
         "r4c-list-bg-sibling",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -568,7 +568,7 @@ async fn list_background_tools_rejects_sibling_requests() {
 }
 
 async fn setup_hook_on_db(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,

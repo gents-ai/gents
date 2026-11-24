@@ -1,0 +1,545 @@
+{
+  "case_id": "scale-card-repair",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type ScaleCard { ref: String lane: String grams: Int }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Set up two automations on new ScaleCard records, both handled by you and fed by one event source named scale-card-created. Task scale-card, fired by trigger scale-card-on-create, asks for a reply of exactly ACK followed by the card's ref. Task scale-audit, fired by trigger scale-audit-on-create, asks for a reply of exactly AUDIT followed by the card's grams. Set them up now; cards arrive later.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "tasks",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "triggers",
+                "key": "trigger_id",
+                "id": "scale-card-on-create",
+                "expect": [
+                  {
+                    "field": "task_id",
+                    "equals": "scale-card"
+                  }
+                ]
+              },
+              {
+                "capture": "triggers",
+                "key": "trigger_id",
+                "id": "scale-audit-on-create",
+                "expect": [
+                  {
+                    "field": "task_id",
+                    "equals": "scale-audit"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "repair",
+      "prompt": "Two changes to the scale-card automation, made in place: keep the scale-card task and its trigger with the same IDs. Its receipt should ask for a reply of exactly ACK, then the card's lane, then its ref, separated by spaces. And cards under 100 grams no longer get a scale-card receipt at all. Leave scale-audit and its trigger as they are: every card, light or not, still gets its audit.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "tasks",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "triggers",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "tasks",
+                "key": "task_id",
+                "id": "scale-card",
+                "expect": [
+                  {
+                    "field": "prompt_template",
+                    "matches": "doc\\.lane[\\s\\S]*doc\\.ref"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "tasks",
+                "key": "task_id",
+                "id": "scale-audit",
+                "expect": [
+                  {
+                    "field": "prompt_template",
+                    "matches": "AUDIT[\\s\\S]*doc\\.grams"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "triggers",
+                "key": "trigger_id",
+                "id": "scale-card-on-create",
+                "expect": [
+                  {
+                    "field": "task_id",
+                    "equals": "scale-card"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "triggers",
+                "key": "trigger_id",
+                "id": "scale-audit-on-create",
+                "expect": [
+                  {
+                    "field": "task_id",
+                    "equals": "scale-audit"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "heavy",
+      "seed": {
+        "collection": "ScaleCard",
+        "document": {
+          "ref": "R9",
+          "lane": "west",
+          "grams": 412
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "light",
+      "seed": {
+        "collection": "ScaleCard",
+        "document": {
+          "ref": "R4",
+          "lane": "east",
+          "grams": 75
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "receipts",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "heavy_receipt",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "light_receipt",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "audits",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "heavy_receipt",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ACK"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*west"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*R9"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "ScaleCard"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "receipts",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%ACK%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "heavy_receipt",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%ACK%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%R9%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "light_receipt",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%ACK%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%R4%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "audits",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%AUDIT%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    }
+  ]
+}

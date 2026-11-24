@@ -208,7 +208,7 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 /// database.
 pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
-    core_packs: default_packs::Archives<'_>,
+    core_packs: gents::core_packs::Archives<'_>,
     entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let registry = args.registry.clone();
@@ -224,12 +224,16 @@ pub(crate) async fn init_home_with_core_packs(
     let client_identity = InitClientIdentity::choose(&home_dir, args.desktop_home.clone())?;
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
-    admit_document_acp(
+    let requested_acp = admit_document_acp(
         &home_dir,
         args.document_acp,
         args.identity_backend,
         !args.dangerously_overwrite,
     )?;
+    anyhow::ensure!(
+        !args.create_transport_group || !requested_acp.is_local(),
+        "--create-transport-group requires a Vera home"
+    );
     crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     if !args.identity_only {
         resolve_init_model_name(&args)?;
@@ -247,6 +251,13 @@ pub(crate) async fn init_home_with_core_packs(
     stage("store_locked");
     let document_acp =
         admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
+
+    if args.create_transport_group {
+        anyhow::ensure!(
+            fresh_store,
+            "--create-transport-group requires a fresh Vera home"
+        );
+    }
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -499,6 +510,14 @@ pub(crate) async fn init_home_with_core_packs(
         )
         .await?;
         stage("runtime_home_initialized");
+        let transport_group = if args.create_transport_group {
+            let account = identity::Did::new(client_identity.did())?;
+            let device = identity::Did::new(initialized_identity.identity.did())?;
+            let group = access.create_device_group(&account, &device).await?;
+            Some(json!({"account": account.as_str(), "group": group}))
+        } else {
+            None
+        };
         if fresh_store
             && matches!(tool_package, ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo)
         {
@@ -548,7 +567,7 @@ pub(crate) async fn init_home_with_core_packs(
         };
         clear_init_pending(&home_dir)?;
 
-        let output = json!({
+        let mut output = json!({
             "status": "initialized",
             "home": home_dir,
             "node_name": args.node_name,
@@ -593,6 +612,9 @@ pub(crate) async fn init_home_with_core_packs(
             ),
             "init": summary,
         });
+        if let Some(group) = transport_group {
+            output["transport_group"] = group;
+        }
         Ok(output)
     }
     .await;
@@ -2378,10 +2400,10 @@ mod tests {
     #[tokio::test]
     async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2461,10 +2483,10 @@ mod tests {
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2555,10 +2577,10 @@ mod tests {
         engineer: bool,
     ) -> gents_tools::surface::ToolSurfaceExplanation {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -3395,6 +3417,7 @@ mod tests {
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
             document_acp: None,
+            create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,
             backend_name: None,

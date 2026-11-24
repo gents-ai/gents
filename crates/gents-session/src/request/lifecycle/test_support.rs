@@ -1,9 +1,8 @@
-use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use crate::request::lifecycle::RequestLifecycle;
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use gents_store::test_support::PIN_FIXED_DID;
 
@@ -245,135 +244,21 @@ pub async fn output_segment_snapshot(
     response["data"]["AgentOutputSegment"].clone()
 }
 
-/// A signed node with its user and the managed Agent access that owns the queue rows.
-pub struct TestDb {
-    pub node: std::sync::Arc<defra_node::Node>,
-    pub identity: std::sync::Arc<dyn NodeIdentity>,
-    pub agent_identity: std::sync::Arc<dyn NodeIdentity>,
-    pub user: gents_store::identity::KeyIdentity,
-    pub user_access: gents_store::config_client::ConfigAccess,
-    pub agent_access: gents_store::config_client::ConfigAccess,
-    pub _db: gents_inference::test_support::TestDb,
-    pub _tempdir: tempfile::TempDir,
-}
-
-impl TestDb {
-    pub fn node_did(&self) -> &str {
-        self.identity.did()
-    }
-
-    pub fn agent_did(&self) -> &str {
-        self.agent_identity.did()
-    }
-}
-
-pub async fn test_db(name: &str) -> TestDb {
-    test_db_with(name, crate::test_support::no_lifecycle_plugins()).await
-}
-
-/// A signed test node composed with `composition`, for tests that need a
-/// plugin (such as Goals) that the session crate cannot name.
-pub async fn test_db_with(
-    name: &str,
-    composition: gents_store::node_extension::Extensions,
-) -> TestDb {
-    let (db, user, user_access, binding) =
-        gents_inference::test_support::signed_test_node(name, composition).await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)
-        .expect("derived test agent identity");
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent_identity.did()).unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    TestDb {
-        node,
-        identity,
-        agent_identity,
-        user,
-        user_access,
-        agent_access,
-        _db: db,
-        _tempdir: tempfile::tempdir().expect("queue fixture directory"),
-    }
-}
-
 pub async fn test_node() -> (
     Arc<EmbeddedNode>,
-    gents_inference::test_support::TestDb,
+    gents_documents::test_support::SignedHome,
     Arc<dyn gents_store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let db = gents_inference::test_support::test_db(
-        "execution-lease-fixture",
+    let home = gents_documents::test_support::SignedHome::start(
+        "execution-lease-owner",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let (db, _user, _access, agent) =
-        gents_inference::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    (node, db, identity, agent)
-}
-
-pub async fn claimed_owner(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> RequestLifecycle {
-    claimed_owner_caused_by(node, identity, agent, TriggerLineage::default()).await
-}
-
-pub async fn claimed_owner_caused_by(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    lineage: TriggerLineage,
-) -> RequestLifecycle {
-    let agent_identity =
-        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap();
-    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
-        node.clone(),
-        &agent.agent_did,
-        identity.clone(),
-        "hello",
-        crate::request::lifecycle::ExecutionBinding {
-            deadline_duration_secs: 60,
-            execution_origin: ExecutionOrigin::Interactive,
-            backend_id: "lease-test".into(),
-            operator_tool_root: None,
-        },
-        lineage,
-        Some(agent_identity),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    lifecycle
-}
-
-pub async fn owner(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> RequestLifecycle {
-    let mut lifecycle = claimed_owner(node, identity, agent).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent)
-            .unwrap()
-            .as_ref(),
-        Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    lifecycle
+    let agent = gents_inference::test_support::default_agent(&home).await;
+    let node = home.store.node.clone();
+    let identity = home.store.node_identity.clone();
+    (node, home, identity, agent)
 }
 
 pub fn agent_identity(
@@ -408,17 +293,20 @@ pub fn agent_signer(
 }
 
 pub async fn observed_case_request(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    home: &gents_documents::test_support::SignedHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     duration_secs: u64,
     deadline_secs: u64,
     epoch: DateTime<Utc>,
 ) -> RequestLifecycle {
-    let lifecycle = owner(node, identity, agent).await;
+    let lifecycle = crate::test_support::ClaimedRequest::self_signed(home, agent)
+        .backend("lease-test")
+        .drive(crate::test_support::Stage::Executing)
+        .await
+        .lifecycle;
     let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
     let deadline = epoch + chrono::Duration::seconds(deadline_secs as i64);
-    agent_access(node, identity, agent).write("test.observed_lease_seed", &format!(
+    home.agent_access(agent).write("test.observed_lease_seed", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
         duration_secs, escape_graphql_string(&deadline.to_rfc3339()),
     )).await.unwrap();

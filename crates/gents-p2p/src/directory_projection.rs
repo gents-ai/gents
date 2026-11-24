@@ -238,6 +238,11 @@ pub async fn run_directory_projection(
 }
 
 async fn sweep_directory(store: &GraphqlDirectoryStore, source_did: &str) {
+    if let Err(error) = gents_store::local::document_acp::ensure_node_publication(&store.node).await
+    {
+        tracing::warn!(%error, "directory publication awaiting device membership");
+        return;
+    }
     match reconcile_directory_tick(store, source_did).await {
         Ok(outcome) => {
             if !outcome.upserted.is_empty()

@@ -79,7 +79,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         ] {
             let name = case.name.as_str();
-            let db = gents_inference::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 "goal-tool-context",
                 crate::lifecycle_hooks::composition(),
             )

@@ -21,15 +21,39 @@ pub struct RetainedRequest {
 }
 
 /// Reads request content and lineage as the held evaluator who created the trial.
-/// No runtime or schema installer is started. The blocking task owns the home
-/// until shutdown, even if the caller drops its future; a query panic also
-/// unwinds only after shutdown.
 pub async fn inspect_retained_requests(
     runtime: &tokio::runtime::Handle,
     runs_dir: &Path,
     locator: &TrialLocator,
     evaluator: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<Vec<RetainedRequest>> {
+    read_retained_home(
+        runtime,
+        runs_dir,
+        locator,
+        evaluator,
+        |access, node_did| async move { read_requests(&access, &node_did).await },
+    )
+    .await
+    .context("inspecting retained trial requests")
+}
+
+/// Runs `read` over a finished trial's retained home as the held evaluator who
+/// created the trial, with the trial node's DID. No runtime or schema installer
+/// is started. The blocking task owns the home until shutdown, even if the
+/// caller drops its future; a read panic also unwinds only after shutdown.
+pub(super) async fn read_retained_home<T, R, Fut>(
+    runtime: &tokio::runtime::Handle,
+    runs_dir: &Path,
+    locator: &TrialLocator,
+    evaluator: &dyn gents_store::identity::NodeIdentity,
+    read: R,
+) -> Result<T>
+where
+    T: Send + 'static,
+    R: FnOnce(ConfigAccess, String) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>>,
+{
     let hint = locator
         .home_hint
         .as_deref()
@@ -52,7 +76,8 @@ pub async fn inspect_retained_requests(
                     home_dir.display()
                 )
             })?;
-        let result = std::panic::AssertUnwindSafe(read_requests(&home, evaluator_did))
+        let access = ConfigAccess::local_as(home.node.clone(), evaluator_did);
+        let result = std::panic::AssertUnwindSafe(read(access, home.did().to_owned()))
             .catch_unwind()
             .await;
         if let Err(error) = home.node.shutdown().await {
@@ -63,8 +88,7 @@ pub async fn inspect_retained_requests(
             Err(panic) => std::panic::resume_unwind(panic),
         }
     })
-    .await
-    .context("inspecting retained trial requests")?
+    .await?
 }
 
 pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf> {
@@ -99,11 +123,7 @@ pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf>
     Ok(trial_dir)
 }
 
-async fn read_requests(
-    home: &EmbeddedHome,
-    evaluator: identity::Did,
-) -> Result<Vec<RetainedRequest>> {
-    let access = ConfigAccess::local_as(home.node.clone(), evaluator);
+async fn read_requests(access: &ConfigAccess, node_did: &str) -> Result<Vec<RetainedRequest>> {
     let query = format!(
         r#"{{ AgentRequest(
             filter: {{ node_did: {{ _eq: "{}" }} }},
@@ -119,7 +139,7 @@ async fn read_requests(
             caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
             caused_by_source_doc_id caused_by_correlation caused_by_trigger_context
         }} }}"#,
-        escape_graphql_string(home.did()),
+        escape_graphql_string(node_did),
         MAX_REQUESTS + 1,
     );
     let response = tokio::time::timeout(READ_TIMEOUT, access.execute(&query))
@@ -181,8 +201,7 @@ mod tests {
         };
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
-        let home = EmbeddedHome::create_retained(&path).await.unwrap();
-        let db = crate::support::test_db_from_home(home);
+        let db = crate::support::trial_store_at(&path).await;
         let (db, user, client, binding) =
             crate::test_support::signed_test_node_from_db(db, "eval-inspect-retained").await;
         let did = db.node_identity.did().to_owned();

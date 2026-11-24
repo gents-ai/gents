@@ -1,0 +1,11 @@
+{
+  "id": "engineer-workflows",
+  "title": "Engineer workflows",
+  "coverage": [
+    "zero-child workflow job",
+    "worker fan-out",
+    "fan-in from worker text",
+    "reading a finished job"
+  ],
+  "subject": "engineer_full"
+}

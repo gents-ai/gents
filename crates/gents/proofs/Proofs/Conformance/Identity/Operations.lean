@@ -287,13 +287,12 @@ structure ParentLinked where
 
 /-- The recovery scenario publishes readiness as the embedded runtime over a
 row the runtime owns natively, with the Node parent present, replaced,
-unregistered or absent, as a foreign runtime, with the publication mark
-aborted and retried; the user reads the row only through the parent grant. -/
+unregistered or absent, as a foreign runtime, with this attempt's parent grant
+or publication mark failed, after an earlier attempt that granted the parent
+without marking the row; the user reads the row only through the parent grant. -/
 @[conformance_family]
 def readinessRecovery : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter
-    (·.name ∉ ["owner-unknown", "owner-mismatch", "grant-failed", "retry-grant-failed",
-      "mark-failed", "retry-mark"])
+  inputs := recoveryInputs.filter (·.name ∉ ["owner-unknown", "owner-mismatch"])
   model := fun c => { parentGranted := (recoveryAfter c).parentGranted
                       parentLinked := (recoveryAfter c).parentLinked }
 
@@ -303,16 +302,6 @@ the user; the user's read of such a row does not measure the parent grant. -/
 def readinessRecoveryForeignOwner : Family RecoveryInput ParentLinked where
   inputs := recoveryInputs.filter (·.name ∈ ["owner-unknown", "owner-mismatch"])
   model := fun c => { parentLinked := (recoveryAfter c).parentLinked }
-
-/-- The parent grant is a native relationship change and the publication mark
-is an auto-commit write after it; the store's fault seams fail only mutations
-inside an apply transaction, so no fixture fails the grant or the mark alone. -/
-@[conformance_family]
-def readinessRecoveryUnreached : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter
-    (·.name ∈ ["grant-failed", "retry-grant-failed", "mark-failed", "retry-mark"])
-  model := fun c => { parentGranted := (recoveryAfter c).parentGranted
-                      parentLinked := (recoveryAfter c).parentLinked }
 
 structure Usable where
   usable : Bool
@@ -513,7 +502,6 @@ def replicaGrantScenario : Family ReplicaInput ReplicaGrant where
       agentRead := replicaRead i "agent" "enrollment_records" "remote"
       outsiderRead := replicaRead i "outsider" "enrollment_records" "remote"
       appRead := replicaHostRead i "children" "application"
-      pending := (replicaState i.name).relations.contains
-        ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
+      pending := (replicaState i.name).pendingParents.contains ("enrollment_records", "remote", "runtime") }
 
 end Conformance.IdentityOperations

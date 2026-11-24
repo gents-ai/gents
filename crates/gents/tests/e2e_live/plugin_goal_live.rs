@@ -16,10 +16,11 @@ use serde_json::{json, Value};
 
 use crate::support::agent_requests::canonical_now;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_options, live_target, wait_for_request_terminal,
     InferenceTarget, LiveUser,
 };
 use crate::support::{test_db, ManagedAgentFixture};
+use gents_store::test_support::rows_when;
 
 pub(super) async fn submit_with_cwd(
     access: &ConfigAccess,

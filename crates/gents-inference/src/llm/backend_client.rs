@@ -195,7 +195,7 @@ pub async fn build_backend_client(
     };
     let api_key = resolved_key.as_deref().unwrap_or(api_key);
     match agent.backend_provider_kind {
-        BackendProviderKind::OpenAiCompatible => {
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => {
             let build_context = format!(
                 "building OpenAI-compatible completion client for agent {} against {}",
                 agent.agent_did, agent.backend_endpoint
@@ -528,7 +528,7 @@ mod tests {
     }
 
     pub(super) fn held_test_agent(
-        db: &crate::test_support::TestDb,
+        db: &gents_store::test_support::TestStore,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
         kind: BackendProviderKind,
         wire_api: gents_loop::openai_wire::OpenAiWireApi,

@@ -1,7 +1,7 @@
 # Development
 
-Building Gents from source. To use Gents, install the desktop app from the
-[README](README.md) instead.
+Building Gents from source. To use Gents, install the desktop app as
+described at [docs.gents.xyz](https://docs.gents.xyz) instead.
 
 ## Requirements
 
@@ -47,4 +47,57 @@ Launch the app with `--desktop-home` naming an empty directory to exercise first
 without touching your own node.
 
 `AGENTS.md` holds the working rules for changes; the
-[proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
+[proof map](crates/gents/proofs/AGENTS.md) identifies the modeled surfaces.
+
+## Start a Vera home with device enrollment
+
+Build the CLI with `cargo build -p gents-cli --features vera`. For a new home,
+pass `--document-acp vera --create-transport-group` to `gents init` alongside
+your usual model and identity options. The client signs the creation of its
+device group and the admission of this runtime. The JSON result includes
+`transport_group.account` (the client DID) and `transport_group.group` (the
+document ID for later membership changes).
+
+Start the same home with `gents server --transport-account <client-DID>`.
+The server checks the account's certified assignment before opening a listener.
+Registry, endpoint, directory and enrollment operations check membership again
+when they run. Revoking the runtime's membership stops subsequent publication.
+A Vera home started without the account option leaves peer publication idle.
+
+Each Vera home hosts its own deployment. The runtime derives the deployment ID
+from its Node DID, uses that DID as its sole operator, and talks to Vera in
+process. The transport group controls which devices may publish. Enrolling a
+second home in the group leaves each home's deployment and worker intact.
+[Embedded deployment configuration](crates/gents-store/src/local/document_acp/embedded_vera.rs)
+
+## Read the documents assigned to a node
+
+On an embedded Vera home, use the receiving node's local `ConfigAccess`.
+Defra checks its `DacStatus` permission and requires the query subject to match
+the authenticated DID. For example, to read this node's inventory from one issuer:
+
+```rust
+let assignments = access.certified_assignments(defra_node::AssignmentQuery {
+    policy: policy_id,
+    resource,
+    relation,
+    subject: node_did,
+    issuer: issuer_did,
+    not_before: last_accepted_position,
+}).await?;
+```
+
+Use `assignments.object_ids` and `assignments.position` from that single answer.
+A successful empty set clears the inventory for this scope. If a proof is
+unavailable or fails verification, preserve the last accepted inventory. Pass
+its position (term, height and block hash) as the floor on the next read.
+
+A workload owner can use `watch_assignments` to reconcile running work. Its
+`AssignmentRuntime` adapter supplies the collection-specific signature checks
+and start/stop operations. If revision B is withdrawn before the body of C
+arrives, the watcher saves C’s certified revision before stopping B. After a
+restart it finishes outstanding stops even while the authority is unreachable,
+and rejects an older view when reads resume. The applied
+inventory advances after the stop succeeds. C can start once its body is verified.
+[Receiver API](crates/gents-store/src/config_client/assignment_receiver.rs) ·
+[Restart and withdrawal tests](crates/gents-store/src/identity/enrollment_grant/withdrawal_tests.rs)

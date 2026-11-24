@@ -1,0 +1,69 @@
+{
+  "case_id": "courier-eta-no-skill",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "answer",
+      "prompt": "A friend who drives for a courier firm asked me what ETA stands for. Just tell me in a few words.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "skills_loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: %"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file",
+              "load_skill"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "skills_loaded",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)estimated\\s+time\\s+of\\s+arrival"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

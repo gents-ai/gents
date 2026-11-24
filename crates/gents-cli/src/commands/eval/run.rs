@@ -164,7 +164,7 @@ pub(super) async fn run_request(
             .context("evaluation requires a caller identity")?,
         definition_id: args.definition_id.clone(),
         split: args.split,
-        case_ids: None,
+        case_ids: (!args.cases.is_empty()).then(|| args.cases.clone()),
         cells,
         trials_per_case: args.trials,
         seed_base: args.seed_base,
@@ -279,5 +279,82 @@ async fn finish(
     match stopped {
         Some(note) => Err(anyhow!(note)),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::testing::eval_command;
+    use crate::cli::EvalCommand;
+
+    #[test]
+    fn only_the_switch_allows_host_bash_and_only_on_commands_that_run_trials() {
+        for argv in [
+            &["run", "d", "--cell", "a=/p", "--allow-host-bash"][..],
+            &[
+                "batch",
+                "--plan",
+                "p",
+                "--concurrency",
+                "1",
+                "--allow-host-bash",
+            ],
+            &["resume", "r", "--allow-host-bash"],
+        ] {
+            assert!(eval_command(argv).allows_host_bash(), "{argv:?}");
+            let without = &argv[..argv.len() - 1];
+            assert!(!eval_command(without).allows_host_bash(), "{without:?}");
+        }
+        assert!(!eval_command(&["list"]).allows_host_bash());
+    }
+
+    #[test]
+    fn an_empty_switch_is_off_and_an_unknown_one_is_refused() {
+        use crate::cli::parse_switch;
+        for off in ["", " ", "0", "false", "No", "off"] {
+            assert_eq!(parse_switch(off), Ok(false), "{off:?}");
+        }
+        for on in ["1", "true", "YES", "on"] {
+            assert_eq!(parse_switch(on), Ok(true), "{on:?}");
+        }
+        assert!(parse_switch("maybe").unwrap_err().contains("use 1 or 0"));
+    }
+
+    #[test]
+    fn containerized_launchers_reach_run_arguments_through_their_environment() {
+        use clap::CommandFactory;
+        let cli = crate::cli::Cli::command();
+        let eval = cli
+            .find_subcommand("utils")
+            .and_then(|utils| utils.find_subcommand("eval"))
+            .unwrap();
+        let env = |command: &str, id: &str| {
+            eval.find_subcommand(command)
+                .unwrap()
+                .get_arguments()
+                .find(|arg| arg.get_id() == id)
+                .and_then(|arg| arg.get_env())
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        };
+        for command in ["run", "batch", "resume"] {
+            assert_eq!(
+                env(command, "allow_host_bash").as_deref(),
+                Some("GENTS_EVAL_ALLOW_HOST_BASH"),
+                "{command}"
+            );
+        }
+        assert_eq!(env("run", "cases").as_deref(), Some("GENTS_EVAL_CASES"));
+        assert_eq!(
+            env("run", "seed_base").as_deref(),
+            Some("GENTS_EVAL_SEED_BASE")
+        );
+
+        let EvalCommand::Run(args) = eval_command(&[
+            "run", "d", "--cell", "a=/p", "--case", "one,two", "--case", "three",
+        ]) else {
+            panic!("not a run");
+        };
+        assert_eq!(args.cases, ["one", "two", "three"]);
     }
 }

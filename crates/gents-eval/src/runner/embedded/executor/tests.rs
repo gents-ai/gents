@@ -34,7 +34,7 @@ pub(super) async fn configured_trial(
     };
     let mut home = EmbeddedHome::create_temp(name).await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    let agent = install(&spec, &home, &workspace).await.unwrap();
+    let agent = install(&spec, &home, &workspace, &[]).await.unwrap();
     (home, spec, agent)
 }
 
@@ -50,12 +50,15 @@ pub(super) fn assert_failure_class(
 #[test]
 fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
     let workspace = Path::new("/runs/r/trials/t/workspace");
-    let without = trial_tool_ceiling(workspace, false);
-    assert_eq!(
-        (without.file_tools(), without.bash(), without.root()),
-        (FileToolMode::ReadWrite, BashMode::Off, Some(workspace))
-    );
-    let with = trial_tool_ceiling(workspace, true);
+    for isolation in [Isolation::Embedded, Isolation::Contained] {
+        let without = trial_tool_ceiling(workspace, false, isolation);
+        assert_eq!(
+            (without.file_tools(), without.bash(), without.root()),
+            (FileToolMode::ReadWrite, BashMode::Off, Some(workspace)),
+            "{isolation:?}"
+        );
+    }
+    let with = trial_tool_ceiling(workspace, true, Isolation::Embedded);
     assert_eq!(
         (with.file_tools(), with.bash(), with.root()),
         (
@@ -69,6 +72,33 @@ fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
             .bash
             .execution_mode,
         CommandExecutionMode::WorkspaceWrite
+    );
+}
+
+#[tokio::test]
+async fn only_a_contained_trial_runs_the_bash_its_definition_asks_for_unsandboxed() {
+    let workspace = Path::new("/runs/r/trials/t/workspace");
+    let contained = trial_tool_ceiling(workspace, true, Isolation::Contained);
+    assert_eq!(
+        (contained.bash(), contained.root()),
+        (BashMode::Unrestricted, Some(workspace))
+    );
+    assert_eq!(
+        gents_tools::test_support::tool_policy(&contained)
+            .bash
+            .execution_mode,
+        CommandExecutionMode::Unrestricted
+    );
+
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        PathBuf::from("/runs"),
+        crate::test_support::runtime_handle(),
+    );
+    assert_eq!(TrialExecutor::isolation(&executor), Isolation::Embedded);
+    assert_eq!(
+        TrialExecutor::isolation(&executor.contained()),
+        Isolation::Contained
     );
 }
 
@@ -102,7 +132,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         evaluator.clone(),
         evaluator.client_signing_capability().unwrap(),
     );
-    let error = install(&spec, &home, &dir.path().join("workspace"))
+    let error = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap_err();
     let reason = format!("{error:#}");
@@ -300,7 +330,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         .await
         .unwrap();
     let evaluator = bind_test_evaluator(&mut spec, &mut home);
-    let agent_did = install(&spec, &home, &workspace).await.unwrap();
+    let agent_did = install(&spec, &home, &workspace, &[]).await.unwrap();
     let locator = TrialLocator {
         trial_node_did: home.did().to_owned(),
         session_id: "s-1".into(),
@@ -342,7 +372,8 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     )
     .unwrap();
     let agent =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -358,7 +389,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     let request = row.try_into().unwrap();
     let mut lifecycle = gents_session::test_support::admitted_client_lifecycle(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         &request,
         agent.as_ref(),
     )
@@ -628,4 +659,142 @@ fn write_minimal_pack(root: &Path) {
         serde_json::to_vec(&json!({"node": {}})).unwrap(),
     )
     .unwrap();
+}
+
+/// A subject whose agent is an Engineer that may install packs: the grant a
+/// trial's core packs are installed through.
+pub(super) fn write_engineer_pack(root: &Path) {
+    std::fs::create_dir_all(root).unwrap();
+    std::fs::write(root.join("README.md"), "# engineer fixture\n").unwrap();
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1,
+            "name": "engineer_fixture",
+            "version": "1.0.0",
+            "description": "An Engineer that installs packs.",
+            "authors": ["gents-ai contributors"],
+            "kind": "documents",
+            "assets": ["README.md", "pack_config.json"],
+            "config": "pack_config.json",
+            "inference_slots": [{
+                "name": "primary",
+                "description": "Runs the subject agent.",
+                "agents": ["subject"],
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [{
+                "agent_slot": "subject",
+                "display_name": "Subject",
+                "context_id": "subject-context",
+                "inference_profile_id": "gents:inference-slot:primary",
+                "tags": [gents_tools::builtin::self_config::ENGINEER_AGENT_TAG],
+            }],
+            "contexts": [{
+                "context_id": "subject-context",
+                "system_prompt": "Work.",
+                "tools_id": "subject-tools",
+            }],
+            "tools": [{
+                "tools_id": "subject-tools",
+                "host": {"files": {"mode": "ReadWrite"}, "bash": {"mode": "Off"}},
+                "self_config": gents_tools::builtin::self_config::engineer_self_config(),
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// A release archive for the core pack `gents/<name>` that ships one skill,
+/// `core-<name>`, written under `dir`.
+pub(super) fn core_pack_archive(dir: &Path, name: &str) -> Vec<u8> {
+    let root = dir.join(name);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("README.md"), "# core pack fixture\n").unwrap();
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": name, "namespace": "gents",
+            "version": "1.0.0", "description": "A core pack fixture",
+            "authors": ["tests"], "tags": [], "kind": "documents",
+            "assets": ["README.md", "pack_config.json"], "dependencies": [],
+            "config": "pack_config.json",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+            "skills": [{"skill_id": format!("core-{name}"),
+                "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                "description": "A core skill.", "instructions": "Use it."}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    gents_pack::pack::archive::write_pack(&root, &mut bytes).unwrap();
+    bytes
+}
+
+/// A core pack the trial cannot install leaves the trial without evidence,
+/// which grades as infrastructure, never as the subject's failure; the
+/// install's own error names what the build lacks.
+#[tokio::test]
+async fn a_core_pack_the_build_does_not_carry_fails_the_trial_as_infrastructure() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs_dir = dir.path().join("runs");
+    let pack_dir = runs_dir
+        .join("run-1")
+        .join("cells")
+        .join("base")
+        .join("pack");
+    write_engineer_pack(&pack_dir);
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        core_packs: vec!["gents/pack_builder".into()],
+        trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
+        ..TrialSpec::empty_for_tests("t1")
+    };
+    let mut home = EmbeddedHome::create_temp("uncarried-core-pack")
+        .await
+        .unwrap();
+    let evaluator = bind_test_evaluator(&mut spec, &mut home);
+    let error = install(&spec, &home, &dir.path().join("workspace"), &[])
+        .await
+        .unwrap_err();
+    let reason = format!("{error:#}");
+    assert!(
+        reason.contains("gents/pack_builder") && reason.contains("carries no"),
+        "{reason}"
+    );
+    home.node.shutdown().await.expect("shutdown node");
+
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        runs_dir,
+        crate::test_support::runtime_handle(),
+    )
+    .with_evaluator_identity(
+        evaluator.clone(),
+        evaluator.client_signing_capability().unwrap(),
+    )
+    .with_core_pack_archives(&[]);
+    executor.provision(&spec).await;
+    let evidence = executor.execute(&spec, CancellationToken::new()).await;
+    assert!(evidence.stages.is_empty(), "{:?}", evidence.stages);
+    assert_eq!(evidence.anchor.requests, 0);
 }

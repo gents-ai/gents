@@ -1,7 +1,7 @@
 //! `gents config pack wire`: the command over the plugin wiring writer, and
 //! the host tool roots an installed pack's agents read.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents_pack::pack::approvals::{Approvals, PackApproval};
 use gents_pack::pack::plugin_wire::{wire_in_planned, WireRequest};
 use gents_pack::pack::resolved_pack::ResolvedPack;
@@ -105,66 +105,6 @@ fn approvals(home: &std::path::Path) -> Result<Approvals> {
 /// (`Configuration.WireRecord.ownHome`).
 fn serves_own_home(home: &std::path::Path, owner: &str) -> bool {
     gents_service::home_state::resolve_node_did(Some(home), None).is_ok_and(|node| node == owner)
-}
-
-/// The agents `pack` would run under its installer's root on the node
-/// `node_did`, read from its archive alone: what a starter pack's status
-/// shows before any node plan exists. It is a display, not the grant's
-/// source: an approval carries these rows and the grant is their
-/// intersection with what the install recorded
-/// ([`gents_tools::surface::grant_pack_root_readers`]). A config that does
-/// not load is an error, never "no such agents": what was not read was not
-/// shown.
-pub(crate) fn listed_root_agents(
-    pack: &gents_pack::pack::resolved_pack::ResolvedPack,
-    node_did: &str,
-) -> Result<Vec<gents_pack::pack::InstallerRootAgent>> {
-    let coordinate = format!(
-        "{}/{}",
-        pack.manifest().metadata.namespace,
-        pack.manifest().name
-    );
-    if pack.manifest().config.is_none() {
-        return Ok(Vec::new());
-    }
-    gents_pack::pack::load_pack_authoring_config(
-        pack.manifest(),
-        &gents_pack::pack::PackInstallOptions {
-            node_did: node_did.to_owned(),
-        },
-        &|path| Ok(pack.asset(path)?.to_vec()),
-        &|name| std::env::var(name).ok(),
-    )
-    .and_then(|authored| {
-        let tools = gents_pack::pack::tools_taking_installer_root(&authored.documents.tools)?;
-        // An authored agent names a slot, not a DID, so it is read as written.
-        let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
-        Ok(rows("agents")
-            .filter_map(|agent| {
-                let selected = rows("contexts")
-                    .find(|context| {
-                        context["context_id"].is_string()
-                            && context["context_id"] == agent["context_id"]
-                    })
-                    .and_then(|context| context["tools_id"].as_str())
-                    .filter(|selected| tools.iter().any(|id| id == selected))?;
-                Some(gents_pack::pack::InstallerRootAgent {
-                    coordinate: coordinate.clone(),
-                    agent: agent["agent_slot"]
-                        .as_str()
-                        .or(agent["agent_did"].as_str())?
-                        .to_owned(),
-                    name: agent["display_name"].as_str().map(ToOwned::to_owned),
-                    tools: selected.to_owned(),
-                })
-            })
-            .collect())
-    })
-    .with_context(|| {
-        format!(
-            "{coordinate} did not load for its host tool review, so the folder its agents would read is unknown"
-        )
-    })
 }
 
 #[cfg(test)]

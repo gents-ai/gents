@@ -208,7 +208,7 @@ fn task_fire_requires_its_canonical_identity_and_exact_session() {
 async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     use gents_store::identity::NodeIdentity;
     let identity_dir = tempfile::tempdir().unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "task-admission-atomic",
         crate::lifecycle_hooks::composition(),
     )
@@ -681,7 +681,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
 
 #[tokio::test]
 async fn reserved_trigger_cause_is_refused() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "reserved-trigger-cause-refused",
         crate::lifecycle_hooks::composition(),
     )

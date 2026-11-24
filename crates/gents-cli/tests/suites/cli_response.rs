@@ -19,7 +19,7 @@ use crate::support::*;
 struct ResponseTestRuntime {
     _tempdir: tempfile::TempDir,
     home_dir: PathBuf,
-    _mock_endpoint: MockModelEndpoint,
+    _mock_endpoint: gents_inference::test_support::scripted_backend::ScriptedBackend,
     _serve: ServeProcess,
     graphql: String,
     node_did: String,
@@ -31,7 +31,10 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-response-{label}-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-response-{label}-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,

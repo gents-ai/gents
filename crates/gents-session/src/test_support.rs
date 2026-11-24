@@ -1,4 +1,9 @@
+mod agent_home;
+mod claimed_request;
 pub mod lineage_fixtures;
+
+pub use agent_home::AgentHome;
+pub use claimed_request::{ClaimedRequest, ClaimedRequestBuilder, Stage};
 
 /// An explicitly empty set of lifecycle plugins, for a test below the bundled
 /// plugins whose code reaches no lifecycle point. A test that reaches one
@@ -17,7 +22,7 @@ pub struct ScopedWatcherFixture {
     pub agent: Arc<dyn gents_store::identity::NodeIdentity>,
     pub access: gents_store::config_client::ConfigAccess,
     pub client_access: gents_store::config_client::ConfigAccess,
-    pub _home: gents_inference::test_support::TestDb,
+    pub _home: gents_store::test_support::TestStore,
 }
 
 impl ScopedWatcherFixture {
@@ -25,7 +30,7 @@ impl ScopedWatcherFixture {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::identity::NodeIdentity;
 
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "scoped-watcher",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -240,13 +245,13 @@ impl ScopedWatcherFixture {
 use crate::session::{output, SequencedMessage};
 use gents_inference::llm::message::Message;
 
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::RequestLifecycle;
 use crate::request::streaming::DefraStreamWriter;
 use defra_node::Node as EmbeddedNode;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub struct FixtureGuard {
-    pub _db: gents_inference::test_support::TestDb,
+    pub _db: gents_store::test_support::TestStore,
     pub owner: gents_store::config_client::ConfigAccess,
 }
 
@@ -272,76 +277,24 @@ pub async fn fixture_with_ids(
     RequestLifecycle,
     DefraStreamWriter,
 ) {
-    use gents_store::identity::NodeIdentity;
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+    let home = gents_documents::test_support::SignedHome::start(
         name,
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let node = db.node.clone();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let create = crate::request::lifecycle::build_signed_client_request(
-        &owner,
-        crate::request::lifecycle::RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            crate::request::lifecycle::RequestIdentity {
-                request_id: request_id.into(),
-                node_did: db.node_identity.did().into(),
-                requester_did: Some(user.did().into()),
-                agent_did: agent.did().into(),
-                session_id: session_id.into(),
-                content: "hello".into(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-        ),
-        crate::request::lifecycle::RequestSigner::Identity(&user),
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let claimed = ClaimedRequest::client_signed(&home, &binding)
+        .ids(request_id, session_id)
+        .drive(Stage::Executing)
+        .await;
+    let writer = claimed.writer.expect("an executing request has its writer");
+    let (db, _user, owner) = home.into_parts();
+    (
+        db.node.clone(),
+        FixtureGuard { _db: db, owner },
+        claimed.lifecycle,
+        writer,
     )
-    .await
-    .unwrap();
-    crate::request::lifecycle::submit_client_request(&owner, &create)
-        .await
-        .unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest {{ {} }} }}",
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = row.try_into().unwrap();
-    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        node.clone(),
-        db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, agent.did())
-        .await
-        .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer =
-        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
-            .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, FixtureGuard { _db: db, owner }, lifecycle, writer)
 }
 
 pub async fn fixture_query(
@@ -565,8 +518,8 @@ pub async fn seed_owned_agent(
 pub async fn serve_client_node(
     name: &str,
     composition: gents_store::node_extension::Extensions,
-) -> (gents_inference::test_support::TestDb, KeyIdentity) {
-    let db = gents_inference::test_support::test_db(name, composition).await;
+) -> (gents_store::test_support::TestStore, KeyIdentity) {
+    let db = gents_store::test_support::TestStore::start(name, composition).await;
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     (db, runtime)
 }
@@ -646,7 +599,7 @@ pub async fn session_rewrite_rows(
 pub async fn fork_reader_node(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
@@ -701,11 +654,16 @@ pub async fn assert_block_signer(node: &defra_node::Node, cid: &str, signer: &st
     );
 }
 
-pub async fn test_p2p_db(name: &str) -> gents_inference::test_support::TestDb {
-    let db = gents_inference::test_support::embedded::test_db_with_p2p(
+pub async fn test_p2p_db(name: &str) -> gents_store::test_support::TestStore {
+    let db = gents_store::test_support::TestStore::start_configured(
         name,
         crate::test_support::no_lifecycle_plugins(),
-        |path| gents_p2p::test_support::transport::test_p2p_config(&Default::default(), path),
+        std::sync::Arc::new(|home, builder| {
+            builder.with_p2p(gents_p2p::test_support::transport::test_p2p_config(
+                &Default::default(),
+                &home.join("data"),
+            ))
+        }),
     )
     .await;
     let (db, _user, _access) =

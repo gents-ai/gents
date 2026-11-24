@@ -1,0 +1,4 @@
+# Use the group document ID and its ACP owner to identify an account's group.
+type AccountDeviceGroup @policy(id: "$household", resource: "device_groups") {
+    account_did: String! @immutable
+}

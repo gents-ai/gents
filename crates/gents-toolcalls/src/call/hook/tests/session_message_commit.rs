@@ -119,7 +119,7 @@ async fn dispatch_with_lost_receipt(
 
 #[tokio::test]
 async fn agent_new_inherits_the_signed_caller_directory() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "agent-new-cwd",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -167,7 +167,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
 
 #[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "lost-commit-receipt",
         gents_session::test_support::no_lifecycle_plugins(),
     )

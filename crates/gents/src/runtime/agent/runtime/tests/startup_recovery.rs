@@ -55,7 +55,9 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ScriptedS
         _updated_at: &str,
     ) -> anyhow::Result<()> {
         let (script, attempts) = match snapshot.process_state {
-            NodeReadinessProcessState::Recovering if snapshot.active_generation > 0 => {
+            NodeReadinessProcessState::Uninitialized | NodeReadinessProcessState::Recovering
+                if snapshot.active_generation > 0 =>
+            {
                 (&self.source, &self.source_attempts)
             }
             NodeReadinessProcessState::Ready => (&self.ready, &self.ready_attempts),
@@ -174,8 +176,12 @@ async fn wait_for_backend_probe_status(
 
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "startup-probe-discovers-model",
         "backend-startup-probe",
         mock_endpoint.endpoint(),
@@ -236,7 +242,6 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     assert_eq!(
         observed,
         vec![
-            crate::runtime::agent::ProcessLifecycleState::Recovering,
             crate::runtime::agent::ProcessLifecycleState::Ready,
             crate::runtime::agent::ProcessLifecycleState::ShuttingDown,
             crate::runtime::agent::ProcessLifecycleState::Shutdown,
@@ -267,12 +272,10 @@ async fn delete_tools_document(access: &gents_store::config_client::ConfigAccess
 
 #[tokio::test]
 async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config() {
-    let fixture = RuntimeHome::new(
+    let fixture = held_runtime_fixture(
         "startup-invalid-config",
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
-        1,
-        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -363,8 +366,12 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
 
 #[tokio::test]
 async fn router_generation_persistence_failure_terminates_run_agent_before_dispatch() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "router-generation-persistence-run-agent",
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
@@ -427,8 +434,12 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
 
 #[tokio::test]
 async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "slot-drain-failure",
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
@@ -489,8 +500,12 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
 async fn startup_publication_follows_the_lean_persistence_model() {
     use gents_lean_vocab::families::startup_publication_startup;
     for case in gents_lean_vocab::families::startup_publication_startup::cases::<String>() {
-        let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-        let fixture = RuntimeHome::new(
+        let mock_endpoint =
+            gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+                .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+                .start()
+                .unwrap();
+        let fixture = held_runtime_fixture_with_status(
             "startup-publication",
             "backend-startup-publication",
             mock_endpoint.endpoint(),
@@ -594,8 +609,12 @@ async fn startup_publication_follows_the_lean_persistence_model() {
 /// shuts the generation-one slot down and `run_agent` returns only after it exits.
 #[tokio::test]
 async fn startup_source_failure_returns_only_after_the_slot_exits() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "startup-source-slot-join",
         "backend-startup-source-slot-join",
         mock_endpoint.endpoint(),
@@ -691,7 +710,7 @@ async fn startup_source_failure_returns_only_after_the_slot_exits() {
 
 #[tokio::test]
 async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_runtime() {
-    let fixture = RuntimeHome::new(
+    let fixture = held_runtime_fixture_with_status(
         "startup-all-unavailable",
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
@@ -788,7 +807,7 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
 
 #[tokio::test]
 async fn run_agent_recovers_backend_availability_without_restart() {
-    let fixture = RuntimeHome::new(
+    let fixture = held_runtime_fixture_with_status(
         "startup-backend-recovers",
         "backend-recovers",
         "http://127.0.0.1:9/v1",
@@ -857,6 +876,64 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         .expect("agent run should return ok");
 }
 
+async fn submit_capacity_request(
+    fixture: &HeldRuntimeFixture,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+) -> String {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+    let user_did = fixture.user.did();
+    let node_did = fixture.db.node_identity.did();
+    let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
+        &fixture.user_access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.to_owned(),
+                node_did: node_did.to_owned(),
+                requester_did: Some(user_did.to_owned()),
+                agent_did: agent_did.to_owned(),
+                session_id: session_id.to_owned(),
+                content: "hello".to_owned(),
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(user_did),
+        ),
+        RequestSigner::Identity(&fixture.user),
+    )
+    .await
+    .unwrap();
+    gents_session::session::update_session_title_with_source(
+        &fixture.user_access,
+        node_did,
+        Some(user_did),
+        session_id,
+        "capacity shutdown test",
+        gents_protocol::session::SessionTitleSource::User,
+    )
+    .await
+    .unwrap();
+    gents_session::request::lifecycle::submit_client_request(&fixture.user_access, &create)
+        .await
+        .unwrap();
+    let request = escape_graphql_string(request_id);
+    let response = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("submitted request must be unique")
+    };
+    row["_docID"].as_str().unwrap().to_owned()
+}
+
 async fn wait_for_held_inference_state(
     access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
@@ -882,8 +959,12 @@ async fn wait_for_held_inference_state(
 
 #[tokio::test]
 async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity() {
-    let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "shutdown-waiting-request",
         "backend-blocked",
         mock_endpoint.endpoint(),
@@ -903,7 +984,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     .unwrap();
     let second_agent =
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &second_binding).unwrap();
-    grant_agent_operations(&node, identity.as_ref(), second_agent.as_ref()).await;
+    grant_held_agent_operations(&node, identity.as_ref(), second_agent.as_ref()).await;
     let first_did = first_agent.did().to_owned();
     let second_did = second_agent.did().to_owned();
     write_runtime_documents(
@@ -947,25 +1028,23 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let first_request_doc_id = fixture
-        .submit_request(
-            &first_did,
-            "req-shutdown-running",
-            "session-shutdown-running",
-            "hello",
-        )
-        .await;
+    let first_request_doc_id = submit_capacity_request(
+        &fixture,
+        &first_did,
+        "req-shutdown-running",
+        "session-shutdown-running",
+    )
+    .await;
     wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "processing").await;
     wait_for_held_inference_state(&first_access, "req-shutdown-running", "running").await;
 
-    let queued_request_doc_id = fixture
-        .submit_request(
-            &second_did,
-            "req-shutdown-waiting",
-            "session-shutdown-waiting",
-            "hello",
-        )
-        .await;
+    let queued_request_doc_id = submit_capacity_request(
+        &fixture,
+        &second_did,
+        "req-shutdown-waiting",
+        "session-shutdown-waiting",
+    )
+    .await;
     wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "processing").await;
     wait_for_held_inference_state(&second_access, "req-shutdown-waiting", "queued").await;
 
@@ -1018,8 +1097,12 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         ids
     }
 
-    let endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "snapshot-demotion",
         "demotion-backend",
         endpoint.endpoint(),
@@ -1141,27 +1224,35 @@ async fn write_runtime_documents(
 
 /// A node with runtime schemas, an identity and a default agent backend
 /// bound to the returned model endpoint, which the caller keeps alive.
-async fn missing_plugin_node(label: &str) -> (RuntimeHome, String, MockModelEndpoint) {
-    let endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+async fn missing_plugin_node(
+    label: &str,
+) -> (
+    HeldRuntimeFixture,
+    String,
+    gents_inference::test_support::scripted_backend::ScriptedBackend,
+) {
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture(
         &format!("startup-{label}"),
         &format!("backend-{label}"),
         endpoint.endpoint(),
-        1,
-        "healthy",
     )
     .await;
     let node_did = fixture.db.node_identity.did().to_owned();
     (fixture, node_did, endpoint)
 }
 
-async fn documents_agent(fixture: &RuntimeHome) -> (crate::Gents, tempfile::TempDir) {
+async fn documents_agent(fixture: &HeldRuntimeFixture) -> (crate::Gents, tempfile::TempDir) {
     documents_agent_with_ceiling(fixture, ToolCeiling::meta_only()).await
 }
 
 /// [`documents_agent`] with a chosen tool ceiling, so a test can run host tools.
 async fn documents_agent_with_ceiling(
-    fixture: &RuntimeHome,
+    fixture: &HeldRuntimeFixture,
     tool_ceiling: ToolCeiling,
 ) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
@@ -1265,7 +1356,7 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
 
     let broken_identity =
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &broken_binding).unwrap();
-    grant_agent_operations(&node, identity.as_ref(), broken_identity.as_ref()).await;
+    grant_held_agent_operations(&node, identity.as_ref(), broken_identity.as_ref()).await;
     let broken_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         broken.parse().unwrap(),
@@ -1405,7 +1496,7 @@ async fn an_agent_with_host_tools_under_an_unread_root_is_rejected_with_the_gran
 
     let agent_identity =
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-    grant_agent_operations(&node, identity.as_ref(), agent_identity.as_ref()).await;
+    grant_held_agent_operations(&node, identity.as_ref(), agent_identity.as_ref()).await;
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
@@ -1667,8 +1758,12 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn storage_full_readiness_writes_do_not_fail_or_stall_shutdown() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = RuntimeHome::new(
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
+    let fixture = held_runtime_fixture_with_status(
         "shutdown-storage-full",
         "backend-shutdown-storage-full",
         mock_endpoint.endpoint(),

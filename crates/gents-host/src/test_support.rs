@@ -215,7 +215,7 @@ async fn serve(
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let mut http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
-    let served = gents::runtime::embedded::ServedNode::default();
+    let served = gents_store::local::home::ServedNode::default();
     if runtime.is_some() {
         http = http.with_authenticated_routes(gents::runtime::embedded::agent_identity_routes(
             served.clone(),
@@ -382,10 +382,10 @@ impl ClientHome {
         let home = gents::runtime::embedded::EmbeddedHome::in_tempdir(directory, None)
             .await
             .unwrap();
-        let access = user_access(home.graphql_endpoint().unwrap(), &user);
+        let access = user_access(home.graphql_endpoint(), &user);
         gents_documents::test_support::enroll_test_user(
             &home.node,
-            home.identity.as_ref(),
+            home.node_identity.as_ref(),
             &user,
             &access,
         )
@@ -418,7 +418,7 @@ impl ClientHome {
     }
 
     pub fn graphql(&self) -> &str {
-        self.home.graphql_endpoint().unwrap()
+        self.home.graphql_endpoint()
     }
 
     /// Provisions a managed Agent and publishes it, with a placeholder
@@ -431,7 +431,7 @@ impl ClientHome {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::identity::NodeIdentity as _;
 
-        let runtime = self.home.identity.as_ref();
+        let runtime = self.home.node_identity.as_ref();
         let binding = gents_store::identity::provision_agent_identity_authorized(
             self.node(),
             runtime,
@@ -503,9 +503,11 @@ impl ClientHome {
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     ) -> gents_store::config_client::ConfigAccess {
         use gents_store::config_client::ConfigAccess;
-        let agent =
-            gents_store::identity::resolve_agent_identity(self.home.identity.as_ref(), binding)
-                .unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(
+            self.home.node_identity.as_ref(),
+            binding,
+        )
+        .unwrap();
         gents_store::identity::GrantSet::AgentBaseline
             .grant(
                 &ConfigAccess::local_as(

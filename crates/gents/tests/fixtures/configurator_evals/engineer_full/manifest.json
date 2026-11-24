@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_full",
+  "version": "0.1.0",
+  "description": "The Engineer that gents init --engineer makes, as an eval subject: its prompt, Tools, mailbox surface and own target, with host bash off as an embedded trial requires. A definition installs the core packs through its subject core_packs.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agents/engineer/system_prompt.md",
+    "pack_config.json"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "engineer",
+      "description": "Runs the Engineer and every agent its core packs ship.",
+      "agents": [
+        "engineer"
+      ]
+    }
+  ]
+}

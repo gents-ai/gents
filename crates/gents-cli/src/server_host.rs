@@ -49,7 +49,7 @@ pub async fn ensure_standard_home_with_core_packs(
 
 async fn ensure_standard_home_inner(
     options: ProvisionOptions,
-    archives: crate::commands::init::default_packs::Archives<'_>,
+    archives: gents::core_packs::Archives<'_>,
 ) -> Result<()> {
     if let Some(mut stored) = gents_service::home_state::read_init_config(&options.home)? {
         stored.tool_ceiling = options.tool_ceiling;

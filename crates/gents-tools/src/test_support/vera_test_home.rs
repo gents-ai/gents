@@ -59,7 +59,7 @@ pub async fn serve(
     home: &Home,
     document_acp: DocumentAcp,
 ) -> anyhow::Result<(Arc<defra_node::Node>, String)> {
-    serve_with(home, document_acp, None).await
+    serve_with(home, document_acp, None, None).await
 }
 
 /// Serve `home` over HTTP behind its edge with the owner-staged route, as the
@@ -68,13 +68,14 @@ pub async fn serve_with_owner_staged(
     home: &Home,
     document_acp: DocumentAcp,
 ) -> anyhow::Result<(Arc<defra_node::Node>, String)> {
-    serve_with(home, document_acp, Some(OwnerStagedRoute::new())).await
+    serve_with(home, document_acp, Some(OwnerStagedRoute::new()), None).await
 }
 
 async fn serve_with(
     home: &Home,
     document_acp: DocumentAcp,
     owner_staged: Option<OwnerStagedRoute>,
+    transport_account: Option<&identity::Did>,
 ) -> anyhow::Result<(Arc<defra_node::Node>, String)> {
     let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -90,14 +91,23 @@ async fn serve_with(
         let edge = HttpEdge::new(document_acp, home.node.did());
         move |router| edge.wrap(router)
     }));
+    let p2p = transport_account.map(|_| {
+        gents_p2p::test_support::transport::test_p2p_config(&Default::default(), &home.data)
+    });
     let (node, _admission) = ProtectedBackendStore::open(&home.data, &home.key, &home.lock)
         .await?
-        .preflight(&home.key, &home.node, document_acp)
+        .preflight_with_account(&home.key, &home.node, document_acp, transport_account)
         .await?
         .start_node_with_projection(
             &home.key,
             home.node.clone(),
-            move |builder: defra_node::NodeBuilder| builder.with_http(http),
+            move |builder: defra_node::NodeBuilder| {
+                let builder = builder.with_http(http);
+                match p2p {
+                    Some(config) => builder.with_p2p(config),
+                    None => builder,
+                }
+            },
             Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
             &gents_session::test_support::no_lifecycle_plugins(),

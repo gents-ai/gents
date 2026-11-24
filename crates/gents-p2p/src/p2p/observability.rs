@@ -21,6 +21,8 @@ pub struct P2pSyncStatusSnapshot {
     pub request_dispatch: P2pRequestDispatchSnapshot,
     pub inbound_budget: Vec<P2pInboundClassSnapshot>,
     pub peer_fetches: Vec<P2pPeerFetchSnapshot>,
+    #[serde(default)]
+    pub pending_dag_fetch_slots: P2pPendingDagFetchSlots,
     pub non_authoritative_broadcast_tasks: usize,
     pub non_authoritative_broadcast_high_water: usize,
     pub non_authoritative_broadcast_rejected_total: u64,
@@ -68,6 +70,25 @@ pub struct P2pSyncStatusSnapshot {
     pub pending_dag_tie_reorders: u64,
     #[serde(default)]
     pub pending_dag_peer_occupancy: Vec<P2pPendingPeerOccupancySnapshot>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pPendingDagFetchSlots {
+    pub limit: usize,
+    pub held: usize,
+    pub scheduled: usize,
+    pub claimed: usize,
+    pub running: usize,
+    pub merging: usize,
+    pub roots: Vec<P2pPendingDagFetchSlot>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pPendingDagFetchSlot {
+    pub root_cid: String,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -188,6 +209,10 @@ pub struct P2pPushBacklogSnapshot {
     pub head_hints_failed_transport: u64,
     pub head_hints_failed_local: u64,
     pub peer_capacity_parks_total: u64,
+    #[serde(default)]
+    pub parked_total: u64,
+    #[serde(default)]
+    pub head_hints_parked_offline: u64,
     pub per_peer: Vec<P2pPeerBacklogSnapshot>,
 }
 
@@ -200,6 +225,12 @@ pub struct P2pPeerBacklogSnapshot {
     pub active_jobs: usize,
     pub consecutive_failures: u32,
     pub cooldown_remaining_ms: u64,
+    #[serde(default)]
+    pub failed_total: u64,
+    #[serde(default)]
+    pub parked_total: u64,
+    #[serde(default)]
+    pub last_success_at_ms: u64,
 }
 
 pub trait P2pSyncStatusAdapter {
@@ -296,6 +327,8 @@ mod tests {
                 head_hints_failed_transport: 149,
                 head_hints_failed_local: 151,
                 peer_capacity_parks_total: 13,
+                parked_total: 19,
+                head_hints_parked_offline: 23,
                 per_peer: vec![PeerBacklogSnapshot {
                     peer_id: "peer-a".to_string(),
                     queued_items: 4,
@@ -303,6 +336,9 @@ mod tests {
                     active_jobs: 1,
                     consecutive_failures: 3,
                     cooldown_remaining_ms: 750,
+                    failed_total: 3,
+                    parked_total: 2,
+                    last_success_at_ms: 700,
                 }],
             },
             broadcast_coalesced_total: 41,
@@ -370,6 +406,7 @@ mod tests {
                     oversized_resets: 19,
                 },
             ],
+            pending_dag_fetch_slots: Default::default(),
             peer_fetches: vec![
                 PeerFetchStats {
                     peer: "peer-fetch-a".into(),
@@ -500,6 +537,8 @@ mod tests {
                     head_hints_failed_transport: 149,
                     head_hints_failed_local: 151,
                     peer_capacity_parks_total: 13,
+                    parked_total: 19,
+                    head_hints_parked_offline: 23,
                     per_peer: vec![P2pPeerBacklogSnapshot {
                         peer_id: "peer-a".to_string(),
                         queued_items: 4,
@@ -507,6 +546,9 @@ mod tests {
                         active_jobs: 1,
                         consecutive_failures: 3,
                         cooldown_remaining_ms: 750,
+                        failed_total: 3,
+                        parked_total: 2,
+                        last_success_at_ms: 700,
                     }],
                 },
                 push_retry_markers: P2pPushRetryMarkerSnapshot {
@@ -580,6 +622,7 @@ mod tests {
                         oversized_resets: 19,
                     },
                 ],
+                pending_dag_fetch_slots: Default::default(),
                 peer_fetches: vec![
                     P2pPeerFetchSnapshot {
                         peer: "peer-fetch-a".into(),

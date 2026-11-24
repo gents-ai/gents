@@ -1255,3 +1255,131 @@ async fn hidden_tools_stay_out_of_the_provider_request_through_request_binding()
     assert_eq!(names, ["script"]);
     assert!(tools[1].hidden());
 }
+
+#[cfg(feature = "native")]
+#[tokio::test]
+async fn responses_reasoning_returns_only_to_its_issuer_whatever_the_prefix_became() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::claude_messages_body::ReplayWire;
+    use crate::openai_wire::OpenAiWireApi;
+    use crate::provider_input::replay_frontier::FlatItem;
+    use gents_protocol::message::{Reasoning, ReasoningContent};
+
+    let tag = provider_tag(0);
+    let issuer = ReplayIssuer {
+        family: "OpenAiCompatible".into(),
+        endpoint: "https://api.openai.test".into(),
+    };
+    let content = vec![
+        AssistantContent::Reasoning(Reasoning {
+            id: Some("rs_1".into()),
+            content: vec![ReasoningContent::Encrypted("sealed-1".into())],
+        }),
+        AssistantContent::Text(Text {
+            text: "visible".into(),
+        }),
+    ];
+    let rows = vec![ReplayEvidenceRow {
+        tag: tag.clone(),
+        evidence: ResolvedReplayEvidence {
+            reasoning: crate::claude_messages_body::reasoning_witness(&content),
+            issuer: issuer.clone(),
+            wire: ReplayWire::Responses,
+            captured: Some(vec![FlatItem::Ordinary(
+                b"a prefix this request lacks".to_vec(),
+            )]),
+            ..evidence_row(&tag, "header", Vec::new()).evidence
+        },
+    }];
+    let body_for =
+        |kind: BackendProviderKind, wire: OpenAiWireApi, replay_issuer: Option<ReplayIssuer>| {
+            let rows = rows.clone();
+            let tag = tag.clone();
+            let content = content.clone();
+            async move {
+                let mut config = replay_assembly_config();
+                config.provider_input_counter = Arc::new(
+                    crate::provider_input::ProviderInputCounter::new(kind, wire, "test-model"),
+                );
+                let replay = LoopReplayInput {
+                    issuer: replay_issuer,
+                    wire: config.provider_input_counter.profile().replay_wire(),
+                    resolve: Some(Arc::new(move |_| {
+                        let rows = rows.clone();
+                        Box::pin(async move { Ok(rows) })
+                    })),
+                    ..LoopReplayInput::default()
+                };
+                let mut history = vec![
+                    TaggedMessage::unassociated(Message::user("prompt")),
+                    TaggedMessage {
+                        message: Message::Assistant {
+                            request_id: None,
+                            id: Some("msg_1".into()),
+                            content,
+                        },
+                        source: Some(tag),
+                        physical_header: Some("header".into()),
+                        block_indices: vec![0, 1],
+                        stub_receipts: Vec::new(),
+                    },
+                ];
+                let mut new = vec![TaggedMessage::unassociated(Message::user("next"))];
+                let request = assemble_provider_request(
+                    &assembly_only(),
+                    &mut history,
+                    &mut new,
+                    &[],
+                    &config,
+                    &replay,
+                )
+                .await
+                .unwrap();
+                config
+                    .provider_input_counter
+                    .project_body(&request)
+                    .unwrap()
+            }
+        };
+
+    let same = body_for(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::Responses,
+        Some(issuer.clone()),
+    )
+    .await;
+    assert_eq!(
+        same["input"].as_array().unwrap()[1..3],
+        [
+            serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [],
+                "encrypted_content": "sealed-1"}),
+            serde_json::json!({"type": "message", "id": "msg_1", "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "visible", "annotations": []}]}),
+        ],
+        "{same}"
+    );
+
+    let other_backend = body_for(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::Responses,
+        Some(ReplayIssuer {
+            endpoint: "https://other.test".into(),
+            ..issuer.clone()
+        }),
+    )
+    .await;
+    let chat = body_for(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        Some(issuer),
+    )
+    .await;
+    for body in [other_backend, chat] {
+        let text = body.to_string();
+        assert!(
+            !text.contains("sealed-1") && !text.contains("rs_1") && text.contains("visible"),
+            "{text}"
+        );
+    }
+}

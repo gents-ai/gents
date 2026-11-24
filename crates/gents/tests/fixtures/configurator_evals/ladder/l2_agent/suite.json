@@ -1,0 +1,14 @@
+{
+  "id": "l2-agent",
+  "title": "Agent configuration",
+  "coverage": [
+    "context and tool selection",
+    "least privilege",
+    "protected Engineer",
+    "in-place edits",
+    "reentry",
+    "restore a prompt in place"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

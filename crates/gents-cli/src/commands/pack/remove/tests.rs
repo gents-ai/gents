@@ -928,7 +928,9 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             "did:key:remote",
             home.path(),
             &request,
-            gents_service::home_state::load_held_user_identity,
+            gents_pack::pack::plugin_wire::HeldUser::Load(
+                gents_service::home_state::load_held_user_identity,
+            ),
         )
         .await
         .unwrap_err();

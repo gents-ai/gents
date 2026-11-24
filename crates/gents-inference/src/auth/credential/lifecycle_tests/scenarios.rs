@@ -94,7 +94,7 @@ fn tokens(
 }
 
 struct World {
-    db: crate::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     access: ConfigAccess,
     slots: Vec<(String, String)>,
 }

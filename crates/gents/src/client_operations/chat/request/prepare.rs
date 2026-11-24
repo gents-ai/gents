@@ -57,7 +57,7 @@ pub async fn prepare_request_submission(
     let binding = resolve_agent_binding(store, node_did, agent_did, Some(session_id))?;
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let create = gents_session::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
         access,
         RequestSpec {
             retry: Some(RetryLink {

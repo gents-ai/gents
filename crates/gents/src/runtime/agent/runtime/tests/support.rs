@@ -1,13 +1,7 @@
 use super::super::*;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::thread::JoinHandle;
 
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
-pub(super) use crate::test_support::running_runtime::{grant_agent_operations, RuntimeHome};
 pub(super) use gents_documents::Tools;
 pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
@@ -271,6 +265,170 @@ pub(super) async fn create_user_agent_session(
         .unwrap();
 }
 
+pub(super) struct HeldRuntimeFixture {
+    pub db: gents_store::test_support::TestStore,
+    pub user: KeyIdentity,
+    pub user_access: gents_store::config_client::ConfigAccess,
+    pub agent: std::sync::Arc<dyn NodeIdentity>,
+}
+
+impl HeldRuntimeFixture {
+    pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
+        self.db.backend_admission()
+    }
+
+    pub async fn agent_config_access(&self) -> gents_store::config_client::ConfigAccess {
+        use gents_store::config_client::NodePermission;
+        let runtime_did = self.db.node_identity.did();
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            self.db.node.clone(),
+            runtime_did.parse().unwrap(),
+        );
+        let agent_did = identity::Did::new(self.agent.did()).unwrap();
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
+                .await
+                .unwrap();
+        }
+        self.user_access
+            .transact_write("test.runtime.agent_config", |txn| {
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    gents_documents::grant_selected_self_configuration(
+                        txn,
+                        runtime_did,
+                        agent_did.as_str(),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        gents_store::config_client::ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            agent_did,
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+}
+
+pub(super) async fn held_runtime_fixture(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+) -> HeldRuntimeFixture {
+    held_runtime_fixture_with_status(name, backend_id, endpoint, 1, "healthy").await
+}
+
+pub(super) async fn held_runtime_fixture_with_status(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) -> HeldRuntimeFixture {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store(name).await,
+        name,
+    )
+    .await;
+    let node_did = db.node_identity.did();
+    let profile_id = format!("{}:inference", binding.agent_did);
+    let docs = [
+        (
+            gents_store::collection::Collection::InferenceProfile,
+            serde_json::json!({
+                "node_did": node_did, "profile_id": profile_id,
+                "backend_id": backend_id, "model_name": "default"
+            }),
+        ),
+        (
+            gents_store::collection::Collection::InferenceBackend,
+            serde_json::json!({
+                "node_did": node_did, "backend_id": backend_id,
+                "name": backend_id, "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
+                "max_concurrent": max_concurrent, "auth": {"kind": "unauthenticated"}
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(collection, value)| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    })
+    .collect();
+    let plan = DesiredStateApplyPlan::new(docs).unwrap();
+    user_access
+        .transact_write("test.runtime.inference", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let runtime_access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        node_did.parse().unwrap(),
+    );
+    gents_inference::backends::registry::set_backend_probe_status_as(
+        &runtime_access,
+        node_did,
+        backend_id,
+        probe_status,
+    )
+    .await
+    .unwrap();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    grant_held_agent_operations(&db.node, db.node_identity.as_ref(), agent.as_ref()).await;
+    HeldRuntimeFixture {
+        db,
+        user,
+        user_access,
+        agent,
+    }
+}
+
+pub(super) async fn grant_held_agent_operations(
+    node: &Arc<defra_node::Node>,
+    runtime: &dyn NodeIdentity,
+    agent: &dyn NodeIdentity,
+) {
+    use gents_store::config_client::NodePermission;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.did().parse().unwrap(),
+    );
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+}
+
 pub(super) async fn create_held_agent_request(
     node: &Arc<defra_node::Node>,
     node_did: &str,
@@ -517,149 +675,6 @@ pub(super) async fn wait_for_runtime_process_state(
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-
-pub(super) struct MockModelEndpoint {
-    pub(super) endpoint: String,
-    pub(super) port: u16,
-    pub(super) stop: Arc<AtomicBool>,
-    pub(super) handle: Option<JoinHandle<()>>,
-}
-
-impl MockModelEndpoint {
-    pub(super) fn start(model_name: &str) -> anyhow::Result<Self> {
-        Self::start_with_blocking_chat(model_name, false)
-    }
-
-    pub(super) fn start_blocking_chat(model_name: &str) -> anyhow::Result<Self> {
-        Self::start_with_blocking_chat(model_name, true)
-    }
-
-    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = stop.clone();
-        let model_name = model_name.to_string();
-        // Drop wakes the blocking accept with a self-connection.
-        let handle = thread::spawn(move || {
-            let mut held_chats = Vec::new();
-            for stream in listener.incoming() {
-                if stop_for_thread.load(Ordering::Relaxed) {
-                    break;
-                }
-                let Ok(mut stream) = stream else { break };
-                let request = match read_http_request(&mut stream) {
-                    Ok(request) => request,
-                    Err(_) => {
-                        let _ = stream.shutdown(Shutdown::Both);
-                        continue;
-                    }
-                };
-                if blocking_chat
-                    && request.method == "POST"
-                    && request.path == "/v1/chat/completions"
-                {
-                    held_chats.push(stream);
-                    continue;
-                }
-
-                let (status, body) = if request.method == "GET"
-                    && (request.path == "/v1/models" || request.path == "/models")
-                {
-                    ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
-                } else {
-                    ("404 Not Found", r#"{"error":"not found"}"#.to_string())
-                };
-                let _ = write_http_response(&mut stream, status, "application/json", &body);
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-            for stream in held_chats {
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-        });
-
-        Ok(Self {
-            endpoint: format!("http://127.0.0.1:{port}/v1"),
-            port,
-            stop,
-            handle: Some(handle),
-        })
-    }
-
-    pub(super) fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-}
-
-impl Drop for MockModelEndpoint {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-pub(super) struct HttpRequestData {
-    pub(super) method: String,
-    pub(super) path: String,
-}
-
-pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
-    // macOS accepts inherit the listener's nonblocking mode; the read timeout
-    // alone cannot stop an early WouldBlock from closing the fixture socket.
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut buffer = Vec::new();
-    let mut temp = [0u8; 1024];
-    let header_end = loop {
-        let read = stream.read(&mut temp)?;
-        if read == 0 {
-            anyhow::bail!("connection closed before headers");
-        }
-        buffer.extend_from_slice(&temp[..read]);
-        if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
-    let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
-    let request_line = lines
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request line"))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request method"))?
-        .to_string();
-    let path = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request path"))?
-        .to_string();
-    Ok(HttpRequestData { method, path })
-}
-
-pub(super) fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-pub(super) fn write_http_response(
-    stream: &mut TcpStream,
-    status: &str,
-    content_type: &str,
-    body: &str,
-) -> anyhow::Result<()> {
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
-    Ok(())
 }
 
 #[derive(Default)]

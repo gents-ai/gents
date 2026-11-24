@@ -13,7 +13,10 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     std::fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-agent-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-agent-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -425,7 +428,10 @@ async fn agent_create_on_a_named_home_prints_a_grant_that_works_as_printed() -> 
     let node_home_arg = node_home.to_str().context("node home utf8")?;
 
     let model_name = format!("mock-agent-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let init = run_init_json(

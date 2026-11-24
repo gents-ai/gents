@@ -1,0 +1,129 @@
+{
+  "case_id": "parts-desk-app-pack",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package the parts desk app as depot/parts_desk 2.0.0 under packs/parts_desk and install it here. It needs two collections: PartBin (binCode String, partName String, onHand Int) and PartRequest (binCode String, quantity Int, requestedBy String). Give it a datastore surface called parts-desk with two tools: list_bins, which lists PartBin records with all three fields, and request_part, which creates a PartRequest and requires all three of its fields. No agents and no records.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "depot/parts_desk"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surface",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_eq": "parts-desk"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "entries"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "PartBin",
+            "PartRequest"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surface",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "depot/parts_desk",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "2.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "surface",
+                "key": "surface_id",
+                "id": "parts-desk",
+                "expect": [
+                  {
+                    "field": "entries",
+                    "matches": "(?s)list_bins.*request_part|request_part.*list_bins"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type PartBin { binCode: String partName: String onHand: Int } type PartRequest { binCode: String quantity: Int requestedBy: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

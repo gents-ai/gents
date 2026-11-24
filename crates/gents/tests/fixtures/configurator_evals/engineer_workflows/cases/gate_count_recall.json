@@ -1,0 +1,292 @@
+{
+  "case_id": "gate-count-recall",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "yard/gate-log.csv",
+        "contents": "time,gate,plate\n06:10,A,KX-201\n06:14,B,LM-882\n06:31,B,QT-410\n06:44,C,KX-201\n07:02,B,RA-119\n07:15,A,QT-410\n07:20,B,MM-045\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Run a background workflow named gate-count with one worker agent that counts how many entries in yard/gate-log.csv came through gate B. The job should finish with JSON keyed gate_b.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "finished",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_eq": "workflow"
+            },
+            "session_id": {
+              "_eq": "$session"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "_docID",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "children",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_like": "job-session:%"
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "segments",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "_docID",
+            "source",
+            "payload",
+            "close"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "workflow"
+            ],
+            "forbidden": [
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "finished",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "children",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "links": [
+              {
+                "capture": "finished",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "field": "_docID",
+                "target_capture": "segments",
+                "target_key": "source.tool_call_doc_id",
+                "expect": [
+                  {
+                    "field": "close",
+                    "matches": "\\\\?\"outcome\\\\?\"\\s*:\\s*\\\\?\"complete\\\\?\""
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"gate_b\\\\?\"\\s*:\\s*4\\b"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "stage_id": "recall",
+      "prompt": "Without starting anything new, what did the gate-count job return, and how many workers did it use?",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "finished",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_eq": "workflow"
+            },
+            "session_id": {
+              "_eq": "$session"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "_docID",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "children",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_like": "job-session:%"
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "segments",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "_docID",
+            "source",
+            "payload",
+            "close"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "workflow",
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "finished",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b4\\b"
+              },
+              {
+                "matches": "(?i)\\b(one|1|single)\\s+(worker|child|agent|sub-?agent)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

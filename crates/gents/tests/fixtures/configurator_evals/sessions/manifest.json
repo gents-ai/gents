@@ -12,15 +12,25 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "pack_config.json",
-    "cases/discover_old.json",
-    "cases/count_closed.json",
-    "cases/wrong_id.json",
-    "cases/filtered_discovery.json",
-    "cases/transcript_evidence.json",
     "cases/archive_evidence.json",
+    "cases/atlas_review_close_date.json",
+    "cases/birch_gate_unconfirmed.json",
+    "cases/cedar_receiving_not_recorded.json",
+    "cases/count_closed.json",
     "cases/cross_agent_visible.json",
-    "cases/stub_recovery.json"
+    "cases/discover_old.json",
+    "cases/filtered_discovery.json",
+    "cases/frame_corrected_handoff_bay.json",
+    "cases/frame_matched_weld_seal.json",
+    "cases/frame_reconciled_cost.json",
+    "cases/juniper_original_dock.json",
+    "cases/kestrel_newest_revision.json",
+    "cases/relay_handoff_current_window.json",
+    "cases/stub_recovery.json",
+    "cases/transcript_evidence.json",
+    "cases/wrong_id.json",
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

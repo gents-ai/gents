@@ -14,7 +14,7 @@ use gents_store::config_client::NodePermission;
 #[tokio::test]
 async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "delegated-http-claim-routes-mailbox-to",
         crate::test_support::no_lifecycle_plugins(),
     )

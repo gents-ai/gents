@@ -18,6 +18,18 @@ pub struct MailboxWriteReceipt {
     pub item: MailboxItem,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MailboxFilingRefusal {
+    #[error(
+        "another request's question is still open under this notification key and stays unchanged; wait for its answer, or call file_mailbox_item with `question` to file this request's own question"
+    )]
+    QuestionHeldByAnotherRequest,
+}
+
+fn question_held_by_another_request(item: &MailboxItem, args: &FileMailboxItemArgs) -> bool {
+    matches!(args.kind, MailboxKind::Ask | MailboxKind::Gate) && item.request_id != args.request_id
+}
+
 fn validate_existing_notification(
     item: &MailboxItem,
     context: &MailboxStampContext,
@@ -37,6 +49,9 @@ fn validate_existing_notification(
         item.action == args.action.as_str() && item.expected_collection == args.expected_collection,
         "open notification has a different handling policy; resolve it before changing policy"
     );
+    if question_held_by_another_request(item, args) {
+        return Err(MailboxFilingRefusal::QuestionHeldByAnotherRequest.into());
+    }
     Ok(())
 }
 

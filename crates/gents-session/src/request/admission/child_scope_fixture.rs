@@ -8,7 +8,9 @@ use gents_store::config_client::session_children::{
     agent_session_child_binding_in_txn, session_child_binding_for_request_in_txn,
     SessionChildSource,
 };
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, NodePermission};
+use gents_store::config_client::{
+    ConfigAccess, ConfigApplyTxn, NodePermission, RelationshipChangeKind, RelationshipMatch,
+};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
@@ -106,7 +108,7 @@ impl ChildScopeWorld {
     pub async fn build(input: &ChildScopeInput) -> Self {
         let b = &input.binding;
         let home = tempfile::tempdir().unwrap();
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "child-scope-",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -579,7 +581,26 @@ impl ChildScopeWorld {
             self.root.did(),
             &repairer_did,
         );
-        let result = if input.mark_ok {
+        let result = if !input.grant_ok {
+            let (result, trace) = ConfigApplyTxn::with_relationship_change_failure(
+                Some(RelationshipMatch {
+                    collection: None,
+                    relation: Some("parent"),
+                    kind: Some(RelationshipChangeKind::Add),
+                    nth: 1,
+                }),
+                repair,
+            )
+            .await;
+            assert!(
+                trace
+                    .first()
+                    .is_some_and(|change| change.collection == collection),
+                "{}: the parent grant is attempted",
+                input.name
+            );
+            result
+        } else if input.mark_ok {
             repair.await
         } else {
             ConfigApplyTxn::with_successful_mutation_failure_at(Some(1), repair)

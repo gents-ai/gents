@@ -9,6 +9,7 @@ pub struct RuntimeDocumentProjector {
     ids: &'static gents_protocol::schemas::HomePolicyIds,
     tools: ToolPermissionProjection,
     startup_plugins: Option<Vec<super::ProjectedPlugin>>,
+    transport_manager: Option<acp::Subject>,
     projection_rules: Vec<acp::projection::Rule>,
 }
 
@@ -29,8 +30,6 @@ impl RuntimeDocumentProjector {
                 for (relation, target_kind) in [
                     ("reader", Entity),
                     ("reader_manager", Entity),
-                    ("local_publication", Entity),
-                    ("pending_parent", Entity),
                     ("parent", EntitySet),
                 ] {
                     projection_rules.push(acp::projection::Rule {
@@ -56,8 +55,21 @@ impl RuntimeDocumentProjector {
             ids,
             tools: ToolPermissionProjection::new(node, policy)?,
             startup_plugins: None,
+            transport_manager: None,
             projection_rules,
         })
+    }
+
+    pub(super) fn with_transport_manager(mut self, manager: Option<acp::Subject>) -> Self {
+        if manager.is_some() {
+            for rule in &mut self.projection_rules {
+                if rule.relation == "reader_manager" {
+                    rule.target_kind = acp::projection::TargetKind::EntitySet;
+                }
+            }
+        }
+        self.transport_manager = manager;
+        self
     }
 
     pub(super) fn with_startup_plugins(mut self, plugins: Vec<super::ProjectedPlugin>) -> Self {
@@ -87,14 +99,24 @@ impl RuntimeDocumentProjector {
         ) {
             self.tools.update(ctx).await?;
         }
-        if project_transport_document(ctx, self.ids, collection, doc_id).await? {
+        if project_transport_document(
+            ctx,
+            self.ids,
+            collection,
+            doc_id,
+            self.transport_manager.as_ref(),
+        )
+        .await?
+        {
             ctx.notify_access_changed(collection, doc_id).await?;
         }
         Ok(())
     }
 
     async fn reconcile_transport(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
-        for (collection, doc_id) in reconcile_transport_documents(ctx, self.ids).await? {
+        for (collection, doc_id) in
+            reconcile_transport_documents(ctx, self.ids, self.transport_manager.as_ref()).await?
+        {
             ctx.notify_access_changed(&collection, &doc_id).await?;
         }
         Ok(())

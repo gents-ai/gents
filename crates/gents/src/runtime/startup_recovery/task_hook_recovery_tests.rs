@@ -15,16 +15,16 @@ pub(super) struct Fixture {
     pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     user: KeyIdentity,
     owner_access: gents_store::config_client::ConfigAccess,
 }
 
 impl Fixture {
     pub(super) async fn new() -> Self {
-        let db = crate::support::test_db("task-hook-recovery").await;
+        let db = crate::support::trial_store("task-hook-recovery").await;
         let (db, user, owner_access, binding) =
-            crate::test_support::root::signed_test_node_from_db(db, "task-hook-recovery-user")
+            gents_inference::test_support::signed_test_node_from_db(db, "task-hook-recovery-user")
                 .await;
         let node = db.node.clone();
         let identity = db.node_identity.clone();

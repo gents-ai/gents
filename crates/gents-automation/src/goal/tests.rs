@@ -118,12 +118,12 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
 }
 
 async fn auto_resume_access() -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::config_client::ConfigAccess,
     String,
 ) {
     use gents_store::identity::NodeIdentity;
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "goal-auto-resume",
         crate::lifecycle_hooks::composition(),
     )

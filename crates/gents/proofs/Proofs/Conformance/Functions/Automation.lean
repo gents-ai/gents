@@ -6,7 +6,13 @@ import Proofs.Automation.Triggers.CommandRun
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Automation.Triggers.MaterializedLineage
+import Proofs.Automation.Process
 import Proofs.Conformance.Family
+
+namespace ProcessState
+deriving instance Lean.ToJson for ActionTag
+end ProcessState
+deriving instance Lean.ToJson for ProcessState
 
 namespace Mailbox
 deriving instance Lean.ToJson for Status, Handling
@@ -51,6 +57,7 @@ def materialization : Conformance.Family Fire Materialized where
 end MaterializedLineage
 
 attribute [conformance_function]
+  ProcessState.next
   Mailbox.Status.terminal
   Mailbox.Operations.serves
   Mailbox.Operations.dismissDecision

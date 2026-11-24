@@ -47,7 +47,7 @@ enum PageSize {
 
 #[tokio::test]
 async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
-    let db = gents_inference::test_support::test_db("mcp-views", Default::default()).await;
+    let db = gents_store::test_support::TestStore::start("mcp-views", Default::default()).await;
     let guest_home = tempfile::tempdir()?;
     let guest_path = guest_home.path().join("guest.key");
     let guest = tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(guest_path, None))

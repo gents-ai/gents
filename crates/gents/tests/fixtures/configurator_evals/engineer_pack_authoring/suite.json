@@ -1,0 +1,16 @@
+{
+  "id": "engineer-pack-authoring",
+  "title": "Engineer pack authoring",
+  "coverage": [
+    "author a documents pack with a collection and install its built archive",
+    "export live configuration to a pack without installing it",
+    "repair a manifest asset binding",
+    "fix check findings until clean",
+    "release a new version and update the installed pack",
+    "remove a pack and keep its collection",
+    "compare pack digests without installing",
+    "preview an install without committing",
+    "register an unregistered skill"
+  ],
+  "subject": "engineer_full"
+}

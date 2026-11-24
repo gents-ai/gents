@@ -276,32 +276,7 @@ mod tests {
     /// Each name is an emitted family that no native test replays. The list
     /// only shrinks: a family leaves it when its consumer is written or Lean
     /// stops emitting it, and a new family arrives with its consumer.
-    const OPEN: &[&str] = &[
-        "contracts_atomic_admission_unreached",
-        "contracts_background_wake_rows_unreached",
-        "contracts_edit_anchor_fork_unreached",
-        "contracts_fork_publication_unreached",
-        "contracts_queued_steering_guard_unreached",
-        "contracts_session_advance_unreached",
-        "contracts_session_refresh_unreached",
-        "contracts_title_admission_fresh_verifier_unreached",
-        "eval_records_published_unreached",
-        "fold_queue_contracts_management_unreached",
-        "household_tool_grant_rebinding_unreached",
-        "household_unattended_receipt_unreached",
-        "identity_operations_readiness_recovery_unreached",
-        "mailbox_handoff_contracts_linked_unreached",
-        "native_completion_trace_unreached",
-        "native_refinement_claim_unreached",
-        "node_provisioning_bootstrap_grant_unreached",
-        "session_child_child_scope_repair_unreached",
-        "session_child_client_request_recovery_unreached",
-        "session_documents_retry_unreached",
-        "title_admission_join_unreached",
-        "title_usage_budget_unreached",
-        "title_usage_catalog_unreached",
-        "title_usage_goal_unreached",
-    ];
+    const OPEN: &[&str] = &[];
 
     struct Scan {
         families: BTreeSet<String>,

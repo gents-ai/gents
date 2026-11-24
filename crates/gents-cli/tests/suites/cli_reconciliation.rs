@@ -14,7 +14,10 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("reset-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-reset-{}", Uuid::new_v4().simple());
 
     run_init_json(

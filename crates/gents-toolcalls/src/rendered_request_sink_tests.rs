@@ -34,7 +34,7 @@ fn fixture_identities() -> &'static (
 }
 
 struct CaptureFixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     _user: gents_store::identity::KeyIdentity,
     agent: Arc<dyn NodeIdentity>,
     lifecycle: gents_session::request::lifecycle::RequestLifecycle,

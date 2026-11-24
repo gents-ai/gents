@@ -134,7 +134,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     // Runtime control admits only the Node's own signer; the enrolled User
     // configures the Agent the runtime starts over its fresh backend admission.
     let home = crate::test_support::ClientHome::new().await;
-    let identity = home.home.identity.clone();
+    let identity = home.home.node_identity.clone();
     let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
     foreign_paths.ensure_root_dirs().await.unwrap();
     let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
@@ -596,7 +596,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
     use gents_pack::pack::plugin_wire::WireRequest;
     use gents_store::local::document_acp::DocumentAcp;
     let home = crate::test_support::ClientHome::owned_by_user().await;
-    let identity = home.home.identity.clone();
+    let identity = home.home.node_identity.clone();
     let owner = identity.did().to_owned();
     let binding = home.agent("fixture").await;
     home.mark_backend_healthy(&binding).await;
@@ -705,16 +705,13 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         .contract
         .route(
             "/api/v0/graphql",
-            post(forward_graphql(
-                home.home.graphql_endpoint().unwrap().to_owned(),
-            )),
+            post(forward_graphql(home.home.graphql_endpoint().to_owned())),
         )
         .route(
             "/api/v0/acp/node/explain",
             get(forward_explain(
                 home.home
                     .graphql_endpoint()
-                    .unwrap()
                     .replace("/api/v0/graphql", "/api/v0/acp/node/explain"),
             )),
         );
@@ -910,7 +907,7 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     // The enrolled User holds the operator grants and configures the Node
     // through its own client-signed endpoint.
     let home = crate::test_support::ClientHome::new().await;
-    let identity = home.home.identity.clone();
+    let identity = home.home.node_identity.clone();
     let user = &home.user;
     let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
     foreign_paths.ensure_root_dirs().await.unwrap();
@@ -1434,7 +1431,7 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     // The owner is the enrolled User that published the Node; the runtime
     // authenticates its signed reads against the Node it can see.
     let home = crate::test_support::ClientHome::new().await;
-    let identity = home.home.identity.clone();
+    let identity = home.home.node_identity.clone();
     let owner = home.user_signer();
     let other = key("other.key");
     let node = home.node().clone();

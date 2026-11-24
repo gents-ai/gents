@@ -267,13 +267,16 @@ impl ProviderInputProfile {
 
     pub fn resolve(provider: BackendProviderKind, wire: OpenAiWireApi) -> Self {
         match (provider, wire) {
-            (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions)
-            | (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::ChatCompletions) => {
-                Self::OpenAiChatCompletions
-            }
-            (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses) => {
-                Self::OpenAiResponsesNormalized
-            }
+            (
+                BackendProviderKind::OpenAiCompatible
+                | BackendProviderKind::Vllm
+                | BackendProviderKind::XaiGrokOAuth,
+                OpenAiWireApi::ChatCompletions,
+            ) => Self::OpenAiChatCompletions,
+            (
+                BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm,
+                OpenAiWireApi::Responses,
+            ) => Self::OpenAiResponsesNormalized,
             (BackendProviderKind::OpenRouter, _) => Self::OpenRouterChatCompletions,
             (BackendProviderKind::ChatGptCodex, _) => Self::ChatGptCodexResponses,
             (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::Responses) => Self::XaiResponses,
@@ -493,21 +496,16 @@ impl ProviderInputCounter {
                 return Ok(0);
             }
         }
-        let chat_history = OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
-            .map_err(|_| ProviderInputError::EmptyMessageProjection)?;
-        let request = CompletionRequest {
-            model: None,
-            preamble: None,
-            chat_history,
-            documents: Vec::new(),
-            tools: Vec::new(),
-            temperature: None,
-            max_tokens: None,
-            tool_choice: None,
-            additional_params: None,
-            output_schema: None,
-        };
-        self.estimate_request(&request)
+        self.estimate_request(&messages_only_request(messages)?)
+    }
+
+    /// The wire body of a request carrying only `messages`: its history field
+    /// holds them exactly as this profile renders them in any request's history.
+    pub fn project_message_body(
+        &self,
+        messages: &[gents_protocol::message::Message],
+    ) -> Result<Value> {
+        self.project_body(&messages_only_request(messages)?)
     }
 
     #[cfg(feature = "native")]
@@ -594,6 +592,25 @@ impl ProviderInputCounter {
         }
         Ok(Value::Object(body))
     }
+}
+
+fn messages_only_request(
+    messages: &[gents_protocol::message::Message],
+) -> Result<CompletionRequest> {
+    let chat_history = OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
+        .map_err(|_| ProviderInputError::EmptyMessageProjection)?;
+    Ok(CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history,
+        documents: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_tokens: None,
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    })
 }
 
 /// Conservative ceiling: undercounting could admit a request over provider context.

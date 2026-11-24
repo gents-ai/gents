@@ -531,6 +531,10 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
                 prompt_tokens
                 completion_tokens
                 cached_input_tokens
+                cache_creation_input_tokens
+                reasoning_output_tokens
+                provider_total_tokens
+                usage_completeness
                 context_accounting_json
             }}
         }}"#,

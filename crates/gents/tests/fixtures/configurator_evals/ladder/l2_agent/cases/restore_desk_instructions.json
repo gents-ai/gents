@@ -1,0 +1,214 @@
+{
+  "case_id": "restore-desk-instructions",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "setup",
+      "prompt": "Create two standalone instruction templates (agent contexts) for our returns desk, both labeled \"Returns desk\" and neither with any tool grants. Use context ID desk-live with the description \"Production template\" and the system prompt \"Send return labels to pier two.\" Use context ID desk-approved with the description \"Signed-off template\" and the system prompt \"Route return labels to pier seven. Keep the carton code.\" Store each text exactly as written. Do not attach either to an assistant.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "desks",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "desks",
+                "key": "context_id",
+                "id": "desk-live",
+                "expect": [
+                  {
+                    "field": "display_name",
+                    "equals": "Returns desk"
+                  },
+                  {
+                    "field": "description",
+                    "equals": "Production template"
+                  },
+                  {
+                    "field": "system_prompt",
+                    "equals": "Send return labels to pier two."
+                  },
+                  {
+                    "field": "tools_id",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "desks",
+                "key": "context_id",
+                "id": "desk-approved",
+                "expect": [
+                  {
+                    "field": "display_name",
+                    "equals": "Returns desk"
+                  },
+                  {
+                    "field": "description",
+                    "equals": "Signed-off template"
+                  },
+                  {
+                    "field": "system_prompt",
+                    "equals": "Route return labels to pier seven. Keep the carton code."
+                  },
+                  {
+                    "field": "tools_id",
+                    "equals": null
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "desks",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "display_name": {
+              "_eq": "Returns desk"
+            }
+          },
+          "fields": [
+            "context_id",
+            "display_name",
+            "description",
+            "system_prompt",
+            "tools_id"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "repair",
+      "prompt": "The desk-live context contains old handling instructions. Copy just the system prompt from the approved context desk-approved into desk-live, exactly as stored. Both are Returns desk templates. Keep both records under their existing IDs, preserve their labels and descriptions, and leave them without tool grants. Please make the change using native config.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "desks",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "desks",
+                "key": "context_id",
+                "id": "desk-live",
+                "expect": [
+                  {
+                    "field": "display_name",
+                    "equals": "Returns desk"
+                  },
+                  {
+                    "field": "description",
+                    "equals": "Production template"
+                  },
+                  {
+                    "field": "system_prompt",
+                    "equals": "Route return labels to pier seven. Keep the carton code."
+                  },
+                  {
+                    "field": "tools_id",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "desks",
+                "key": "context_id",
+                "id": "desk-approved",
+                "expect": [
+                  {
+                    "field": "display_name",
+                    "equals": "Returns desk"
+                  },
+                  {
+                    "field": "description",
+                    "equals": "Signed-off template"
+                  },
+                  {
+                    "field": "system_prompt",
+                    "equals": "Route return labels to pier seven. Keep the carton code."
+                  },
+                  {
+                    "field": "tools_id",
+                    "equals": null
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "desks",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "display_name": {
+              "_eq": "Returns desk"
+            }
+          },
+          "fields": [
+            "context_id",
+            "display_name",
+            "description",
+            "system_prompt",
+            "tools_id"
+          ]
+        }
+      ]
+    }
+  ]
+}

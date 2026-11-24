@@ -196,7 +196,7 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
         .into_iter()
         .partition(|case| publishes_every_relation(&case.input));
     let home = tempfile::tempdir().unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "exercise-readiness-relationship-sets",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -295,7 +295,7 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
     } else {
         db.client_access(&user)
     };
-    let create = build_signed_client_request(
+    let create = crate::request::lifecycle::build_signed_reserved_client_request(
         &author_access,
         RequestSpec::new(
             RequestPurpose::Normal,

@@ -1,0 +1,38 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-host-files",
+      "comparability_version": 1,
+      "title": "Host files: read, search, write and edit the workspace",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/pickup_shortfall.json",
+        "./cases/dispatch_queue_merge.json",
+        "./cases/change_request_apply.json",
+        "./cases/product_rename_prose.json",
+        "./cases/station_renumber.json",
+        "./cases/crew_lists_split.json",
+        "./cases/pump_error_tally.json",
+        "./cases/retry_callers_audit.json",
+        "./cases/heron_current_decisions.json",
+        "./cases/berth_overlap_pairs.json",
+        "./cases/beacon_live_minutes.json",
+        "./cases/chiller_alarm_edit.json"
+      ]
+    }
+  ]
+}

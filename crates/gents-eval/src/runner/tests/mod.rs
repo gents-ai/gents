@@ -15,6 +15,7 @@ use gents_documents::EvalFixtureDocument;
 use gents_documents::EvalFixtureFile;
 use gents_documents::{EvalCase, EvalFixtures, EvalSplit};
 use gents_store::collection::Collection;
+use gents_store::test_support::{STALL_CEILING, UNREACHED_DEADLINE};
 
 mod budget;
 mod cancel;
@@ -171,9 +172,80 @@ fn verdict_keys(
     keys
 }
 
-struct BackoffBegan(Arc<tokio::sync::Notify>);
+/// Re-reads the run's progress file at the loop's marker poll until `found`
+/// answers, and fails with the last progress read once the file has not
+/// changed for [`STALL_CEILING`]. The file has no change notification.
+async fn progress_when<T>(run_dir: &Path, what: &str, found: impl Fn(&Progress) -> Option<T>) -> T {
+    let mut reread = tokio::time::interval(marker_poll(&RunOptions::default()));
+    let mut last = None;
+    let mut changed = std::time::Instant::now();
+    loop {
+        reread.tick().await;
+        let progress = read_progress(run_dir);
+        if let Some(answer) = progress.as_ref().and_then(&found) {
+            return answer;
+        }
+        if progress != last {
+            last = progress;
+            changed = std::time::Instant::now();
+        } else if changed.elapsed() >= STALL_CEILING {
+            panic!("{what}: the progress stayed {last:?} for {STALL_CEILING:?}");
+        }
+    }
+}
 
-impl<S> tracing_subscriber::Layer<S> for BackoffBegan
+const RUNNER_TARGET: &str = "gents_eval::runner";
+
+fn runner_target(target: &str) -> bool {
+    target.starts_with(RUNNER_TARGET) || target == "gents::eval"
+}
+
+/// Makes the run loop's events visible to a scoped subscriber. tracing caches
+/// one interest per callsite for the whole process, and while a single
+/// dispatcher is registered it computes that interest from the default of
+/// whichever thread reaches the callsite first; another test's thread with no
+/// default caches `never`, which then hides the event from this test's
+/// subscriber. A global default that enables the target is every such
+/// thread's default (TLA+ `EvalBackoffCancel`).
+fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(RunnerTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+struct RunnerTargetSubscriber;
+
+impl tracing::Subscriber for RunnerTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        runner_target(metadata.target())
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
+}
+
+#[derive(Clone, Debug, Default)]
+struct RunnerEvents {
+    last: Option<String>,
+    backoff_began: bool,
+}
+
+struct ObservesRunner(tokio::sync::watch::Sender<RunnerEvents>);
+
+impl<S> tracing_subscriber::Layer<S> for ObservesRunner
 where
     S: tracing::Subscriber,
 {
@@ -182,10 +254,46 @@ where
         event: &tracing::Event<'_>,
         _context: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        if event.metadata().target() == module_path!().trim_end_matches("::tests")
-            && event.metadata().fields().field("backoff").is_some()
-        {
-            self.0.notify_one();
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let metadata = event.metadata();
+        if !runner_target(metadata.target()) {
+            return;
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        let backoff =
+            metadata.target() == RUNNER_TARGET && metadata.fields().field("backoff").is_some();
+        self.0.send_modify(|events| {
+            events.last = Some(format!("{}: {}", metadata.target(), message.0));
+            events.backoff_began |= backoff;
+        });
+    }
+}
+
+/// Waits until `done` holds for the run's events, failing with the last one
+/// once none has arrived for [`STALL_CEILING`].
+async fn runner_when(
+    events: &mut tokio::sync::watch::Receiver<RunnerEvents>,
+    what: &str,
+    done: impl Fn(&RunnerEvents) -> bool,
+) {
+    loop {
+        if done(&events.borrow_and_update()) {
+            return;
+        }
+        match tokio::time::timeout(STALL_CEILING, events.changed()).await {
+            Ok(changed) => changed.expect("the test's subscriber outlives the run"),
+            Err(_) => panic!(
+                "{what}: no runner event for {STALL_CEILING:?}; the last was {:?}",
+                events.borrow().last
+            ),
         }
     }
 }
@@ -194,62 +302,62 @@ where
 async fn a_marker_written_during_the_backoff_ends_the_wait() {
     use tracing_subscriber::layer::SubscriberExt;
 
-    let began = Arc::new(tokio::sync::Notify::new());
+    enable_scoped_event_capture();
+    let (observed, mut events) = tokio::sync::watch::channel(RunnerEvents::default());
     let subscriber = tracing::Dispatch::new(
-        tracing_subscriber::Registry::default().with(BackoffBegan(began.clone())),
+        tracing_subscriber::Registry::default().with(ObservesRunner(observed)),
     );
     let _subscriber = tracing::dispatcher::set_default(&subscriber);
 
     let (launching, pack) = launching("captured_rows_count").await;
     let mut request = request(&launching, &pack, "run-backoff");
     one_slot(&mut request);
-    let slow = RunOptions {
+    let unreached = RunOptions {
         trial_budget: None,
-        poll_backoff_base: Duration::from_secs(30),
-        poll_backoff_cap: Duration::from_secs(30),
+        poll_backoff_base: UNREACHED_DEADLINE,
+        poll_backoff_cap: UNREACHED_DEADLINE,
     };
     let runs_dir = launching.runs_dir();
     let run_dir = runs_dir.join("run-backoff");
-    let held = || {
-        read_progress(&run_dir)
-            .and_then(|progress| progress.holder)
-            .map(|holder| holder.written_at)
-    };
+    let held = || read_progress(&run_dir).and_then(|progress| progress.holder);
     let operator = async {
-        tokio::time::timeout(Duration::from_secs(20), began.notified())
-            .await
-            .expect("the loop began its backoff after the not-evidence attempt");
+        runner_when(
+            &mut events,
+            "the loop begins its backoff after the not-evidence attempt",
+            |events| events.backoff_began,
+        )
+        .await;
         let first = held().expect("the loop holds the run during its backoff");
-        assert!(running_elsewhere(&run_dir));
-        tokio::time::sleep(Duration::from_millis(2_500)).await;
-        let second = held().expect("still held");
-        assert!(
-            second > first,
-            "refreshed during the backoff: {first} {second}"
-        );
+        assert_eq!(first.pid, std::process::id());
+        progress_when(
+            &run_dir,
+            "the loop refreshes its hold during the backoff",
+            |progress| {
+                progress
+                    .holder
+                    .as_ref()
+                    .filter(|holder| holder.written_at > first.written_at)
+                    .map(|_| ())
+            },
+        )
+        .await;
         request_cancel(&runs_dir, "run-backoff").unwrap();
-        std::time::Instant::now()
+        runner_when(&mut events, "the marker ends the backoff", |_| false).await;
     };
     let executor =
         ScriptedExecutor::new().with_default(ScriptedExecutor::not_evidence("did:key:trial"));
     let registry = CheckRegistry::builtin();
-    let (outcome, marked) = tokio::join!(
-        run(
+    let outcome = tokio::select! {
+        outcome = run(
             &launching.access,
             &request,
             &executor,
             &registry,
             CancellationToken::new(),
-            &slow,
-        ),
-        operator,
-    );
-    let outcome = outcome.unwrap();
-    assert!(
-        marked.elapsed() < Duration::from_secs(5),
-        "the 30 s backoff was cut short at the next tick: {:?}",
-        marked.elapsed()
-    );
+            &unreached,
+        ) => outcome.unwrap(),
+        () = operator => unreachable!("the operator returns only by failing"),
+    };
     assert!(outcome.cancelled);
     assert_eq!((outcome.completed, outcome.abandoned), (1, 0));
     assert_eq!(

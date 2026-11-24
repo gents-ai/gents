@@ -259,6 +259,32 @@ fn lockout_protected(permission: NodePermission) -> bool {
         || GrantSet::PolicyDelegate.permissions().contains(&permission)
 }
 
+/// Lean `Tools.SessionCustody.relationChangeOffered`.
+fn relation_change_offered(collection: &str, revoke: bool) -> bool {
+    !(revoke
+        && gents_protocol::schemas::identity_policy_resource(collection)
+            == Some(gents_protocol::schemas::SESSION_POLICY_RESOURCE))
+}
+
+/// The refusal of a relation removal on a session document, naming the check
+/// that shows the relation, which stays.
+fn session_relation_kept(
+    subject: &::identity::Did,
+    collection: &str,
+    doc_id: &str,
+    relation: &str,
+) -> anyhow::Error {
+    guidance(
+        format!(
+            "policy revoke refused for relation {relation} on {collection} document {doc_id}: an Agent never removes a relation of a session or deletes one, because a session's relations carry its User's access to the Agent's activity. The relation stays; a User who administers this Agent can withdraw it."
+        ),
+        json!({"argv": [
+            "policy", "check", "--subject", subject.as_str(), "--collection", collection,
+            "--doc", doc_id, "--relation", relation,
+        ]}),
+    )
+}
+
 /// Lean `Identity.GrantSets.selfChangeKeepsLockout`. Document relationships are
 /// not modeled here and stay governed by native document authorization.
 fn keeps_lockout(no_lockout: bool, is_self: bool, delete: bool, target: &PolicyTarget) -> bool {
@@ -848,6 +874,21 @@ impl ConfigCommandTool {
                 json!({"argv": ["policy", "--help"]}),
             )
         })?;
+        if let PolicyTarget::Relation {
+            collection,
+            doc_id,
+            relation,
+        } = target
+        {
+            if !relation_change_offered(collection, !grant) {
+                return Err(session_relation_kept(
+                    &call.subject,
+                    collection,
+                    doc_id,
+                    relation,
+                ));
+            }
+        }
         let actor = self.core.identity()?;
         if !keeps_lockout(self.no_lockout, call.is_self, !grant, target) {
             return Err(guidance(
@@ -975,11 +1016,21 @@ impl ConfigCommandTool {
             assumptions.push("Document relationships are read as direct tuples only: owner, implied-relation, admin and Tools paths are not evaluated.".to_owned());
         }
         // Whoever can grant can revoke (Lean `GrantSets.revoke_follows_grant`),
-        // so a grant names the call that withdraws it.
+        // so a grant names the call that withdraws it, except on a session,
+        // whose relations no Agent removes (Lean `Tools.SessionCustody`).
         let how_to_proceed = if grant {
-            json!({
-                "to_withdraw": change_argv("revoke", &call.subject, target),
-            })
+            match target {
+                PolicyTarget::Relation { collection, .. }
+                    if !relation_change_offered(collection, true) =>
+                {
+                    json!({
+                        "to_withdraw": "a User who administers this Agent; an Agent never removes a relation of a session",
+                    })
+                }
+                _ => json!({
+                    "to_withdraw": change_argv("revoke", &call.subject, target),
+                }),
+            }
         } else {
             json!({
                 "to_restore": change_argv("grant", &call.subject, target),
@@ -1071,6 +1122,13 @@ mod tests {
         assert!(NodePermission::NacRelationAdd.is_admin_class());
         assert!(NodePermission::DacBypass.is_admin_class());
         assert!(!NodePermission::DocumentRead.is_admin_class());
+    }
+
+    #[test]
+    fn session_custody_relation_change_matches_lean() {
+        gents_lean_vocab::families::session_custody_relation_change::replay(|i| {
+            relation_change_offered(&i.collection, i.revoke)
+        });
     }
 
     #[test]

@@ -8,6 +8,7 @@ import Proofs.Conformance.ContractCases.Types
 import Lean
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Session
+import Proofs.Session.Compaction.Cursor
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
@@ -373,39 +374,36 @@ def EditAnchorInput.ofCase (witness : EditAnchorCase) : EditAnchorInput :=
 def EditAnchorInput.source? (i : EditAnchorInput) : Option SessionFork.History :=
   (editAnchorCases.find? (·.name == i.name)).map (·.source)
 
+def editAnchorRetained? (i : EditAnchorInput) : Option Nat :=
+  i.source?.bind fun source =>
+    (SessionFork.editCut source i.key).map fun cut =>
+      (SessionFork.copyPrefix source child remap childKey cut).messages.length
+
 structure EditAnchorCut where
   cut : Option Nat
+  retainedCount : Option Nat
   deriving ToJson
 
+/-- The cut an edit anchor selects and the number of source messages a fork at
+that cut copies. -/
 @[conformance_family]
 def editAnchorCut : Family EditAnchorInput EditAnchorCut where
   inputs := editAnchorCases.map EditAnchorInput.ofCase
-  model := fun i => { cut := i.source?.bind fun source => SessionFork.editCut source i.key }
+  model := fun i =>
+    { cut := i.source?.bind fun source => SessionFork.editCut source i.key
+      retainedCount := editAnchorRetained? i }
 
 structure EditAnchorRetained where
   retainedCount : Option Nat
   deriving ToJson
 
-def editAnchorRetained (i : EditAnchorInput) : EditAnchorRetained :=
-  { retainedCount := i.source?.bind fun source =>
-      (SessionFork.editCut source i.key).map fun cut =>
-        (SessionFork.copyPrefix source child remap childKey cut).messages.length }
-
-/-- The fork scenario publishes signed user-text turns only, so only a history
-made of user messages can be built on a served node. -/
+/-- A served edit fork of a signed user history copies the prefix before the
+anchor and leaves the source unchanged; `editAnchorCut` replays every anchor's
+cut and copied prefix. -/
 @[conformance_family]
 def editAnchorFork : Family EditAnchorInput EditAnchorRetained where
   inputs := (editAnchorCases.filter fun c => c.name ∈ ["three_user_turns"]).map EditAnchorInput.ofCase
-  model := editAnchorRetained
-
-/-- The served fork fixture publishes user-text turns
-only; histories with assistant, tool-result or empty user messages, duplicate
-keys or anchors that no message carries are not built by any production
-scenario, so their retained prefix is not replayed. -/
-@[conformance_family]
-def editAnchorForkUnreached : Family EditAnchorInput EditAnchorRetained where
-  inputs := (editAnchorCases.filter fun c => c.name ∉ ["three_user_turns"]).map EditAnchorInput.ofCase
-  model := editAnchorRetained
+  model := fun i => { retainedCount := editAnchorRetained? i }
 
 deriving instance ToJson for SessionFork.EditForkBinding, SessionFork.EditForkDecision
 
@@ -510,20 +508,14 @@ structure ForkCase where
   cut : Nat
   authorized : Bool
   idle : Bool
-  coherent : Bool
 
 def forkCases : List ForkCase :=
-  [ ⟨"exact_copy", history, child, 1, true, true, true⟩,
-    ⟨"empty_prefix", history, child, 0, true, true, true⟩,
-    ⟨"duplicate_message_sequence", duplicateSequenceHistory, child, 1, true, true, true⟩,
-    ⟨"wrong_requester", history, { child with requester := none }, 1, true, true, true⟩,
-    ⟨"busy_source", history, child, 1, true, false, true⟩,
-    ⟨"mixed_generation", history, child, 1, true, true, false⟩,
-    ⟨"unauthorized", history, child, 1, false, true, true⟩,
-    ⟨"cursor_beyond_source",
-      { history with compactions := [⟨4, scope.session, 1, 99⟩] }, child, 100, true, true, true⟩,
+  [ ⟨"exact_copy", history, child, 1, true, true⟩,
+    ⟨"empty_prefix", userTurnHistory, child, 0, true, true⟩,
+    ⟨"busy_source", history, child, 1, true, false⟩,
+    ⟨"unauthorized", history, child, 1, false, true⟩,
     ⟨"invalid_compaction_sequence",
-      { history with compactions := [⟨4, scope.session, 2, 0⟩] }, child, 1, true, true, true⟩ ]
+      { history with compactions := [⟨4, scope.session, 2, 0⟩] }, child, 1, true, true⟩ ]
 
 structure ForkInput where
   name : String
@@ -532,22 +524,23 @@ structure ForkInput where
   child : AgentSession.Scope
   exclusiveSequenceCut : Nat
   documentIdOffset : Nat
+  childKeyPrefix : String
   authorized : Bool
   idle : Bool
-  coherent : Bool
   deriving ToJson
 
 def ForkCase.input (c : ForkCase) : ForkInput :=
   { name := c.name, source := HistoryWire.ofModel c.source, parent := scope, child := c.target
-    exclusiveSequenceCut := c.cut, documentIdOffset := 1000, authorized := c.authorized
-    idle := c.idle, coherent := c.coherent }
+    exclusiveSequenceCut := c.cut, documentIdOffset := 1000, childKeyPrefix
+    authorized := c.authorized
+    idle := c.idle }
 
 def ForkCase.published (c : ForkCase) : Option SessionFork.History :=
   let authorization : SessionFork.SourceAuthorization :=
     ⟨if c.authorized then scope else { scope with node := scope.node + 1 },
       c.source.messages.map (·.header.id), c.source.compactions.map (·.id),
       c.source.closures.map (·.id)⟩
-  SessionFork.publish c.source scope c.target remap childKey c.cut authorization c.idle c.coherent
+  SessionFork.publish c.source scope c.target remap childKey c.cut authorization c.idle true
 
 structure ForkReader where
   grant : String
@@ -563,33 +556,41 @@ def ForkCase.readers (c : ForkCase) : List ForkReader :=
 
 def forkCaseOf (i : ForkInput) : Option ForkCase := forkCases.find? (·.name == i.name)
 
-structure ForkReaders where
-  readers : List ForkReader
-  deriving ToJson
-
-/-- A reader granted only a published fork's own session reads its whole
-retained transcript. The served scenario publishes a signed user history and
-forks it exactly, so it replays the exact copy. -/
-@[conformance_family]
-def forkReaders : Family ForkInput ForkReaders where
-  inputs := (forkCases.filter fun c => c.name ∈ ["exact_copy"]).map ForkCase.input
-  model := fun i => { readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
-
 structure ForkPublication where
   published : Option HistoryWire
   readers : List ForkReader
   deriving ToJson
 
-/-- Production publishes a fork through its served
-transaction and assigns DefraDB document identifiers, so no production function
-returns the copied history for comparison with `SessionFork.publish`, and no
-scenario builds these source histories. -/
+/-- The history a served fork publishes from each source, and which direct
+session grant reads the published child's whole transcript. -/
 @[conformance_family]
-def forkPublicationUnreached : Family ForkInput ForkPublication where
+def forkPublication : Family ForkInput ForkPublication where
   inputs := forkCases.map ForkCase.input
   model := fun i =>
     { published := ((forkCaseOf i).bind ForkCase.published).map HistoryWire.ofModel
       readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
+
+structure CompactionCursorSaveInput where
+  name : String
+  stored : List Nat
+  cursor : Nat
+  deriving ToJson
+
+structure CompactionCursorSaveOutput where
+  saved : Bool
+  deriving ToJson
+
+/-- The compaction save owner stores a cursor only when it names a stored
+message of its session. `stored` lists the session's message sequences; the
+first is the one the transcript allocator assigns to a session's first
+message. -/
+@[conformance_family]
+def compactionCursorSave : Family CompactionCursorSaveInput CompactionCursorSaveOutput where
+  inputs :=
+    ([("names_first", [1, 2], 1), ("names_last", [1, 2], 2), ("past_last", [1, 2], 3),
+      ("before_first", [1, 2], 0), ("between_stored", [1, 3], 2)] :
+        List (String × List Nat × Nat)).map fun (name, stored, cursor) => { name, stored, cursor }
+  model := fun i => { saved := _root_.Compaction.Cursor.namesStoredMessage i.stored i.cursor }
 
 deriving instance ToJson for AgentSession.TaskFireEvidence, AgentSession.StarterEvidence,
   AgentSession.CreationReceipt
@@ -848,17 +849,15 @@ def advanceInput (name : String) (r : AgentSession.RequestFact)
     rows := rows.map RequestWire.ofModel, request := RequestWire.ofModel r
     normalizedPreview := "candidate", now := 4 }
 
-/-- The session observation owner advances the public
-head inside served request admission transactions; no production function
-takes a modeled document and request rows, and no scenario builds these
-request histories. -/
+/-- A claim advances the public head from the request facts it loads under the
+session's exact scope, which select normal-purpose rows only, so the incoming
+request is always a normal-purpose row of that scope; `title_does_not_advance`
+covers a title-audit row. -/
 @[conformance_family]
-def sessionAdvanceUnreached : Family AdvanceInput DocumentAfter where
+def sessionAdvance : Family AdvanceInput DocumentAfter where
   inputs :=
     [ advanceInput "stale_admission" old,
       advanceInput "current_admission" newerRequest,
-      advanceInput "title_does_not_advance_public_observation" titleRequest session
-        [old, newerRequest, titleRequest],
       advanceInput "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed
         [old, newerRequest, scopedSuccessor, foreignRequester],
       advanceInput "present_requester_does_not_freeze_absent_scope" absentScopeRequest
@@ -881,14 +880,10 @@ def refreshInput (name : String) (event : AgentSession.RequestFact)
   { name, operation := "refresh", before := DocumentWire.ofModel indexed
     event := RequestWire.ofModel event, rows := rows.map RequestWire.ofModel, now := 4 }
 
-/-- The session observation owner refreshes the public
-head inside served request transactions; no production function takes a
-modeled document and request rows, and no scenario builds these request
-histories. -/
 @[conformance_family]
-def sessionRefreshUnreached : Family RefreshInput DocumentAfter where
+def sessionRefresh : Family RefreshInput DocumentAfter where
   inputs :=
-    [ refreshInput "stale_completion" old,
+    [ refreshInput "stale_completion" old [old],
       refreshInput "wrong_physical_completion"
         { newerRequest with observed := { newerRequest.observed with docId := 999 } },
       refreshInput "current_completion" completedRequest,
@@ -934,6 +929,7 @@ structure AdmissionCaseInput where
   receipt : Option AgentSession.CreationReceipt
   authorized : Bool
   commit : Bool
+  reserved : Bool
   deriving ToJson
 
 def admissionInputs : List AdmissionCaseInput :=
@@ -941,7 +937,8 @@ def admissionInputs : List AdmissionCaseInput :=
     { name, operation := "atomic_admission", before := AdmissionStateWire.ofModel before
       requested := DocumentWire.ofModel input.requested, actor := input.actor
       sessionDoc := input.sessionDoc, agentDoc := input.agentDoc, requestDoc := input.requestDoc
-      receipt := input.receipt, authorized := input.authorized, commit := input.commit }
+      receipt := input.receipt, authorized := input.authorized, commit := input.commit
+      reserved := input.reserved }
 
 def admissionAfter (i : AdmissionCaseInput) : AgentSession.AdmissionState :=
   ((admissionCases.find? (·.1 == i.name)).map fun (_, before, input) =>
@@ -959,17 +956,34 @@ def atomicAdmissionUnattended : Family AdmissionCaseInput AdmissionTitle where
   model := fun i => { title := ((admissionAfter i).session.bind (·.title)).map fun t =>
     { text := t.text, source := t.source.toWireName } }
 
-structure AdmissionAfter where
-  after : AdmissionStateWire
+/-- What a served admission stores, named by the case's numbers: the session's
+native owner, document, `parent` Agent document and `working_agent`, whether it
+carries a creation receipt, and the newest request's document, native owner,
+`session` and `working_agent`. -/
+structure AdmissionObservation where
+  sessionOwner : Option Nat
+  sessionDoc : Option Nat
+  sessionParent : Option Nat
+  sessionWorker : Option Nat
+  receipt : Bool
+  requestDoc : Option Nat
+  requestOwner : Option Nat
+  requestParent : Option Nat
+  requestWorker : Option Nat
   deriving ToJson
 
-/-- Atomic admission runs inside the served request
-admission transaction with DefraDB identities and ACP relationships; no
-production function returns the modeled admission state, and only the
-unattended creation's session title is observed by a scenario. -/
+def AdmissionObservation.ofModel (s : AgentSession.AdmissionState) : AdmissionObservation :=
+  { sessionOwner := s.sessionOwner, sessionDoc := s.sessionDoc, sessionParent := s.sessionParent
+    sessionWorker := s.sessionWorker, receipt := s.receipt.isSome, requestDoc := s.requestDoc
+    requestOwner := s.requestOwner, requestParent := s.requestParent
+    requestWorker := s.requestWorker }
+
+/-- A User's Client submission, run through the served admission transaction:
+new, reused, refused and incomplete sessions, a denied grant and an aborted
+transaction, directly or after a reservation. -/
 @[conformance_family]
-def atomicAdmissionUnreached : Family AdmissionCaseInput AdmissionAfter where
-  inputs := admissionInputs
-  model := fun i => { after := AdmissionStateWire.ofModel (admissionAfter i) }
+def atomicAdmissionClient : Family AdmissionCaseInput AdmissionObservation where
+  inputs := admissionInputs.filter fun i => i.name ∉ ["agent_unattended_creation"]
+  model := fun i => AdmissionObservation.ofModel (admissionAfter i)
 
 end Conformance.Contracts

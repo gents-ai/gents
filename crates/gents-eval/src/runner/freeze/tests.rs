@@ -160,7 +160,7 @@ impl Launching {
     }
 
     pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        gents_store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
+        gents_store::identity::provision_agent_identity(self.home.node_identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -234,7 +234,7 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
     .unwrap();
     let outsider = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
-            launching.home.graphql_endpoint().unwrap(),
+            launching.home.graphql_endpoint(),
             stranger.did(),
         )
         .with_client_signing_capability(stranger.client_signing_capability().unwrap())
@@ -720,6 +720,108 @@ async fn freeze_refuses_any_host_bash_under_embedded_but_not_under_process() {
 }
 
 #[tokio::test]
+async fn host_bash_holds_only_when_the_subject_and_the_launcher_both_ask_for_it() {
+    let launching = Launching::new().await;
+    let mut opted_in = definition(launching.owner());
+    opted_in["definition_id"] = json!("monitor-findings-bash");
+    opted_in["subject"]["host_bash"] = json!(true);
+    launching
+        .install(vec![(Collection::EvalDefinition, opted_in)])
+        .await;
+    let request = |run_id: &str, pack: &Path, host_bash: bool| {
+        let mut request = launching.request(run_id, pack);
+        if host_bash {
+            request.definition_id = "monitor-findings-bash".into();
+        }
+        request
+    };
+    let unrestricted = launching.pack("bash-Unrestricted", "Unrestricted");
+
+    let error = freeze(
+        &launching.access,
+        &request("no-switch", &unrestricted, true),
+        Isolation::Embedded,
+    )
+    .await
+    .unwrap_err();
+    let reason = refusal(&error);
+    assert!(
+        reason.contains("--allow-host-bash")
+            && reason.contains("GENTS_EVAL_ALLOW_HOST_BASH")
+            && reason.contains("container"),
+        "{reason}"
+    );
+    assert!(!launching.runs_dir().join("no-switch").exists());
+
+    let error = freeze(
+        &launching.access,
+        &request("no-opt-in", &unrestricted, false),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap_err();
+    let reason = refusal(&error);
+    assert!(
+        reason.contains("monitor-tools") && reason.contains("host_bash"),
+        "{reason}"
+    );
+    assert!(!launching.runs_dir().join("no-opt-in").exists());
+
+    let off = launching.pack("pack", "Off");
+    let frozen = freeze(
+        &launching.access,
+        &request("switch-alone", &off, false),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(!frozen.cells[0].tools_unrestricted_bash);
+
+    let read_only = launching.pack("bash-ReadOnly", "ReadOnly");
+    freeze(
+        &launching.access,
+        &request("both-read-only", &read_only, true),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+
+    let frozen = freeze(
+        &launching.access,
+        &request("both", &unrestricted, true),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(frozen.cells[0].tools_unrestricted_bash);
+    assert!(frozen.definition.subject.host_bash);
+
+    let error = thaw(
+        &launching.access,
+        launching.owner(),
+        "both",
+        &launching.runs_dir(),
+        Isolation::Embedded,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal(&error).contains("--allow-host-bash"),
+        "a contained run resumes only contained: {error:#}"
+    );
+    let thawed = thaw(
+        &launching.access,
+        launching.owner(),
+        "both",
+        &launching.runs_dir(),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(thawed.cells[0].tools_unrestricted_bash);
+}
+
+#[tokio::test]
 async fn freeze_refuses_an_oauth_backend() {
     let launching = Launching::new().await;
     launching
@@ -963,4 +1065,94 @@ async fn a_run_frozen_without_the_file_falls_back_to_the_live_definition() {
     .await
     .unwrap();
     assert_eq!(thawed.definition, frozen.definition);
+}
+
+#[test]
+fn a_definitions_core_packs_must_be_core_packs_the_build_carries() {
+    use super::validate::validate_core_packs;
+    let mut definition: EvalDefinition = serde_json::from_value(json!({
+        "definition_id": "core-packs",
+        "node_did": "did:key:owner",
+        "comparability_version": 1,
+        "subject": {"kind": "agent", "core_packs": ["gents/script"]},
+        "cases": [{"case_id": "c", "split": "train", "stages": [{"stage_id": "s", "prompt": "p",
+            "checks": [{"check": "tool_calls_expected", "params": {"required": ["script"]}, "tier": "acceptance"}]}]}]
+    }))
+    .unwrap();
+    let carried: &[(&str, &[u8])] = &[("gents/script", b"archive")];
+    validate_core_packs(&definition, carried).unwrap();
+    let missing = refusal(&validate_core_packs(&definition, &[]).unwrap_err());
+    assert!(
+        missing.contains("gents/script") && missing.contains("make core-packs"),
+        "{missing}"
+    );
+    definition.subject.core_packs = vec!["gents/nonesuch".into()];
+    let unknown = refusal(&validate_core_packs(&definition, carried).unwrap_err());
+    assert!(unknown.contains("is not a core pack"), "{unknown}");
+}
+
+#[test]
+fn a_definitions_core_packs_need_a_subject_that_can_install_them() {
+    use super::pack::load_pack;
+    use super::validate::validate_core_pack_installer;
+    let write = |root: &std::path::Path, self_config: Value| {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("README.md"), "# subject\n").unwrap();
+        std::fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "manifest_version": 1, "name": "subject", "version": "1.0.0",
+                "description": "A subject.", "authors": ["tests"], "kind": "documents",
+                "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
+                "inference_slots": [{"name": "engineer", "description": "Runs the subject.",
+                    "agents": ["engineer"]}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("pack_config.json"),
+            serde_json::to_vec(&json!({
+                "node": {},
+                "agents": [{"agent_slot": "engineer", "context_id": "context",
+                    "inference_profile_id": "gents:inference-slot:engineer"}],
+                "contexts": [{"context_id": "context", "system_prompt": "Work.", "tools_id": "tools"}],
+                "tools": [{"tools_id": "tools", "self_config": self_config}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (granted, ungranted) = (dir.path().join("granted"), dir.path().join("ungranted"));
+    write(
+        &granted,
+        serde_json::to_value(gents_tools::builtin::self_config::engineer_self_config()).unwrap(),
+    );
+    write(&ungranted, json!({"enable_self_config": true}));
+    let mut definition: EvalDefinition = serde_json::from_value(json!({
+        "definition_id": "core-packs",
+        "node_did": "did:key:owner",
+        "comparability_version": 1,
+        "subject": {"kind": "agent", "core_packs": ["gents/script"]},
+        "cases": [{"case_id": "c", "split": "train", "stages": [{"stage_id": "s", "prompt": "p",
+            "checks": [{"check": "tool_calls_expected", "params": {"required": ["script"]}, "tier": "acceptance"}]}]}]
+    }))
+    .unwrap();
+    let load = |root: &std::path::Path| {
+        load_pack(&CellSource::Directory(root.to_owned()), "did:key:owner").unwrap()
+    };
+    validate_core_pack_installer(&definition, "base", "engineer", &load(&granted).authored)
+        .unwrap();
+    let refused = refusal(
+        &validate_core_pack_installer(&definition, "base", "engineer", &load(&ungranted).authored)
+            .unwrap_err(),
+    );
+    assert!(
+        refused.contains("enable_pack_install") && refused.contains("\"base\""),
+        "{refused}"
+    );
+    definition.subject.core_packs.clear();
+    validate_core_pack_installer(&definition, "base", "engineer", &load(&ungranted).authored)
+        .unwrap();
 }

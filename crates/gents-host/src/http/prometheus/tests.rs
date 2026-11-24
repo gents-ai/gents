@@ -410,6 +410,7 @@ fn p2p_metrics_render_configured_admission_and_live_counts() {
                         active_jobs: 1,
                         consecutive_failures: 3,
                         cooldown_remaining_ms: 750,
+                        ..Default::default()
                     }],
                     ..Default::default()
                 },

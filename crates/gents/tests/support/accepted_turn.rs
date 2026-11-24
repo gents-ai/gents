@@ -3,7 +3,9 @@ use gents_store::identity::NodeIdentity;
 
 use super::fixtures::{bind_agent_backend, bind_selected_managed_agent_backend};
 use super::interrupt::BootedAgent;
-use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 
 pub struct AcceptedTurnSpec<'a> {
     pub backend_id: &'a str,
@@ -24,12 +26,12 @@ pub type RequestSetup<'a> =
     Box<dyn FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) + 'a>;
 
 pub struct PreparedAcceptedTurn {
-    pub backend: MockStreamingBackend,
+    pub backend: ScriptedBackend,
 }
 
 pub struct AcceptedTurnRuntime {
     pub runtime: BootedAgent,
-    pub backend: MockStreamingBackend,
+    pub backend: ScriptedBackend,
 }
 
 pub async fn enqueue_local_accepted_request(
@@ -184,8 +186,8 @@ pub async fn prepare_managed_accepted_turn(
             .into_iter()
             .map(StreamPlan::with_current_authored_user),
     );
-    let backend = MockStreamingBackend::start_with_plans(spec.model, plans)
-        .expect("start accepted-turn backend");
+    let backend =
+        ScriptedBackend::start_with_plans(spec.model, plans).expect("start accepted-turn backend");
     for agent_did in spec.configured_agent_dids {
         bind_selected_managed_agent_backend(
             db,
@@ -301,8 +303,8 @@ pub async fn prepare_accepted_turn_with_signer(
             .into_iter()
             .map(StreamPlan::with_current_authored_user),
     );
-    let backend = MockStreamingBackend::start_with_plans(spec.model, plans)
-        .expect("start accepted-turn backend");
+    let backend =
+        ScriptedBackend::start_with_plans(spec.model, plans).expect("start accepted-turn backend");
     for agent_did in spec.configured_agent_dids {
         bind_agent_backend(
             db,

@@ -508,7 +508,7 @@ pub struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
     pub node: std::sync::Arc<defra_node::Node>,
-    pub _db: gents_inference::test_support::TestDb,
+    pub _db: gents_store::test_support::TestStore,
     pub _dir: tempfile::TempDir,
 }
 
@@ -552,7 +552,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
     }
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "fixture"]);
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "overlay-artifact-workspace",
         crate::test_support::no_lifecycle_plugins(),
     )

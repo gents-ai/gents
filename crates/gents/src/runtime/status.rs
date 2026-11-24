@@ -6,6 +6,7 @@ use chrono::Utc;
 use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
 
+#[cfg(test)]
 use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
@@ -209,6 +210,27 @@ impl RuntimeStatusHandle {
         Ok(())
     }
 
+    /// Durably applies `action` through Lean `ProcessState.next`, returning
+    /// the state written or the refusal that left it unchanged.
+    pub(crate) async fn apply_process_action(
+        &self,
+        action: gents_protocol::node_readiness::ProcessAction,
+        stuck_requests: bool,
+        active_is_zero: bool,
+    ) -> anyhow::Result<
+        Result<
+            gents_protocol::node_readiness::NodeReadinessProcessState,
+            gents_protocol::node_readiness::ProcessTransitionRefused,
+        >,
+    > {
+        self.record_readiness_write(
+            self.readiness
+                .apply_process_action(action, stuck_requests, active_is_zero)
+                .await,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) async fn set_process_state_durable(
         &self,
         state: ProcessLifecycleState,

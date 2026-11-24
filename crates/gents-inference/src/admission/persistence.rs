@@ -120,6 +120,22 @@ pub(super) async fn persist_call_started(
         .map_err(completion_persistence_error)
 }
 
+/// The persisted state a call starts running from (Lean
+/// `InferenceCall.Persistence.mayStart`).
+pub(super) const START_SOURCE: &str = "queued";
+
+/// The persisted states a terminal write of `target` may replace, so the first
+/// terminal outcome and its provider-limit verdict land in one write and later
+/// observations are usage only (Lean
+/// `InferenceCall.Persistence.mayInstallTerminal`).
+pub(super) fn terminal_write_sources(target: &str) -> Option<&'static [&'static str]> {
+    match target {
+        "completed" | "failed" => Some(&["running"]),
+        "cancelled" => Some(&["queued", "running"]),
+        _ => None,
+    }
+}
+
 pub(super) async fn persist_existing_call_running(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
@@ -132,7 +148,7 @@ pub(super) async fn persist_existing_call_running(
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
             docID: "{doc_id}",
-            filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {{ _eq: "queued" }} }},
+            filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {{ _eq: "{START_SOURCE}" }} }},
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
     );
@@ -188,14 +204,17 @@ pub async fn persist_existing_call_terminal(
     usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
 ) -> Result<()> {
-    // Proofs/Inference/InferenceCall/Persistence.lean: only an existing legal source
-    // may install the first terminal outcome, and its provider-limit verdict lands
-    // in the same write; later observations are usage only.
-    let live_source = match call_state {
-        "completed" | "failed" => r#"{ _eq: "running" }"#,
-        "cancelled" => r#"{ _in: ["queued", "running"] }"#,
-        _ => anyhow::bail!("invalid terminal InferenceCall state: {call_state}"),
+    let Some(sources) = terminal_write_sources(call_state) else {
+        anyhow::bail!("invalid terminal InferenceCall state: {call_state}");
     };
+    let live_source = format!(
+        "{{ _in: [{}] }}",
+        sources
+            .iter()
+            .map(|source| format!("\"{source}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let call_id = escape_graphql_string(&call.call_id);
     let doc_id = escape_graphql_string(doc_id);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());

@@ -9,8 +9,10 @@ use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, reboot_job_harness, result, spawn,
     wait_job, JobHarness, PlanEntry,
 };
-use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::test_db_in;
+use gents_inference::test_support::scripted_backend::{
+    StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -209,9 +209,8 @@ fn runtime_access(live: &Live) -> gents_store::config_client::ConfigAccess {
 }
 
 async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
-    use gents::support::live_inference::{
-        rows_when, terminal_assistant_answer, wait_for_request_terminal,
-    };
+    use gents::support::live_inference::{terminal_assistant_answer, wait_for_request_terminal};
+    use gents_store::test_support::rows_when;
     let access = runtime_access(live);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }} }}) {{ request_id }} }}"#,
@@ -365,10 +364,10 @@ fn configure_questions(home: &Path, node_did: &str, previous_tools: &str) -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
-    use gents::support::live_inference::rows_when;
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
+    use gents_store::test_support::rows_when;
     let live = start_live(true).await?;
     let question = MailboxQuestion {
         version: MAILBOX_QUESTION_VERSION,

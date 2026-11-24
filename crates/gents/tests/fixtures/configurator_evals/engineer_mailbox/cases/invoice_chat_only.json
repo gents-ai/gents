@@ -1,0 +1,159 @@
+{
+  "case_id": "invoice-chat-only",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type SupplierInvoice { invoice: String supplier: String due_day: Int paid: Boolean amount: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "SupplierInvoice",
+        "document": {
+          "invoice": "INV-304",
+          "supplier": "Brandt Hardware",
+          "due_day": 14,
+          "paid": false,
+          "amount": 640
+        }
+      },
+      {
+        "collection": "SupplierInvoice",
+        "document": {
+          "invoice": "INV-301",
+          "supplier": "Coastal Paper",
+          "due_day": 12,
+          "paid": false,
+          "amount": 210
+        }
+      },
+      {
+        "collection": "SupplierInvoice",
+        "document": {
+          "invoice": "INV-302",
+          "supplier": "Coastal Paper",
+          "due_day": 19,
+          "paid": false,
+          "amount": 95
+        }
+      },
+      {
+        "collection": "SupplierInvoice",
+        "document": {
+          "invoice": "INV-303",
+          "supplier": "Ridge Fuel",
+          "due_day": 9,
+          "paid": true,
+          "amount": 1300
+        }
+      },
+      {
+        "collection": "SupplierInvoice",
+        "document": {
+          "invoice": "INV-305",
+          "supplier": "Ridge Fuel",
+          "due_day": 15,
+          "paid": false,
+          "amount": 480
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "answer",
+      "prompt": "It's day 15. Which supplier invoices in SupplierInvoice are overdue? One due today isn't overdue yet, and paid ones don't count. I'm reading this right now, so just answer here and don't put anything in my inbox. Reply with JSON containing \"overdue\" as an array of invoice numbers in ascending order.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "visible",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file",
+              "file_mailbox_item"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"overdue\"\\s*:\\s*\\[\\s*\"INV-301\"\\s*,\\s*\"INV-304\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

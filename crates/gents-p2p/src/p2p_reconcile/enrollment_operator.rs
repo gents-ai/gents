@@ -60,7 +60,8 @@ pub async fn decide_operator_command(
     gents_store::local::document_acp::ensure_enrollment(
         node,
         gents_store::local::document_acp::EnrollmentRequest::Decision,
-    )?;
+    )
+    .await?;
     let now = Utc::now();
     authenticate_operator_command(identity, command, now).await?;
     consume_operator_nonce(node, &command.admin_did, &command.nonce, now).await?;

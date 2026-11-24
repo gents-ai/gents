@@ -1,0 +1,103 @@
+{
+  "case_id": "station-renumber",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "routes/harbor-loop.md",
+        "contents": "# Harbor loop\n\nStops: QX-3, QX-7, QX-12\nLayover at QX-7 for 6 minutes.\n"
+      },
+      {
+        "path": "routes/inland.yaml",
+        "contents": "route: inland\nstops:\n  - QX-2\n  - QX-71\n  - QX-12\n"
+      },
+      {
+        "path": "routes/night-ferry.txt",
+        "contents": "NIGHT FERRY\ndeparts QX-1 22:40\ncalls QX-7 23:05 (request stop)\nterminates QX-71 23:30\n"
+      },
+      {
+        "path": "routes/express.json",
+        "contents": "{\n  \"route\": \"express\",\n  \"stops\": [\n    \"QX-1\",\n    \"QX-7\"\n  ],\n  \"notes\": \"QX-7 platform B\"\n}\n"
+      },
+      {
+        "path": "routes/history/2025-timetable.md",
+        "contents": "# 2025 timetable\n\nHarbor loop: QX-3, QX-7, QX-12\n"
+      },
+      {
+        "path": "routes/history/renumbering.log",
+        "contents": "2019-04-02 QX-5 renumbered QX-7\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "renumber",
+      "prompt": "Station QX-7 has been renumbered QX-40. Update every live route file under routes/ that refers to QX-7. routes/history/ is the historical record, so leave it as it is, and don't change anything that isn't QX-7.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "routes",
+          "glob": "routes/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "routes",
+            "expect": [
+              {
+                "path": "routes/harbor-loop.md",
+                "equals": "# Harbor loop\n\nStops: QX-3, QX-40, QX-12\nLayover at QX-40 for 6 minutes.\n"
+              },
+              {
+                "path": "routes/night-ferry.txt",
+                "equals": "NIGHT FERRY\ndeparts QX-1 22:40\ncalls QX-40 23:05 (request stop)\nterminates QX-71 23:30\n"
+              },
+              {
+                "path": "routes/express.json",
+                "pointer": "/stops",
+                "equals": [
+                  "QX-1",
+                  "QX-40"
+                ]
+              },
+              {
+                "path": "routes/express.json",
+                "pointer": "/notes",
+                "equals": "QX-40 platform B"
+              },
+              {
+                "path": "routes/inland.yaml",
+                "sha256": "73b55d8a1fd5d43c8b0148c0b4141ebdb83f042476f1cd27e6c81c91c294b86d"
+              },
+              {
+                "path": "routes/history/2025-timetable.md",
+                "sha256": "8bdb987c869878936cd2644a8c3d79b18150544a8099fa82e134118dfa368971"
+              },
+              {
+                "path": "routes/history/renumbering.log",
+                "sha256": "e7182789bc54f857f0b0ed1ea993096864dec25ebadc125a345cc1abf7943cb4"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

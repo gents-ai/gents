@@ -7,8 +7,8 @@ name: Notarize staged signed macOS artifact (CI control)
 # (plus Apple history as a secondary check); the receipt is uploaded before
 # waiting; acceptance requires Apple's log to bind the job to the full SHA-256.
 # Ambiguous outcomes are continued with mode=resume, never by resubmitting. Dispatch is trusted
-# only from the default branch of gents-ai/gents. See
-# docs/notarize-staged-artifact.md.
+# only from the default branch of gents-ai/gents. Runbook:
+# https://docs.gents.xyz/docs/operations/notarize-staged-artifact
 
 on:
   workflow_dispatch:

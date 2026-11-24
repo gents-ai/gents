@@ -1,5 +1,6 @@
 import Proofs.Runtime.CanonicalOutput.Execution.State
 import Proofs.Session.Compaction.State
+import Proofs.Session.Compaction.Cursor
 import Proofs.Session.Compaction.ReductionEngine
 
 /-!
@@ -267,8 +268,12 @@ def prefixView? (world : World) (throughSequence : Transcript.Sequence) :
         | _ => none }
   pure view
 
+/-- The sequences of the session's stored messages. -/
+def sessionSequences (world : World) : List Transcript.Sequence :=
+  (world.messages.filter (·.header.session == world.sessionId)).map (·.sequence)
+
 def advanceCursor? (world : World) (throughSequence : Transcript.Sequence) : Option World :=
-  if throughSequence ≥ world.transcript.nextSeq then none
+  if !_root_.Compaction.Cursor.namesStoredMessage (sessionSequences world) throughSequence then none
   else if world.compactionCursor.any (fun previous => throughSequence < previous) then none
   else match prefixView? world throughSequence with
     | none => none
@@ -288,13 +293,15 @@ theorem advanceCursor_preserves_publications
 theorem advanceCursor_requires_stable_prefix
     (world after : World) (cursor : Transcript.Sequence)
     (h : advanceCursor? world cursor = some after) :
-    cursor < world.transcript.nextSeq ∧
+    cursor ∈ sessionSequences world ∧
       ∃ view, prefixView? world cursor = some view ∧
         _root_.Compaction.PromptView.safeToReduce view := by
   unfold advanceCursor? at h
   split at h
   · contradiction
-  · rename_i hbound
+  · rename_i hnames
+    have hcursor : cursor ∈ sessionSequences world :=
+      (_root_.Compaction.Cursor.namesStoredMessage_iff _ _).mp (by simpa using hnames)
     split at h
     · contradiction
     · split at h
@@ -302,7 +309,7 @@ theorem advanceCursor_requires_stable_prefix
       · rename_i view hview
         split at h
         · rename_i hsafe
-          exact ⟨Nat.lt_of_not_ge hbound, view, hview, hsafe⟩
+          exact ⟨hcursor, view, hview, hsafe⟩
         · contradiction
 
 theorem advanceCursor_never_rewinds

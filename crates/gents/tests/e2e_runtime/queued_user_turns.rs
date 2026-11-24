@@ -11,10 +11,10 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime,
 };
 use crate::support::live_inference::wait_for_request_terminal;
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamPlan, StreamResponse, StreamScript,
-};
 use crate::support::test_db;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamPlan, StreamResponse, StreamScript,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
@@ -33,7 +33,7 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
         .iter()
         .map(|entry| format!("independent-queued-turn-{}", entry.request_id))
         .collect::<Vec<_>>();
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         "queued-turn-model",
         markers
             .iter()
@@ -256,7 +256,7 @@ async fn two_steers_behind_a_busy_turn_are_answered_by_one_inference() {
     assert_eq!(steers.len(), 2);
     let marker = |id: u64| format!("busy-turn-{id}");
     let head_marker = marker(head);
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         "busy-turn-model",
         vec![StreamPlan::new(
             &head_marker,

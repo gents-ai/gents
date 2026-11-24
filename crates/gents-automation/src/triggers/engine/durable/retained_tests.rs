@@ -115,7 +115,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let name = case.input.name.as_str();
         let directory = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-        let node_db = gents_inference::test_support::test_db_with_tool_policy(
+        let node_db = gents_store::test_support::TestStore::start_with_tool_policy(
             "retained-task-outcomes-follow-modeled-as",
             crate::lifecycle_hooks::composition(),
             Arc::new(gents_tools::surface::ToolCeiling::meta_only()),

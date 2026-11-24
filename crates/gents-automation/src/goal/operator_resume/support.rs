@@ -30,7 +30,7 @@ pub struct ClaudeAccounts {
 /// parent request, so cases stay independent without a node per case.
 #[derive(Clone)]
 pub struct FixtureNode {
-    db: Arc<gents_inference::test_support::TestDb>,
+    db: Arc<gents_store::test_support::TestStore>,
     user: Arc<KeyIdentity>,
     user_access: ConfigAccess,
     next: Arc<std::sync::atomic::AtomicUsize>,
@@ -112,7 +112,7 @@ pub struct Fixture {
     pub goal: GoalDocument,
     pub parent: gents_protocol::row::AgentRequest,
     user_access: ConfigAccess,
-    _db: Arc<gents_inference::test_support::TestDb>,
+    _db: Arc<gents_store::test_support::TestStore>,
 }
 impl Fixture {
     pub async fn new(before: &Value) -> Self {

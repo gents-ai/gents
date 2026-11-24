@@ -5,12 +5,12 @@ const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 async fn fixture(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     DefraSessionHook,
     String,
     String,
 ) {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "native-transcript",
         gents_session::test_support::no_lifecycle_plugins(),
     )

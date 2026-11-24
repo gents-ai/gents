@@ -86,56 +86,59 @@ fn generic_responses_request_does_not_force_reasoning() {
     assert!(body.get("chat_template_kwargs").is_none());
 }
 
-#[test]
-fn profile_reasoning_serializes_top_level_into_openai_body() {
-    use rig::completion::message::{Message, Text, UserContent};
-    use rig::one_or_many::OneOrMany;
-
-    let additional_params = merge_optional_params(
-        merge_optional_params(
-            reasoning_profile_params(
-                BackendProviderKind::OpenAiCompatible,
-                gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-                Some(gents_documents::inference_defaults::ReasoningEffort::Max),
-            ),
-            provider_additional_params(
-                BackendProviderKind::OpenAiCompatible,
-                gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-                gents_inference::backends::setup::OPENAI_ENDPOINT,
-            ),
-        ),
-        SamplingConfig::default().additional_params(),
-    );
-
-    let core_req = rig::completion::CompletionRequest {
+fn chat_completions_body(kind: BackendProviderKind) -> serde_json::Value {
+    let mut agent = agent_with_retry(Default::default());
+    agent.backend_provider_kind = kind;
+    agent.openai_wire_api = OpenAiWireApi::ChatCompletions;
+    agent.model_name = "fixture-model".to_owned();
+    agent.max_output_tokens = 512;
+    agent.sampling.reasoning_effort = Some(ReasoningEffort::High);
+    let config =
+        loop_config_for_request(&agent, "preamble".into(), &request(), None, 0, 0).unwrap();
+    let request = rig::completion::CompletionRequest {
         model: None,
         preamble: None,
-        chat_history: OneOrMany::one(Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
-                text: "hi".to_string(),
-            })),
-        }),
+        chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
         documents: Vec::new(),
         tools: Vec::new(),
-        temperature: None,
-        max_tokens: None,
+        temperature: config.temperature,
+        max_tokens: config.max_tokens,
         tool_choice: None,
-        additional_params,
+        additional_params: config.additional_params.clone(),
         output_schema: None,
     };
+    config
+        .provider_input_counter
+        .project_body(&request)
+        .unwrap()
+}
 
-    let openai_req = rig::providers::openai::CompletionRequest::try_from((
-        "fixture-model".to_string(),
-        core_req,
-    ))
-    .expect("openai request conversion should succeed");
-    let body = serde_json::to_value(&openai_req).expect("serializing openai request");
-
+#[test]
+fn chat_completions_effort_rides_template_kwargs_only_to_vllm() {
     assert_eq!(
-        body["chat_template_kwargs"]["enable_thinking"], true,
-        "request body must carry top-level chat_template_kwargs.enable_thinking=true; body was {body}"
+        chat_completions_body(BackendProviderKind::Vllm),
+        serde_json::json!({
+            "model": "fixture-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 512,
+            "chat_template_kwargs": {"enable_thinking": true, "reasoning_effort": "high"},
+            "user": "session-456",
+            "stream": true,
+            "stream_options": {"include_usage": true},
+        })
     );
-    assert_eq!(body["chat_template_kwargs"]["reasoning_effort"], "max");
+    assert_eq!(
+        chat_completions_body(BackendProviderKind::OpenAiCompatible),
+        serde_json::json!({
+            "model": "fixture-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 512,
+            "reasoning_effort": "high",
+            "user": "session-456",
+            "stream": true,
+            "stream_options": {"include_usage": true},
+        })
+    );
 }
 
 #[test]
@@ -392,8 +395,11 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
     for case in gents_lean_vocab::families::budget_rehydration_ledger::cases::<String>() {
-        let (db, user, owner, binding) =
-            crate::test_support::root::signed_test_node("completion-budget-rehydration").await;
+        let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store("completion-budget-rehydration").await,
+            "completion-budget-rehydration",
+        )
+        .await;
         let node = db.node.clone();
         let agent = agent_with_binding(
             db.node_identity.clone(),
@@ -707,8 +713,11 @@ fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>)
 
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
-    let (db, user, owner, binding) =
-        crate::test_support::root::signed_test_node("completion-session-calibration").await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("completion-session-calibration").await,
+        "completion-session-calibration",
+    )
+    .await;
     let node = db.node.clone();
     let agent = agent_with_binding(
         db.node_identity.clone(),
@@ -748,7 +757,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     let session = "session-calibration";
     let mut sessions = Vec::new();
     for session_id in [session, "other-session"] {
-        let create = gents_session::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
             &owner,
             gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,

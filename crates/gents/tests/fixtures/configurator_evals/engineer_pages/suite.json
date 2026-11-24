@@ -1,0 +1,12 @@
+{
+  "id": "engineer-pages",
+  "title": "Engineer pages",
+  "coverage": [
+    "page create and lint",
+    "page edit in place",
+    "page data declarations",
+    "charts tool",
+    "data_tables tool"
+  ],
+  "subject": "engineer_full"
+}

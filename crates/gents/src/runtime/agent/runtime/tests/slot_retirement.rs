@@ -1,11 +1,11 @@
 use super::support::*;
-use crate::test_support::running_runtime::{HeldBackend, RunningRuntime};
+use crate::test_support::running_runtime::{AgentRuntimeHome, BootedRuntime};
+use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamScript};
 use gents_store::identity::NodeIdentity;
 use gents_store::test_support::read_when_changed;
 use gents_store::test_support::snapshot_reader::SnapshotReader as _;
 use std::collections::BTreeSet;
 
-const BACKEND: &str = "backend-retire";
 const REQUEST: &str = "retire-held-request";
 
 /// What the runtime shows of one retirement: the slot generations still
@@ -63,22 +63,23 @@ async fn live_calls(node: &defra_node::Node) -> (u64, serde_json::Value) {
 /// it, and waits for the request to finish and the retired slot's task to
 /// join.
 async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
-    let backend = HeldBackend::start(REQUEST, "done");
-    let home = RuntimeHome::new(
+    let backend =
+        ScriptedBackend::start("default", vec![StreamScript::completes(REQUEST, ["done"])])
+            .unwrap();
+    let held = backend.hold(REQUEST);
+    let home = AgentRuntimeHome::start(
         if call_in_flight {
             "retire-slot-held"
         } else {
             "retire-slot-idle"
         },
-        BACKEND,
         backend.endpoint(),
         1,
-        "healthy",
     )
     .await;
-    let node = home.db.node.clone();
+    let node = home.home.store.node.clone();
     let agent_did = home.agent.did().to_owned();
-    let mut runtime = RunningRuntime::start(
+    let mut runtime = BootedRuntime::boot(
         &home,
         crate::runtime::agent::DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
@@ -93,9 +94,9 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
         .active_generation;
 
     if call_in_flight {
-        home.submit_request(&agent_did, REQUEST, "retire-session", REQUEST)
+        home.submit_request(REQUEST, "retire-session", REQUEST)
             .await;
-        backend.entered().await;
+        held.entered().await;
         read_when_changed(
             node.as_ref(),
             "InferenceCall",
@@ -114,7 +115,7 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
         .await;
     }
 
-    home.restage(BACKEND, backend.endpoint(), 2).await;
+    home.bind_backend(backend.endpoint(), 2).await;
     let published = runtime
         .readiness_when("the restaged generation is active and routed", |snapshot| {
             snapshot.active_generation > retired_generation
@@ -139,7 +140,7 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
     let while_held = if call_in_flight {
         record(runtime.joined_retired_slots(), &mut joined);
         let observed = (running(&joined), live_calls(&node).await.0);
-        backend.release();
+        held.release();
         read_when_changed(
             node.as_ref(),
             "AgentRequest",

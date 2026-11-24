@@ -532,7 +532,6 @@ where
                     .await?
                     .as_ref(),
                 )?;
-                config.temperature = Some(0.0);
                 config.max_tokens =
                     title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
                 config.max_turns = 1;

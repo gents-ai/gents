@@ -56,14 +56,16 @@ struct GoalLatencySession {
     agent_signer: gents_store::identity::ManagedAgentSigner,
     access: ConfigAccess,
     call: u64,
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
 }
 
 impl GoalLatencySession {
     async fn start(name: &str, requests: usize, calls: usize) -> Self {
-        let db =
-            gents_inference::test_support::test_db(name, crate::lifecycle_hooks::composition())
-                .await;
+        let db = gents_store::test_support::TestStore::start(
+            name,
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
         let node = db.node.clone();
         let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let mut hook =

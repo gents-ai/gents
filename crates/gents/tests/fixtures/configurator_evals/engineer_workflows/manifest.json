@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_workflows",
+  "version": "0.1.0",
+  "description": "Native eval definition engineer-workflows: the Engineer runs agent-authored workflow jobs that fan out to worker agents and fan their reports back in.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "cases/calibration_review.json",
+    "cases/freeze_check.json",
+    "cases/gate_count_recall.json",
+    "cases/harbor_read.json",
+    "cases/harbor_sum.json",
+    "cases/late_desk_escalation.json",
+    "cases/mail_count.json",
+    "cases/pier_sums.json",
+    "cases/reefer_tally_fan_in.json",
+    "cases/west_loading_reconcile.json",
+    "pack_config.json",
+    "subject_patch.json",
+    "suite.json"
+  ],
+  "config": "pack_config.json"
+}

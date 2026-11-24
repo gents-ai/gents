@@ -11,6 +11,27 @@ pub(crate) struct EvalScopeArgs {
     pub(crate) graphql: Option<String>,
 }
 
+/// The process-wide switch for host bash; a batch plan's entries use the
+/// batch's.
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub(crate) struct EvalHostBashArgs {
+    /// For a run inside the eval container only (scripts/evals/run-container.sh):
+    /// declare the process contained, so a subject whose definition opts in
+    /// (`subject.host_bash`) holds the host bash its pack grants, unsandboxed,
+    /// with the container as its boundary. Refused anywhere else.
+    #[arg(long, env = "GENTS_EVAL_ALLOW_HOST_BASH", value_parser = parse_switch)]
+    pub(crate) allow_host_bash: bool,
+}
+
+/// An empty value leaves a switch off, as an unset one does.
+pub(crate) fn parse_switch(raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        "1" | "true" | "yes" | "on" => Ok(true),
+        _ => Err(format!("{raw:?} is not a switch value; use 1 or 0")),
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum EvalCommand {
     #[command(
@@ -34,6 +55,11 @@ pub(crate) enum EvalCommand {
     Show(EvalShowArgs),
     #[command(about = "Show one slot's latest attempt with its stages and verdicts")]
     Trial(EvalTrialArgs),
+    #[command(
+        about = "Write each finished trial's provider transcripts as JSONL, read from its retained home",
+        after_help = EVAL_EXPORT_AFTER_HELP
+    )]
+    Export(EvalExportArgs),
     #[command(about = "Ask the process hosting a run to stop at its next check")]
     Cancel(EvalRunIdArgs),
     #[command(about = "Invalidate a run as this home; its documents stay")]
@@ -65,6 +91,15 @@ pub(crate) enum EvalCommand {
 }
 
 impl EvalCommand {
+    pub(crate) fn allows_host_bash(&self) -> bool {
+        match self {
+            Self::Run(args) => args.host_bash.allow_host_bash,
+            Self::Batch(args) => args.host_bash.allow_host_bash,
+            Self::Resume(args) => args.host_bash.allow_host_bash,
+            _ => false,
+        }
+    }
+
     pub(crate) fn scope(&self) -> &EvalScopeArgs {
         match self {
             Self::Run(args) => &args.scope,
@@ -73,6 +108,7 @@ impl EvalCommand {
             Self::List(args) => &args.scope,
             Self::Show(args) => &args.scope,
             Self::Trial(args) => &args.scope,
+            Self::Export(args) => &args.scope,
             Self::Cancel(args) => &args.scope,
             Self::Invalidate(args) => &args.scope,
             Self::Rm(args) => &args.scope,
@@ -129,6 +165,38 @@ pub(crate) struct EvalTrialArgs {
     pub(crate) requests: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
+}
+
+const EVAL_EXPORT_AFTER_HELP: &str = "One JSON line per finished trial (its slot's latest attempt): the run, case and trial, its class, score and report usage, and per stage its verdicts and transcript. A stage's transcript holds the exact provider request body of its last inference call (every provider call with --calls all), whose messages and tools are what the model saw, and its final assistant message as that provider's history renders it, beside the request's usage, tool calls, compactions and the tool outputs its history carries as stubs. Requests a stage caused, a background tool's completion or a delegated agent's request, carry transcripts of their own under child_requests. Requires the evaluator identity that created the run. --redaction training-safe or public blanks every message, reasoning and tool argument or result string, keeping roles, part kinds, ids and tool names; it is not for fine-tuning text.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalExportArgs {
+    pub(crate) run_id: String,
+    /// Only this cell.
+    #[arg(long)]
+    pub(crate) cell: Option<String>,
+    /// Only this case; repeatable.
+    #[arg(long = "case")]
+    pub(crate) cases: Vec<String>,
+    /// Only this trial index.
+    #[arg(long)]
+    pub(crate) trial: Option<u32>,
+    /// Each stage's last inference call, or every provider call it made.
+    #[arg(long, value_enum, default_value_t = EvalExportCallsArg::Final)]
+    pub(crate) calls: EvalExportCallsArg,
+    #[arg(long, value_enum, default_value_t = super::TraceProjectionRedactionArg::Full)]
+    pub(crate) redaction: super::TraceProjectionRedactionArg,
+    /// Write the JSONL here instead of stdout.
+    #[arg(long)]
+    pub(crate) output_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum EvalExportCallsArg {
+    Final,
+    All,
 }
 
 #[derive(clap::Args)]
@@ -360,6 +428,8 @@ pub(crate) struct EvalBatchArgs {
     #[arg(long)]
     pub(crate) json: bool,
     #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
+    #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
 
@@ -377,9 +447,14 @@ pub(crate) struct EvalRunArgs {
     pub(crate) profiles: Vec<(String, String)>,
     #[arg(long, value_parser = parse_split, default_value = "validation")]
     pub(crate) split: gents_documents::EvalSplit,
+    /// Run only these cases of the split, once each or comma-separated;
+    /// every case of the split when absent.
+    #[arg(long = "case", env = "GENTS_EVAL_CASES", value_delimiter = ',')]
+    pub(crate) cases: Vec<String>,
     #[arg(long, default_value_t = 2)]
     pub(crate) trials: u32,
-    #[arg(long, default_value_t = 1000)]
+    /// Trial `i` of every case samples with seed `seed_base + i`.
+    #[arg(long, default_value_t = 1000, env = "GENTS_EVAL_SEED_BASE")]
     pub(crate) seed_base: i64,
     /// Trials run at once; embedded trials never exceed the runner's
     /// per-process ceiling.
@@ -401,6 +476,8 @@ pub(crate) struct EvalRunArgs {
     pub(crate) registry: Option<String>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
@@ -462,6 +539,8 @@ pub(crate) struct EvalResumeArgs {
     pub(crate) run_id: String,
     #[arg(long)]
     pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }

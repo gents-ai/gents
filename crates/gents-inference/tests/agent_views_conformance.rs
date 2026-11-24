@@ -48,7 +48,7 @@ async fn agent_inventory_matches_lean_on_served_node() -> anyhow::Result<()> {
         let access = if request.reader.is_some() {
             db.client_access(&reader)
         } else {
-            ConfigAccess::graphql(db.client_endpoint())
+            ConfigAccess::graphql(db.graphql_endpoint())
         };
         let mut view = AgentList::new(&request.node_did);
         if let Some(id) = &request.agent_did {

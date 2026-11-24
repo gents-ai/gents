@@ -4,11 +4,13 @@
 `nativeReturned` is an observation supplied by the adapter; a caller timeout or
 cancellation does not imply it, and the model does not establish that native
 work eventually returns (retaining the mutation gate is the safe modeled
-outcome). Explicit rollback completion is allowed only after all abandoned
-native statements return; native owner abandonment removes the registry entry
-synchronously without implying already-acquired contexts have returned. Both
-paths retain the gate until every native operation drains. Observes registry
-and gate ownership, not storage internals.
+outcome). A caller timeout or cancellation poisons the transaction, and an
+explicit rollback of a poisoned transaction is deferred: it never returns, even
+after every native statement drains. Rollback of a poisoned transaction belongs
+to dropping it: the drop abandons the native owner synchronously, without
+implying already-acquired contexts have returned, and is itself a request to
+release the gate, which is released only once every native operation drains. Observes registry and gate ownership, not
+storage internals.
 -/
 namespace NativeCompletion
 
@@ -65,10 +67,12 @@ def step (s : State) (event : Event) : State :=
   | .callerTimedOut => { s with caller := .timedOut, poisoned := true }
   | .callerCancelled => { s with caller := .cancelled, poisoned := true }
   | .registryAbandoned =>
-      if s.cleanupRequired then { s with registryAbandoned := true, poisoned := true }
+      if s.cleanupRequired then
+        { s with registryAbandoned := true, poisoned := true
+                 gateHeld := s.gateHeld && !nativeWorkDrained s.nativeOutstanding }
       else s
   | .rollbackReturned =>
-      if nativeWorkDrained s.nativeOutstanding && s.cleanupRequired then
+      if !s.poisoned && nativeWorkDrained s.nativeOutstanding && s.cleanupRequired then
         { s with rollbackReturned := true }
       else s
   | .retryRequested =>
@@ -112,11 +116,31 @@ theorem timeout_blocks_cleanup_and_release_while_native_live :
     s.nativeOutstanding = 1 ∧ s.rollbackReturned = false ∧ s.gateHeld = true := by
   decide
 
-theorem transaction_cleanup_follows_observed_native_and_rollback_return :
-    let s := run transaction
+/-- A drained poisoned transaction still refuses its explicit rollback and
+keeps the gate; dropping it releases the gate at once. -/
+theorem poisoned_transaction_cleanup_follows_drop_after_drain :
+    let drained := run transaction
       [.nativeStarted, .callerTimedOut, .nativeReturned, .rollbackReturned,
         .gateReleaseRequested]
-    s.nativeOutstanding = 0 ∧ s.rollbackReturned = true ∧ s.gateHeld = false := by
+    let dropped := step drained .registryAbandoned
+    drained.nativeOutstanding = 0 ∧ drained.rollbackReturned = false ∧
+      drained.gateHeld = true ∧ dropped.gateHeld = false := by
+  decide
+
+theorem registry_abandonment_never_releases_outstanding_work (s : State)
+    (h : 0 < s.nativeOutstanding) (gate : s.gateHeld = true) :
+    (step s .registryAbandoned).gateHeld = true := by
+  cases hc : s.cleanupRequired <;> simp [step, hc, nativeWorkDrained, Nat.ne_of_gt h, gate]
+
+theorem poisoned_transaction_explicit_rollback_is_deferred (s : State)
+    (h : s.poisoned = true) :
+    (step s .rollbackReturned).rollbackReturned = s.rollbackReturned := by
+  simp [step, h]
+
+theorem unpoisoned_transaction_rollback_follows_drain_and_releases :
+    let s := run transaction
+      [.nativeStarted, .nativeReturned, .rollbackReturned, .gateReleaseRequested]
+    s.rollbackReturned = true ∧ s.gateHeld = false := by
   decide
 
 theorem auto_commit_gate_tracks_native_completion :

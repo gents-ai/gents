@@ -154,3 +154,38 @@ async fn a_home_on_the_node_store_is_initialized_served_used_and_reopened() -> R
 async fn a_home_on_an_embedded_vera_node_is_initialized_served_used_and_reopened() -> Result<()> {
     a_home_is_initialized_served_used_and_reopened("vera").await
 }
+
+#[cfg(feature = "vera")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let model = MockChatEndpoint::start("device-group", REPLY)?;
+    let init = run_init_json(
+        home.path(),
+        &[
+            "--model-name",
+            "device-group",
+            "--inference-url",
+            model.endpoint(),
+            "--document-acp",
+            "vera",
+            "--create-transport-group",
+        ],
+    )?;
+    let group = &init["transport_group"];
+    let account = group["account"]
+        .as_str()
+        .context("missing device group owner")?;
+    anyhow::ensure!(
+        !group["group"].as_str().unwrap_or_default().is_empty(),
+        "missing device group ID"
+    );
+    let (serve, _, readiness) = spawn_server_with_ready_json_recovering(
+        home.path(),
+        allocate_port()?,
+        &["--transport-account", account],
+        &[],
+    )?;
+    anyhow::ensure!(readiness["status"] == "serving", "{readiness}");
+    stop(serve).await
+}

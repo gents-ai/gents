@@ -1,0 +1,647 @@
+{
+  "case_id": "sample-bin-placement",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type SamplePlacement { sample: String @index(unique: true) bin_id: String }",
+      "type SampleIntake { sample: String @index(unique: true) site: String bin_code: String }",
+      "type LabBin { bin_id: String @index(unique: true) site: String code: String available: String }"
+    ],
+    "documents": [
+      {
+        "collection": "SamplePlacement",
+        "document": {
+          "sample": "Q-102",
+          "bin_id": "historic-bin"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-101",
+          "site": "east",
+          "bin_code": "M3"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-102",
+          "site": "west",
+          "bin_code": "M3"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-103",
+          "site": "east",
+          "bin_code": "R6"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-104",
+          "site": "west",
+          "bin_code": "S2"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-105",
+          "site": "east",
+          "bin_code": "S2"
+        }
+      },
+      {
+        "collection": "SampleIntake",
+        "document": {
+          "sample": "Q-106",
+          "site": "north",
+          "bin_code": "R6"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-101",
+          "site": "east",
+          "code": "M3",
+          "available": "2026-11-13"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-102",
+          "site": "east",
+          "code": "R6",
+          "available": "2026-11-03"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-103",
+          "site": "east",
+          "code": "R6",
+          "available": "2026-11-06"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-104",
+          "site": "west",
+          "code": "S2",
+          "available": "2026-12-01"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-105",
+          "site": "north",
+          "code": "R6",
+          "available": "2026-11-03"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-106",
+          "site": "north",
+          "code": "R6",
+          "available": "2026-11-03"
+        }
+      },
+      {
+        "collection": "LabBin",
+        "document": {
+          "bin_id": "LB-107",
+          "site": "east",
+          "code": "S2",
+          "available": "2026-11-05"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in SamplePlacement, SampleIntake and LabBin. Enable your general read access only to those collections, and general create/update/delete access only to SamplePlacement if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "SamplePlacement"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"SamplePlacement\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"SampleIntake\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"LabBin\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "SamplePlacement",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "SampleIntake",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "LabBin",
+                "min": 7,
+                "max": 7
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "SamplePlacement",
+          "collection": "SamplePlacement",
+          "filter": {},
+          "fields": [
+            "sample",
+            "bin_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "SampleIntake",
+          "collection": "SampleIntake",
+          "filter": {},
+          "fields": [
+            "sample",
+            "site",
+            "bin_code"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LabBin",
+          "collection": "LabBin",
+          "filter": {},
+          "fields": [
+            "bin_id",
+            "site",
+            "code",
+            "available"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "ask",
+      "prompt": "Place the incoming samples as of 2026-11-13. For each unplaced SampleIntake, find its LabBin by both site and bin code. Use the bin with the latest available date on or before that date. Leave it unplaced if none qualifies or two share the latest date. Add the SamplePlacement with the bin ID. Keep existing placements and source records unchanged. Reply with JSON containing \"unplaced\", the intake IDs still without a placement.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "SamplePlacement",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "SampleIntake",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "LabBin",
+                "min": 7,
+                "max": 7
+              }
+            ],
+            "rows": [
+              {
+                "capture": "SamplePlacement",
+                "key": "sample",
+                "id": "Q-102",
+                "expect": [
+                  {
+                    "field": "bin_id",
+                    "equals": "historic-bin"
+                  }
+                ]
+              },
+              {
+                "capture": "SamplePlacement",
+                "key": "sample",
+                "id": "Q-101",
+                "expect": [
+                  {
+                    "field": "bin_id",
+                    "equals": "LB-101"
+                  }
+                ]
+              },
+              {
+                "capture": "SamplePlacement",
+                "key": "sample",
+                "id": "Q-103",
+                "expect": [
+                  {
+                    "field": "bin_id",
+                    "equals": "LB-103"
+                  }
+                ]
+              },
+              {
+                "capture": "SamplePlacement",
+                "key": "sample",
+                "id": "Q-105",
+                "expect": [
+                  {
+                    "field": "bin_id",
+                    "equals": "LB-107"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-101",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "M3"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-102",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "M3"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-103",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "R6"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-104",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "S2"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-105",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "S2"
+                  }
+                ]
+              },
+              {
+                "capture": "SampleIntake",
+                "key": "sample",
+                "id": "Q-106",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "north"
+                  },
+                  {
+                    "field": "bin_code",
+                    "equals": "R6"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-101",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "M3"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-13"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-102",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "R6"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-03"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-103",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "R6"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-06"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-104",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "S2"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-12-01"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-105",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "north"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "R6"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-03"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-106",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "north"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "R6"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-03"
+                  }
+                ]
+              },
+              {
+                "capture": "LabBin",
+                "key": "bin_id",
+                "id": "LB-107",
+                "expect": [
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "code",
+                    "equals": "S2"
+                  },
+                  {
+                    "field": "available",
+                    "equals": "2026-11-05"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unplaced\"\\s*:\\s*\\[\\s*(?:\"Q-104\"\\s*,\\s*\"Q-106\"|\"Q-106\"\\s*,\\s*\"Q-104\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "SamplePlacement",
+          "collection": "SamplePlacement",
+          "filter": {},
+          "fields": [
+            "sample",
+            "bin_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "SampleIntake",
+          "collection": "SampleIntake",
+          "filter": {},
+          "fields": [
+            "sample",
+            "site",
+            "bin_code"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LabBin",
+          "collection": "LabBin",
+          "filter": {},
+          "fields": [
+            "bin_id",
+            "site",
+            "code",
+            "available"
+          ]
+        }
+      ]
+    }
+  ]
+}

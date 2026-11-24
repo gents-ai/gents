@@ -121,6 +121,9 @@ pub struct ServeArgs {
     pub advertise_graphql_url: Option<String>,
     #[arg(long)]
     pub node_name: Option<String>,
+    /// Account DID whose certified device group manages Vera transport readers on this home.
+    #[arg(long, value_name = "DID")]
+    pub transport_account: Option<identity::Did>,
     #[arg(long)]
     pub key_path: Option<PathBuf>,
     #[arg(

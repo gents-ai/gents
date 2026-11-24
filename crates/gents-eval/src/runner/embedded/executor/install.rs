@@ -23,6 +23,7 @@ pub(super) async fn install(
     spec: &TrialSpec,
     home: &EmbeddedHome,
     workspace: &Path,
+    core_pack_archives: gents::core_packs::Archives<'_>,
 ) -> Result<String> {
     let (manifest, assets) = read_pack(&spec.pack_dir)?;
     let digest = digest_declared_assets(&manifest, |path| {
@@ -67,7 +68,8 @@ pub(super) async fn install(
     )
     .await
     .context("bootstrapping the evaluator-owned trial node")?;
-    let provisioner = gents_pack::pack::AgentProvisioner::local(&home.node, home.identity.as_ref());
+    let provisioner =
+        gents_pack::pack::AgentProvisioner::local(&home.node, home.node_identity.as_ref());
     let config = load_pack_install_config_with_provisioner(
         &planning_access,
         &manifest,
@@ -217,6 +219,7 @@ pub(super) async fn install(
         .map(|agent| agent.agent_did.clone())
         .collect::<Vec<_>>();
     install_workspace_root(&access, &node_did, workspace, &root_readers).await?;
+    install_core_packs(spec, home, &node_did, &agent_did, core_pack_archives).await?;
     let mut fixtures = spec.fixtures.clone();
     for fixture in &mut fixtures.documents {
         gents_pack::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
@@ -256,7 +259,72 @@ pub(super) async fn install(
     Ok(agent_did)
 }
 
-pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
+/// Leaves each of the subject's core packs on its agent as `gents init`
+/// leaves them on the Engineer, through the same owner, from `archives`. The
+/// evaluator is the trial node's init User, so it holds the store and signs
+/// the wire, as init's User does; the trial's runtime has not started, so
+/// this is init's route through the home's own store (Lean
+/// `Pack.CorePacks.enableRoute` with nothing serving the home). A failure
+/// leaves the trial with no evidence, which grades as infrastructure, and
+/// the next attempt starts from a fresh home.
+async fn install_core_packs(
+    spec: &TrialSpec,
+    home: &EmbeddedHome,
+    node_did: &str,
+    agent_did: &str,
+    archives: gents::core_packs::Archives<'_>,
+) -> Result<()> {
+    use gents::core_packs::{apply, resolve, Consent, CorePackTarget};
+    use gents_pack::pack::core_packs::{init_wiring, CorePack};
+    use gents_pack::pack::plugin_wire::{HeldUser, WireSigners};
+
+    if spec.core_packs.is_empty() {
+        return Ok(());
+    }
+    let access = home.local_client_access(&spec.evaluator_did)?;
+    let identity = home.node_identity.clone();
+    let runtime = move || -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
+        Ok(identity.clone())
+    };
+    let target = CorePackTarget {
+        access: &access,
+        owner: node_did,
+        home: home.path(),
+        engineer: agent_did,
+        runtime: &runtime,
+        signers: WireSigners {
+            held_user: HeldUser::Held(home.evaluator_identity(&spec.evaluator_did)?),
+            client: trial_wires_through_its_own_store,
+        },
+        registry: None,
+        enable_with: "the eval definition's subject core_packs".to_owned(),
+    };
+    for coordinate in &spec.core_packs {
+        let pack = CorePack::of_coordinate(coordinate)
+            .with_context(|| format!("{coordinate} is not a core pack"))?;
+        let source = resolve(home.path(), pack, archives, None).await?;
+        apply(&target, &source, init_wiring(pack), Consent::Init)
+            .await
+            .with_context(|| format!("installing core pack {coordinate} on the trial subject"))?;
+    }
+    Ok(())
+}
+
+fn trial_wires_through_its_own_store(
+    _: gents_store::config_client::GraphqlEndpoint,
+    _: String,
+    _: std::path::PathBuf,
+    _: Vec<gents_pack::pack::plugin_wire::ClientWire>,
+) -> futures::future::BoxFuture<'static, Result<Vec<Value>>> {
+    Box::pin(async {
+        anyhow::bail!("an eval trial wires its core packs through its own store, never a runtime")
+    })
+}
+
+pub(crate) async fn grant_trial_operations(
+    home: &gents_store::local::home::ServedHome,
+    target: &str,
+) -> Result<()> {
     use gents_store::config_client::NodePermission;
 
     let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);
@@ -360,7 +428,16 @@ fn inference_plan(
         })?,
     };
     own(&mut sampling, "InferenceSampling", node_did)?;
-    object(&mut sampling, "InferenceSampling")?.insert("seed".to_string(), json!(binding.seed));
+    let wire = gents_inference::backends::registry::backend_fields(
+        &serde_json::from_value(backend.clone())
+            .context("the trial's InferenceBackend document is invalid")?,
+    );
+    if gents_inference::resolved::supports_sampling_seed(
+        wire.backend_provider_kind,
+        wire.openai_wire_api,
+    ) {
+        object(&mut sampling, "InferenceSampling")?.insert("seed".to_string(), json!(binding.seed));
+    }
     let sampling_id = sampling
         .get("sampling_id")
         .and_then(Value::as_str)
@@ -463,8 +540,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == agent_did)
                 .context("expired request fixture references an unknown agent binding")?;
-            let agent =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let agent = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             expired_request::install(access, &document, home, evaluator, agent.as_ref()).await?;
             continue;
         }
@@ -487,8 +566,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == did)
                 .context("agent-owned fixture references an unknown agent binding")?;
-            let identity =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let identity = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             Some(ConfigAccess::local_managed_agent(
                 home.node.clone(),
                 ::identity::Did::new(did)?,

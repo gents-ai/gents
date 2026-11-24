@@ -393,7 +393,9 @@ fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {
     }
 }
 
-fn projection_redaction_mode(arg: TraceProjectionRedactionArg) -> ProjectionRedactionMode {
+pub(crate) fn projection_redaction_mode(
+    arg: TraceProjectionRedactionArg,
+) -> ProjectionRedactionMode {
     match arg {
         TraceProjectionRedactionArg::Full => ProjectionRedactionMode::Full,
         TraceProjectionRedactionArg::TrainingSafe => ProjectionRedactionMode::TrainingSafe,
