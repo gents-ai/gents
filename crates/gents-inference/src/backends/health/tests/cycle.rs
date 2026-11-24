@@ -9,11 +9,13 @@ struct CycleFixture {
 
 impl CycleFixture {
     async fn new() -> Self {
-        let (db, user_identity, user, _binding) = crate::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             "health-cycle",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let _binding = crate::test_support::default_agent(&signed_home).await;
+        let (db, user_identity, user) = signed_home.into_parts();
         let runtime =
             crate::auth::credential::runtime_credential_access(&db.node, db.node_identity.did())
                 .unwrap();
