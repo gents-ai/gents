@@ -328,9 +328,12 @@ function activityStatusFor(
         animated: true,
       };
     case "waitingForRequestObservation":
+      /* the same words as the step before: to the person both are the send
+         still going out, and a label that changes every half second reads
+         as noise; the detail still tells the two apart */
       return {
         kind: "syncing",
-        label: "Syncing message…",
+        label: "Sending message…",
         detail:
           "Your request was created; waiting for it to appear in the shared conversation.",
         animated: true,
