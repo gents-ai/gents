@@ -1,13 +1,13 @@
 pub(super) fn page(path: &[&str]) -> Option<&'static str> {
     Some(match path {
         ["collections"] => "An SDL type defines a document collection. Fields describe values; collection directives affect authorization, identity and history. Read help collections TOPIC: policy, branchable, governed, downsample. Query-backed collections: help views. Ordinary collections must be materialized. Publish with collection create; use view create when a source query is required.",
-        ["collections", "policy"] => r#"Collection-level @policy attaches an existing DefraDB ACP policy and its named resource.
+        ["collections", "policy"] => r#"Collection-level @policy binds a document access policy and one of its resources to a new collection.
 ```graphql
 type Report @policy(id: "POLICY_ID", resource: "report") {
   title: String
 }
 ```
-Replace POLICY_ID with a registered policy ID and report with a resource in that policy. This declares the authorization contract; it does not create the policy or grant access. Existing bindings cannot be changed through schema patching. Field-level @policy is not implemented; materialized views cannot carry an ACP policy. Next: collection create --help or help views virtual."#,
+config policy create registers a policy; its receipt gives this line. Each document then belongs to its creator; others reach it only by relations granted per document with config policy grant. A binding is fixed at creation. Field-level @policy is not implemented; materialized views cannot carry an ACP policy. Next: config ["help","policy"], then collection create --help."#,
         ["collections", "branchable"] => r#"@branchable tracks collection history as one verifiable entity, adding collection-level commits for document changes.
 ```graphql
 type Event @branchable {

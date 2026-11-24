@@ -90,7 +90,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
     ),
     (
         "policy",
-        "node permissions and document relationships, delegated as this agent",
+        "node permissions, document policies and relationships, as this agent",
     ),
     (
         "plugin",

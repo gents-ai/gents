@@ -61,6 +61,7 @@ mod delegation;
 mod delegation_conformance;
 mod destructive_decision;
 pub mod document_decide;
+mod document_policy;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;

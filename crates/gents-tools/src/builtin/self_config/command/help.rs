@@ -393,14 +393,15 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
-            what: "node permissions and document relationships and permissions granted to or held by an identity, acting as this agent.",
+            what: "node permissions, document relationships and permissions, and document access policies, acting as this agent.",
             commands: &[
                 "policy get  options: subject (self or an agent DID), collection and doc to list a document's relationships",
                 "policy check  options: subject, and permission NAME (a node permission, or a relation or permission of this Node's document such as manage_agents), or collection, doc and relation or permission",
                 "policy explain  same options as check; when denied, names the grant that would allow it",
                 "policy grant | revoke  same options as check; acts as this agent",
+                "policy create  options.definition: {name, resources: [{name, relations: [{name, types, manages}], permissions: [{name, relations, parents: [{relation, permission}]}]}]}",
             ],
-            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. A document relationship you can grant you can revoke, except on an AgentSession: no agent removes a relation of a session. Receipts give the answer first, then the subject's access after the change, the call that undoes it, and assumptions.",
+            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. You can revoke what you can grant, except a relation of an AgentSession. Receipts give the answer, the access after the change, the call that undoes it, and assumptions.\ncreate: each resource declares read, update and delete; types are actor, a resource, or RESOURCE->RELATION; a parent is an object relation and a name on its target; owner, a document's creator, is implicit.",
             next: "policy get to see what you hold; policy check --permission NAME to test one permission.",
         },
         "page" => Page {
