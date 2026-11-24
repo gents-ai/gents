@@ -495,6 +495,8 @@ pub struct OAuthCredentialRow {
     #[serde(default)]
     pub account_id: Option<String>,
     #[serde(default)]
+    pub account_email: Option<String>,
+    #[serde(default)]
     pub chatgpt_plan_type: Option<String>,
     #[serde(default)]
     pub is_fedramp: Option<bool>,

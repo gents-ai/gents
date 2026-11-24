@@ -69,6 +69,27 @@ async fn list_accounts_is_ordered_token_free_and_marks_the_default() {
     );
 }
 
+/// A listing reads no token, so it names an account by the email the tokens
+/// showed when the runtime stored them (Lean `AccountListing`).
+#[tokio::test]
+async fn a_listing_names_an_account_by_its_stored_email() {
+    let (db, _user, access) = access().await;
+    let did = db.node_identity.did();
+    let mut credential = Product::ChatGpt.sign_in(did, "a", "refresh-SECRET-a");
+    credential.id_token = Some(unsigned_jwt(json!({
+        "email": "person@example.test",
+        "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" },
+    })));
+    store(&access, credential).await;
+
+    let listed = list_accounts(&access, did).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].identity.as_deref(), Some("person@example.test"));
+    let stored = list_stored_accounts(&access, did).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].identity.as_deref(), Some("person@example.test"));
+}
+
 #[tokio::test]
 async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
     let (db, _user, access) = access().await;

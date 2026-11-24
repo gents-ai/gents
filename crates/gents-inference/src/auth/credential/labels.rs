@@ -2,25 +2,32 @@ use anyhow::Result;
 
 use super::*;
 
-/// Display metadata only. Decoded, unverified claims must not authorize requests or replace
-/// `account_id` used by provider authentication headers.
-pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
-    let claims = credential
+fn token_claim(credential: &OAuthCredential, key: &str) -> Option<String> {
+    credential
         .id_token
         .as_deref()
         .and_then(crate::auth::chatgpt_refresh::jwt_payload)
-        .or_else(|| crate::auth::chatgpt_refresh::jwt_payload(&credential.access_token));
-    let field = |key: &str| {
-        claims
-            .as_ref()
-            .and_then(|value| value.get(key))
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_owned)
-    };
-    field("email")
+        .or_else(|| crate::auth::chatgpt_refresh::jwt_payload(&credential.access_token))
+        .as_ref()
+        .and_then(|claims| claims.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// Display metadata only. Decoded, unverified claims must not authorize requests or replace
+/// `account_id` used by provider authentication headers.
+pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
+    token_claim(credential, "email")
         .or_else(|| credential.account_id.clone())
-        .or_else(|| field("sub"))
+        .or_else(|| token_claim(credential, "sub"))
+}
+
+/// The email the tokens show, which a store or a refresh copies into
+/// `account_email` so that a listing names the account without reading a
+/// token (Lean `AccountListing.write`). Display metadata only, as above.
+pub(super) fn token_account_email(credential: &OAuthCredential) -> Option<String> {
+    token_claim(credential, "email")
 }
 
 pub(super) fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
@@ -51,9 +58,13 @@ pub fn validate_account_label(label: &str) -> Result<String> {
 }
 
 pub fn effective_account_label(credential: &OAuthCredential) -> String {
-    credential.label.clone().unwrap_or_else(|| {
-        sign_in_product(&credential.provider)
-            .map_or(credential.provider.as_str(), |product| product.name)
+    label_or_product(credential.label.as_deref(), &credential.provider)
+}
+
+pub(super) fn label_or_product(label: Option<&str>, provider: &str) -> String {
+    label.map(str::to_owned).unwrap_or_else(|| {
+        sign_in_product(provider)
+            .map_or(provider, |product| product.name)
             .to_owned()
     })
 }
