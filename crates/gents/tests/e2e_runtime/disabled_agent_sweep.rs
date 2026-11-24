@@ -2,7 +2,7 @@ use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 
 async fn disable_agent(
     access: &gents_store::config_client::ConfigAccess,
@@ -46,7 +46,7 @@ async fn disable_agent(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_disabled_sibling_agent_does_not_stop_the_runtime() {
     let target = live_target().await;
-    let db = test_db("disabled-agent-sweep").await;
+    let db = trial_store("disabled-agent-sweep").await;
     let actors = bind_target(&db, &target).await;
     let (_, sibling) = crate::support::install_managed_agent(
         &db,

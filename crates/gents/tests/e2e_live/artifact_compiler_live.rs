@@ -2,7 +2,7 @@ use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
 use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
-    test_db,
+    trial_store,
 };
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{BashMode, FileToolMode};
@@ -35,7 +35,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "macOS compiler qualification: run the built live test executable directly without parent Cargo"]
 async fn live_compiler_keeps_sealed_sources_unchanged() {
-    let db = test_db("artifact-compiler-live").await;
+    let db = trial_store("artifact-compiler-live").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let did = identity.did().to_owned();
     let target = crate::support::live_inference::live_target().await;
@@ -205,7 +205,7 @@ async fn live_compiler_keeps_sealed_sources_unchanged() {
         db.node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(&repo),
             ..Default::default()
         },

@@ -10,7 +10,7 @@ use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
 use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"fixture-model\"\r\n}\r\n";
 
@@ -18,7 +18,7 @@ const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"fixture-m
 async fn edit_file_live_model_preserves_other_content_and_line_endings() {
     let target = live_target().await;
 
-    let db = test_db("edit-file-live").await;
+    let db = trial_store("edit-file-live").await;
 
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("profile.json"), SEED).unwrap();
@@ -53,7 +53,7 @@ async fn edit_file_live_model_preserves_other_content_and_line_endings() {
         db.node.clone(),
         Arc::clone(&db.node_identity),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace.path()),
             ..Default::default()
         },

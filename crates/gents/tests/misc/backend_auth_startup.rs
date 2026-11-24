@@ -45,7 +45,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     }
 
     let _env_guard = ENV_VAR_LOCK.lock().await;
-    let db = crate::support::test_db("startup-probe-backend-auth").await;
+    let db = crate::support::trial_store("startup-probe-backend-auth").await;
     let identity = db.node_identity.clone();
     let node = db.node.clone();
     let mock_endpoint = ScriptedBackend::builder("default")
@@ -68,7 +68,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

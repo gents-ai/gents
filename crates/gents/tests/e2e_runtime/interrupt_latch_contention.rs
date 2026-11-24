@@ -11,7 +11,7 @@ use gents_protocol::operations::request::{RequestInterruptInput, RequestRef};
 
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const SESSION: &str = "contended-interrupt-session";
 const REQUEST: &str = "contended-interrupt-request";
@@ -85,7 +85,7 @@ fn interrupt_input(node_did: &str) -> RequestInterruptInput {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
-    let db = test_db("interrupt-latch-contention").await;
+    let db = trial_store("interrupt-latch-contention").await;
     let actors = Arc::new(RequestActors::new(&db).await);
     let node_did = db.node_identity.did().to_owned();
     let doc = submit_user_request(
@@ -102,7 +102,7 @@ async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
             "execution_lease_expires_at": format!("2099-01-01T00:00:0{landed}Z"),
         })
     });
-    let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
+    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
 
     let receipt = gents::operations::request::interrupt(&contended, interrupt_input(&node_did))
@@ -124,7 +124,7 @@ async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_rebuild_keeps_another_interrupters_latch() {
-    let db = test_db("interrupt-latch-stamped-once").await;
+    let db = trial_store("interrupt-latch-stamped-once").await;
     let actors = Arc::new(RequestActors::new(&db).await);
     let node_did = db.node_identity.did().to_owned();
     let doc = submit_user_request(
@@ -143,7 +143,7 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
             "terminalized_at": OTHER_STAMP,
         })
     });
-    let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
+    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
 
     let receipt = gents::operations::request::interrupt(&contended, interrupt_input(&node_did))

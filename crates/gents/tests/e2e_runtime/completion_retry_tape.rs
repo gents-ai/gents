@@ -22,7 +22,7 @@ use crate::support::builder_runtime::{
 };
 use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
 use crate::support::snapshots::fetch_request_snapshot;
-use crate::support::{first_row, test_db};
+use crate::support::{first_row, trial_store};
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -49,7 +49,7 @@ async fn backend_restart_cluster_recovers() {
         })
         .collect::<Vec<_>>();
     let backend = ScriptedBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
-    let db = test_db("completion-retry-cluster").await;
+    let db = trial_store("completion-retry-cluster").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 3, UNREACHED_DEADLINE.as_secs()).await;
 
@@ -139,7 +139,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-backoff-liveness").await;
+    let db = trial_store("completion-retry-backoff-liveness").await;
     let unreached_backoff_ms = i64::try_from(UNREACHED_DEADLINE.as_millis()).unwrap();
     let (actors, runtime) = build_retry_agent_with_liveness(
         &db,
@@ -309,7 +309,7 @@ async fn deadline_tight_fails_cleanly() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deadline-tight").await;
+    let db = trial_store("completion-retry-deadline-tight").await;
     let deadline_duration_secs = 1u64;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
@@ -384,7 +384,7 @@ async fn interactive_budget_is_quick() {
     let backend =
         ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
             .unwrap();
-    let db = test_db("completion-retry-interactive-budget").await;
+    let db = trial_store("completion-retry-interactive-budget").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
 
@@ -512,7 +512,7 @@ async fn start_stall_tape(
     execution_origin: &str,
 ) -> (
     ScriptedBackend,
-    crate::support::TestDb,
+    gents_store::test_support::TestStore,
     RequestActors,
     BootedAgent,
     String,
@@ -521,7 +521,7 @@ async fn start_stall_tape(
         ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
             .unwrap();
     let test_name = format!("completion-retry-{marker}");
-    let db = test_db(&test_name).await;
+    let db = trial_store(&test_name).await;
     let actors = builder_actors(&db, RETRY_BACKEND_ID, backend.endpoint(), RETRY_MODEL, 1).await;
     let runtime = fixture_agent(
         runtime_builder(&db, &actors).tool_ceiling(ToolCeiling::meta_only()),
@@ -679,7 +679,7 @@ async fn deterministic_400_tape() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deterministic-400").await;
+    let db = trial_store("completion-retry-deterministic-400").await;
     let (actors, agent) =
         build_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
     let request_id = "req-deterministic-400";
@@ -715,7 +715,7 @@ async fn deterministic_400_tape() {
 }
 
 async fn boot_retry_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,
@@ -734,7 +734,7 @@ async fn boot_retry_agent(
 }
 
 async fn build_retry_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,
@@ -751,7 +751,7 @@ async fn build_retry_agent(
 }
 
 async fn build_retry_agent_with_liveness(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,

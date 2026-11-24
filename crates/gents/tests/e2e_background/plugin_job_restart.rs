@@ -9,7 +9,7 @@ use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, reboot_job_harness, result, spawn,
     wait_job, JobHarness, PlanEntry,
 };
-use crate::support::test_db_in;
+use crate::support::trial_store_at;
 use gents_inference::test_support::scripted_backend::{
     StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -108,7 +108,7 @@ async fn run_job_crash_worker(ready_path: &Path) {
     })
     .await
     .unwrap();
-    let db = test_db_in(home).await;
+    let db = trial_store_at(home.path()).await;
     let child_plans = SLOTS
         .iter()
         .map(|slot| {
@@ -154,7 +154,7 @@ async fn run_job_crash_worker(ready_path: &Path) {
     .await
     .expect("a job child is processing");
     let ready = JobCrashReady {
-        data_path: h.db.data_path().to_path_buf(),
+        data_path: h.db.path().to_path_buf(),
         plugin_home: h.plugin_home.clone(),
         child_states,
         row_doc_id,

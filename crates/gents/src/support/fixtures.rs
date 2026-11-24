@@ -169,7 +169,7 @@ pub fn default_tool_configs(
 }
 
 pub async fn session_command_agent_snapshot(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
 ) -> tokio::sync::watch::Receiver<
     Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
 > {
@@ -232,7 +232,7 @@ pub async fn session_command_agent_snapshot(
 
 /// Configures an Agent's tools as the Node's retained configuring User.
 pub async fn configure_agent_tools(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     node_did: &str,
     agent_did: &str,
     system_prompt: Option<String>,
@@ -375,12 +375,16 @@ pub fn agent_target(
 
 /// Binds the Node's default Agent to a backend as the Node's configuring User,
 /// enrolling that User, its Node and a default Agent when the store is fresh.
-pub async fn bind_default_agent_backend(db: &super::TestDb, backend_id: &str, endpoint: &str) {
+pub async fn bind_default_agent_backend(
+    db: &gents_store::test_support::TestStore,
+    backend_id: &str,
+    endpoint: &str,
+) {
     bind_agent_backend_chain(db, None, backend_id, endpoint, "default").await;
 }
 
 pub async fn held_fixture_history(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     session_id: &str,
 ) -> Vec<gents_inference::llm::message::Message> {
@@ -404,7 +408,7 @@ pub async fn held_fixture_history(
 /// reconstruction owner marks that window incomplete, so wait it out and
 /// fail on any other error.
 pub async fn held_canonical_message(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     header: &str,
 ) -> (
@@ -455,7 +459,7 @@ pub async fn canonical_run_timeline_rows(
 }
 
 pub async fn bind_managed_agent_backend(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     backend_id: &str,
     endpoint: &str,
@@ -474,7 +478,7 @@ pub async fn bind_managed_agent_backend(
 }
 
 pub async fn bind_selected_managed_agent_backend(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     agent_did: &str,
     make_default: bool,
@@ -568,7 +572,7 @@ pub async fn bind_selected_managed_agent_backend(
 /// Binds an installed Agent to a backend as the Node's configuring User and
 /// makes it the Node default.
 pub async fn bind_agent_backend(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -578,7 +582,7 @@ pub async fn bind_agent_backend(
 }
 
 async fn bind_agent_backend_chain(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_did: Option<&str>,
     backend_id: &str,
     endpoint: &str,

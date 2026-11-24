@@ -16,8 +16,9 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::{self, TestDb};
+use crate::support::{self};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
@@ -79,7 +80,7 @@ async fn wait_row_as(
 }
 
 async fn signed_edit_targets(
-    db: &TestDb,
+    db: &TestStore,
     signer: &dyn gents_store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
@@ -206,7 +207,7 @@ impl SeededSession {
 /// The P2P edit route is gone: every edit is published by its author through
 /// the signed client endpoint, and concurrency is two authors racing there.
 struct EndpointEdits {
-    db: TestDb,
+    db: TestStore,
     user: gents_store::identity::KeyIdentity,
     client: ConfigAccess,
     agent_did: String,
@@ -215,7 +216,7 @@ struct EndpointEdits {
 
 impl EndpointEdits {
     async fn start(name: &str) -> Self {
-        let db = support::test_db(name).await;
+        let db = support::trial_store(name).await;
         let support::ManagedAgentFixture {
             user,
             access: client,
@@ -980,7 +981,7 @@ async fn identical_edit_republished_after_receipt_is_refused() {
 #[tokio::test]
 async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempotent() {
     use gents_store::identity::NodeIdentity as _;
-    let mut db = support::test_db("input-edit-reopen").await;
+    let mut db = support::trial_store("input-edit-reopen").await;
     let did = db.node_identity.did().to_owned();
     // The enrolled User created this Agent and edits its own queued input.
     let support::ManagedAgentFixture {

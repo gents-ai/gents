@@ -11,19 +11,20 @@ use crate::support::agent_transcript::{self, Imported, Source};
 use crate::support::snapshots::{
     fetch_compaction_entry_snapshots_for_session, fetch_session_snapshot,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::TestStore;
 
 /// The Agent authors its own transcript: every session, request, segment,
 /// header, tool row and compaction cursor below is written by the fixture
 /// Agent's managed signer, and the fork runs as that same Agent.
 struct Fixture {
-    db: TestDb,
+    db: TestStore,
     actors: RequestActors,
 }
 
 impl Fixture {
     async fn new(name: &str) -> Self {
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let actors = RequestActors::new(&db).await;
         Self { db, actors }
     }
@@ -237,7 +238,7 @@ async fn fork_via_http_uses_same_header_contract() {
     let source = f.import(&parent, 1, MessageRole::User, "u", true).await;
     let agent = f.actors.agent();
     let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
-        f.db.client_endpoint(),
+        f.db.graphql_endpoint(),
         agent.did(),
     )
     .with_client_signing_capability(agent.client_signing_capability().unwrap())

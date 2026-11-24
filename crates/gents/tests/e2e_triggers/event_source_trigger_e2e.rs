@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
@@ -223,7 +223,7 @@ async fn write_webhook_event(access: &ConfigAccess, external_id: &str, kind: &st
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
-    let db = test_db("event-trigger-e2e").await;
+    let db = trial_store("event-trigger-e2e").await;
 
     let target = live_target().await;
     let actors = bind_target(&db, &target).await;
@@ -236,7 +236,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

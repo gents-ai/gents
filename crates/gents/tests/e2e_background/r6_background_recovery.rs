@@ -4,7 +4,7 @@ use crate::support::agent_requests::submit_user_request;
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::spawn_runtime;
 use crate::support::live_inference::{bind_target, live_target};
-use crate::support::test_db_in;
+use crate::support::trial_store_at;
 use gents_store::test_support::rows_when;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,7 +43,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     .await
     .unwrap()
     .unwrap();
-    let db = test_db_in(data_dir).await;
+    let db = trial_store_at(data_dir.path()).await;
     let target = live_target().await;
     let actors = bind_target(&db, &target).await;
     let node_did = actors.node_did().to_owned();
@@ -69,14 +69,14 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         db.node.clone(),
         db.node_identity.clone(),
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly_at(root),
             ..Default::default()
         },
     )
     .await
     .unwrap()
-    .with_background_process_records(db.data_path().join("background-processes"));
+    .with_background_process_records(db.path().join("background-processes"));
     let executions = agent.background_execution_registry();
     let _runtime = spawn_runtime(&db, agent).await;
     let arguments = serde_json::json!({"tool_name":"bash", "args":{"command":"sh", "args":["-c", "exec 3< \"$1\"; printf READY; IFS= read -r release <&3", "gents-live-crash", root.join("release").display().to_string()]}});
@@ -109,7 +109,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     .await
     .unwrap();
     let ready = CrashWorkerReady {
-        data_path: db.data_path().to_path_buf(),
+        data_path: db.path().to_path_buf(),
         node_did,
         agent_binding: actors.fixture.binding.clone(),
         session_id: session_id.into(),
