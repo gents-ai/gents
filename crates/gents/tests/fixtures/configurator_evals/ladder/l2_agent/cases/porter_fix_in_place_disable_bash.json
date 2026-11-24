@@ -2,85 +2,18 @@
   "case_id": "porter-fix-in-place-disable-bash",
   "split": "validation",
   "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "docs/layout.txt",
+        "contents": "Repository layout\nsrc/ holds the service code.\ntools/build/ holds the build scripts.\nfixtures/ holds sample data.\n"
+      }
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Porter for repository inspection. Give it its own instructions and tool permissions, appropriate for its role: read local files and run read-only inspection commands. It must not modify anything. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "porter",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^porter$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(repository|inspect|read)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^porter$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Porter for inspecting this repository: it may read files and run read-only inspection commands, but must not modify anything. Set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -135,11 +68,7 @@
             "integrations"
           ]
         }
-      ]
-    },
-    {
-      "stage_id": "disable_bash",
-      "prompt": "Porter should no longer be able to run commands. Keep its ability to read files and its other settings; update the existing assistant.",
+      ],
       "checks": [
         {
           "check": "crew_spec_match",
@@ -151,6 +80,122 @@
               "expect": [
                 {
                   "agent_did": "porter",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^porter$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^porter$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(repository|inspect|read)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "disable_bash",
+      "prompt": "Porter should no longer be able to run commands. Keep its file reading and everything else as it is.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "porter",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^porter$"
+                  },
                   "agent": [
                     {
                       "field": "display_name",
@@ -179,46 +224,25 @@
                     {
                       "field": "self_config.enable_self_config",
                       "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
                     }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^porter$"
-                  }
+                  ]
                 }
               ]
             }
           },
           "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Porter to read docs/layout.txt and tell me which directory holds the build scripts.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
-          "name": "agents",
+          "name": "role_agents",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -227,47 +251,86 @@
           },
           "fields": [
             "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id",
-            "tags"
+            "display_name"
           ]
         },
         {
           "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^porter$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
             }
           },
           "fields": [
-            "context_id",
-            "system_prompt",
-            "tools_id"
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
           ]
         },
         {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "helper_requests",
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              }
+            ]
           },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "self_config",
-            "agents",
-            "remote",
-            "built_ins",
-            "integrations"
-          ]
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "tools/build"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "docs/layout.txt",
+                "sha256": "fec1ac553d89e65d48e9af73c594d8627f51a61cf499fcb4b2e4a9043d990fff"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

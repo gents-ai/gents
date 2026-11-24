@@ -5,82 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Cursor for planning in conversation. Give it its own instructions and tool permissions, appropriate for its role: help me plan using only what we discuss, without accessing files or running commands. Give it no tools beyond conversation. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "cursor",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^cursor$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(plan|conversation)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^cursor$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Cursor that helps me plan using only what we discuss: no files, no commands, no tools beyond conversation. Set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -134,6 +59,151 @@
             "built_ins",
             "integrations"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "cursor",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^cursor$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^cursor$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(plan|conversation)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "agents.enabled",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "datastore.datastore_tool_surface_ids",
+                      "matches": "^(null|\\[\\])$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Cursor to break moving our office to the second floor into exactly three numbered steps, and show me its plan.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^cursor$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "helper_requests",
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?s)\\b1[.):].*\\b2[.):].*\\b3[.):]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

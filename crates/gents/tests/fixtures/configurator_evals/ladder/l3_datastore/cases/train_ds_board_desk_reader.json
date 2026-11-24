@@ -47,21 +47,101 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our bulletin board keeps DispatchThread { ticket: string, desk: string } records; the type and its records already exist. Give yourself a read-only tool that returns each ticket with its desk for a desk name the caller supplies, limited to DispatchThread. It must not add or change records or reach other collections.",
-      "checks": [
+      "prompt": "Our bulletin board keeps DispatchThread records, each with a ticket and a desk. Create an assistant called Board Reader that can look up tickets by desk, read-only, with no other database access. I will hand it work through you.",
+      "capture": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
           },
-          "tier": "acceptance",
-          "weight": 1
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
         },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          }
+        },
+        {
+          "kind": "documents",
+          "name": "helper_targets",
+          "collection": "AgentTarget",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^board[ -]?reader$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          }
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {}
+        }
+      ],
+      "checks": [
         {
           "check": "crew_spec_match",
           "params": {
@@ -71,7 +151,17 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_did": "gents:agent-slot:engineer",
+                  "agent_did": "board-reader",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^board[ -]?reader$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [],
@@ -97,7 +187,8 @@
             },
             "present": [
               {
-                "capture": "surfaces"
+                "capture": "helper_targets",
+                "min": 1
               },
               {
                 "capture": "DispatchThread",
@@ -108,31 +199,17 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Board Reader which tickets belong to the receiving desk, and tell me its answer.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
-          "name": "DispatchThread",
-          "collection": "DispatchThread",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "desk"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "agents",
+          "name": "role_agents",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -141,86 +218,57 @@
           },
           "fields": [
             "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
+            "display_name"
           ]
         },
         {
           "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^board[ -]?reader$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
             }
           },
           "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
           ]
         },
         {
           "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {}
         }
-      ]
-    },
-    {
-      "stage_id": "exercise",
-      "prompt": "Which tickets belong to the receiving desk? Use your board tool and leave configuration alone.",
+      ],
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "captured_fields_match",
           "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "B-14",
-              "B-18",
-              "B-22",
-              "B-37"
+            "name": "helper_requests",
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              }
             ]
           },
           "tier": "acceptance",
@@ -229,39 +277,6 @@
         {
           "check": "crew_spec_match",
           "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [],
-                    "query": [
-                      "DispatchThread"
-                    ],
-                    "lookup_by": "desk",
-                    "query_fields": {
-                      "DispatchThread": [
-                        "ticket",
-                        "desk"
-                      ]
-                    },
-                    "called_query": [
-                      "DispatchThread"
-                    ]
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            },
             "present": [
               {
                 "capture": "DispatchThread",
@@ -329,84 +344,19 @@
           },
           "tier": "acceptance",
           "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "DispatchThread",
-          "collection": "DispatchThread",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "desk"
-          ]
         },
         {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "B-14",
+              "B-18",
+              "B-22",
+              "B-37"
+            ]
           },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

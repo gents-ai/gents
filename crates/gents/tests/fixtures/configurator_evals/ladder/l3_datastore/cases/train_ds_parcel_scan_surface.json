@@ -5,163 +5,50 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I need you to keep depot scan records. The records are ParcelScan { tracking: string, depot: string }. The tracking number is a caller-supplied business key: preserve it exactly, and find records using that key alone. Set up storage for this record type. Give yourself tools to add and find scan records, limited to those records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "ParcelScan"
-                    ],
-                    "query": [
-                      "ParcelScan"
-                    ],
-                    "lookup_by": "tracking",
-                    "caller_fields": {
-                      "ParcelScan": [
-                        "tracking",
-                        "depot"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "surfaces"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "I want to keep depot scans as ParcelScan records with a tracking number and a depot, in fields named tracking and depot. Set that up so you can add scans and look them up by tracking number.",
       "capture": [
         {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
+          "kind": "schema",
+          "name": "storage",
+          "collections": [
+            "ParcelScan"
           ]
-        },
+        }
+      ],
+      "checks": [
         {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "check": "schema_matches",
+          "params": {
+            "name": "storage",
+            "sdl": "type ParcelScan {\n  tracking: String\n  depot: String\n}"
           },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "exercise",
-      "prompt": "Save one scan for tracking \"PX-4410\" at depot \"Leith\". Then look it up by tracking and tell me what was saved. Use your recordkeeping tools; leave configuration alone.",
-      "checks": [
+      "prompt": "Save a scan for tracking PX-4410 at depot Leith, then look it up by tracking and tell me what is stored.",
+      "settle": true,
+      "capture": [
         {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "scans",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
+          "kind": "documents",
+          "name": "scans",
+          "collection": "ParcelScan",
+          "filter": {
+            "tracking": {
+              "_eq": "PX-4410"
+            }
+          }
+        }
+      ],
+      "checks": [
         {
           "check": "captured_fields_match",
           "params": {
             "name": "scans",
-            "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
                 "field": "tracking",
@@ -177,17 +64,6 @@
           "weight": 1
         },
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "final_message_matches",
           "params": {
             "all": [
@@ -197,135 +73,13 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "ParcelScan"
-                    ],
-                    "query": [
-                      "ParcelScan"
-                    ],
-                    "lookup_by": "tracking",
-                    "caller_fields": {
-                      "ParcelScan": [
-                        "tracking",
-                        "depot"
-                      ]
-                    },
-                    "called_create": [
-                      "ParcelScan"
-                    ],
-                    "called_query": [
-                      "ParcelScan"
-                    ]
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
         }
       ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "scans",
-          "collection": "ParcelScan",
-          "filter": {
-            "tracking": {
-              "_eq": "PX-4410"
-            }
-          },
-          "fields": [
-            "tracking",
-            "depot"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
-        }
-      ]
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "scans"
+      }
     }
   ]
 }

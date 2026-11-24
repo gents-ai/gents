@@ -5,62 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create a research-helper assistant for short research questions, using our current model. Make it available for you to delegate to. Set this up now; we will try it next.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "research-helper"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "research-helper",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^research[ -]helper$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Research Helper for short research questions, and set it up so you can hand work to it. We will try it next.",
       "capture": [
         {
           "kind": "documents",
@@ -76,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -90,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -107,56 +53,162 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets",
           "collection": "AgentTarget",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^research[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "research-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^research[ -]helper$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "helper_targets",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "delegate",
+      "prompt": "Ask Research Helper to reply with exactly TRAIN-111 and tell me what it says.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "target_id",
-            "node_did",
-            "name",
-            "target_node_did",
-            "agent_did"
+            "agent_did",
+            "display_name"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper-session",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^research[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          }
+        },
+        {
+          "kind": "documents",
+          "name": "helper-request",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^research[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "content": {
+              "_like": "%TRAIN-111%"
+            }
+          }
+        },
+        {
+          "kind": "documents",
+          "name": "delegation_calls",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_in": [
+                "agent_new",
+                "agent_message"
+              ]
+            },
+            "request_id": {
+              "_eq": "$request"
+            }
+          }
         }
-      ]
-    },
-    {
-      "stage_id": "delegate",
-      "prompt": "Ask Research Helper to reply with exactly TRAIN-111 and report its reply when it arrives.",
+      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_new"
-            ],
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "helper-session",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
         {
           "check": "captured_fields_match",
           "params": {
@@ -178,7 +230,7 @@
             "max_rows": 1
           },
           "tier": "acceptance",
-          "weight": 2
+          "weight": 1
         },
         {
           "check": "crew_spec_match",
@@ -216,10 +268,16 @@
                 "target_key": "session_id",
                 "exact": true
               }
+            ],
+            "present": [
+              {
+                "capture": "helper-session",
+                "min": 1
+              }
             ]
           },
           "tier": "acceptance",
-          "weight": 2
+          "weight": 1
         },
         {
           "check": "final_message_matches",
@@ -231,7 +289,12 @@
           "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "follow_up",
+      "prompt": "Now ask it, in that same conversation, to reply with exactly FOLLOW-222, and tell me what it says.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
@@ -267,12 +330,7 @@
                 }
               }
             }
-          },
-          "fields": [
-            "session_id",
-            "agent_did",
-            "node_did"
-          ]
+          }
         },
         {
           "kind": "documents",
@@ -296,17 +354,11 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "content": {
+              "_like": "%FOLLOW-222%"
             }
-          },
-          "fields": [
-            "request_id",
-            "agent_did",
-            "session_id",
-            "content",
-            "lifecycle_state",
-            "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
-          ]
+          }
         },
         {
           "kind": "documents",
@@ -325,44 +377,10 @@
             "request_id": {
               "_eq": "$request"
             }
-          },
-          "fields": [
-            "_docID",
-            "lifecycle_state",
-            "completion_notification_delivered_at"
-          ]
+          }
         }
       ],
-      "settle": true
-    },
-    {
-      "stage_id": "follow_up",
-      "prompt": "Ask the same helper to reply with exactly FOLLOW-222. Keep using that conversation and report its reply when it arrives.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_message"
-            ],
-            "forbidden": [
-              "agent_new"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "helper-session",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
         {
           "check": "captured_fields_match",
           "params": {
@@ -384,7 +402,7 @@
             "max_rows": 1
           },
           "tier": "acceptance",
-          "weight": 2
+          "weight": 1
         },
         {
           "check": "crew_spec_match",
@@ -422,10 +440,17 @@
                 "target_key": "session_id",
                 "exact": true
               }
+            ],
+            "present": [
+              {
+                "capture": "helper-session",
+                "min": 1,
+                "max": 1
+              }
             ]
           },
           "tier": "acceptance",
-          "weight": 2
+          "weight": 1
         },
         {
           "check": "final_message_matches",
@@ -437,112 +462,7 @@
           "tier": "acceptance",
           "weight": 1
         }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "role_agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "helper-session",
-          "collection": "AgentSession",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^research[ -]helper$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            }
-          },
-          "fields": [
-            "session_id",
-            "agent_did",
-            "node_did"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "helper-request",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^research[ -]helper$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "content": {
-              "_like": "%FOLLOW-222%"
-            },
-            "purpose": {
-              "_eq": "normal"
-            }
-          },
-          "fields": [
-            "request_id",
-            "agent_did",
-            "session_id",
-            "content",
-            "lifecycle_state",
-            "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "delegation_calls",
-          "collection": "AgentToolCall",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tool_name": {
-              "_in": [
-                "agent_new",
-                "agent_message"
-              ]
-            },
-            "request_id": {
-              "_eq": "$request"
-            }
-          },
-          "fields": [
-            "_docID",
-            "lifecycle_state",
-            "completion_notification_delivered_at"
-          ]
-        }
-      ],
-      "settle": true
+      ]
     }
   ]
 }

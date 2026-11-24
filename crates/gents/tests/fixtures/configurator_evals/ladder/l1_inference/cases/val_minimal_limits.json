@@ -80,12 +80,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -204,19 +198,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
@@ -281,6 +262,67 @@
             "name": "backends",
             "min": 1,
             "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Good. Quick question then: how many days are there in a leap year?",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "run",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "max_total_tokens",
+            "executed_inference_profile_id",
+            "executed_reasoning_effort",
+            "content"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "run",
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              },
+              {
+                "field": "max_total_tokens",
+                "equals": 60000
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b366\\b"
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1

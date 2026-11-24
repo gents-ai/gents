@@ -2,85 +2,26 @@
   "case_id": "archivist-full-files-no-bash",
   "split": "validation",
   "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "archive/1998-leases.txt",
+        "contents": "Leases 1998\nHolloway yard lease signed March 1998, term 20 years.\n"
+      },
+      {
+        "path": "archive/2004-leases.txt",
+        "contents": "Leases 2004\nMarlow wharf lease signed June 2004; it ended in 2016.\n"
+      },
+      {
+        "path": "archive/2011-permits.txt",
+        "contents": "Permits 2011\nCrane permit C-88 renewed for the east berth.\n"
+      }
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Archivist for our archive. Give it its own instructions and tool permissions, appropriate for its role: search and summarize our local archive. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "archivist",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^archivist$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(archiv|records)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^archivist$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Archivist that searches and summarizes our local archive. It must not change files or run commands. Set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -134,6 +75,169 @@
             "built_ins",
             "integrations"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "archivist",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^archivist$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^archivist$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(archiv|records)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Archivist which file under archive/ mentions the Marlow lease and what year that lease ended. Tell me its answer.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^archivist$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "helper_requests",
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "2004-leases"
+              },
+              {
+                "matches": "\\b2016\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "archive/1998-leases.txt",
+                "sha256": "3d0ad0bdd8c3cff2546bc76f9e3601f4dff1835f0282374dbc9b28518f7a1bcb"
+              },
+              {
+                "path": "archive/2004-leases.txt",
+                "sha256": "a245cd50f5d75274163d73e33b00fc8c7685d93db558a9bef94868178837d60b"
+              },
+              {
+                "path": "archive/2011-permits.txt",
+                "sha256": "e45a95a31870b8d0f3f44ea1ca0640cf635c6111c887c7739ce5e24df745ba63"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

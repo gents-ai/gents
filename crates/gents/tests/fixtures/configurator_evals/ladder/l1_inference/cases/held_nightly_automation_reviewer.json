@@ -85,12 +85,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -208,19 +202,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

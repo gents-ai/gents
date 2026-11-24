@@ -80,12 +80,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -204,19 +198,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
@@ -297,6 +278,93 @@
             "name": "backends",
             "min": 1,
             "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "review",
+      "prompt": "Have Reviewer review this function and tell me what it found: def add(a, b): return a - b",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "reviews",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^(code )?reviewer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "max_total_tokens",
+            "executed_inference_profile_id",
+            "executed_reasoning_effort",
+            "content"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "reviews",
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              },
+              {
+                "field": "max_total_tokens",
+                "equals": 100000
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)(subtract|minus|a - b|a \\+ b|instead of add)"
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1

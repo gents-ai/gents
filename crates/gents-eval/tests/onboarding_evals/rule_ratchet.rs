@@ -13,17 +13,11 @@ use super::rules::{findings, Rule, Subject};
 
 const README: &str = "crates/gents/tests/fixtures/configurator_evals/README.md";
 const CELL_AGENT: &str = "engineer";
+const ENGINEER_CONTEXT_ID: &str = "engineer-context";
+const ENGINEER_TOOLS_ID: &str = "engineer-tools";
 
 #[rustfmt::skip]
-const ENGINEER_PIN: &[(&str, usize)] = &[
-    ("ladder/l2_agent/cases/analyst_grants_file_tools.json", 2),
-    ("ladder/l2_agent/cases/archivist_full_files_no_bash.json", 2),
-    ("ladder/l2_agent/cases/clerk_automation_seed_fire.json", 2),
-    ("ladder/l2_agent/cases/cursor_grants_list_only.json", 2),
-    ("ladder/l2_agent/cases/ledger_prompt_edit_in_place.json", 4),
-    ("ladder/l2_agent/cases/porter_fix_in_place_disable_bash.json", 4),
-    ("ladder/l2_agent/cases/scout_grants_two_file_tools.json", 4),
-];
+const ENGINEER_PIN: &[(&str, usize)] = &[];
 #[rustfmt::skip]
 const LONG_PROMPT: &[(&str, usize)] = &[
     ("engineer_automation_graphs/cases/bay_thread_per_key.json", 1),
@@ -98,22 +92,6 @@ const LONG_PROMPT: &[(&str, usize)] = &[
     ("engineer_workflows/cases/late_desk_escalation.json", 1),
     ("engineer_workflows/cases/reefer_tally_fan_in.json", 1),
     ("engineer_workflows/cases/west_loading_reconcile.json", 1),
-    ("ladder/l1_inference/cases/val_stream_settings.json", 1),
-    ("ladder/l2_agent/cases/analyst_grants_file_tools.json", 1),
-    ("ladder/l2_agent/cases/clerk_automation_seed_fire.json", 1),
-    ("ladder/l2_agent/cases/cursor_grants_list_only.json", 1),
-    ("ladder/l2_agent/cases/restore_desk_instructions.json", 2),
-    ("ladder/l2_agent/cases/scout_grants_two_file_tools.json", 1),
-    ("ladder/l3_datastore/cases/held_ds_surface_on_new_agent.json", 1),
-    ("ladder/l3_datastore/cases/train_ds_board_desk_reader.json", 1),
-    ("ladder/l3_datastore/cases/train_ds_parcel_scan_surface.json", 1),
-    ("ladder/l3_datastore/cases/train_ds_schema_surface_select_call.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_automation_seed_to_output.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_baseline.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_create_only_surface.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_finish_partial_setup.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_row_persists_across_stages.json", 1),
-    ("ladder/l3_datastore/cases/val_ds_two_collection_surface.json", 1),
     ("ladder/l4_automation/cases/completion_record_write_contract.json", 1),
     ("ladder/l4_automation/cases/default_filter_missing_field.json", 1),
     ("ladder/l4_automation/cases/parallel_base.json", 1),
@@ -123,7 +101,6 @@ const LONG_PROMPT: &[(&str, usize)] = &[
     ("ladder/l4_automation/cases/session_template_routing.json", 1),
     ("ladder/l4_automation/cases/train_parallel_baseline.json", 1),
     ("ladder/l4_automation/cases/val_stop_fern_receipt_outcomes.json", 1),
-    ("ladder/l5_agents_tools/cases/heldout_mixed_valid_and_ghost.json", 1),
     ("native_packs/cases/authority_refusal.json", 1),
     ("native_packs/cases/local_sealed_install.json", 2),
     ("schema_experience/cases/admiral_report_search.json", 2),
@@ -285,25 +262,6 @@ const ROUTE: &[(&str, usize)] = &[
     ("engineer_workflows/cases/reefer_tally_fan_in.json", 2),
     ("engineer_workflows/cases/west_loading_reconcile.json", 2),
     ("factory_setup/definition/cases/factory_setup.json", 12),
-    ("ladder/l1_inference/cases/held_nightly_automation_reviewer.json", 4),
-    ("ladder/l1_inference/cases/train_basic_exec_profile_bind.json", 4),
-    ("ladder/l1_inference/cases/val_minimal_limits.json", 4),
-    ("ladder/l1_inference/cases/val_moderate_limits_reuse_backend.json", 4),
-    ("ladder/l1_inference/cases/val_new_agent_reviewer.json", 4),
-    ("ladder/l1_inference/cases/val_reasoning_effort_high.json", 4),
-    ("ladder/l1_inference/cases/val_stream_settings.json", 4),
-    ("ladder/l1_inference/cases/val_trap_preserve_default_profile.json", 4),
-    ("ladder/l2_agent/cases/restore_desk_instructions.json", 5),
-    ("ladder/l3_datastore/cases/held_ds_surface_on_new_agent.json", 4),
-    ("ladder/l3_datastore/cases/train_ds_board_desk_reader.json", 4),
-    ("ladder/l3_datastore/cases/train_ds_parcel_scan_surface.json", 4),
-    ("ladder/l3_datastore/cases/train_ds_schema_surface_select_call.json", 4),
-    ("ladder/l3_datastore/cases/val_ds_automation_seed_to_output.json", 2),
-    ("ladder/l3_datastore/cases/val_ds_baseline.json", 4),
-    ("ladder/l3_datastore/cases/val_ds_create_only_surface.json", 4),
-    ("ladder/l3_datastore/cases/val_ds_finish_partial_setup.json", 6),
-    ("ladder/l3_datastore/cases/val_ds_row_persists_across_stages.json", 6),
-    ("ladder/l3_datastore/cases/val_ds_two_collection_surface.json", 6),
     ("ladder/l4_automation/cases/completion_record_write_contract.json", 2),
     ("ladder/l4_automation/cases/default_filter_missing_field.json", 2),
     ("ladder/l4_automation/cases/emit_outcome_false.json", 2),
@@ -322,20 +280,6 @@ const ROUTE: &[(&str, usize)] = &[
     ("ladder/l4_automation/cases/train_suspend_kiln_shift_task.json", 4),
     ("ladder/l4_automation/cases/val_retime_luthier_schedule_in_place.json", 4),
     ("ladder/l4_automation/cases/val_stop_fern_receipt_outcomes.json", 4),
-    ("ladder/l5_agents_tools/cases/heldout_mixed_valid_and_ghost.json", 4),
-    ("ladder/l5_agents_tools/cases/heldout_night_proof_desk_notice.json", 11),
-    ("ladder/l5_agents_tools/cases/train_minimal_self_target.json", 6),
-    ("ladder/l5_agents_tools/cases/train_notify_west_dock_thread.json", 11),
-    ("ladder/l5_agents_tools/cases/train_repair_intake_acknowledgement.json", 8),
-    ("ladder/l5_agents_tools/cases/train_stop_one_crate_load.json", 9),
-    ("ladder/l5_agents_tools/cases/val_caller_agent_and_delegate.json", 6),
-    ("ladder/l5_agents_tools/cases/val_ghost_agent_refused.json", 2),
-    ("ladder/l5_agents_tools/cases/val_linen_replenishment_request.json", 11),
-    ("ladder/l5_agents_tools/cases/val_repoint_target_in_place.json", 6),
-    ("ladder/l5_agents_tools/cases/val_self_target_existing_agent.json", 4),
-    ("ladder/l5_agents_tools/cases/val_stop_duplicate_invoice_batch.json", 9),
-    ("ladder/l5_agents_tools/cases/val_two_targets_both_selected.json", 4),
-    ("ladder/l5_agents_tools/cases/val_verify_then_delegate_no_dupes.json", 5),
     ("native_packs/cases/authority_refusal.json", 3),
     ("native_packs/cases/local_sealed_install.json", 12),
     ("native_packs/cases/scaffold_check.json", 8),
@@ -382,13 +326,6 @@ const UNEXERCISED: &[(&str, usize)] = &[
     ("engineer_pages/cases/harbor_arrivals_page.json", 1),
     ("engineer_pages/cases/ticket_board_page.json", 1),
     ("engineer_skills/cases/courier_ticket_collection.json", 1),
-    ("ladder/l2_agent/cases/analyst_grants_file_tools.json", 1),
-    ("ladder/l2_agent/cases/archivist_full_files_no_bash.json", 1),
-    ("ladder/l2_agent/cases/cursor_grants_list_only.json", 1),
-    ("ladder/l2_agent/cases/ledger_prompt_edit_in_place.json", 1),
-    ("ladder/l2_agent/cases/porter_fix_in_place_disable_bash.json", 1),
-    ("ladder/l2_agent/cases/restore_desk_instructions.json", 1),
-    ("ladder/l2_agent/cases/scout_grants_two_file_tools.json", 1),
     ("ladder/l4_automation/cases/held_interval_kiln_watch_pulse.json", 1),
     ("ladder/l4_automation/cases/train_daily_cron_digest.json", 1),
     ("ladder/l4_automation/cases/train_interval_heartbeat_fires.json", 1),
@@ -461,7 +398,7 @@ fn scan() -> BTreeMap<(Rule, String), BTreeSet<String>> {
     let tools = known_tools(&suites);
     let mut found: BTreeMap<(Rule, String), BTreeSet<String>> = BTreeMap::new();
     for suite in &suites {
-        let subject = subject(suite, tools.clone());
+        let subject = subject(tools.clone());
         let paths = case_paths(&suite.dir);
         for case in definition(&suite.dir).cases {
             let path = &paths[&case.case_id];
@@ -476,19 +413,11 @@ fn scan() -> BTreeMap<(Rule, String), BTreeSet<String>> {
     found
 }
 
-fn subject(suite: &Suite, tools: BTreeSet<String>) -> Subject {
-    let config = json(&fixtures().join(&suite.subject).join("pack_config.json"));
-    let agent = array(&config["agents"])
-        .find(|agent| agent["agent_slot"] == CELL_AGENT)
-        .unwrap_or_else(|| panic!("{}: its subject has no {CELL_AGENT} slot", suite.id));
-    let context_id = agent["context_id"].as_str().unwrap().to_owned();
-    let context = array(&config["contexts"])
-        .find(|context| context["context_id"] == context_id.as_str())
-        .unwrap_or_else(|| panic!("{}: its subject has no Context {context_id}", suite.id));
+fn subject(tools: BTreeSet<String>) -> Subject {
     Subject {
         engineer: format!("{AGENT_SLOT_REFERENCE_PREFIX}{CELL_AGENT}"),
-        tools_id: context["tools_id"].as_str().unwrap().to_owned(),
-        context_id,
+        tools_id: ENGINEER_TOOLS_ID.to_owned(),
+        context_id: ENGINEER_CONTEXT_ID.to_owned(),
         tools,
     }
 }
