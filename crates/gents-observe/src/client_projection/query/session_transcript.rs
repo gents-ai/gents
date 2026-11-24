@@ -73,6 +73,14 @@ pub(super) async fn read_request_documents(
     Ok((rows, unique_doc_ids.len()))
 }
 
+/// The question items a person's replies answer, read as the caller: a source
+/// the caller cannot see is absent, a denial is the caller's error, and any
+/// other failure leaves the sources out. Like every store read it waits for
+/// the node's answer, never a client clock (`tla/CommitResponseWait.tla`,
+/// `ClientWindow`): a deadline here threw a live node's answer away, and on a
+/// cold client it also ran through the endpoint's authentication and the
+/// shared HTTP client's first build, so a first read could end before it was
+/// sent.
 async fn read_legacy_question_sources<'a>(
     access: &ConfigAccess,
     requests: impl Iterator<Item = &'a AgentRequestRow>,
@@ -108,13 +116,10 @@ async fn read_legacy_question_sources<'a>(
                 .doc_ids(batch.to_vec())
                 .for_reader();
             count += 1;
-            match tokio::time::timeout(std::time::Duration::from_secs(1), access.read_view(&view))
-                .await
-            {
-                Ok(Ok(found)) => rows.extend(found),
-                Ok(Err(error)) if error.permission_denied() => return Err(error.into()),
-                Ok(Err(error)) => tracing::debug!(%error,"question reply sources unavailable"),
-                Err(_) => tracing::debug!("question reply sources timed out"),
+            match access.read_view(&view).await {
+                Ok(found) => rows.extend(found),
+                Err(error) if error.permission_denied() => return Err(error.into()),
+                Err(error) => tracing::debug!(%error, "question reply sources unavailable"),
             }
         }
     }
