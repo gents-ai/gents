@@ -1,12 +1,11 @@
-use super::{fake_llm, ChatAction};
 use anyhow::{Context, Result};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{load_agent_context_and_tools_in_txn, AgentTools};
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
-use std::{path::Path, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use std::{path::Path, time::Duration};
 
 pub const PROMPT: &str = "Start the two related-work fixtures.";
 pub const REPLY: &str = "Both related sessions are running.";
@@ -15,20 +14,21 @@ const WORKERS: [(&str, &str); 2] = [
     ("Check history", "RELATED_HISTORY_WORK"),
 ];
 
+/// Releases the related worker at the index.
+const GATES: [&str; 2] = ["related-0", "related-1"];
+
 pub struct Provider {
-    gates: [Arc<Semaphore>; 2],
     fail_history: bool,
     profile_commands: bool,
 }
 impl Provider {
     pub fn new(fail_history: bool, profile_commands: bool) -> Self {
         Self {
-            gates: std::array::from_fn(|_| Arc::new(Semaphore::new(0))),
             fail_history,
             profile_commands,
         }
     }
-    pub fn reply(&self, request: &Value) -> Option<ChatAction> {
+    pub fn reply(&self, request: &Value) -> Option<StreamResponse> {
         let messages = request["messages"].as_array()?;
         let has_user = |expected: &str| {
             messages.iter().any(|message| {
@@ -52,16 +52,15 @@ impl Provider {
         for (index, (_, prompt)) in WORKERS.iter().enumerate() {
             if has_user(prompt) {
                 if index == 1 && self.fail_history {
-                    return Some(ChatAction::WaitThenHttpError(
-                        self.gates[index].clone(),
-                        axum::http::StatusCode::BAD_REQUEST,
+                    return Some(StreamResponse::status(
+                        axum::http::StatusCode::BAD_REQUEST.as_u16(),
                         json!({"error":{"message":"Related history fixture refused the provider request","type":"invalid_request_error"}}).to_string(),
-                    ));
+                    ).after(GATES[index]));
                 }
-                return Some(ChatAction::WaitThenSse(
-                    self.gates[index].clone(),
-                    fake_llm::completion_text_sse(&format!("{} complete.", WORKERS[index].0)),
-                ));
+                return Some(
+                    StreamResponse::text(format!("{} complete.", WORKERS[index].0))
+                        .after(GATES[index]),
+                );
             }
         }
         if !has_user(PROMPT) {
@@ -73,17 +72,21 @@ impl Provider {
                 .iter()
                 .any(|message| message["role"] == "tool" && message["tool_call_id"] == call)
             {
-                return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                return Some(StreamResponse::tool_call(
                     &call,
                     "agent_new",
-                    &json!({"agent":format!("related-worker-{index}"), "prompt":prompt, "title":title}).to_string(),
-                )));
+                    json!({"agent":format!("related-worker-{index}"), "prompt":prompt, "title":title}).to_string(),
+                ));
             }
         }
-        Some(ChatAction::Sse(fake_llm::completion_text_sse(REPLY)))
+        Some(StreamResponse::text(REPLY))
     }
-    pub async fn release_when_requested(&self, root: &Path) -> Result<()> {
-        for (index, gate) in self.gates.iter().enumerate() {
+    pub async fn release_when_requested(
+        &self,
+        root: &Path,
+        backend: &ScriptedBackend,
+    ) -> Result<()> {
+        for (index, gate) in GATES.iter().enumerate() {
             tokio::time::timeout(Duration::from_secs(90), async {
                 while !root.join(format!("release-related-{index}")).is_file() {
                     tokio::time::sleep(Duration::from_millis(25)).await;
@@ -91,7 +94,7 @@ impl Provider {
             })
             .await
             .context("editor did not release the related worker")?;
-            gate.add_permits(1);
+            backend.release(gate);
         }
         Ok(())
     }

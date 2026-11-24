@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::scripted_backend::ScriptedBackend;
 
 struct CycleFixture {
     db: gents_store::test_support::TestStore,
@@ -138,8 +139,8 @@ impl CycleFixture {
 async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
-    let initial = fixture.backend("initial", listener.endpoint());
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let initial = fixture.backend("initial", listener.endpoint().to_owned());
     fixture.seed(&initial, "unknown").await;
     let health = BackendHealthMap::new();
     let cancel = CancellationToken::new();
@@ -160,7 +161,7 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
     let initial_health = health.get(&initial.backend_id).await.unwrap();
     assert_modeled_probe(None, &initial_health, "probeSuccess");
 
-    let added = fixture.backend("added", listener.endpoint());
+    let added = fixture.backend("added", listener.endpoint().to_owned());
     fixture.write(&added).await;
     fixture.wait_for_promotion(&added).await;
     assert_modeled_probe(
@@ -172,7 +173,7 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
         health.get(&initial.backend_id).await.unwrap().last_probe_at,
         initial_health.last_probe_at
     );
-    assert_eq!(listener.requests(), 2);
+    assert_eq!(listener.recorded_requests().len(), 2);
 
     cancel.cancel();
     tokio::time::timeout(Duration::from_secs(10), prober)
@@ -193,8 +194,8 @@ async fn cycle_reproduces_fleet_evidence_dead_backend_demotes_and_recovers() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
 
-    let listener = ModelsListener::start();
-    let endpoint = listener.endpoint();
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let endpoint = listener.endpoint().to_owned();
     let backends = vec![fixture.backend("spark", endpoint.clone())];
     fixture.write(&backends[0]).await;
     let now = Utc::now();
@@ -237,8 +238,8 @@ async fn cycle_reproduces_fleet_evidence_dead_backend_demotes_and_recovers() {
         }
     }
 
-    let recovered = ModelsListener::start();
-    let backends = vec![fixture.backend("spark", recovered.endpoint())];
+    let recovered = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let backends = vec![fixture.backend("spark", recovered.endpoint().to_owned())];
     fixture.write(&backends[0]).await;
     let outcome = probe_backends_cycle(
         &node,
@@ -272,7 +273,7 @@ async fn cycle_probes_anthropic_key_backends_independently() {
     let health_map = BackendHealthMap::new();
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
     // The Anthropic API-key adapter only reaches its fixed public endpoint, so a
     // local listener cannot stand in for it. The keyed probe path under test is
     // provider-independent, so the backends use a keyed OpenAI-compatible adapter.
@@ -285,7 +286,7 @@ async fn cycle_probes_anthropic_key_backends_independently() {
         backend
     };
     let backends = vec![
-        key_backend("a", listener.endpoint()),
+        key_backend("a", listener.endpoint().to_owned()),
         key_backend("b", "http://127.0.0.1:1/v1".to_string()),
     ];
     for backend in &backends {
@@ -333,9 +334,9 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
     let health_map = BackendHealthMap::new();
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
 
-    let backends = vec![fixture.backend("late-arrival", listener.endpoint())];
+    let backends = vec![fixture.backend("late-arrival", listener.endpoint().to_owned())];
     fixture.seed(&backends[0], "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -349,7 +350,7 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
     .await;
     assert_eq!(outcome.promotable, vec!["late-arrival".to_string()]);
 
-    let backends = vec![fixture.backend("late-arrival", listener.endpoint())];
+    let backends = vec![fixture.backend("late-arrival", listener.endpoint().to_owned())];
     fixture.seed(&backends[0], "healthy").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -390,8 +391,8 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
 async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
-    let local = fixture.backend("same", listener.endpoint());
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let local = fixture.backend("same", listener.endpoint().to_owned());
     let mut foreign = fixture.backend("same", "http://127.0.0.1:1/v1".into());
     let foreign_db = gents_store::test_support::TestStore::start(
         "health-foreign-node",
@@ -579,7 +580,7 @@ async fn measured_entries(health: &BackendHealthMap) -> Vec<(u64, BackendHealthS
 async fn cycle_retention_matches_the_lean_model() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
+    let listener = ScriptedBackend::start("test-model", Vec::new()).unwrap();
     for case in gents_lean_vocab::families::backend_health_retention_cycle::cases::<
         BackendHealthState,
         String,
@@ -597,8 +598,8 @@ async fn cycle_retention_matches_the_lean_model() {
         let mut backends = Vec::new();
         for wire in &case.input.backends {
             let endpoint = match wire.target.as_str() {
-                "unreachable" => format!("{}/missing", listener.endpoint()),
-                _ => listener.endpoint(),
+                "unreachable" => format!("{}/missing", listener.endpoint().to_owned()),
+                _ => listener.endpoint().to_owned(),
             };
             let mut backend = fixture.backend(&format!("backend-{}", wire.id), endpoint);
             if wire.target == "node_oauth" {
@@ -685,7 +686,10 @@ async fn scheduled_cycles_match_the_lean_trace() {
                 .await;
         }
         // A revision names the endpoint alone, so a revision change is an endpoint change.
-        let listeners = [ModelsListener::start(), ModelsListener::start()];
+        let listeners = [
+            ScriptedBackend::start("test-model", Vec::new()).unwrap(),
+            ScriptedBackend::start("test-model", Vec::new()).unwrap(),
+        ];
         let health = BackendHealthMap::new();
         let mut schedule = ProbeSchedule::default();
         let options = BackendProberOptions {
@@ -699,9 +703,9 @@ async fn scheduled_cycles_match_the_lean_trace() {
             for wire in &step.backends {
                 let listener = &listeners[usize::try_from(wire.revision).unwrap()];
                 let endpoint = if wire.reachable {
-                    listener.endpoint()
+                    listener.endpoint().to_owned()
                 } else {
-                    format!("{}/missing", listener.endpoint())
+                    format!("{}/missing", listener.endpoint().to_owned())
                 };
                 let mut backend = fixture.backend(&format!("backend-{}", wire.id), endpoint);
                 backend.enabled = wire.enabled;

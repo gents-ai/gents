@@ -1,8 +1,8 @@
 pub mod fs;
 pub mod graphql;
-pub mod mocks;
 pub mod pack_preview;
 pub mod process;
+pub mod provider_requests;
 pub mod waits;
 
 pub use fs::{
@@ -14,16 +14,16 @@ pub use gents::support::ports::{allocate_port, graphql_url};
 pub use graphql::{
     doc_id_for_tools, doc_id_from_create, escape_graphql_string, first_graphql_row, graphql_query,
 };
-pub use mocks::{
-    request_has_tool_result_message, request_system_message, request_tool_names,
-    request_tool_result_text, MockChatEndpoint, MockOpenAIEndpoint,
-};
 pub use pack_preview::{assert_preview_hides_the_secret, documents_fixture_with_secret_variable};
 pub use process::{
     cli_bin, run_cli_failure_stderr, run_cli_failure_stderr_with_env, run_cli_failure_stdout_json,
     run_cli_json, run_cli_json_with_env, run_cli_text, run_init_json, spawn_server,
     spawn_server_with_env, spawn_server_with_ready_json, spawn_server_with_ready_json_recovering,
     wait_for_port, ServeProcess,
+};
+pub use provider_requests::{
+    request_has_tool_result_message, request_system_message, request_tool_names,
+    request_tool_result_text,
 };
 pub use waits::{
     canonical_tool_result_text, wait_for_request, wait_for_request_lifecycle_state,

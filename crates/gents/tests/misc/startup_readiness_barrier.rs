@@ -13,9 +13,9 @@ use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
 use crate::support::{managed_agent_fixture, test_db};
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 
 #[derive(Clone, Debug)]
 struct BuildFailure {
@@ -141,7 +141,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let fixture = managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default")?;
+    let mock_endpoint = ScriptedBackend::start("default", Vec::new())?;
     bind_managed_agent_backend(
         &db,
         &fixture,
@@ -269,7 +269,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     let fixture = managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default")?;
+    let mock_endpoint = ScriptedBackend::start("default", Vec::new())?;
     bind_managed_agent_backend(
         &db,
         &fixture,
