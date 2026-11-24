@@ -597,7 +597,7 @@ async fn stamp_notification_with_source(
         .context("create stamped mailbox item")
 }
 
-const NO_RECIPIENT: &str = "this request has no inbox to file to: no person signed it and no trigger started its run. Put the notice in your reply; whoever started you reads it.";
+const NO_RECIPIENT: &str = "no inbox to file to: neither a person nor a trigger started this run. Put the notice in your reply instead; whoever started you reads it.";
 
 #[derive(Debug)]
 pub struct MailboxToolError(anyhow::Error);
