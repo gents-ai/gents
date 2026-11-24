@@ -77,6 +77,10 @@ mimalloc.workspace = true
 tauri-plugin-deep-link = "~2.4.10"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+nuclei = { version = "0.5.6", default-features = false }
+workers.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # What tauri-plugin-notification delivers through (via notify-rust); used
 # directly to wait on a notice's click. Keep it on notify-rust's version.
