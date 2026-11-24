@@ -6,6 +6,21 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the harness pauses a Goal after 3 consecutive goal turns without
+  progress, judged from what its Agent did, never its text: a turn makes
+  progress when it changes the Goal or makes a tool call (name, canonical
+  arguments, result) the previous turn did not. The Goal pauses as `paused`
+  with reason `no_progress` and resumes like any paused Goal. A running
+  background job before its deadline counts as waiting, not as no progress.
+- Breaking: a Goal has a stop policy its user sets and its Agent cannot change
+  (new `GoalStopPolicy` document, policy resource `goal_policies`): what one
+  blocked report does (`stop_first`, the default; `confirm_once`, one
+  confirmation turn first; `keep_trying`, the report is kept and the Goal goes
+  on), a token ceiling (the enforced budget is the smaller of the Goal's own
+  budget and the ceiling), a turn ceiling and `lifted`. Set it with `gents
+  automation goal policy --session S`. The working Agent may now change or
+  clear its own Goal's budget; the user's ceiling still bounds it. The
+  Household policy ID changes, so an existing home is refused once.
 - Eval trials record what the subject agent itself spent, beside the
   home-wide `usage`: each completion's `subject_usage` holds its first request's
   prompt tokens and estimated component split (tool schemas among them), its
