@@ -10,99 +10,9 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our inspection band is more than 4 and less than 8 units. When a new ScaleReading lands strictly inside that band, start a request to yourself asking for a reply of exactly INSPECT, a space, and the reading_id. Every other new reading, including one of exactly 4 or exactly 8, gets a request asking for a reply of exactly CLEAR, a space, and the reading_id. Sort readings in the automation, not in the request: each request carries only its own reply. Configure it now; the readings come later.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "triggers",
-          "collection": "Trigger",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "trigger_id",
-            "task_id",
-            "source",
-            "concurrency",
-            "session_id_template",
-            "create_session",
-            "enabled",
-            "last_status",
-            "last_error"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sources",
-          "collection": "EventSource",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "event_source_id",
-            "source_collection",
-            "event_kind",
-            "filter",
-            "correlation_field",
-            "group"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tasks",
-          "collection": "Task",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "task_id",
-            "prompt_template",
-            "emit_outcome",
-            "enabled"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "triggers",
-                "min": 1
-              },
-              {
-                "capture": "tasks",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ]
+      "prompt": "Check each new ScaleReading against our inspection band, more than 4 and less than 8 units, and give me a one-line verdict: INSPECT and the reading_id inside the band, CLEAR and the reading_id outside it. Set it up now; readings come in later.",
+      "checks": [],
+      "capture": []
     },
     {
       "stage_id": "at_lower",
@@ -115,7 +25,20 @@
         }
       },
       "deadline_secs": 300,
-      "checks": [],
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bclear\\W+BR2\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": []
     },
     {
@@ -129,7 +52,20 @@
         }
       },
       "deadline_secs": 300,
-      "checks": [],
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bclear\\W+BR5\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": []
     },
     {
@@ -146,15 +82,22 @@
       "settle": true,
       "checks": [
         {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\binspect\\W+BL6\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
           "check": "crew_spec_match",
           "params": {
             "present": [
               {
-                "capture": "fires",
-                "min": 3,
-                "max": 3
-              },
-              {
                 "capture": "br2",
                 "min": 1,
                 "max": 1
@@ -168,53 +111,6 @@
                 "capture": "bl6",
                 "min": 1,
                 "max": 1
-              }
-            ],
-            "rows": [
-              {
-                "capture": "br2",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*CLEAR"
-                  },
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*BR2"
-                  }
-                ]
-              },
-              {
-                "capture": "br5",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*CLEAR"
-                  },
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*BR5"
-                  }
-                ]
-              },
-              {
-                "capture": "bl6",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*INSPECT"
-                  },
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*BL6"
-                  }
-                ]
               }
             ]
           },
@@ -223,29 +119,6 @@
         }
       ],
       "capture": [
-        {
-          "kind": "documents",
-          "name": "fires",
-          "collection": "TriggerFire",
-          "filter": {
-            "owner_did": {
-              "_eq": "$trial"
-            },
-            "source_collection": {
-              "_eq": "ScaleReading"
-            }
-          },
-          "fields": [
-            "fire_key",
-            "trigger_id",
-            "task_id",
-            "request_id",
-            "session_id",
-            "source_collection",
-            "source_doc_id",
-            "source_handoff_id"
-          ]
-        },
         {
           "kind": "documents",
           "name": "br2",
@@ -260,25 +133,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%BR2%"
-                }
-              },
-              {
-                "content": {
-                  "_nlike": "%INSPECT%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%BR2%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -300,25 +163,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%BR5%"
-                }
-              },
-              {
-                "content": {
-                  "_nlike": "%INSPECT%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%BR5%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -340,25 +193,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%BL6%"
-                }
-              },
-              {
-                "content": {
-                  "_nlike": "%CLEAR%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%BL6%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",

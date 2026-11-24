@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-workflows",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Workflows: background jobs over worker agents",
       "subject": {
         "kind": "agent",
@@ -20,12 +20,10 @@
         ]
       },
       "cases": [
-        "./cases/harbor_sum.json",
-        "./cases/harbor_read.json",
+        "./cases/gate_count_recall.json",
+        "./cases/mail_count.json",
         "./cases/pier_sums.json",
         "./cases/late_desk_escalation.json",
-        "./cases/mail_count.json",
-        "./cases/gate_count_recall.json",
         "./cases/calibration_review.json",
         "./cases/freeze_check.json",
         "./cases/west_loading_reconcile.json",

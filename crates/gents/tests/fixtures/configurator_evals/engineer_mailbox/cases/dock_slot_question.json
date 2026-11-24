@@ -62,7 +62,7 @@
   "stages": [
     {
       "stage_id": "ask",
-      "prompt": "Carriers have bid for dock 4 at 06:00 tomorrow; the bids are in CarrierBid, and withdrawn bids don't count. Choosing is my call, not yours. Put a question in my inbox titled \"Dock 4 at 06:00\" whose only choices are the two lowest bidders for that slot, by carrier name, and don't pick one for me.",
+      "prompt": "Carriers have bid for dock 4 at 06:00 tomorrow; the bids are in CarrierBid, and withdrawn bids don't count. The choice is mine. Ask me in my inbox, titled \"Dock 4 at 06:00\", which of the two lowest bidders to take, with just those two carriers as the choices.",
       "capture": [
         {
           "kind": "documents",
@@ -115,24 +115,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

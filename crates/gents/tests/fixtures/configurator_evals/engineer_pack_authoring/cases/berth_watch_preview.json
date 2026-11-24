@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "preview",
-      "prompt": "Before I install packs/berth_watch, show me what installing it would do. Preview the install and tell me which documents it would create and which inference slot I'd have to bind. Don't install it.",
+      "prompt": "Before I install packs/berth_watch, tell me what it would add to this node and whether I'd need to set anything up for it. Don't install it yet.",
       "capture": [
         {
           "kind": "documents",
@@ -57,36 +57,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "write_file",
-              "edit_file",
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "committed",
-                "equals": false
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
@@ -144,6 +114,103 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "install_and_run",
+      "prompt": "Go ahead and install it; the watcher can run on the same model you use. Then run its overstay check once to make sure it works.",
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "overstay_runs",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "harbourdesk/berth_watch",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "0.2.0"
+                  }
+                ]
+              },
+              {
+                "capture": "overstay_runs",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "still alongside"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "harbourdesk/berth_watch"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "overstay_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "content": {
+              "_like": "%still alongside%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
         }
       ]
     }

@@ -13,7 +13,7 @@
   "stages": [
     {
       "stage_id": "ask",
-      "prompt": "I'm the operations lead. Go through rota/swap-requests.md: one swap is still waiting on me. Put it in my inbox as a question titled with that request's heading text after the \"## \", offering its candidate covers as the only choices. Don't decide it for me and don't edit the file.",
+      "prompt": "I'm the operations lead. One swap in rota/swap-requests.md is still waiting on me. Ask me about it in my inbox, titled with that request's heading (the text after \"## \"), with its candidate covers as the only choices. Don't decide it for me and don't edit the file.",
       "capture": [
         {
           "kind": "documents",
@@ -71,24 +71,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

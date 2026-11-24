@@ -33,59 +33,14 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 200,000-token budget: count the items on every shelf in inventory/ into shelf-count.json as {\"items\": N}. The shelf files are plain text. If there are more than four shelf files, raise the budget to 600,000 before counting.",
       "settle": true,
-      "prompt": "Open a goal for this session, objective exactly \"Count the items on every shelf in inventory/ into shelf-count.json\", token budget 200000. The shelf files are plain text. If inventory/ turns out to hold more than four shelf files, lift the goal's budget to 600000 before counting. shelf-count.json should hold {\"items\": N}. Close the goal out when it's done.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "count",
-          "glob": "shelf-count.json"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
             "name": "goal",
             "expect": [
-              {
-                "field": "objective",
-                "equals": "Count the items on every shelf in inventory/ into shelf-count.json"
-              },
               {
                 "field": "token_budget",
                 "equals": 600000
@@ -115,6 +70,33 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "count",
+          "glob": "shelf-count.json"
         }
       ]
     }

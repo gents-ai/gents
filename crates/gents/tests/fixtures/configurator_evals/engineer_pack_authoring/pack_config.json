@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-pack-authoring",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Packs: author, check, build, install and audit",
       "subject": {
         "kind": "agent",

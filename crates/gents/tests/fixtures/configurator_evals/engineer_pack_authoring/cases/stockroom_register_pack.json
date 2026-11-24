@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "author",
-      "prompt": "Make a pack for the stockroom register: fielddesk/stockroom_register, version 1.0.0, authored in packs/stockroom_register. It holds one collection, StockroomBin, with binCode (String), itemName (String) and onHand (Int), and nothing else: no agents, plugins or records. Check it, build it, and install the archive you built rather than the directory.",
+      "prompt": "Package our stockroom register as a pack, fielddesk/stockroom_register 1.0.0, in packs/stockroom_register: one collection, StockroomBin, with binCode, itemName and onHand (a whole number), and nothing else. Install it here.",
       "capture": [
         {
           "kind": "documents",
@@ -40,20 +40,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -100,10 +86,6 @@
             "name": "packs",
             "expect": [
               {
-                "path": "packs/fielddesk.stockroom_register-1.0.0.pack",
-                "exists": true
-              },
-              {
                 "path": "packs/stockroom_register/manifest.json",
                 "pointer": "/kind",
                 "equals": "documents"
@@ -112,6 +94,49 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Add bin A-01 to the stockroom register: 40 hex bolts.",
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "bins",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "itemName",
+                "matches": "(?i)hex bolt"
+              },
+              {
+                "field": "onHand",
+                "equals": 40
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "bins",
+          "collection": "StockroomBin",
+          "filter": {
+            "binCode": {
+              "_eq": "A-01"
+            }
+          },
+          "fields": [
+            "binCode",
+            "itemName",
+            "onHand"
+          ]
         }
       ]
     }

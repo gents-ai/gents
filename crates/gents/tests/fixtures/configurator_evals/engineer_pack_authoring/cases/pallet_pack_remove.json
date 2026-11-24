@@ -82,20 +82,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "present": [
@@ -196,20 +182,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-mailbox",
-      "comparability_version": 2,
+      "comparability_version": 3,
       "title": "Mailbox: notices that reach the operator",
       "subject": {
         "kind": "agent",

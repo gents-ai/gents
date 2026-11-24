@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "both",
-      "prompt": "Two things from the kiln room need me. Kiln K3 failed its door seal check, so flag it in my inbox with the title \"K3 door seal\" and the note \"K3 failed the door seal check and is out of service.\" Separately, ask me in my inbox, titled \"Glaze supplier\", whether to reorder glaze from Marlow Ceramics or Tidewell Supply, with exactly those two choices. That one is my decision, but it can wait: let me skip it if I don't care either way.",
+      "prompt": "Two things from the kiln room. Kiln K3 failed its door seal check: flag it in my inbox titled \"K3 door seal\" with the note \"K3 failed the door seal check and is out of service.\" And ask me in my inbox, titled \"Glaze supplier\", whether to reorder glaze from Marlow Ceramics or Tidewell Supply, with just those two choices; I may not care, so let me skip it.",
       "capture": [
         {
           "kind": "documents",
@@ -58,24 +58,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

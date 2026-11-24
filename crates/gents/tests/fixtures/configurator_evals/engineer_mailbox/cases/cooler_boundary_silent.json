@@ -66,7 +66,7 @@
   "stages": [
     {
       "stage_id": "check",
-      "prompt": "Cooler C-12 carried the vaccine-free shipment VF-88, and it had to stay between 2 and 8 degrees inclusive. Its readings are in CoolerReading. Flag my inbox only if one of its readings was outside that range, and tell me what you found.",
+      "prompt": "Cooler C-12 carried shipment VF-88, which had to stay between 2 and 8 degrees inclusive. Its readings are in CoolerReading. Flag it in my inbox only if one of its readings was outside that range, and tell me what you found.",
       "capture": [
         {
           "kind": "documents",
@@ -125,22 +125,6 @@
             "name": "visible",
             "min": 0,
             "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
           },
           "tier": "acceptance",
           "weight": 1

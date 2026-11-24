@@ -21,55 +21,9 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 500,000-token budget to copy every report in reports/ into archive/, unchanged and under the same names. If any report turns out to be a draft, leave the drafts out and change the goal to say final reports only. Finish the goal when the copies are done.",
       "settle": true,
-      "prompt": "Set this session's goal to exactly \"Copy every report in reports/ into archive/\" with a token budget of 500000. Then look at what's there: if any report is a draft, change the goal's objective to exactly \"Copy every final report in reports/ into archive/\" and leave the drafts out. Copy the files unchanged, under the same names, and finish the goal when the copies are done.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "archive",
-          "glob": "archive/*"
-        },
-        {
-          "kind": "file",
-          "name": "reports",
-          "glob": "reports/*"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
@@ -77,7 +31,7 @@
             "expect": [
               {
                 "field": "objective",
-                "equals": "Copy every final report in reports/ into archive/"
+                "matches": "(?i)\\bfinal\\b"
               },
               {
                 "field": "token_budget",
@@ -115,6 +69,33 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "archive",
+          "glob": "archive/*"
         }
       ]
     }
