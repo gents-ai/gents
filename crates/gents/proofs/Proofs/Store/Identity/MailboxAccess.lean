@@ -94,10 +94,12 @@ theorem uncommitted_claim_has_no_recipient :
 
 /-! ## Who an item is filed for -/
 
-/-- How a request was admitted, read from its signed admission: by a person's
-client, by an event or schedule trigger, as a runtime continuation of the
-request before it (a retry, a Goal turn, a background-completion wake), or
-otherwise (a delegated helper's request, a peer's). -/
+/-- How a request was admitted, read from its signed admission: by a client
+key (a person's, or a delegating Agent's for a request it caused), by an event
+or schedule trigger, as a runtime continuation of the request before it (a
+retry, a Goal turn, a background-completion wake), or otherwise (a peer's).
+A continuation whose signed source request is not the request its parent link
+names continues nothing and reads as `other`. -/
 inductive Admission where
   | client
   | automatedTrigger
@@ -105,71 +107,98 @@ inductive Admission where
   | other
   deriving DecidableEq, Repr
 
+/-- One request of a lineage as the filing request's runtime reads it: its
+admission and the DID that signed it. -/
+structure Hop where
+  admission : Admission
+  signer : String
+  deriving DecidableEq, Repr
+
 /-- Where a run started: the first admission that is not a continuation,
 reading from the filing request back through its parents. -/
 inductive LineageRoot where
+  | signed (signer : String)
   | automatedTrigger
   | other
   deriving DecidableEq, Repr
 
-def lineageRoot : List Admission → LineageRoot
+def lineageRoot : List Hop → LineageRoot
   | [] => .other
-  | .localControl :: parents => lineageRoot parents
-  | .automatedTrigger :: _ => .automatedTrigger
-  | _ :: _ => .other
+  | ⟨.localControl, _⟩ :: parents => lineageRoot parents
+  | ⟨.client, signer⟩ :: _ => .signed signer
+  | ⟨.automatedTrigger, _⟩ :: _ => .automatedTrigger
+  | ⟨.other, _⟩ :: _ => .other
+
+/-- Whether the filing request continues an earlier one. -/
+def continues : List Hop → Bool
+  | ⟨.localControl, _⟩ :: _ => true
+  | _ => false
 
 /-- Decision (gents#4191): who a filed item is for. `lineage` lists the filing
-request's admission and then its parents'.
+request's admission and then its parents', read from the stored parent link
+and signed source request of each continuation.
 
-A request a person signed files for that person once its claim commits
-(`claimedRecipient`). A run an event or schedule trigger admitted, and every
-continuation in its lineage, files for the Node's owner: automation is Node
-configuration, which the Node's owner administers, so the run acts for that
-owner. The owner is the actor the store records as the Node document's
-native owner, observed by the runtime reading its own Node; it is never read
-from a field, the Task, the trigger's payload or the model, so a run cannot
-name another person, and the owner administers every Agent on the Node, so it
-could always message the run's Agent. An unobservable owner leaves no
-recipient. Any other request without an admitted signer (a delegated helper, a
-continuation of a person's turn) files for no one; its agent reports in its
-reply instead. -/
-def filingRecipient (claimedSigner : Option String) (lineage : List Admission)
+A request a client signed files for that signer once its claim commits
+(`claimedRecipient`). A continuation of such a request (a background-completion
+wake, a Goal turn, a follow-up turn) files for the signer of its lineage's
+root: a continuation exists only after its parent ran, so the root's claim
+committed on that signer, and admission fields are immutable. A run an event
+or schedule trigger admitted, and every continuation in its lineage, files for
+the Node's owner: automation is Node configuration, which the Node's owner
+administers, so the run acts for that owner. The owner is the actor the store
+records as the Node document's native owner, observed by the runtime reading
+its own Node. No recipient is read from a field, the Task, the trigger's
+payload or the model, so a run cannot name another person, and every recipient
+could message the run's Agent. An unobservable owner leaves no recipient. Any
+other request (an unclaimed one, a peer's) files for no one; its agent reports
+in its reply instead. -/
+def filingRecipient (claimedSigner : Option String) (lineage : List Hop)
     (nodeOwner : Option String) : Option String :=
-  match claimedSigner with
-  | some signer => some signer
-  | none =>
-    match lineageRoot lineage with
-    | .automatedTrigger => nodeOwner
-    | .other => none
+  match claimedSigner, lineageRoot lineage with
+  | some signer, _ => some signer
+  | none, .automatedTrigger => nodeOwner
+  | none, .signed signer => if continues lineage then some signer else none
+  | none, .other => none
 
-theorem signed_request_files_for_its_signer (signer : String) (lineage : List Admission)
+theorem signed_request_files_for_its_signer (signer : String) (lineage : List Hop)
     (nodeOwner : Option String) :
     filingRecipient (some signer) lineage nodeOwner = some signer := rfl
 
-theorem automation_files_only_for_the_node_owner (lineage : List Admission)
+theorem unclaimed_files_only_for_the_root_signer_or_the_owner (lineage : List Hop)
     (nodeOwner : Option String) (recipient : String)
     (h : filingRecipient none lineage nodeOwner = some recipient) :
-    lineageRoot lineage = .automatedTrigger ∧ nodeOwner = some recipient := by
+    (lineageRoot lineage = .signed recipient ∧ continues lineage = true) ∨
+      (lineageRoot lineage = .automatedTrigger ∧ nodeOwner = some recipient) := by
   unfold filingRecipient at h
-  cases hroot : lineageRoot lineage <;> simp_all
+  cases hroot : lineageRoot lineage with
+  | signed signer =>
+    rw [hroot] at h
+    cases hc : continues lineage <;> simp_all
+  | automatedTrigger => rw [hroot] at h; simp_all
+  | other => rw [hroot] at h; simp at h
 
-theorem unattended_request_files_for_no_one (lineage : List Admission)
+theorem unattended_request_files_for_no_one (lineage : List Hop)
     (nodeOwner : Option String) (h : lineageRoot lineage = .other) :
     filingRecipient none lineage nodeOwner = none := by
   simp [filingRecipient, h]
 
+theorem continuation_of_a_signed_turn_files_for_its_signer :
+    filingRecipient none [⟨.localControl, "agent"⟩, ⟨.localControl, "agent"⟩, ⟨.client, "user"⟩]
+      (some "owner") = some "user" := rfl
+
+theorem unclaimed_signed_request_files_for_no_one :
+    filingRecipient none [⟨.client, "user"⟩] (some "owner") = none := rfl
+
 theorem trigger_continuation_files_for_the_owner :
-    filingRecipient none [.localControl, .localControl, .automatedTrigger] (some "owner") =
-      some "owner" := rfl
+    filingRecipient none [⟨.localControl, "agent"⟩, ⟨.automatedTrigger, "agent"⟩]
+      (some "owner") = some "owner" := rfl
 
-theorem continuation_of_a_signed_turn_files_for_no_one :
-    filingRecipient none [.localControl, .client] (some "owner") = none := rfl
-
-theorem delegated_helper_files_for_no_one :
-    filingRecipient none [.other] (some "owner") = none := rfl
+theorem broken_continuation_files_for_no_one :
+    filingRecipient none [⟨.localControl, "agent"⟩, ⟨.other, "user"⟩] (some "owner") = none :=
+  rfl
 
 theorem unobservable_owner_leaves_automation_without_recipient :
-    filingRecipient none [.automatedTrigger] none = none := rfl
+    filingRecipient none [⟨.automatedTrigger, "agent"⟩] none = none := rfl
 
 /-! ## What a client lists -/
 
