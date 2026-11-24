@@ -358,7 +358,7 @@ where
                             crate::request::interrupt::INTERRUPT_DRAIN_REASON,
                         )
                         .await?;
-                        return Ok(drained.then_some(Err(ClaimRefused::Drained)));
+                        return Ok(drained.is_some().then_some(Err(ClaimRefused::Drained)));
                     }
                 }
                 match claim_gate_in_txn(txn, request, claimed_at, client).await? {

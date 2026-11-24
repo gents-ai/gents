@@ -523,7 +523,7 @@ pub async fn interrupt(
     .await
     {
         Ok(RequestInterrupt::Interrupted { at, already }) => Ok(receipt(at, already)),
-        Ok(RequestInterrupt::InterruptedBeforeClaim) => Ok(receipt(None, false)),
+        Ok(RequestInterrupt::InterruptedBeforeClaim { at }) => Ok(receipt(Some(at), false)),
         Ok(RequestInterrupt::Settled) => Ok(receipt(None, true)),
         Err(SessionInterruptError::Refused(refusal)) => {
             Err(RequestOperationError::InterruptRefused {

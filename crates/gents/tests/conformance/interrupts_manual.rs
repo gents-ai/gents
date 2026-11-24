@@ -101,10 +101,10 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
                 .valid_until(Some(&past)),
         )
         .await;
-    assert_eq!(
+    assert!(matches!(
         gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id).await,
-        gents_session::request::interrupt::RequestInterrupt::InterruptedBeforeClaim
-    );
+        gents_session::request::interrupt::RequestInterrupt::InterruptedBeforeClaim { .. }
+    ));
 
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);

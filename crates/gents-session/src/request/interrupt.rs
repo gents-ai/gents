@@ -49,8 +49,9 @@ pub enum RequestInterrupt {
     /// The session's marker passes the request's claim; `already` when an
     /// earlier interrupt had passed it.
     Interrupted { at: Option<String>, already: bool },
-    /// The request was pending and is interrupted before its claim.
-    InterruptedBeforeClaim,
+    /// The request was pending and is interrupted before its claim, at its
+    /// terminal time (`InterruptGeneration.observedInterrupted`).
+    InterruptedBeforeClaim { at: String },
     /// The request had already settled.
     Settled,
 }
@@ -73,17 +74,12 @@ pub async fn interrupt_session_in_txn(
     let refused = || SessionInterruptRefusal::NotPermitted {
         session_id: session_id.to_owned(),
     };
-    let Some(session) = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
-        txn,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await?
+    let Some(session_doc_id) =
+        session_doc_id_in_txn(txn, node_did, session_id, requester_did).await?
     else {
         return Ok(Err(refused()));
     };
-    let Some(marker) = interrupt_marker::read_in_txn(txn, &session.doc_id).await? else {
+    let Some(marker) = interrupt_marker::read_in_txn(txn, &session_doc_id).await? else {
         return Ok(Err(SessionInterruptRefusal::NoMarker {
             session_id: session_id.to_owned(),
         }));
@@ -96,6 +92,42 @@ pub async fn interrupt_session_in_txn(
         generation: bumped.generation,
         interrupted_at: bumped.interrupted_at.unwrap_or_default(),
     }))
+}
+
+/// The id of the session in the caller's scope, or `None` when the caller
+/// reads no such session. External premise: DefraDB omits from its response a
+/// collection the actor may not read at all (`{"data":{}}`), which is a caller
+/// who may not interrupt the session, not a malformed read.
+async fn session_doc_id_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<String>> {
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session::Doc, session_scope, Query, Selection,
+        };
+        Query::select(Selection::doc_id())
+            .filter(session_scope::<Doc>(node_did, session_id, requester_did))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run(&query).await?;
+    let Some(rows) = response["data"].get("AgentSession") else {
+        return Ok(None);
+    };
+    let rows = rows
+        .as_array()
+        .context("session lookup returned no row list")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "duplicate sessions for session_id={session_id}"
+    );
+    Ok(rows
+        .first()
+        .and_then(|row| row["_docID"].as_str())
+        .map(str::to_owned))
 }
 
 async fn bump_in_txn(
@@ -276,16 +308,17 @@ async fn interrupt_request_matching_in_txn(
     match state {
         Some(state) if state.is_terminal() => Ok(Ok(RequestInterrupt::Settled)),
         Some(RequestLifecycleState::Pending) => {
-            interrupt_pending_in_txn(
+            let at = interrupt_pending_in_txn(
                 txn,
                 physical,
                 node_did,
                 request_id,
                 "interrupted before claim",
             )
-            .await?;
+            .await?
+            .context("pending request read by id was not interrupted")?;
             crate::request::hooks::points::session_halt(txn, node_did, session_id).await?;
-            Ok(Ok(RequestInterrupt::InterruptedBeforeClaim))
+            Ok(Ok(RequestInterrupt::InterruptedBeforeClaim { at }))
         }
         _ => {
             let marker =
@@ -324,15 +357,15 @@ async fn interrupt_request_matching_in_txn(
 }
 
 /// Moves a pending request to interrupted by a write of its own row, which a
-/// concurrent claim also writes, and stages its terminal hook. Returns
-/// whether the row was still pending.
+/// concurrent claim also writes, and stages its terminal hook. Returns its
+/// terminal time when the row was still pending.
 pub(crate) async fn interrupt_pending_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     doc_id: &str,
     node_did: &str,
     request_id: &str,
     reason: &str,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let transition =
         RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Interrupted)?;
     let terminalized_at = Utc::now().to_rfc3339();
@@ -360,7 +393,7 @@ pub(crate) async fn interrupt_pending_in_txn(
         _ => anyhow::bail!("pending interrupt mutation returned unexpected rows"),
     };
     let Some(row) = rows.first() else {
-        return Ok(false);
+        return Ok(None);
     };
     anyhow::ensure!(
         rows.len() == 1 && row["_docID"].as_str() == Some(doc_id),
@@ -376,7 +409,7 @@ pub(crate) async fn interrupt_pending_in_txn(
         &terminalized_at,
     )
     .await?;
-    Ok(true)
+    Ok(Some(terminalized_at))
 }
 
 /// Records on a wake this transaction published the generation of the
