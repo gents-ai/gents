@@ -105,7 +105,17 @@ Its delete is the Node's delete, so whoever administers the Node, and so can
 grant or withdraw an Agent's P2P mutation, can also stop any pairing. No
 resource names it as a relation type or a parent, so holding any permission on
 it reaches no other document, and the overlay grants no access to the
-collections it names (`Identity.ApplicationPairingAccess`). -/
+collections it names (`Identity.ApplicationPairingAccess`).
+
+`session_interrupts` holds a session's interrupt marker
+(`SessionQueue.InterruptGeneration`), one per session, its parent that
+session. Decision: it grants no new authority. It is created with the session,
+in the transaction that creates the session and as that session's creator, so
+its owner is the session's owner. Its read is the session's read, so every
+claim and wake publication of the session reads it by id; its update is the
+session's update (the working Agent, the Agent's session administrators and,
+through them, the Node's), exactly who may update a request of the session;
+its delete is the session's delete (`Identity.SessionInterrupt`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -221,6 +231,11 @@ def policy : List ResourceDefinition :=
         ⟨"working_agent", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "working_agent"] [("parent", "read")],
         permission "update" ["working_agent"] [("parent", "delete")],
+        permission "delete" [] [("parent", "delete")]] }
+  , { name := "session_interrupts"
+      relations := [⟨"parent", ["sessions"], []⟩]
+      permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] } ]
 
 def transportV2Policy : List ResourceDefinition := policy.map fun resource =>

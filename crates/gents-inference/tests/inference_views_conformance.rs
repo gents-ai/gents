@@ -8,11 +8,12 @@ use gents_store::identity::NodeIdentity;
 async fn inference_view_exposure_follows_reader_acp_on_served_node() -> Result<()> {
     let cases = gents_lean_vocab::families::inference_views_exposure::cases();
     anyhow::ensure!(!cases.is_empty(), "Lean emitted no inference view cases");
-    let (db, _owner, access) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, _owner, access) = gents_documents::test_support::SignedHome::start(
         "inference-view-exposure",
         gents_store::node_extension::Extensions::default(),
     )
-    .await;
+    .await
+    .into_parts();
     let node_did = db.node_identity.did();
     let reader = tokio::task::spawn_blocking(|| {
         gents_store::test_support::test_identity("inference-view-reader")
@@ -220,11 +221,12 @@ async fn inference_view_exposure_follows_reader_acp_on_served_node() -> Result<(
 
 #[tokio::test]
 async fn inference_settings_views_read_back_every_written_field() -> Result<()> {
-    let (db, _owner, access) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, _owner, access) = gents_documents::test_support::SignedHome::start(
         "inference-view-read-back",
         gents_store::node_extension::Extensions::default(),
     )
-    .await;
+    .await
+    .into_parts();
     let node_did = db.node_identity.did();
     let backend = serde_json::json!({
         "node_did": node_did, "backend_id": "backend", "name": "Backend",

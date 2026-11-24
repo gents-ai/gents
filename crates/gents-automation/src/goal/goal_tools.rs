@@ -254,7 +254,8 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     if !context.can_write() {
         let unavailable = matches!(context.assignment, RequestAssignmentObservation::Unknown);
         let error = match context.assignment {
-                RequestAssignmentObservation::None => "the calling request has no Goal assignment",
+                RequestAssignmentObservation::None if call.can_create() => "the calling request has no Goal; call create_goal to set one",
+                RequestAssignmentObservation::None => "the calling request has no Goal, and this agent cannot create one until its Tools set built_ins.enable_goal_creation",
                 RequestAssignmentObservation::Unknown => "Goal caller attribution is unknown; continue from a verified request",
                 RequestAssignmentObservation::Assigned(_) => "the calling request's retained Goal assignment is read-only; a new request is required to work on the current Goal",
             };

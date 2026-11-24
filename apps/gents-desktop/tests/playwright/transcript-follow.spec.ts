@@ -416,6 +416,9 @@ test("a sent message is drawn once from send to saved", async ({ page }, testInf
     }),
   );
   await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdSends());
+  /* the reply's end is shown once the session's read brings it, after the
+     projection's burst window; a send before that is not taken */
+  await expect(page.getByTestId("activity-status")).toHaveCount(0);
   const sent = panel.getByText("again", { exact: true });
   const row = () => sent.locator("xpath=ancestor::*[@data-timeline-key][1]");
 

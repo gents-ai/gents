@@ -90,7 +90,7 @@ pub enum ReceiptWriteError {
     Receipt(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-// Bound every phase retaining the process-wide mutation gate so one wedged
+// Bound every phase retaining a mutation gate permit so one wedged
 // transaction cannot stop response progress, recovery, and hydration.
 pub const EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);

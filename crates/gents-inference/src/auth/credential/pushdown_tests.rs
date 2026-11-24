@@ -40,17 +40,20 @@ async fn oauth_account_scope_matches_lean() {
     };
     let rows = rows_of(&cases[0].input.rows);
 
-    let (local_db, _local_user, access, _local_agent) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "oauth-model-local",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let (foreign_db, _foreign_user, foreign_access, _foreign_agent) =
-        crate::test_support::signed_test_node(
-            "oauth-model-foreign",
-            gents_store::node_extension::Extensions::none(),
-        )
-        .await;
+    let _local_agent = crate::test_support::default_agent(&signed_home).await;
+    let (local_db, _local_user, access) = signed_home.into_parts();
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "oauth-model-foreign",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let _foreign_agent = crate::test_support::default_agent(&signed_home).await;
+    let (foreign_db, _foreign_user, foreign_access) = signed_home.into_parts();
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);

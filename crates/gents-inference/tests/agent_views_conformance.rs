@@ -1,5 +1,4 @@
 use gents_documents::views::agents::AgentList;
-use gents_inference::test_support::signed_test_node_without_agent;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{GrantSet, NodeIdentity};
 use gents_store::views::ViewError;
@@ -7,11 +6,12 @@ use serde_json::json;
 
 #[tokio::test]
 async fn agent_inventory_matches_lean_on_served_node() -> anyhow::Result<()> {
-    let (db, _, owner) = signed_test_node_without_agent(
+    let (db, _, owner) = gents_documents::test_support::SignedHome::start(
         "agent-inventory-views",
         gents_store::node_extension::Extensions::default(),
     )
-    .await;
+    .await
+    .into_parts();
     let reader = gents_store::test_support::test_identity("agent-inventory-reader");
     let reader_did = identity::Did::new(reader.did())?;
     let admin =

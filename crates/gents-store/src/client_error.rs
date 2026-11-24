@@ -370,12 +370,11 @@ pub fn request_operation_failure(
         | E::NodeUnavailable { .. }
         | E::NoDefaultAgent { .. }
         | E::AgentUnavailable { .. } => BridgeErrorCode::InvalidArgument,
-        E::IdentityRequired => BridgeErrorCode::PermissionDenied,
+        E::IdentityRequired | E::InterruptRefused { .. } => BridgeErrorCode::PermissionDenied,
         E::WaitTimedOut { .. }
         | E::OutputUnavailable { .. }
         | E::SuccessorInvalid { .. }
         | E::ReceiptMismatch { .. }
-        | E::InterruptNotLatched { .. }
         | E::Unconfirmed { .. }
         | E::Passthrough(_) => BridgeErrorCode::Unknown,
     };

@@ -287,12 +287,20 @@ structure State where
   fresh : Bool
   /-- a waiting phase's re-read is scheduled -/
   timer : Bool
+  /-- the re-read timer fired and the read it asked for has not started: it
+  waits out the drain loop's burst window, and the load still says a re-read
+  follows -/
+  fired : Bool
   budget : Nat
   /-- the observer runs: the client is running, so its listener, drain loop and
   re-read timer are live -/
   running : Bool
   /-- the targets whose last read is kept, most recent first -/
   recent : List Nat
+  /-- the drain loop runs a pass: its read of the selection is on the way -/
+  busy : Bool
+  /-- the drain loop waits out its burst window before its next pass -/
+  window : Bool
   deriving DecidableEq, Repr
 
 inductive Outcome where
@@ -310,6 +318,21 @@ def Outcome.withdraws : Outcome → Bool
   | .refused => true
   | _ => false
 
+/-- When a request reaches the drain loop, the pass that reads it starts as
+follows. While a pass runs, the request waits for it, and the next pass starts
+as soon as that pass ends: it opens no window and never joins the running
+pass, whose read may have been taken before the request. An idle loop opens
+its burst window, so that the requests of the next moment (a reconnect's
+notices, a turn's events) are read by one pass; a request made while the
+window is open joins it. The window's length is the product's (`BURST_MS`);
+time is abstract, so the window ends at the `elapse` step. -/
+def opensWindow (busy window : Bool) : Bool := window || !busy
+
+/-- A request for a read of the selection: the read is owed, and the drain loop
+decides when its pass starts (`opensWindow`). -/
+def State.owe (s : State) : State :=
+  { s with queued := true, window := opensWindow s.busy s.window }
+
 /-- The load names the selection, read and shown: a read of it refreshes what
 is already on screen rather than loading it. -/
 def State.refreshes (s : State) : Bool :=
@@ -321,11 +344,12 @@ in phase `cached` until that read lands. Without one, `drop` is a writer
 dropping the shown session with the move. -/
 def selectTarget (s : State) (n : Nat) (drop : Bool) : State :=
   if s.running && s.recent.contains n then
-    { s with selected := n, queued := true, fresh := true, timer := false, shown := some n,
-             load := some n, phase := .cached, found := none, errored := false }
+    { s.owe with selected := n, fresh := true, timer := false, shown := some n,
+                 load := some n, phase := .cached, found := none, errored := false }
+  else if s.running then
+    { s.owe with selected := n, fresh := true, shown := if drop then none else s.shown }
   else
-    { s with selected := n, queued := s.queued || s.running, fresh := s.fresh || s.running,
-             timer := false, shown := if drop then none else s.shown }
+    { s with selected := n, timer := false, shown := if drop then none else s.shown }
 
 /-- A read of the selection starts and takes over the load. A waiting phase of
 the same target stays while it is read again, as does a shown recent read,
@@ -336,7 +360,7 @@ reload the whole session view for a read that usually finds nothing new. Its
 load is left as it was, so the read is carried by the refresh fence alone. Any
 read cancels the scheduled re-read. -/
 def launch (s : State) : State :=
-  if s.refreshes then { s with reading := some s.selected, timer := false }
+  if s.refreshes then { s with reading := some s.selected, timer := false, fired := false }
   else
     let same := s.load == some s.selected
     { s with
@@ -345,12 +369,13 @@ def launch (s : State) : State :=
       phase := if same && (s.phase.isWaiting || s.phase == .cached) then s.phase else .loading
       found := if same && s.found == some false then some false else none
       errored := same && s.errored
-      timer := false }
+      timer := false
+      fired := false }
 
-/-- The drain loop starts the owed read; a read the timer alone asked for
-continues its streak. -/
+/-- The drain loop starts a pass for the owed read; a read the timer alone
+asked for continues its streak. -/
 def beginRead (s : State) : State :=
-  { launch s with queued := false, fresh := false,
+  { launch s with queued := false, fresh := false, busy := true,
                   budget := if s.fresh then rereadBudget else s.budget }
 
 /-- What stays on screen when a read settles without confirming it: a shown
@@ -364,10 +389,10 @@ def finish (s : State) (target : Nat) (o : Outcome) : State :=
        selection subscription has already queued the moved selection's read
        (`moved_read_leaves_read_queued`). A refusal still withdraws the
        target's recent read. -/
-    { s with reading := none,
+    { s with reading := none, busy := false,
              recent := if o.withdraws then forgetRecent target s.recent else s.recent }
   else
-    let s := { s with reading := none, load := some target }
+    let s := { s with reading := none, busy := false, load := some target }
     match o with
     | .found =>
         { s with shown := some target, phase := .loaded, found := some true,
@@ -398,7 +423,8 @@ recent read is cleared, and a waiting phase loses its re-read, which offers
 the retry action. -/
 def stopObserver (s : State) : State :=
   { s with running := false, reading := none, queued := false, fresh := false,
-           timer := false, shown := s.unconfirmed,
+           timer := false, fired := false, busy := false, window := false,
+           shown := s.unconfirmed,
            phase := if s.phase == .loading || s.phase == .cached then .failed else s.phase,
            errored := s.errored || s.phase == .loading || s.phase == .cached }
 
@@ -412,12 +438,17 @@ inductive Step : State → State → Prop where
   the node sends one, so its read waits out the gap since the last read
   (longer once reads keep finding nothing new) and, while the window is
   hidden, waits for the window to show, which reads in full. The read stays
-  owed and is never dropped; time is not modeled, so it is owed at once. -/
-  | notice (s : State) (h : s.running = true) : Step s { s with queued := true, fresh := true }
-  | begin (s : State) (h : s.queued = true) : Step s (beginRead s)
+  owed and is never dropped; the gap is not modeled, so it is owed at once. -/
+  | notice (s : State) (h : s.running = true) : Step s { s.owe with fresh := true }
+  /-- the drain loop starts a pass once the previous one has ended and its
+  burst window has passed -/
+  | begin (s : State) (h : s.queued = true) (hb : s.busy = false) (hw : s.window = false) :
+      Step s (beginRead s)
   | complete (s : State) (t : Nat) (o : Outcome) (h : s.reading = some t) :
       Step s (finish s t o)
-  | fire (s : State) (h : s.timer = true) : Step s { s with timer := false, queued := true }
+  | fire (s : State) (h : s.timer = true) : Step s { s with timer := false, fired := true }.owe
+  /-- the drain loop's burst window passes -/
+  | elapse (s : State) (h : s.window = true) : Step s { s with window := false }
   /-- the shell's retry action reads directly, with a fresh streak -/
   | retry (s : State) : Step s { launch s with budget := rereadBudget }
   /-- a writer drops the shown session without moving the selection -/
@@ -425,7 +456,7 @@ inductive Step : State → State → Prop where
   | stop (s : State) (h : s.running = true) : Step s (stopObserver s)
   /-- the client runs again; the observer reads the selection at once -/
   | restart (s : State) (h : s.running = false) :
-      Step s { s with running := true, queued := true, fresh := true }
+      Step s { s with running := true, fresh := true }.owe
   /-- the client's identity changes or a node is removed: the recent reads it
   covered are dropped -/
   | forget (s : State) (t : Nat) : Step s { s with recent := forgetRecent t s.recent }
@@ -434,21 +465,24 @@ inductive Step : State → State → Prop where
 registration requests it; until a registration succeeds, a rejection or a
 deadline (`UNREGISTERED_READ_MS`) requests it without the listener, so the first
 read never waits on a registration that may not resolve. The TLA model
-`DesktopUpdateListener` (`StartupRead`, `NoRegistration`) checks that race. -/
+`DesktopUpdateListener` (`StartupRead`, `NoRegistration`) checks that race. The
+request finds the drain loop idle, so it opens the burst window. -/
 def initial (selected : Nat) : State :=
   { selected, load := none, phase := .idle, shown := none, found := none,
     errored := false, reading := none, queued := true, fresh := true, timer := false,
-    budget := rereadBudget, running := true, recent := [] }
+    fired := false,
+    budget := rereadBudget, running := true, recent := [], busy := false, window := true }
 
 inductive Reachable : State → Prop where
   | init (n : Nat) : Reachable (initial n)
   | step {s t : State} : Reachable s → Step s t → Reachable t
 
-/-- What the load's `reread` says: a read of the load is running or a re-read is
-scheduled. A refresh of a shown session leaves its `loaded` load untouched, so
-a read running under it is not on the load. -/
+/-- What the load's `reread` says: a read of the load is running; a shown
+recent read's read is running or owed (`cached_has_exit`); or a re-read is
+scheduled or, once its timer fired, owed. A refresh of a shown session leaves
+its `loaded` load untouched, so a read running under it is not on the load. -/
 def State.loadReread (s : State) : Bool :=
-  (s.reading.isSome && s.phase != .loaded) || s.timer
+  (s.reading.isSome && s.phase != .loaded) || s.phase == .cached || s.timer || s.fired
 
 def input (s : State) (blocker : Option Blocker) : Input :=
   { selected := true
@@ -527,9 +561,12 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
       split
       · exact ⟨fun _ => by simp, fun _ _ => Or.inr rfl, fun _ _ => Or.inl rfl,
           fun _ _ _ _ => rfl, hb⟩
-      · refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intro hrun <;> simp only at hrun ⊢ <;> simp [hrun]
+      · split
+        · refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp [State.owe]
+        · rename_i hrun
+          refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intro hr <;> simp_all
   | notice h =>
-      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp
+      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp [State.owe]
   | begin h =>
       refine ⟨?_, ?_, ?_, ?_, ?_⟩
       · intro _; exact launch_phase_ne_idle s
@@ -576,7 +613,9 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
             exact ⟨fun _ => by simp, fun _ h => by simp at h, fun _ hne => absurd rfl hne,
               fun _ _ h => by simp at h, hb⟩
   | fire h =>
-      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp
+      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp [State.owe]
+  | elapse h =>
+      exact ⟨hi, hl, ho, hm, hb⟩
   | retry =>
       refine ⟨?_, ?_, ?_, ?_, ?_⟩
       · intro _; exact launch_phase_ne_idle s
@@ -595,7 +634,7 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
       simp only [stopObserver] at this ⊢
       split <;> simp_all
   | restart h =>
-      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp
+      refine ⟨hi, ?_, ?_, ?_, hb⟩ <;> intros <;> simp [State.owe]
   | forget t =>
       exact ⟨hi, hl, ho, hm, Nat.le_trans (forgetRecent_length _ _) hb⟩
 
@@ -603,6 +642,116 @@ theorem reachable_invariant {s : State} (h : Reachable s) : Invariant s := by
   induction h with
   | init n => exact invariant_initial n
   | step _ st ih => exact invariant_step ih st
+
+/-! ## The drain loop's passes -/
+
+theorem launch_busy (s : State) : (launch s).busy = s.busy := by
+  unfold launch; split <;> rfl
+
+theorem launch_window (s : State) : (launch s).window = s.window := by
+  unfold launch; split <;> rfl
+
+/-- A pass never runs with the burst window open: a request made during a pass
+opens none, and a pass starts only once the window has passed. -/
+def DrainInvariant (s : State) : Prop := s.busy = true → s.window = false
+
+theorem owe_keeps_drain_invariant (s : State) (h : DrainInvariant s) : DrainInvariant s.owe := by
+  intro hb
+  simp only [State.owe, opensWindow] at hb ⊢
+  simp [h hb, hb]
+
+theorem drain_invariant_step {s t : State} (hs : DrainInvariant s) (step : Step s t) :
+    DrainInvariant t := by
+  cases step with
+  | select n drop h =>
+      unfold selectTarget
+      split
+      · exact owe_keeps_drain_invariant s hs
+      · split
+        · exact owe_keeps_drain_invariant s hs
+        · exact hs
+  | notice h => exact owe_keeps_drain_invariant s hs
+  | begin h hb hw =>
+      intro _
+      simp [beginRead, launch_window, hw]
+  | complete target o h =>
+      intro hb
+      unfold finish at hb
+      split at hb
+      · cases hb
+      · cases o <;> cases hb
+  | fire h => exact owe_keeps_drain_invariant _ hs
+  | elapse h => intro _; rfl
+  | retry =>
+      intro hb
+      simp only [launch_busy, launch_window] at hb ⊢
+      exact hs hb
+  | drop => exact hs
+  | stop h => intro hb; simp [stopObserver] at hb
+  | restart h => exact owe_keeps_drain_invariant _ hs
+  | forget t => exact hs
+
+theorem reachable_drain_invariant {s : State} (h : Reachable s) : DrainInvariant s := by
+  induction h with
+  | init n => intro hb; simp [initial] at hb
+  | step _ st ih => exact drain_invariant_step ih st
+
+/-- A request made while a pass runs does not join it: the read stays owed and
+no window opens, so the pass that reads it starts as soon as the running pass
+ends. -/
+theorem request_during_pass_waits_for_it {s : State} (hs : Reachable s) (hb : s.busy = true) :
+    s.owe.queued = true ∧ s.owe.window = false := by
+  have := reachable_drain_invariant hs hb
+  simp [State.owe, opensWindow, this, hb]
+
+/-- An idle drain loop answers a request by opening its burst window: the read
+waits for the window, which later requests join. -/
+theorem request_while_idle_opens_window (s : State) (hb : s.busy = false) :
+    s.owe.queued = true ∧ s.owe.window = true := by
+  simp [State.owe, opensWindow, hb]
+
+theorem launch_queued (s : State) : (launch s).queued = s.queued := by
+  unfold launch; split <;> rfl
+
+theorem finish_queued (s : State) (t : Nat) (o : Outcome) :
+    (finish s t o).queued = s.queued := by
+  unfold finish
+  split
+  · rfl
+  · cases o <;> rfl
+
+/-- An owed read is cleared only when a pass of the drain loop starts, which
+needs the previous pass ended and the burst window passed, or when the observer
+stops and drops its reads. -/
+theorem owed_read_clears_only_when_a_pass_starts {s t : State} (step : Step s t)
+    (hq : s.queued = true) (ht : t.queued = false) :
+    (t = beginRead s ∧ s.busy = false ∧ s.window = false) ∨ t = stopObserver s := by
+  cases step with
+  | select n drop h =>
+      unfold selectTarget at ht
+      split at ht
+      · simp [State.owe] at ht
+      · split at ht
+        · simp [State.owe] at ht
+        · simp [hq] at ht
+  | notice h => simp [State.owe] at ht
+  | begin h hb hw => exact Or.inl ⟨rfl, hb, hw⟩
+  | complete target o h => rw [finish_queued] at ht; simp [hq] at ht
+  | fire h => simp [State.owe] at ht
+  | elapse h => simp [hq] at ht
+  | retry => simp only [launch_queued] at ht; simp [hq] at ht
+  | drop => simp [hq] at ht
+  | stop h => exact Or.inr rfl
+  | restart h => simp [State.owe] at ht
+  | forget t => simp [hq] at ht
+
+/-- Every request is read by a pass that starts after it. A request leaves a
+read owed (`State.owe`), and an owed read is cleared only by a pass that starts
+later or by the observer stopping (`owed_read_clears_only_when_a_pass_starts`).
+A request made while a pass runs is read by the next pass
+(`request_during_pass_waits_for_it`), never by the running one, whose read may
+have been taken before the request. -/
+theorem every_request_is_owed_a_later_pass (s : State) : s.owe.queued = true := rfl
 
 /-- A read whose selection moved while it ran leaves the moved selection's read
 owed: the selection subscription queued it, so the drain loop needs no second
@@ -612,6 +761,43 @@ theorem moved_read_leaves_read_queued {s : State} (hs : Reachable s) (hrun : s.r
     (finish s t o).queued = true := by
   have := (reachable_invariant hs).2.2.2.1 hrun t h hne
   simp [finish, hne, this]
+
+theorem launch_fired (s : State) : (launch s).fired = false := by
+  unfold launch; split <;> rfl
+
+theorem finish_fired (s : State) (t : Nat) (o : Outcome) :
+    (finish s t o).fired = s.fired := by
+  unfold finish
+  split
+  · rfl
+  · cases o <;> rfl
+
+/-- A fired re-read is owed: its read stays queued until a read starts. -/
+theorem fired_owes {s : State} (hs : Reachable s) (h : s.fired = true) : s.queued = true := by
+  induction hs with
+  | init n => simp [initial] at h
+  | step _ st ih =>
+      cases st with
+      | select n drop hn =>
+          unfold selectTarget at h ⊢
+          split
+          · rfl
+          · split
+            · rfl
+            · rename_i h1 h2
+              simp only [h1, h2, ↓reduceIte] at h
+              exact ih h
+      | notice => rfl
+      | begin => simp [beginRead, launch_fired] at h
+      | complete t o hr =>
+          rw [finish_fired] at h; rw [finish_queued]; exact ih h
+      | fire => rfl
+      | elapse => exact ih h
+      | retry => simp [launch_fired] at h
+      | drop => exact ih h
+      | stop => simp [stopObserver] at h
+      | restart => rfl
+      | forget => exact ih h
 
 /-- While the observer runs, nothing the selected session shows is silently
 stuck: every status without an action has a read running, a read queued, a
@@ -632,9 +818,13 @@ theorem phase_has_exit {s : State} (hs : Reachable s) (hrun : s.running = true)
     · exact Or.inr (Or.inl h)
     · exact Or.inl h
   · simp only [input, State.loadReread, Bool.or_eq_true, Bool.and_eq_true] at hr
-    rcases hr with h | h
+    rcases hr with ((h | h) | h) | h
     · exact Or.inl h.1
+    · rcases hl hrun (Or.inr (by simpa using h)) with h | h
+      · exact Or.inl h
+      · exact Or.inr (Or.inl h)
     · exact Or.inr (Or.inr (Or.inl h))
+    · exact Or.inr (Or.inl (fired_owes hs h))
   · simp only [input, beq_iff_eq] at hm
     exact Or.inr (Or.inr (Or.inr ⟨hm, hb⟩))
 
@@ -653,7 +843,8 @@ theorem stop_leaves_action {s : State} (hs : Reachable s)
   · simp only [input, stopObserver] at hp
     split at hp <;> simp_all
   · simp [input, stopObserver, hload] at hm
-  · simp [input, stopObserver, State.loadReread] at hr
+  · simp only [input, stopObserver, State.loadReread] at hr
+    split at hr <;> simp_all
   · simp only [input, stopObserver, beq_iff_eq] at hm
     exact ⟨hm, hb⟩
 
@@ -735,10 +926,11 @@ theorem select_shows_only_its_own (s : State) (n : Nat) (drop : Bool) (m : Nat)
   unfold selectTarget at h
   split at h
   · simp only [Option.some.injEq] at h; exact Or.inl h.symm
-  · simp only at h
-    split at h
-    · cases h
-    · exact Or.inr h
+  · split at h <;>
+    · simp only at h
+      split at h
+      · cases h
+      · exact Or.inr h
 
 /-- The recent reads never exceed their bound. -/
 theorem recent_bounded {s : State} (hs : Reachable s) : s.recent.length ≤ cacheBound :=

@@ -22,11 +22,13 @@ pub(super) async fn test_node() -> (
     gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
 ) {
-    let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "inference-admission",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let signer = agent.managed_agent_signer().unwrap();

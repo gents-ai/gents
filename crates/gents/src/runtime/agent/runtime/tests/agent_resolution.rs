@@ -72,11 +72,12 @@ impl PrivateSessionFixture {
 
 #[tokio::test]
 async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
-    let (db, _user, _access, _binding) = gents_inference::test_support::signed_test_node_from_db(
+    let db = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("agent-resolution-blank").await,
         "agent-resolution-blank",
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&db).await;
     let node = db.node.clone();
     for selected in [None, Some(""), Some("   ")] {
         assert!(
@@ -303,12 +304,12 @@ async fn materialized_request_session_is_selectable_and_matches_lean() {
             "the pending-request owner always publishes the session: {}",
             case.input.name
         );
-        let (db, _user, _access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                crate::support::trial_store("materialized-session-selection").await,
-                "materialized-session-selection",
-            )
-            .await;
+        let db = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store("materialized-session-selection").await,
+            "materialized-session-selection",
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&db).await;
         let node_did = db.node_identity.did().to_owned();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)

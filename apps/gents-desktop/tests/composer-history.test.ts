@@ -67,6 +67,27 @@ describe("the messages ↑ steps back through", () => {
     ]);
   });
 
+  it("count the turn just sent, and once when the read brings it", () => {
+    const sent = {
+      requestId: "r2",
+      content: "second",
+      selectedSkillIds: [],
+      lifecycleState: null,
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: null,
+    };
+    expect(sentMessages([user("r1", "first")], sent).map((m) => m.text)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(
+      sentMessages([user("r1", "first"), user("r2", "second")], sent).map(
+        (m) => m.text,
+      ),
+    ).toEqual(["first", "second"]);
+  });
+
   it("take skill lines off a message gents has not read yet", () => {
     expect(sentMessages([pending("a", "/skill review\nlook at this")])).toEqual([
       { text: "look at this", skills: ["review"] },

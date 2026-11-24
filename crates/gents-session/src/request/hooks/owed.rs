@@ -517,6 +517,8 @@ async fn observe_request(
 
 /// The newest request of a session as `txn` sees it: its creation time and
 /// interrupt latch.
+/// When the session's newest request was created, and when its interrupt
+/// marker was last bumped.
 async fn newest_request(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -528,19 +530,22 @@ async fn newest_request(
     );
     let response = txn
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{node}" }} }}, order: {{ created_at: DESC }}, limit: 1) {{ _docID created_at interrupt_requested_at }} }}"#
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{node}" }} }}, order: {{ created_at: DESC }}, limit: 1) {{ _docID created_at }} }}"#
         ))
         .await?;
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "AgentRequest");
-    Ok(rows.first().map(|request| {
-        (
-            request["created_at"].as_str().map(str::to_owned),
-            request["interrupt_requested_at"]
-                .as_str()
-                .filter(|latch| !latch.is_empty())
-                .map(str::to_owned),
-        )
-    }))
+    let Some(request) = rows.first() else {
+        return Ok(None);
+    };
+    let interrupted_at =
+        crate::session::interrupt_marker::read_for_session_in_txn(txn, node_did, session_id)
+            .await?
+            .and_then(|marker| marker.interrupted_at)
+            .filter(|latch| !latch.is_empty());
+    Ok(Some((
+        request["created_at"].as_str().map(str::to_owned),
+        interrupted_at,
+    )))
 }
 
 async fn observe_session(
@@ -859,7 +864,8 @@ async fn halted_sessions(
                     .await?;
                 let interrupted = txn
                     .execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, agent_did: {{ _eq: "{agent_did}" }}, interrupt_requested_at: {{ _ne: null }} }}, order: {{ interrupt_requested_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#
+                        r#"{{ AgentSessionInterrupt(filter: {{ node_did: {{ _eq: "{node}" }}, interrupted_at: {{ _ge: "{horizon}" }} }}, order: {{ interrupted_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#,
+                        horizon = escape_graphql_string(horizon)
                     ))
                     .await?;
                 let mut candidates: Vec<String> = Vec::new();
@@ -868,7 +874,7 @@ async fn halted_sessions(
                         .into_iter()
                         .chain(gents_protocol::graphql::graphql_rows_from_response(
                             &interrupted,
-                            "AgentRequest",
+                            "AgentSessionInterrupt",
                         ))
                 {
                     if let Some(session_id) = row["session_id"].as_str() {
@@ -887,8 +893,7 @@ async fn halted_sessions(
                     let newest = newest_request(txn, node_did, &session_id).await?;
                     let (newest_created, newest_interrupt) = newest.unwrap_or((None, None));
                     // The stop latch is current while no request followed it;
-                    // otherwise the newest request's interrupt latch, which no
-                    // later request can have followed.
+                    // otherwise the session's latest interrupt.
                     let latch = match session.session.stopped_at.clone() {
                         Some(stopped) if not_after(newest_created.as_deref(), &stopped) => {
                             Some(stopped)

@@ -202,6 +202,7 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
         execution_lease_expires_at: None,
         execution_lease_secs: None,
         request_hop: 1,
+        interrupt_generation: None,
         caused_by_parent_request_id: Some("parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
@@ -759,11 +760,13 @@ async fn seed_fixture_agent_session(
 
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("reconcile-api-key-rotation").await,
         "reconcile-api-key-rotation",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();
@@ -2957,11 +2960,13 @@ async fn inference_calls_holding_a_backend_slot(
 /// the calls holding a backend slot while generation 2 serves a request, then
 /// finishes the call; either way it waits for generation 1's runner to return.
 async fn retire_slot_with_call(call_in_flight: bool) -> RetiredSlotObservation {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("reconcile-retired-slot").await,
         "reconcile-retired-slot",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();

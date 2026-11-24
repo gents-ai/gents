@@ -32,9 +32,10 @@ impl Fixture {
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
-        let (home, user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(db, "workspace-rejection-user")
-                .await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "workspace-rejection-user").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (home, user, user_access) = signed_home.into_parts();
         let node = home.node.clone();
         let identity = home.node_identity.clone();
         let agent =

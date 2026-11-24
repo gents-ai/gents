@@ -34,7 +34,7 @@ pub(super) async fn load_timeline_request_by_id(
                 failure_reason
                 created_at
                 retry_count
-                interrupt_requested_at
+                interrupt_generation
                 caused_by_trigger_id
                 caused_by_trigger_kind
                 caused_by_correlation
@@ -90,7 +90,7 @@ pub(super) async fn load_timeline_requests_for_session(
                 failure_reason
                 created_at
                 retry_count
-                interrupt_requested_at
+                interrupt_generation
                 caused_by_trigger_id
                 caused_by_trigger_kind
                 caused_by_correlation
@@ -135,7 +135,7 @@ pub(super) async fn load_timeline_child_requests(
                 failure_reason
                 created_at
                 retry_count
-                interrupt_requested_at
+                interrupt_generation
                 caused_by_trigger_id
                 caused_by_trigger_kind
                 caused_by_correlation

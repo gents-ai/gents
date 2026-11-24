@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundWakeIdentityRedriveUnfenced ----
+EXTENDS BackgroundWakeIdentity
+
+====

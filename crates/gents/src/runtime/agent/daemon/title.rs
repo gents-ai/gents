@@ -317,7 +317,7 @@ where
             gents_session::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
                 lifecycle.access()?,
-                title_request.doc_id.clone(),
+                lifecycle.request(),
                 interrupt_tx,
                 shutdown.clone(),
             ),

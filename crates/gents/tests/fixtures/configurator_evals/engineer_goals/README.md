@@ -3,9 +3,8 @@
 ## Configuration
 
 Use the bundled pack_config.json. The subject is `../engineer_full` with every
-core pack installed; `subject_patch.json` turns goal creation on. The runner
-cannot create a goal on a trial's session, so each case starts without one and
-the Engineer creates any goal itself. Goal stages settle, so the evidence
+core pack installed. The runner cannot create a goal on a trial's session, so
+each case starts without one and the Engineer creates any goal itself. Goal stages settle, so the evidence
 covers the goal's continuation requests.
 
 ## Usage

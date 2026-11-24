@@ -334,11 +334,13 @@ pub(super) async fn held_runtime_fixture_with_status(
     probe_status: &str,
 ) -> HeldRuntimeFixture {
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store(name).await,
         name,
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [
@@ -491,6 +493,7 @@ pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest
         executed_inference_profile_id: None,
         executed_runtime_generation: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,

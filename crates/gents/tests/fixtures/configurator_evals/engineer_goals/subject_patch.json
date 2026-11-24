@@ -1,9 +1,0 @@
-{
-  "tools": {
-    "engineer-tools": {
-      "built_ins": {
-        "enable_goal_creation": true
-      }
-    }
-  }
-}

@@ -181,7 +181,7 @@ where
             request_id = %result.request_id,
             accepted = result.accepted,
             already_interrupted = result.already_interrupted,
-            interrupt_requested_at = %result.interrupt_requested_at.as_deref().unwrap_or(""),
+            interrupted_at = %result.interrupted_at.as_deref().unwrap_or(""),
             "desktop interrupt action completed"
         ),
         Err(error) => tracing::warn!(

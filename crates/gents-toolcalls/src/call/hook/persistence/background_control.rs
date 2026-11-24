@@ -134,14 +134,14 @@ impl DefraSessionHook {
             // Waiting is observational; ending this caller's turn must not
             // revoke the separately budgeted background job.
             let interruption =
-                gents_session::request::interrupt::observe_interrupt_requested_at_with_access(
+                gents_session::request::interrupt::observe_request_interrupted_at_with_access(
                     &self.actor_access()?,
                     &caller.request_id,
                     &caller.node_did,
                     caller.requester_did.as_deref(),
                 )
                 .await?;
-            if interruption.requested_at.is_some() {
+            if interruption.interrupted_at.is_some() {
                 return self
                     .background_tool_envelope(lifecycle, "caller_interrupted")
                     .await;

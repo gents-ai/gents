@@ -59,15 +59,6 @@ pub async fn load_status_enrollment_approvals_in_txn(
 )> {
     let runtime = identity::Did::new(principal.did())?;
     txn.validate_runtime_actor(&runtime)?;
-    for collection in [
-        "NetworkAdminPin",
-        "NetworkEnrollmentRequest",
-        "NetworkEnrollmentDecision",
-        "NetworkAuthorizationRevision",
-        "NetworkEnrollmentRouteReceipt",
-    ] {
-        gents_store::graphql::fence_arrivals(txn, collection).await?;
-    }
     let response: defra_node::QueryResponse =
         serde_json::from_value(txn.execute(STATUS_ENROLLMENT_QUERY).await?)?;
     let pins = runtime_admin_pin_rows(txn, &runtime, None).await?;

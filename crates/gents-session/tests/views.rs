@@ -5,11 +5,13 @@ use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn session_views_match_model_on_served_node() -> anyhow::Result<()> {
-    let (db, user, _, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "session-views",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, _) = signed_home.into_parts();
     let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
     let agent_access =
         ConfigAccess::local_managed_agent(db.node.clone(), agent.did().parse()?, agent.as_ref())?;
@@ -116,11 +118,13 @@ async fn session_ordering_matches_model_on_served_node() -> anyhow::Result<()> {
         tokio::task::spawn_blocking(gents_lean_vocab::families::session_ordering::cases).await?;
     assert_eq!(cases.len(), 6);
     for (index, case) in cases.into_iter().enumerate() {
-        let (db, user, _, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("session-ordering-{index}"),
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, _) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
         let access = ConfigAccess::local_managed_agent(
