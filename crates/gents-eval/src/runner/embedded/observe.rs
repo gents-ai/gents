@@ -946,11 +946,26 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(
+            let access =
+                ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
+            if state == "processing" {
+                let row = poll_request(&home.node, &request_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                gents_session::test_support::record_running_request_as(
+                    &access,
+                    row.doc_id.as_deref().unwrap(),
+                )
+                .await;
+            }
+            let observed = await_terminal_with_access(
                 &home.node,
+                &access,
                 &request_id,
                 Some(Duration::ZERO),
                 Duration::ZERO,
+                &NoHook,
             )
             .await
             .unwrap();
