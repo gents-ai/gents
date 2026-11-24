@@ -6,6 +6,21 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: every inference call records `first_token_at`, when the
+  provider streamed the call's first text, reasoning or tool-call delta;
+  response headers, keep-alives and message ids are not tokens. It is null for
+  a call that was not streamed or that failed before a token, and each retry
+  records its own. On the Claude Messages wire a tool call now streams its
+  name as a tool-call delta when its block starts. A home whose
+  `InferenceCall` predates the field is refused as an older home (exit code
+  65) and left unchanged; start a new home.
+- Eval trials report the subject's time to first token, from a call's
+  `started_at` to its `first_token_at`: `subject_usage` holds the first
+  request's (`first_request.first_token_ms`, unknown when that first call
+  streamed no token) and the median over the subject's turns that streamed
+  one (`median_first_token_ms`). `eval trial` prints both, `eval show` adds
+  their medians per cell and run, and `eval compare` shows their change on
+  passing trials.
 - Eval trials record what the subject agent itself spent, beside the
   home-wide `usage`: each completion's `subject_usage` holds its first request's
   prompt tokens and estimated component split (tool schemas among them), its

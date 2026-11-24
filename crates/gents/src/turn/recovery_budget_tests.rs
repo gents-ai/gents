@@ -240,6 +240,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();
@@ -273,6 +274,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();

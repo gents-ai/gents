@@ -324,6 +324,7 @@ impl BackendAdmissionController {
                     None,
                     None,
                     gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+                    None,
                 )
                 .await
                 {
@@ -497,6 +498,7 @@ impl Drop for QueuedCallGuard {
                 Some("Cancelled"), None,
                 None,
                 gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+                None,
             )
             .await
             {

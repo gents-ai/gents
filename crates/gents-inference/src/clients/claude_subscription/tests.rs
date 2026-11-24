@@ -73,6 +73,7 @@ async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
                     tool_call.function.arguments,
                 ));
             }
+            StreamedAssistantContent::ToolCallDelta { .. } => {}
             StreamedAssistantContent::Final(final_response) => {
                 usage = final_response.usage;
                 break;
