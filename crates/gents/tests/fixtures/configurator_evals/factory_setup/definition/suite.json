@@ -1,13 +1,22 @@
 {
   "id": "factory-setup",
-  "title": "Complete research desk configuration",
+  "title": "Research desk configuration and first run",
   "coverage": [
     "six distinct roles",
     "shared inference limits",
     "caller-supplied data contracts",
     "handoffs and gather step",
     "delegation permissions",
-    "setup receipt"
+    "setup receipt",
+    "one brief request run through every handoff"
   ],
-  "subject": "factory_setup/engineer_kspec"
+  "subject_fixtures": [
+    {
+      "name": "research-desk-brief",
+      "why": "The user's written brief for the research desk, which the case copies into the workspace and the stage prompt asks the Engineer to read.",
+      "assets": [
+        "factory/kickoff.md"
+      ]
+    }
+  ]
 }

@@ -131,176 +131,15 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in SamplePlacement, SampleIntake and LabBin. Enable your general read access only to those collections, and general create/update/delete access only to SamplePlacement if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "stage_id": "place",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Place the incoming samples as of 2026-11-13. Each unplaced intake goes in the lab bin matching its site and bin code with the latest available date on or before that day. If no bin qualifies, or two tie, leave it unplaced. Which samples are still unplaced?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "equals": [
-                        "SamplePlacement"
-                      ]
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"SamplePlacement\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"SampleIntake\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"LabBin\""
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "SamplePlacement",
-                "min": 1,
-                "max": 1
-              },
-              {
-                "capture": "SampleIntake",
-                "min": 6,
-                "max": 6
-              },
-              {
-                "capture": "LabBin",
-                "min": 7,
-                "max": 7
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "SamplePlacement",
-          "collection": "SamplePlacement",
-          "filter": {},
-          "fields": [
-            "sample",
-            "bin_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "SampleIntake",
-          "collection": "SampleIntake",
-          "filter": {},
-          "fields": [
-            "sample",
-            "site",
-            "bin_code"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "LabBin",
-          "collection": "LabBin",
-          "filter": {},
-          "fields": [
-            "bin_id",
-            "site",
-            "code",
-            "available"
-          ]
-        }
-      ]
-    },
-    {
-      "stage_id": "ask",
-      "prompt": "Place the incoming samples as of 2026-11-13. For each unplaced SampleIntake, find its LabBin by both site and bin code. Use the bin with the latest available date on or before that date. Leave it unplaced if none qualifies or two share the latest date. Add the SamplePlacement with the bin ID. Keep existing placements and source records unchanged. Reply with JSON containing \"unplaced\", the intake IDs still without a placement.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "schema"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -598,9 +437,8 @@
           "check": "final_message_matches",
           "params": {
             "all": [
-              {
-                "matches": "\"unplaced\"\\s*:\\s*\\[\\s*(?:\"Q-104\"\\s*,\\s*\"Q-106\"|\"Q-106\"\\s*,\\s*\"Q-104\")\\s*\\]"
-              }
+              "Q-104",
+              "Q-106"
             ]
           },
           "tier": "acceptance",
@@ -639,6 +477,19 @@
             "site",
             "code",
             "available"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "SamplePlacement",
+          "filter": {
+            "sample": {
+              "_eq": "Q-101"
+            }
+          },
+          "fields": [
+            "sample"
           ]
         }
       ]

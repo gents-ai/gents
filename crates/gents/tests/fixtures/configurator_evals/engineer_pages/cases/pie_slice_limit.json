@@ -1,0 +1,28 @@
+{
+  "case_id": "pie-slice-limit",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "ask",
+      "prompt": "We want a pie chart of revenue share across our 15 product lines. Will each product line get its own slice?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b12\\b"
+              },
+              {
+                "matches": "(?i)\\bother\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

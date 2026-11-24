@@ -4,17 +4,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gents_inference::llm::rig_compat::ProviderClient;
-use gents_loop::tool::ToolDyn;
 use tokio::sync::{mpsc, watch, Mutex};
 
+use super::slot_tools::{ActiveSnapshots, SlotTools};
 use crate::runtime::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::turn::completion_factory::build_admitted_model;
-use crate::turn::prompt::LayeredPromptBuilder;
 use gents_inference::admission::AdmissionRegistry;
 use gents_protocol::row::AgentRequest;
 use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
-use gents_toolcalls::call::hook::BackgroundToolRegistry;
-use gents_tools::surface::{self, ToolRuntimeContext, ToolSurface};
+use gents_tools::surface::{ToolRuntimeContext, ToolSurface};
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
@@ -35,6 +33,8 @@ pub(super) struct RuntimeContext {
     /// The runtime's single job driver, created once in `run_agent_owned`.
     pub(super) job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     pub(super) enrollment_authority: gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle,
+    /// The active generations a request reads when its own Tools change.
+    pub(super) active_snapshots: ActiveSnapshots,
 }
 
 struct ResolvedWorker {
@@ -43,14 +43,7 @@ struct ResolvedWorker {
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     account_hops: u32,
-    prompt_builder: LayeredPromptBuilder,
-    preamble: String,
-    loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
-    background_tool_registry: BackgroundToolRegistry,
-    remote_tools: Option<gents_documents::RemoteTools>,
-    job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
-    output_obligations: Vec<(String, gents_documents::WriteToolOutputObligation)>,
-    root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
+    tools: SlotTools,
 }
 
 pub(super) struct AgentResolution {
@@ -156,37 +149,12 @@ impl RuntimeContext {
         } else {
             agent_config.completion_client_api_key()?
         };
-        let allowed_targets = surface::resolve_agent_target_descriptions(tool_surface.as_ref());
-        let prompt_builder = LayeredPromptBuilder::new(
-            agent_config.as_ref(),
-            tool_surface.as_ref(),
-            &allowed_targets,
-        );
-        let preamble = prompt_builder.preamble().to_string();
-        let tool_runtime = self.tool_runtime.for_agent(&agent_config);
         let mut cancel = shutdown.clone();
-        let (mut loop_tools, background_tools) = tokio::select! {
+        let tools = tokio::select! {
             biased;
             _ = cancel.changed() => return Ok(()),
-            built = build_slot_tools(&tool_runtime, &tool_surface) => built?,
+            built = SlotTools::build(&self.tool_runtime, &agent_config, &tool_surface) => built?,
         };
-        if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
-            let ceiling = gents_documents::skills::skill_tool_ceiling(
-                tool_surface.tool_names(),
-                tool_surface.allowed_mcp_service_ids(),
-                tool_surface.includes_meta_tools(),
-            );
-            loop_tools.push(Box::new(
-                gents_tools::native::skills::LoadSkillTool::for_agent(
-                    agent_config.skills.clone(),
-                    ceiling,
-                    &agent_config.configuration,
-                ),
-            ));
-        }
-        let loop_tools = std::sync::Arc::new(loop_tools);
-        let background_tool_registry =
-            BackgroundToolRegistry::from_config(background_tools, tool_surface.background_tools());
         tracing::info!(
             agent_did = %agent_config.agent_did,
             did = %agent_config.node_did(),
@@ -212,16 +180,7 @@ impl RuntimeContext {
             provider_family,
             replay_issuer,
             account_hops,
-            prompt_builder,
-            preamble,
-            loop_tools,
-            background_tool_registry,
-            remote_tools: tool_surface.remote_tools().cloned(),
-            job_tools: gents_toolcalls::background::job::JobBinding::bind_all(
-                tool_surface.plugin_resolutions(),
-            ),
-            output_obligations: tool_surface.output_obligations(),
-            root_execution_guard: tool_surface.root_execution_guard().cloned(),
+            tools,
         };
 
         gents_inference::llm::backend_client::with_backend_client!(client, |client| {
@@ -255,14 +214,18 @@ impl RuntimeContext {
             provider_family,
             replay_issuer,
             account_hops,
-            prompt_builder,
-            preamble,
-            loop_tools,
-            background_tool_registry,
-            remote_tools,
-            job_tools,
-            output_obligations,
-            root_execution_guard,
+            tools:
+                SlotTools {
+                    prompt_builder,
+                    preamble,
+                    loop_tools,
+                    background_tool_registry,
+                    remote_tools,
+                    job_tools,
+                    output_obligations,
+                    root_execution_guard,
+                    agent_targets,
+                },
         } = worker;
         let model = Arc::new(build_admitted_model(
             client,
@@ -323,32 +286,17 @@ impl RuntimeContext {
         .with_job_tools(job_tools)
         .with_job_driver(self.job_driver.clone())
         .with_output_obligations(output_obligations)
-        .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());
+        .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone())
+        .with_tool_rebinding(crate::runtime::agent::daemon::RebindingSource {
+            tool_runtime: self.tool_runtime.clone(),
+            active_snapshots: self.active_snapshots.clone(),
+            agent_targets,
+        });
         if let Some((compactor, provider_family)) = summary_compactor {
             daemon = daemon.with_compactor(compactor, provider_family);
         }
         daemon.run(request_rx, capacity, shutdown).await
     }
-}
-
-/// A slot's foreground and background tools, built on one side of an
-/// installer's publication: a surface with plugin tools holds the store's
-/// shared lease while it builds, waiting for an installer until the
-/// publication deadline. A plugin-free surface never waits for the store.
-async fn build_slot_tools(
-    runtime: &ToolRuntimeContext,
-    surface: &ToolSurface,
-) -> Result<(Vec<Box<dyn ToolDyn>>, Vec<Box<dyn ToolDyn>>)> {
-    let deadline = tokio::time::Instant::now() + surface::PUBLICATION_WAIT;
-    let _publication = if surface.has_plugin_tools() {
-        surface::publication_guard_until(runtime.plugin_store_pin(), deadline).await?
-    } else {
-        None
-    };
-    Ok((
-        surface.build_tools_until(runtime, deadline).await?,
-        surface.build_tools_until(runtime, deadline).await?,
-    ))
 }
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ discovery_timeout_secs?: number | null,
  */
 request_timeout_secs?: number | null,
 /**
- * Shared backend capacity across profiles; absent resolves to 1.
+ * Shared backend capacity across profiles; absent resolves to 4.
  */
 max_concurrent?: number | null,
 /**

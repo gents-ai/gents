@@ -5,17 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "We need an editorial database: Writer { name, stories } and Story { headline, draft, writer }. Name and headline are text; draft is true/false. One writer has many stories and each story has one writer. Make both sides navigable. The headline also needs English word search with BM25; this is keyword relevance, not vector similarity.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "Writer",
-            "Story"
-          ]
-        }
-      ],
+      "prompt": "We need an editorial database: Writer { name, stories } and Story { headline, draft, writer }. Name and headline are text, draft is true/false. A writer has many stories and each story one writer, linked both ways. Headlines are English and need keyword search, best match first.",
       "checks": [
         {
           "check": "schema_matches",
@@ -25,19 +15,186 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "tool_calls_expected",
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Writer",
+            "Story"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Add writer Ada Okafor with stories \"Harbor dredging delayed again\" (draft) and \"Council approves harbor budget\" (not a draft), and writer Ben Ruiz with \"School lunch prices rise\" (not a draft). Search the headlines for \"lunch\": who wrote the best match?",
+      "checks": [
+        {
+          "check": "crew_spec_match",
           "params": {
-            "required": [
-              "schema"
+            "present": [
+              {
+                "capture": "writers",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "stories",
+                "min": 3,
+                "max": 3
+              }
             ],
-            "forbidden": [
-              "bash"
+            "rows": [
+              {
+                "capture": "writers",
+                "key": "name",
+                "id": "Ada Okafor",
+                "expect": []
+              },
+              {
+                "capture": "writers",
+                "key": "name",
+                "id": "Ben Ruiz",
+                "expect": []
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Harbor dredging delayed again",
+                "expect": [
+                  {
+                    "field": "draft",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Council approves harbor budget",
+                "expect": [
+                  {
+                    "field": "draft",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "School lunch prices rise",
+                "expect": [
+                  {
+                    "field": "draft",
+                    "equals": false
+                  }
+                ]
+              }
+            ],
+            "links": [
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Harbor dredging delayed again",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Council approves harbor budget",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "School lunch prices rise",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bBen\\b|\\bRuiz\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "writers",
+          "collection": "Writer",
+          "filter": {},
+          "fields": [
+            "_docID",
+            "name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "stories",
+          "collection": "Story",
+          "filter": {},
+          "fields": [
+            "headline",
+            "draft",
+            "_writerID"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Story",
+          "filter": {
+            "headline": {
+              "_eq": "School lunch prices rise"
+            }
+          },
+          "fields": [
+            "headline"
+          ]
         }
       ]
     }

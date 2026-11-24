@@ -5,11 +5,11 @@
     "filtered count",
     "ordered pagination",
     "durable create/update/delete",
-    "protected data and owner selection",
+    "owner selection across config, schema and records",
     "derived reads",
     "record linkage",
-    "guarded updates and deletes"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+    "guarded updates and deletes",
+    "self-granted write access",
+    "another agent's read and write access, granted, exercised and revoked"
+  ]
 }

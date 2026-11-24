@@ -141,176 +141,15 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in CrateCount and CrateAudit. Enable your general read access only to those collections, and general create/update/delete access only to CrateCount if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records. Set up only the access now; do not change any records or collection definitions until I send the change request.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "schema_matches",
-          "params": {
-            "name": "schema",
-            "sdl": "type CrateCount { ticket: String @index(unique: true) expected: Int site: String }\ntype CrateAudit { event: String @index(unique: true) ticket: String edition: Int disposition: String counted: Int }",
-            "exact_nullability": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "equals": [
-                        "CrateCount"
-                      ]
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"CrateCount\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"CrateAudit\""
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "CrateCount",
-                "min": 5,
-                "max": 5
-              },
-              {
-                "capture": "CrateAudit",
-                "min": 9,
-                "max": 9
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "CrateCount",
-            "CrateAudit"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "CrateCount",
-          "collection": "CrateCount",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "expected",
-            "site"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "CrateAudit",
-          "collection": "CrateAudit",
-          "filter": {},
-          "fields": [
-            "event",
-            "ticket",
-            "edition",
-            "disposition",
-            "counted"
-          ]
-        }
-      ]
-    },
-    {
       "stage_id": "migrate",
-      "prompt": "Crate audit 10 needs an optional integer discrepancy on CrateCount. For each ticket use the approved CrateAudit with the highest edition and subtract the expected amount from its counted amount. A counted zero is a reading. Leave discrepancy unset if that audit is missing or has no counted amount. Preserve the records and all existing fields. Reply with one JSON object whose \"missing\" array lists the ticket values.",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Add an optional whole-number discrepancy to CrateCount: counted minus expected, taken from each ticket's approved audit with the highest edition. A count of zero is a real count. Leave it empty if that audit is missing or has no count. Which tickets have none?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "schema_matches",
           "params": {
@@ -648,9 +487,8 @@
           "check": "final_message_matches",
           "params": {
             "all": [
-              {
-                "matches": "\"missing\"\\s*:\\s*\\[\\s*(?:\"CT-111\"\\s*,\\s*\"CT-120\"|\"CT-120\"\\s*,\\s*\"CT-111\")\\s*\\]"
-              }
+              "CT-111",
+              "CT-120"
             ]
           },
           "tier": "acceptance",
@@ -690,8 +528,44 @@
             "disposition",
             "counted"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "CrateCount",
+          "filter": {
+            "ticket": {
+              "_eq": "CT-114"
+            },
+            "discrepancy": {
+              "_eq": 1
+            }
+          },
+          "fields": [
+            "ticket",
+            "discrepancy"
+          ]
         }
       ]
+    },
+    {
+      "stage_id": "read",
+      "prompt": "Which tickets show a discrepancy other than zero now, and how large is it?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "CT-114\\b[^\\n]{0,80}?\\b(?:1|one)\\b|\\b(?:1|one)\\b[^\\n]{0,80}?CT-114\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": []
     }
   ]
 }

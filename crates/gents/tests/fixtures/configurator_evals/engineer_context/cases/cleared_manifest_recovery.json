@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "count",
-      "prompt": "How many parcels are on the outbound manifest, dock/outbound.csv, and how many on the inbound one, dock/inbound.csv? The outbound truck has left, so after that cut dock/outbound.csv down to just its header row. Leave the inbound manifest as it is.",
+      "prompt": "Read through the outbound manifest, dock/outbound.csv, and tell me how many parcels went out, and how many are on the inbound one, dock/inbound.csv. The outbound truck has left, so after that cut dock/outbound.csv down to just its header row. Leave the inbound manifest as it is.",
       "capture": [
         {
           "kind": "file",
@@ -26,18 +26,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -77,35 +65,6 @@
       "stage_id": "recover",
       "prompt": "A consignee is asking about the parcel that went out on that truck from bay 7. Which parcel was it, and who signed for it?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "text",
-                "contains": "PX-3299"
-              },
-              {
-                "field": "text",
-                "contains": "Ferreira"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {

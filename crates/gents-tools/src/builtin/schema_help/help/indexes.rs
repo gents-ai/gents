@@ -47,7 +47,7 @@ type Note {
 ```
 Defaults: HNSW algorithm, COSINE metric. Choose one algorithm block; it selects the algorithm and holds its settings. @vectorIndex is not supported.
 Discover: help indexes vector dimensions | metrics | hnsw | flat | ivfpq | ivfflat | ssg.
-For generated vectors: help embeddings. Similarity queries use the data/query interface, not schema commands."#
+For generated vectors: help embeddings. Rank by similarity with query search; see query help search."#
         }
         ["indexes", "vector", "dimensions"] => {
             r#"Dimensions is the number of numbers in each vector. Set it to the embedding model's output width, or the width of vectors you supply.
@@ -132,7 +132,7 @@ type Article {
   body: String @fulltext(language: "english")
 }
 ```
-Defaults: language: "english", k1: 1.2 for term-frequency saturation, b: 0.75 for document-length normalization. Leave scoring parameters at defaults unless you have measured retrieval needs. Run text queries through the data/query interface.
+Defaults: language: "english", k1: 1.2 for term-frequency saturation, b: 0.75 for document-length normalization. Leave scoring parameters at defaults unless you have measured retrieval needs. Rank text with query search (query help search).
 Next: help indexes vector; help embeddings."#
         }
         ["indexes", "encrypted"] => {

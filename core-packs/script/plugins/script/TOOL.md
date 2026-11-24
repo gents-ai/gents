@@ -1,9 +1,9 @@
-Run JavaScript (not Python, shell or script files) in a WASM sandbox. Return the answer; `input` holds optional JSON input. Local variables survive `await`.
+Run JavaScript (not Python, shell or script files) in a WASM sandbox. Return the answer; `input` holds optional JSON input and `console.log` lines come back beside the answer. Local variables survive `await`.
 
-With tool access enabled in Tools, `await tools.TOOL_NAME({...})` invokes that tool with the caller's permissions and returns its result, as data where the tool offers JSON. `Object.keys(tools)` lists the tools; `tools.NAME.description` and `tools.NAME.parameters` describe one. An unknown `tools.NAME`, or `tools` without a tool grant, is `undefined`. Calls started before awaiting them (e.g. `Promise.all`) are batched: up to four consecutive calls to read-only tools run together, and every other call (a write, a repeated call, or a call after `sleep`) runs alone, in order. Failures throw catchable errors. `await sleep(milliseconds)` waits without calling a model.
+With tool access enabled in Tools, `await tools.TOOL_NAME({...})` invokes that tool with the caller's permissions and returns its result, as data where the tool offers JSON: `(await tools.read_file({path})).content` is the file's text. `Object.keys(tools)` lists the tools. Failures throw catchable errors. `await sleep(milliseconds)` waits without calling a model; `await wait(receipt)` waits for a run that `agent_new`, `agent_message` or `config` `task run` started and returns its reply.
 
-JavaScript has no filesystem, network, environment, shell or module API; effects, files included, use granted tools. Read and write files in the script with `tools.read_file`/`tools.write_file`, e.g. `(await tools.read_file({path})).content` (lines prefixed `L<n>: `); that is cheaper than pasting contents into `input`.
-
-For background execution, call `spawn_process` with `{"tool_name":"script","args":{"script":"YOUR JAVASCRIPT","input":{}}}`. Wait on, inspect or cancel it with the process tools. It keeps its caller's tools and runs within that tool's background lifetime, not the foreground allowance. Agent, goal and process tools behave as usual, asynchronous receipts included. A script started by another script has no `tools`. Once the request has ended, `spawn_process` returns `{ok: false, code: "request_stopped"}` instead of throwing; check `.ok`.
+JavaScript has no filesystem, network, environment, shell or module API; effects, files included, use granted tools.
 
 Completed effects stay applied if the script fails. Scripts are bounded. A cancelled or interrupted script stops, even mid-loop or inside `try`/`catch`, and is not resumed or replayed.
+
+Help: `{"help": "topics"}` lists the topics (tools, files, runs, background); `{"help": "<topic>"}` returns one.

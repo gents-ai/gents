@@ -54,6 +54,12 @@ private def cases : List Input :=
    { calls := [failure "overflow", { tool := true, poison := false }, { tool := true, poison := false },
                failure "overflow", done], compactor := true, maxTurns := 4 },
    { calls := [{ tool := true, poison := false }, failure "overflow"], maxTurns := 4 }] ++
+  [{ calls := [{ tool := true, poison := false }, done], rebindAt := some 0 },
+   { calls := [{ tool := true, poison := false }, failure "transport", done], rebindAt := some 0 },
+   { calls := [{ failure "transport" with tool := true }, { tool := true, poison := false },
+               { tool := true, poison := false }, done], rebindAt := some 0, maxTurns := 4 },
+   { calls := [{ tool := true, poison := false }, { tool := true, poison := false }, done],
+     rebindAt := some 1, maxTurns := 4 }] ++
   [0, 1, 2, 3].flatMap (fun transport => [false, true].map fun repair =>
     { calls := [failure "transport", failure "parse", failure "reasoning", done], transport, repair })
 

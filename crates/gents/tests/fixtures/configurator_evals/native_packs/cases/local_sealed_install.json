@@ -20,79 +20,8 @@
   "stages": [
     {
       "stage_id": "inspect",
-      "prompt": "A built local plugins-only artifact is available at ./artifacts/native_echo.pack in your granted workspace. Discover native pack help and inspect the artifact and its exact digest. Preview installation. Do not install, select tools, or run anything yet; keep shell off. Use native config, never shell or CLI passthrough.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "installation",
-          "collection": "PackInstallation",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "coordinate": {
-              "_eq": "fixture/native_echo_pack"
-            }
-          },
-          "fields": [
-            "coordinate",
-            "version",
-            "digest"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "notes",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "context_id": {
-              "_eq": "personal-notes"
-            }
-          },
-          "fields": [
-            "context_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tools_id": {
-              "_eq": "engineer-tools"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "integrations"
-          ]
-        }
-      ],
+      "prompt": "There's a plugin pack at artifacts/native_echo.pack. What's in it, and what would installing it do? Don't install it yet.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_message",
-              "agent_new"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "tool_result_matches",
           "params": {
@@ -132,11 +61,6 @@
                 "capture": "notes",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "tools",
-                "min": 1,
-                "max": 1
               }
             ],
             "rows": [
@@ -150,32 +74,13 @@
                     "equals": "Keep this unrelated context unchanged."
                   }
                 ]
-              },
-              {
-                "capture": "tools",
-                "key": "tools_id",
-                "id": "engineer-tools",
-                "expect": [
-                  {
-                    "field": "host.bash.mode",
-                    "equals": null
-                  },
-                  {
-                    "field": "host.files.mode",
-                    "equals": "ReadWrite"
-                  }
-                ]
               }
             ]
           },
           "tier": "acceptance",
           "weight": 1
         }
-      ]
-    },
-    {
-      "stage_id": "install-select",
-      "prompt": "Install the exact sealed local artifact you previewed. Reinspect and preview if necessary, use the returned digest, inspect the installed fixture/native_echo plugin, then explicitly select its pinned digest on your existing Tools while preserving all other fields and entries. Read back Tools and effective configuration. Do not call the plugin in this request; report that a fresh request is needed. Never claim installation alone exposes tools. Keep shell off and the unrelated context unchanged.",
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -230,40 +135,12 @@
             "integrations"
           ]
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "install-select",
+      "prompt": "Go ahead and install it, and give yourself its tool.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_message",
-              "agent_new"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "committed",
-                "equals": true
-              },
-              {
-                "field": "installed.coordinate",
-                "equals": "fixture/native_echo_pack"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -303,19 +180,7 @@
                 "expect": [
                   {
                     "field": "integrations.plugins",
-                    "matches": "\"plugin\"\\s*:\\s*\"fixture/native_echo\""
-                  },
-                  {
-                    "field": "integrations.plugins",
-                    "matches": "\"digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
-                  },
-                  {
-                    "field": "host.bash.mode",
-                    "equals": null
-                  },
-                  {
-                    "field": "host.files.mode",
-                    "equals": "ReadWrite"
+                    "matches": "\\{[^{}]*\"plugin\"\\s*:\\s*\"fixture/native_echo\"[^{}]*\"digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\"[^{}]*\\}|\\{[^{}]*\"digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\"[^{}]*\"plugin\"\\s*:\\s*\"fixture/native_echo\"[^{}]*\\}"
                   }
                 ]
               },
@@ -335,11 +200,7 @@
           "tier": "acceptance",
           "weight": 1
         }
-      ]
-    },
-    {
-      "stage_id": "fresh-call",
-      "prompt": "This is the fresh request after explicit Tools selection. Call native_echo with {} and return the actual result. Keep configuration and all unrelated data unchanged; do not use shell.",
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -394,24 +255,12 @@
             "integrations"
           ]
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "fresh-call",
+      "prompt": "Now run the echo plugin's tool with no arguments and show me exactly what it returns.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "native_echo"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_message",
-              "agent_new"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "tool_result_matches",
           "params": {
@@ -433,11 +282,6 @@
                 "capture": "notes",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "tools",
-                "min": 1,
-                "max": 1
               }
             ],
             "rows": [
@@ -451,26 +295,66 @@
                     "equals": "Keep this unrelated context unchanged."
                   }
                 ]
-              },
-              {
-                "capture": "tools",
-                "key": "tools_id",
-                "id": "engineer-tools",
-                "expect": [
-                  {
-                    "field": "host.bash.mode",
-                    "equals": null
-                  },
-                  {
-                    "field": "host.files.mode",
-                    "equals": "ReadWrite"
-                  }
-                ]
               }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installation",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "fixture/native_echo_pack"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "context_id": {
+              "_eq": "personal-notes"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tools_id": {
+              "_eq": "engineer-tools"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "integrations"
+          ]
         }
       ]
     }

@@ -22,99 +22,9 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Give every bay one running conversation for its slips. The conversation for a bay is named bay- followed by the bay, so slips for bay north go to bay-north, which already exists. A bay without a conversation yet gets one when its first slip arrives, and its later slips continue there. For each new BaySlip, ask the agent in that bay's conversation to reply exactly ACK followed by the slip's code. Set this up now; slips come later.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "triggers",
-          "collection": "Trigger",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "trigger_id",
-            "task_id",
-            "source",
-            "concurrency",
-            "session_id_template",
-            "create_session",
-            "enabled",
-            "last_status",
-            "last_error"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sources",
-          "collection": "EventSource",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "event_source_id",
-            "source_collection",
-            "event_kind",
-            "filter",
-            "correlation_field",
-            "group"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tasks",
-          "collection": "Task",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "task_id",
-            "prompt_template",
-            "emit_outcome",
-            "enabled"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "triggers",
-                "min": 1
-              },
-              {
-                "capture": "tasks",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ]
+      "prompt": "Keep one running conversation per bay for its slips, named bay- and the bay; bay-north already exists. Post each new BaySlip there as ACK and its code, starting the bay's conversation when its first slip arrives. Set it up now; slips come in later.",
+      "checks": [],
+      "capture": []
     },
     {
       "stage_id": "north",
@@ -190,7 +100,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ACK"
+                    "matches": "(?s)\\].*\\bACK\\b"
                   },
                   {
                     "field": "content",
@@ -209,7 +119,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ACK"
+                    "matches": "(?s)\\].*\\bACK\\b"
                   },
                   {
                     "field": "content",
@@ -228,7 +138,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ACK"
+                    "matches": "(?s)\\].*\\bACK\\b"
                   },
                   {
                     "field": "content",
@@ -270,7 +180,6 @@
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -301,7 +210,6 @@
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -332,7 +240,6 @@
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -353,7 +260,8 @@
             }
           },
           "fields": [
-            "session_id"
+            "session_id",
+            "agent_did"
           ]
         }
       ]

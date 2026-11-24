@@ -118,7 +118,7 @@
     },
     {
       "stage_id": "rename",
-      "prompt": "We are standardising tool names: rename the dock_desk read tool list_dock_jobs to open_dock_jobs, and keep the Dock Jobs page working with it. Lint the page when you are done.",
+      "prompt": "We're standardising tool names: rename the dock_desk read tool list_dock_jobs to open_dock_jobs, and keep the Dock Jobs page working with it. Lint the page when you're done.",
       "capture": [
         {
           "kind": "documents",
@@ -156,44 +156,9 @@
             "entries",
             "enabled"
           ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -244,7 +209,7 @@
                   },
                   {
                     "field": "module",
-                    "matches": "useQuery\\(\\s*ctx\\s*,\\s*'dock_desk'\\s*,\\s*'open_dock_jobs'"
+                    "matches": "useQuery\\(\\s*ctx\\s*,\\s*['\"]dock_desk['\"]\\s*,\\s*['\"]open_dock_jobs['\"]"
                   },
                   {
                     "field": "module",

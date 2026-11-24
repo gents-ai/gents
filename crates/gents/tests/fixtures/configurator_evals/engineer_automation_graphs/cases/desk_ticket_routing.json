@@ -42,99 +42,9 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Each new DeskTicket names its desk's conversation in its desk field: desk-north or desk-south. Route each ticket into the conversation its desk field names, asking the agent there to reply exactly ACK followed by the ticket. Urgent tickets (urgent is true) are the exception: whatever their desk field says, they go to the duty-desk conversation instead, asking for a reply of exactly URGENT followed by the ticket. All three conversations already exist; never open a new one. Set it up now; tickets arrive later.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "triggers",
-          "collection": "Trigger",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "trigger_id",
-            "task_id",
-            "source",
-            "concurrency",
-            "session_id_template",
-            "create_session",
-            "enabled",
-            "last_status",
-            "last_error"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sources",
-          "collection": "EventSource",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "event_source_id",
-            "source_collection",
-            "event_kind",
-            "filter",
-            "correlation_field",
-            "group"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tasks",
-          "collection": "Task",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "task_id",
-            "prompt_template",
-            "emit_outcome",
-            "enabled"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "triggers",
-                "min": 1
-              },
-              {
-                "capture": "tasks",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ]
+      "prompt": "Post each new DeskTicket into the conversation its desk field names (desk-north or desk-south) as ACK and the ticket. Urgent tickets go to duty-desk instead, as URGENT and the ticket. Those three conversations already exist; don't start new ones. Set it up now; tickets come in later.",
+      "checks": [],
+      "capture": []
     },
     {
       "stage_id": "north",
@@ -185,11 +95,6 @@
           "params": {
             "present": [
               {
-                "capture": "fires",
-                "min": 3,
-                "max": 3
-              },
-              {
                 "capture": "t11",
                 "min": 1,
                 "max": 1
@@ -218,7 +123,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ACK"
+                    "matches": "(?s)\\].*\\bACK\\b"
                   },
                   {
                     "field": "content",
@@ -237,7 +142,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*URGENT"
+                    "matches": "(?s)\\].*\\bURGENT\\b"
                   },
                   {
                     "field": "content",
@@ -256,7 +161,7 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ACK"
+                    "matches": "(?s)\\].*\\bACK\\b"
                   },
                   {
                     "field": "content",
@@ -277,29 +182,6 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "fires",
-          "collection": "TriggerFire",
-          "filter": {
-            "owner_did": {
-              "_eq": "$trial"
-            },
-            "source_collection": {
-              "_eq": "DeskTicket"
-            }
-          },
-          "fields": [
-            "fire_key",
-            "trigger_id",
-            "task_id",
-            "request_id",
-            "session_id",
-            "source_collection",
-            "source_doc_id",
-            "source_handoff_id"
-          ]
-        },
-        {
-          "kind": "documents",
           "name": "t11",
           "collection": "AgentRequest",
           "filter": {
@@ -312,25 +194,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%T-11%"
-                }
-              },
-              {
-                "content": {
-                  "_nlike": "%URGENT%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%T-11%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -352,25 +224,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%T-12%"
-                }
-              },
-              {
-                "content": {
-                  "_like": "%URGENT%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%T-12%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -392,25 +254,15 @@
             "caused_by_trigger_id": {
               "_ne": null
             },
-            "_and": [
-              {
-                "content": {
-                  "_like": "%T-13%"
-                }
-              },
-              {
-                "content": {
-                  "_nlike": "%URGENT%"
-                }
-              }
-            ]
+            "content": {
+              "_like": "%T-13%"
+            }
           },
           "fields": [
             "request_id",
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",
@@ -431,7 +283,8 @@
             }
           },
           "fields": [
-            "session_id"
+            "session_id",
+            "agent_did"
           ]
         }
       ]

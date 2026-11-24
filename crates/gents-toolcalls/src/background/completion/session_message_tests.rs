@@ -331,3 +331,158 @@ async fn managed_parent_receives_child_completion_without_unrelated_reader_acces
     node.shutdown().await.unwrap();
     std::fs::remove_dir_all(&admission.path).unwrap();
 }
+
+/// A delegate that starts a helper in the background and ends its turn
+/// answers its caller from the turn the helper's result wakes (Lean
+/// `LineageReturn.decide`): the call waits while the helper's call owes its
+/// result, then settles with the answer of the wake that delivered it. The
+/// wake is answered before its notice is written, so the notice need not be a
+/// canonical transcript message.
+#[tokio::test]
+async fn nested_delegation_answers_from_the_wake() {
+    let PublishedSessionMessage {
+        admission,
+        caused_request_doc_id,
+        ..
+    } = crate::call::lifecycle::admission_fixture::published_session_message(
+        crate::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
+            name: "nested-delegation".into(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let node = &admission.node;
+    let did = &admission.node_did;
+    let owner = admission.tool.access().unwrap();
+    let signer = owner.managed_agent_signer().unwrap();
+    let session = caused_session_id(&owner, &caused_request_doc_id).await;
+    let caused = owner
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ request_id requester_did agent_did }} }}"#,
+            escape_graphql_string(&caused_request_doc_id)
+        ))
+        .await
+        .unwrap()["data"]["AgentRequest"][0]
+        .clone();
+    let field = |name: &str| caused[name].as_str().unwrap().to_owned();
+    let (caused_id, requester, agent) = (
+        field("request_id"),
+        field("requester_did"),
+        field("agent_did"),
+    );
+    let settle = || {
+        settle_running_session_message_rows_with_access(
+            node,
+            &owner,
+            &gents_session::session::message::NoSessionMessageGoals,
+            did,
+        )
+    };
+    let nested = owner
+        .write(
+            "test.nested_call",
+            &format!(
+                r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "nested-helper-call", request_id: "{}", request_doc_id: "{}", session_id: "{}", agent_did: "{}", node_did: "{}", requester_did: "{}", tool_name: "{}", tool_call_id: "nested-helper", status: "pending", lifecycle_state: "pending", await_mode: "background" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&caused_id),
+                escape_graphql_string(&caused_request_doc_id),
+                escape_graphql_string(&session),
+                escape_graphql_string(&agent),
+                escape_graphql_string(did),
+                escape_graphql_string(&requester),
+                gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+            ),
+        )
+        .await
+        .unwrap();
+    let nested_doc = gents_store::graphql::created_doc_id(&nested, "AgentToolCall").unwrap();
+    let mark = |status: &str| {
+        format!(
+            r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ lifecycle_state: "completed", status: "{status}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&nested_doc)
+        )
+    };
+    crate::call::lifecycle::admission_fixture::complete_child_managed_verified(
+        node,
+        &caused_id,
+        "asked the helper; ending my turn",
+        &signer,
+        admission.runtime.clone(),
+    )
+    .await;
+    assert_eq!(
+        settle().await.unwrap(),
+        0,
+        "the helper's call owes its result"
+    );
+
+    let wake_id = uuid::Uuid::new_v4().to_string();
+    let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        &wake_id,
+        gents_protocol::request_admission::RequestScope::new(did, &requester, &agent, &session),
+        "the helper answered",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent),
+    );
+    gents_session::request::admission::sign_agent_request_create(&signer, &mut wake)
+        .await
+        .unwrap();
+    let created = owner
+        .write("test.nested_wake", &wake.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let wake_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    crate::call::lifecycle::admission_fixture::complete_child_managed_verified(
+        node,
+        &wake_id,
+        "relayed PONG-7391",
+        &signer,
+        admission.runtime.clone(),
+    )
+    .await;
+    owner
+        .write("test.nested_settled", &mark("completionPending"))
+        .await
+        .unwrap();
+    assert_eq!(
+        settle().await.unwrap(),
+        0,
+        "a settled call owes its result until its completion is delivered"
+    );
+    owner
+        .write(
+            "test.nested_notice",
+            &format!(
+                r#"mutation {{ create_AgentMessage(input: {{ message_key: "{}", session_id: "{}", node_did: "{}", requester_did: "{}", request_doc_id: "{}", sequence: 1000000, role: "user", created_at: "{}" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&background_completion_notification_message_key(
+                    &nested_doc,
+                    "tool"
+                )),
+                escape_graphql_string(&session),
+                escape_graphql_string(did),
+                escape_graphql_string(&requester),
+                escape_graphql_string(&wake_doc),
+                chrono::Utc::now().to_rfc3339(),
+            ),
+        )
+        .await
+        .unwrap();
+    owner
+        .write("test.nested_delivered", &mark("completed"))
+        .await
+        .unwrap();
+    assert_eq!(settle().await.unwrap(), 1);
+    let notifications =
+        session_message_notifications(&owner, did, admission.tool.session_id()).await;
+    assert_eq!(notifications.len(), 1);
+    assert!(
+        notifications[0].contains("relayed PONG-7391"),
+        "{notifications:?}"
+    );
+    node.shutdown().await.unwrap();
+    std::fs::remove_dir_all(&admission.path).unwrap();
+}

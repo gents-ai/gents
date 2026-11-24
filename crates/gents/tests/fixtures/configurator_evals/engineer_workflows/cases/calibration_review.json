@@ -17,8 +17,62 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run one background workflow named calibration-review. Have two worker agents each read exactly one report from reports/, then combine their returned data. Revision 8 is current. For a current station, put the range of its offsets under its station ID in spreads. Put older station IDs in stale. The workflow result should be JSON with spreads and stale. Keep the reports unchanged and give me the job address.",
+      "prompt": "Run a background job called calibration-review with two helpers, each reading one report in reports/. Revision 8 is current: for each current station, put the difference between its highest and lowest offset under its station ID in spreads, and list the other stations' IDs in stale. Return spreads and stale, and don't change the reports.",
       "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "finished",
+                "min": 1
+              },
+              {
+                "capture": "helpers",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "links": [
+              {
+                "capture": "finished",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "field": "_docID",
+                "target_capture": "segments",
+                "target_key": "source.tool_call_doc_id",
+                "expect": [
+                  {
+                    "field": "close",
+                    "matches": "\\\\?\"outcome\\\\?\"\\s*:\\s*\\\\?\"complete\\\\?\""
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"spreads\\\\?\"\\s*:\\s*\\{\\s*\\\\?\"LST-47\\\\?\"\\s*:\\s*13\\s*\\}"
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"stale\\\\?\"\\s*:\\s*\\[\\s*\\\\?\"LCH-82\\\\?\"\\s*\\]"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 2
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -36,17 +90,45 @@
             },
             "lifecycle_state": {
               "_eq": "completed"
+            },
+            "job_pin": {
+              "handle": {
+                "_eq": "calibration-review"
+              }
             }
           },
           "fields": [
             "_docID",
-            "lifecycle_state"
+            "lifecycle_state",
+            "job_pin"
           ]
         },
         {
           "kind": "documents",
-          "name": "children",
-          "collection": "AgentSession",
+          "name": "helpers",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_like": "job-session:%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_calls",
+          "collection": "AgentToolCall",
           "filter": {
             "node_did": {
               "_eq": "$trial"
@@ -57,7 +139,8 @@
           },
           "fields": [
             "session_id",
-            "agent_did"
+            "tool_name",
+            "lifecycle_state"
           ]
         },
         {
@@ -93,74 +176,6 @@
             "session_id",
             "file_changes"
           ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "workflow"
-            ],
-            "forbidden": [
-              "agent_new"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "finished",
-                "min": 1,
-                "max": 1
-              },
-              {
-                "capture": "children",
-                "min": 2,
-                "max": 2
-              }
-            ],
-            "links": [
-              {
-                "capture": "finished",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "field": "_docID",
-                "target_capture": "segments",
-                "target_key": "source.tool_call_doc_id",
-                "expect": [
-                  {
-                    "field": "close",
-                    "matches": "\\\\?\"outcome\\\\?\"\\s*:\\s*\\\\?\"complete\\\\?\""
-                  },
-                  {
-                    "field": "payload",
-                    "matches": "\\\\?\"spreads\\\\?\"\\s*:\\s*\\{\\s*\\\\?\"LST-47\\\\?\"\\s*:\\s*13\\s*\\}"
-                  },
-                  {
-                    "field": "payload",
-                    "matches": "\\\\?\"stale\\\\?\"\\s*:\\s*\\[\\s*\\\\?\"LCH-82\\\\?\"\\s*\\]"
-                  }
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 2
         }
       ]
     }

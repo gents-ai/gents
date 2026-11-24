@@ -125,8 +125,8 @@ impl std::fmt::Display for MissingAgent {
 pub(crate) const PREVIEW_EFFECT: &str =
     "preview: nothing was written; send the same create/update call without preview to apply";
 
-pub const EFFECT_TIMING_NOTE: &str = "Applies from the next request, once the runtime reconciler \
-     picks it up (a few seconds); the current turn keeps its existing configuration.";
+pub const EFFECT_TIMING_NOTE: &str =
+    "A change to your own Tools applies from your next turn; any other change applies from the next request.";
 
 #[derive(Clone)]
 pub struct SelfConfigCore {
@@ -162,6 +162,10 @@ pub struct PatchOutcome {
     /// write reaches, and the sha256 of the document that was published.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared: Option<Value>,
+    /// Present when the write changed the calling request's own Tools: what
+    /// its next turn holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_turn: Option<Value>,
 }
 
 impl PatchOutcome {
@@ -197,6 +201,7 @@ impl PatchOutcome {
             },
             doc_id: receipt.doc_id,
             shared: None,
+            next_turn: None,
         }
     }
 }
@@ -640,8 +645,9 @@ impl SelfConfigCore {
             committed: false,
             changed,
             shared,
+            next_turn: None,
             effect: if request.target == SelfConfigTarget::DatastoreToolSurface {
-                "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Tools apply after reconciliation to later requests."
+                "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Your own Tools apply from your next turn."
             } else if creating && request.target == SelfConfigTarget::InferenceProfile {
                 "Creating a profile does not select it for an agent. To use it, call agent update with set.inference_profile_id equal to this target_id. Selecting it preserves the previous profile and its settings. The selection applies to later requests after reconciliation."
             } else if request.target == SelfConfigTarget::Tools
@@ -654,7 +660,7 @@ impl SelfConfigCore {
                             .is_some_and(|ids| !ids.is_empty())
                 })
             {
-                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_did and set.agents containing enabled:true plus the existing target_ids. Tools apply after reconciliation to later requests."
+                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_did and set.agents containing enabled:true plus the existing target_ids. Your own Tools apply from your next turn."
             } else {
                 EFFECT_TIMING_NOTE
             },
@@ -834,6 +840,7 @@ impl SelfConfigCore {
             created: creating,
             committed: false,
             shared,
+            next_turn: None,
             effect: PREVIEW_EFFECT,
         })
     }

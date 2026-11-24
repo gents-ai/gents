@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "engineer_context",
   "version": "0.1.0",
-  "description": "Native eval definition engineer-context: the Engineer reads its context budget, recovers tool output trimmed from its history and reads files longer than one read allows.",
+  "description": "Native eval definition engineer-context: the Engineer reads its context budget, recovers tool output trimmed from its history and finds answers deep in long files.",
   "authors": [
     "gents-ai contributors"
   ],
@@ -15,13 +15,11 @@
     "cases/budget_headroom.json",
     "cases/cleared_handover_recovery.json",
     "cases/manual_final_step.json",
-    "cases/trimmed_outputs_report.json",
     "cases/cleared_manifest_recovery.json",
     "cases/rotated_log_last_event.json",
     "cases/slimmed_rotation_recovery.json",
     "cases/route_fare_total.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"

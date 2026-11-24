@@ -7,6 +7,7 @@ use gents_eval::report::{
     CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotClass, SlotCounts, SlotReport,
     SlotScore, StageDiff, SubjectSpend,
 };
+use gents_eval::runner::divergence::{Divergence, Severity};
 use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, LiveSnapshot, Progress, RunView, ToolTally, SCHEMAS_GOAL,
     STALE_WINDOW,
@@ -47,7 +48,55 @@ pub(crate) fn counts_inline(counts: &SlotCounts) -> String {
     )
 }
 
+/// Every report opens by saying whether the run tests the Engineer a
+/// production node runs, and how it does not.
+fn divergence_banner(divergences: Option<&[Divergence]>, out: &mut dyn Write) -> io::Result<()> {
+    let Some(divergences) = divergences else {
+        return writeln!(
+            out,
+            "divergences: not recorded; this run was frozen before runs recorded how they differ from a production node"
+        );
+    };
+    if divergences.is_empty() {
+        return writeln!(
+            out,
+            "divergences: none; the subject and conditions are the Engineer `gents init --engineer` makes, as a production node runs it"
+        );
+    }
+    let narrows = divergences
+        .iter()
+        .filter(|divergence| divergence.severity == Severity::Narrows)
+        .count();
+    let rule = "!".repeat(78);
+    writeln!(out, "{rule}")?;
+    writeln!(
+        out,
+        "!! NOT THE SHIPPED ENGINEER: {narrows} difference(s) that remove, narrow or replace what it ships, {} addition(s)",
+        divergences.len() - narrows
+    )?;
+    let mut sorted: Vec<&Divergence> = divergences.iter().collect();
+    sorted.sort_by(|a, b| (a.severity, &a.cell, &a.kind).cmp(&(b.severity, &b.cell, &b.kind)));
+    for divergence in sorted {
+        let severity = match divergence.severity {
+            Severity::Narrows => "NARROWS",
+            Severity::Adds => "ADDS",
+        };
+        let cell = divergence
+            .cell
+            .as_deref()
+            .map(|cell| format!("[{cell}] "))
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "!! {severity:<7} {cell}{}: {}",
+            divergence.kind, divergence.detail
+        )?;
+    }
+    writeln!(out, "{rule}")
+}
+
 pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
+    divergence_banner(report.divergences.as_deref(), out)?;
     let run = &report.run;
     writeln!(
         out,
@@ -152,6 +201,10 @@ fn seconds(millis: Option<u64>) -> String {
     )
 }
 
+fn millis(millis: Option<u64>) -> String {
+    millis.map_or_else(|| "-".to_owned(), |millis| format!("{millis}ms"))
+}
+
 fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
     writeln!(
         out,
@@ -159,7 +212,7 @@ fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10}",
         "cell",
         "set",
         "trials",
@@ -170,7 +223,9 @@ fn subject_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
         "turns",
         "tools d/s/in",
         "failed d/s/in",
-        "wall"
+        "wall",
+        "first_ttft",
+        "ttft"
     )?;
     let run = (report.cells.len() > 1).then_some(("run", &report.subject_usage));
     for (label, summary) in report
@@ -205,7 +260,7 @@ fn subject_row(
     };
     writeln!(
         out,
-        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8}",
+        "{:<16} {:<8} {:>6} {:>12} {:>12} {:>9} {:>8} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10}",
         label,
         set,
         spend.trials,
@@ -220,7 +275,9 @@ fn subject_row(
             "failed_script_calls",
             "failed_inside_script_calls"
         ]),
-        seconds(median("wall_ms"))
+        seconds(median("wall_ms")),
+        millis(median("first_request_first_token_ms")),
+        millis(median("median_first_token_ms"))
     )
 }
 
@@ -281,6 +338,17 @@ fn subject_lines(subject: &SubjectUsage, out: &mut dyn Write) -> io::Result<()> 
         seconds(subject.wall_ms),
         seconds(subject.model_ms),
         seconds(subject.tool_ms)
+    )?;
+    writeln!(
+        out,
+        "subject first_token first_request {} median {}",
+        millis(
+            subject
+                .first_request
+                .as_ref()
+                .and_then(|first| first.first_token_ms)
+        ),
+        millis(subject.median_first_token_ms)
     )
 }
 

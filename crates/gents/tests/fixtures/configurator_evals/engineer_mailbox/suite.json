@@ -14,6 +14,5 @@
     "a flag and an optional question in one turn",
     "escalate the blocked part, finish the rest",
     "notice from workspace notes"
-  ],
-  "subject": "engineer_full"
+  ]
 }

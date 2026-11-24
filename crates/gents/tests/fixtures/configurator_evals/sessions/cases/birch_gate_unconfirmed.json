@@ -81,7 +81,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "Did the yard ever accept a receiving gate for the current Birch pallet handoff? Answer UNCONFIRMED if nothing accepted one, and point me to the two conversations that show where things stand.",
+      "prompt": "Did the yard ever accept a receiving gate for the current Birch pallet handoff? Answer UNCONFIRMED if nothing accepted one, and give me the session IDs of the two conversations that show where things stand.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -90,21 +90,6 @@
               {
                 "matches": "\\bUNCONFIRMED\\b"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

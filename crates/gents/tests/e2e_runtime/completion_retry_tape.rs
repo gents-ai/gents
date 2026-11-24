@@ -714,6 +714,128 @@ async fn deterministic_400_tape() {
     agent.shutdown().await;
 }
 
+/// A call records its first token when the provider streams it, not when the
+/// call is dispatched: the backend holds the stream open after the request
+/// arrives, and the token follows the release. An attempt that fails before a
+/// token records none, and its retry records its own.
+#[tokio::test]
+async fn first_token_at_is_when_each_attempt_streamed_its_first_token() {
+    let held = "first-token-held";
+    let retried = "first-token-retried";
+    let backend = ScriptedBackend::start_with_plans(
+        RETRY_MODEL,
+        vec![
+            StreamPlan::new(
+                held,
+                vec![StreamResponse::Stream(StreamScript::paused_before(
+                    held,
+                    vec![StreamChunk::text("released first token")],
+                ))],
+            ),
+            StreamPlan::new(
+                retried,
+                vec![
+                    StreamResponse::service_unavailable(format!(
+                        "HTTP status 503 before any token for {retried}"
+                    )),
+                    StreamResponse::completes(retried, ["token after the retry"]),
+                ],
+            ),
+        ],
+    )
+    .unwrap();
+    let db = test_db("completion-retry-first-token").await;
+    let (actors, agent) =
+        boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
+
+    let held_doc = submit_request(
+        &actors,
+        "req-first-token-held",
+        "session-first-token-held",
+        "interactive",
+        &format!("answer once the stream is released {held}"),
+    )
+    .await;
+    backend.wait_for_request(held).await;
+    let released_at = chrono::Utc::now();
+    backend.release(held);
+    assert_eq!(
+        wait_for_request_terminal_state(&actors, &held_doc).await,
+        RequestLifecycleState::Completed
+    );
+    let calls = fetch_first_tokens(&actors, "req-first-token-held").await;
+    let [call] = calls.as_slice() else {
+        panic!("one streamed attempt: {calls:?}");
+    };
+    let first_token = rfc3339(call.first_token_at.as_deref());
+    assert!(
+        rfc3339(call.started_at.as_deref()) < released_at
+            && released_at <= first_token
+            && first_token <= rfc3339(call.ended_at.as_deref()),
+        "the first token follows the release, not the dispatch (released {released_at}): {call:?}"
+    );
+
+    let retried_doc = submit_request(
+        &actors,
+        "req-first-token-retried",
+        "session-first-token-retried",
+        "interactive",
+        &format!("answer after a refused attempt {retried}"),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(&actors, &retried_doc).await,
+        RequestLifecycleState::Completed
+    );
+    let calls = fetch_first_tokens(&actors, "req-first-token-retried").await;
+    let [refused, recovered] = calls.as_slice() else {
+        panic!("a refused attempt and its retry: {calls:?}");
+    };
+    assert_eq!(
+        (
+            refused.call_state.as_str(),
+            refused.first_token_at.as_deref()
+        ),
+        ("failed", None),
+        "{calls:?}"
+    );
+    let first_token = rfc3339(recovered.first_token_at.as_deref());
+    assert!(
+        recovered.call_state == "completed"
+            && rfc3339(recovered.started_at.as_deref()) <= first_token
+            && first_token <= rfc3339(recovered.ended_at.as_deref()),
+        "{calls:?}"
+    );
+    agent.shutdown().await;
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FirstTokenRow {
+    call_state: String,
+    started_at: Option<String>,
+    first_token_at: Option<String>,
+    ended_at: Option<String>,
+}
+
+async fn fetch_first_tokens(actors: &RequestActors, request_id: &str) -> Vec<FirstTokenRow> {
+    let request_id = escape_graphql_string(request_id);
+    let response = actors
+        .query(&format!(
+            r#"{{ InferenceCall(
+                filter: {{ request_id: {{ _eq: "{request_id}" }}, call_kind: {{ _eq: "inference" }} }},
+                order: {{ call_seq: ASC }}
+            ) {{ call_state started_at first_token_at ended_at }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch first tokens failed: {:?}",
+        response.errors
+    );
+    serde_json::from_value(response.data.expect("first token rows")["InferenceCall"].clone())
+        .expect("decode first token rows")
+}
+
 async fn boot_retry_agent(
     db: &gents_store::test_support::TestStore,
     endpoint: &str,

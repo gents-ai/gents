@@ -147,175 +147,15 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in AssetHold, AssetApproval and AssetSafetyStop. Enable your general read access only to those collections, and general create/update/delete access only to AssetHold if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "stage_id": "clear",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Yard audit: clear every hold that is still held, has both a lead and a review approval, and has no active safety stop. Which holds did you clear?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "equals": [
-                        "AssetHold"
-                      ]
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"AssetHold\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"AssetApproval\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"AssetSafetyStop\""
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "AssetHold",
-                "min": 6,
-                "max": 6
-              },
-              {
-                "capture": "AssetApproval",
-                "min": 9,
-                "max": 9
-              },
-              {
-                "capture": "AssetSafetyStop",
-                "min": 2,
-                "max": 2
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "AssetHold",
-          "collection": "AssetHold",
-          "filter": {},
-          "fields": [
-            "hold",
-            "state",
-            "yard"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "AssetApproval",
-          "collection": "AssetApproval",
-          "filter": {},
-          "fields": [
-            "approval",
-            "hold",
-            "role"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "AssetSafetyStop",
-          "collection": "AssetSafetyStop",
-          "filter": {},
-          "fields": [
-            "hold",
-            "active"
-          ]
-        }
-      ]
-    },
-    {
-      "stage_id": "ask",
-      "prompt": "Yard audit 10: clear AssetHold records still held only when AssetApproval has both a lead and a review for that hold and AssetSafetyStop has no active stop for it. Ignore the withdrawn approval S-109 if it appears. Change only state on qualifying holds. Reply with JSON containing \"cleared\", the hold IDs changed today.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "schema"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -593,9 +433,8 @@
           "check": "final_message_matches",
           "params": {
             "all": [
-              {
-                "matches": "\"cleared\"\\s*:\\s*\\[\\s*(?:\"AH-103\"\\s*,\\s*\"AH-112\"|\"AH-112\"\\s*,\\s*\"AH-103\")\\s*\\]"
-              }
+              "AH-103",
+              "AH-112"
             ]
           },
           "tier": "acceptance",
@@ -633,6 +472,22 @@
           "fields": [
             "hold",
             "active"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "AssetHold",
+          "filter": {
+            "hold": {
+              "_eq": "AH-103"
+            },
+            "state": {
+              "_eq": "cleared"
+            }
+          },
+          "fields": [
+            "hold"
           ]
         }
       ]

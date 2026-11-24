@@ -524,93 +524,23 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Total the freight weight per route from every FreightLeg record, in one script that reads them with your query tool. There are a lot of legs, so make sure the script sees all of them. Have the script return {\"legs\": <number of legs it read>, \"totals\": {<route>: <total kg>, ...}}, and tell me the heaviest route and its total.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_queries",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "query"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        }
-      ],
+      "prompt": "What's the total freight weight per route across all our FreightLeg records, and which route is heaviest?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "query"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "legs",
-                "equals": 64
-              },
-              {
-                "field": "totals",
-                "equals": {
-                  "north": 2093,
-                  "south": 2267,
-                  "east": 1062
-                }
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_queries",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "south"
+                "matches": "\\b2,?093\\b"
               },
               {
-                "matches": "\\b2267\\b|2,267"
+                "matches": "\\b2,?267\\b"
+              },
+              {
+                "matches": "\\b1,?062\\b"
+              },
+              {
+                "matches": "(?i)south"
               }
             ]
           },

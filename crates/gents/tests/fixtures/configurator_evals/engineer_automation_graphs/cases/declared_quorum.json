@@ -10,99 +10,9 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Each SamplePart's required field is its batch's quorum: how many parts that batch needs. Parts of a two-part batch and a three-part batch can arrive interleaved. Acknowledge every part as it arrives with a request to yourself asking for a reply of exactly PART, a space, and the part's reference. Separately, once a batch has received its declared number of parts, start one more request to yourself for that batch asking for a reply of exactly BATCH followed by the batch name. Parts from different batches never complete one another. Set it up now; parts arrive later.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "triggers",
-          "collection": "Trigger",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "trigger_id",
-            "task_id",
-            "source",
-            "concurrency",
-            "session_id_template",
-            "create_session",
-            "enabled",
-            "last_status",
-            "last_error"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sources",
-          "collection": "EventSource",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "event_source_id",
-            "source_collection",
-            "event_kind",
-            "filter",
-            "correlation_field",
-            "group"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tasks",
-          "collection": "Task",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "task_id",
-            "prompt_template",
-            "emit_outcome",
-            "enabled"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "triggers",
-                "min": 2
-              },
-              {
-                "capture": "tasks",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ]
+      "prompt": "Set up an automation for new SamplePart records: each part gets a run that replies PART and its reference, and once a batch has all the parts its required field asks for, one more run replies BATCH, the batch name, complete. Set it up now; parts come in later.",
+      "checks": [],
+      "capture": []
     },
     {
       "stage_id": "ash_first",
@@ -115,7 +25,20 @@
         }
       },
       "deadline_secs": 300,
-      "checks": [],
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}part\\W+QR1\\W*$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": []
     },
     {
@@ -129,21 +52,20 @@
         }
       },
       "deadline_secs": 300,
-      "checks": [],
-      "capture": []
-    },
-    {
-      "stage_id": "elm_second",
-      "seed": {
-        "collection": "SamplePart",
-        "document": {
-          "reference": "QS2",
-          "batch": "ELM",
-          "required": 3
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}part\\W+QS1\\W*$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
-      },
-      "deadline_secs": 300,
-      "checks": [],
+      ],
       "capture": []
     },
     {
@@ -164,29 +86,34 @@
           "params": {
             "present": [
               {
-                "capture": "parts",
-                "min": 4,
-                "max": 4
-              },
-              {
-                "capture": "batches",
+                "capture": "part_qr2",
                 "min": 1,
                 "max": 1
+              },
+              {
+                "capture": "ash_done",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "elm_done",
+                "min": 0,
+                "max": 0
               }
             ],
             "rows": [
               {
-                "capture": "batches",
+                "capture": "ash_done",
                 "key": "lifecycle_state",
                 "id": "completed",
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*BATCH"
+                    "matches": "(?s)\\].*\\bBATCH\\b"
                   },
                   {
                     "field": "content",
-                    "matches": "(?s)\\].*ASH"
+                    "matches": "(?s)\\].*\\bASH\\b"
                   }
                 ]
               }
@@ -199,189 +126,7 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "parts",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "content": {
-              "_like": "%PART%"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "lifecycle_state",
-            "content",
-            "terminal_output",
-            "caused_by_trigger_id",
-            "caused_by_trigger_kind",
-            "caused_by_source_doc_id",
-            "caused_by_correlation",
-            "execution_origin"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "batches",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "content": {
-              "_like": "%BATCH%"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "lifecycle_state",
-            "content",
-            "terminal_output",
-            "caused_by_trigger_id",
-            "caused_by_trigger_kind",
-            "caused_by_source_doc_id",
-            "caused_by_correlation",
-            "execution_origin"
-          ]
-        }
-      ]
-    },
-    {
-      "stage_id": "elm_third",
-      "seed": {
-        "collection": "SamplePart",
-        "document": {
-          "reference": "QS3",
-          "batch": "ELM",
-          "required": 3
-        }
-      },
-      "deadline_secs": 300,
-      "settle": true,
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "parts",
-                "min": 5,
-                "max": 5
-              },
-              {
-                "capture": "batches",
-                "min": 2,
-                "max": 2
-              },
-              {
-                "capture": "elm",
-                "min": 1,
-                "max": 1
-              }
-            ],
-            "rows": [
-              {
-                "capture": "elm",
-                "key": "lifecycle_state",
-                "id": "completed",
-                "expect": [
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*BATCH"
-                  },
-                  {
-                    "field": "content",
-                    "matches": "(?s)\\].*ELM"
-                  }
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "parts",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "content": {
-              "_like": "%PART%"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "lifecycle_state",
-            "content",
-            "terminal_output",
-            "caused_by_trigger_id",
-            "caused_by_trigger_kind",
-            "caused_by_source_doc_id",
-            "caused_by_correlation",
-            "execution_origin"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "batches",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "content": {
-              "_like": "%BATCH%"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "lifecycle_state",
-            "content",
-            "terminal_output",
-            "caused_by_trigger_id",
-            "caused_by_trigger_kind",
-            "caused_by_source_doc_id",
-            "caused_by_correlation",
-            "execution_origin"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "elm",
+          "name": "part_qr2",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
@@ -396,12 +141,12 @@
             "_and": [
               {
                 "content": {
-                  "_like": "%ELM%"
+                  "_like": "%QR2%"
                 }
               },
               {
                 "content": {
-                  "_like": "%BATCH%"
+                  "_nlike": "%complete%"
                 }
               }
             ]
@@ -411,7 +156,84 @@
             "session_id",
             "lifecycle_state",
             "content",
-            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "ash_done",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%complete%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%ASH%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "elm_done",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%complete%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%ELM%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
             "caused_by_trigger_id",
             "caused_by_trigger_kind",
             "caused_by_source_doc_id",

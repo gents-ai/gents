@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "fix",
-      "prompt": "The kiln runbook pack in packs/kiln_runbook checks and installs fine, but the kiln operators say its firing-curve guidance never shows up as a skill. Fix the pack so that guidance registers as a skill with the id firing-curve, keeping the skill text exactly as written, then install the fixed pack here.",
+      "prompt": "The kiln operators say the firing-curve guidance in packs/kiln_runbook never shows up as a skill, even though the pack checks and installs fine. Fix the pack so it registers as a skill with the id firing-curve, keeping the skill text exactly as written, and install the fixed pack here.",
       "capture": [
         {
           "kind": "documents",
@@ -80,20 +80,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

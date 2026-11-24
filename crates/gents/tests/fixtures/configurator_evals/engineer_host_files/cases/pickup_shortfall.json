@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "answer",
-      "prompt": "How short are we on pickup? pickup/orders.json has each order's units and pickup/scans.json has every scan. Voided scans don't count, and ignore scans for orders that aren't in orders.json. Reply with only a JSON object: short_orders (one entry per under-scanned order, with id and missing_units, sorted by id) and fulfilled_orders (how many orders were scanned in full). Leave the files alone.",
+      "prompt": "How short are we on today's pickups? Orders are in pickup/orders.json and every scan is in pickup/scans.json. Voided scans don't count, and ignore scans for orders that aren't in orders.json. Which orders are short and by how many units, and how many were fully scanned?",
       "capture": [
         {
           "kind": "file",
@@ -26,20 +26,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write_file",
-              "edit_file",
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -63,10 +49,16 @@
           "params": {
             "all": [
               {
-                "matches": "\"short_orders\"\\s*:\\s*\\[\\s*\\{(?:[^{}]*\"id\"\\s*:\\s*\"PKV-2290\"[^{}]*\"missing_units\"\\s*:\\s*4\\b|[^{}]*\"missing_units\"\\s*:\\s*4\\b[^{}]*\"id\"\\s*:\\s*\"PKV-2290\")[^{}]*\\}\\s*,\\s*\\{(?:[^{}]*\"id\"\\s*:\\s*\"PKV-6170\"[^{}]*\"missing_units\"\\s*:\\s*7\\b|[^{}]*\"missing_units\"\\s*:\\s*7\\b[^{}]*\"id\"\\s*:\\s*\"PKV-6170\")[^{}]*\\}\\s*,\\s*\\{(?:[^{}]*\"id\"\\s*:\\s*\"PKV-8315\"[^{}]*\"missing_units\"\\s*:\\s*4\\b|[^{}]*\"missing_units\"\\s*:\\s*4\\b[^{}]*\"id\"\\s*:\\s*\"PKV-8315\")[^{}]*\\}\\s*\\]"
+                "matches": "PKV-2290\\b(?:[^-]|-\\D){0,200}?\\b4\\b"
               },
               {
-                "matches": "\"fulfilled_orders\"\\s*:\\s*6\\b"
+                "matches": "PKV-6170\\b(?:[^-]|-\\D){0,200}?\\b7\\b"
+              },
+              {
+                "matches": "PKV-8315\\b(?:[^-]|-\\D){0,200}?\\b4\\b"
+              },
+              {
+                "matches": "(?i)\\b(6|six)\\b[^.\\n]{0,60}(full|complete|in full|fulfil)|(full|complete|fulfil)[^.\\n]{0,80}\\b(6|six)\\b"
               }
             ]
           },

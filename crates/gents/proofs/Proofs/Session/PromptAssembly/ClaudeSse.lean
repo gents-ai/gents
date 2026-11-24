@@ -8,8 +8,10 @@ import Lean
 fold of `ClaudeMap.step`. Each dispatch yields the stream items it completes
 and the audit observations it records; the end of the body (`message_stop` or
 EOF) flushes an open tool block before the single final response. A tool
-call's accumulated input must parse as JSON, and a `refusal` stop reason is a
-distinct terminal failure.
+block's start yields the tool's name at once, before its input streams: it is
+the model's first token for that call, and a turn that opens with a tool call
+has no earlier one. A tool call's accumulated input must parse as JSON, and a
+`refusal` stop reason is a distinct terminal failure.
 -/
 
 namespace PromptAssembly.ClaudeSse
@@ -28,6 +30,7 @@ inductive Payload where
   deriving DecidableEq, Repr
 
 inductive Emitted where
+  | toolName (id : ToolExecution.ToolCallId) (name : String)
   | message (text : String)
   | reasoningDelta (text : String)
   | reasoning (text signature : String)
@@ -92,7 +95,7 @@ def nonempty {α : Type} (text : String) (value : α) : List α := if text == ""
 def dispatch (surface : Surface) (st : State) : Payload → Except Failure (State × Step)
   | .toolStart index id name input => do
       let (next, emitted) ← advance surface st [.start id name input]
-      return (next, ⟨emitted, [.blockStart index .toolUse]⟩)
+      return (next, ⟨nonempty name (.toolName id name) ++ emitted, [.blockStart index .toolUse]⟩)
   | .inputDelta _ fragment => do
       let (next, emitted) ← advance surface st [.delta fragment]
       return (next, ⟨emitted, []⟩)
@@ -149,7 +152,7 @@ theorem sse_tool_use_with_unparseable_input_fails_closed :
 theorem sse_message_stop_flushes_pending_tool_before_final :
     run {"echo"} [.toolStart 0 1 "echo" (some "{}"), .inputDelta 0 "{\"text\":\"hi\"}",
       .messageStop] =
-      ⟨[⟨[], [.blockStart 0 .toolUse]⟩, ⟨[], []⟩,
+      ⟨[⟨[.toolName 1 "echo"], [.blockStart 0 .toolUse]⟩, ⟨[], []⟩,
         ⟨[.toolCall 1 "echo" "{\"text\":\"hi\"}", .final], []⟩], [], none⟩ := by
   native_decide
 

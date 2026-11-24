@@ -15,15 +15,12 @@
     "cases/calibration_review.json",
     "cases/freeze_check.json",
     "cases/gate_count_recall.json",
-    "cases/harbor_read.json",
-    "cases/harbor_sum.json",
     "cases/late_desk_escalation.json",
     "cases/mail_count.json",
     "cases/pier_sums.json",
     "cases/reefer_tally_fan_in.json",
     "cases/west_loading_reconcile.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"

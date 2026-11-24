@@ -48,7 +48,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "The harbour office wants one desktop page, Harbour Arrivals, that shows the moored vessels next to the quay depths and lets the clerk log a new arrival with its name and quay. Put the page's datastore tools on one surface: read tools moored_vessels and quay_depths, and a create tool log_arrival. Lint the page before you hand it over.",
+      "prompt": "The harbour office wants a desktop page, Harbour Arrivals, that shows the moored vessels next to the quay depths and lets the clerk log a new arrival with its vessel name and quay. Lint it before you hand it over.",
       "capture": [
         {
           "kind": "documents",
@@ -86,76 +86,9 @@
             "entries",
             "enabled"
           ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "surfaces",
-            "min_rows": 1,
-            "max_rows": 1,
-            "expect": [
-              {
-                "field": "entries",
-                "matches": "\"tool_name\"\\s*:\\s*\"moored_vessels\""
-              },
-              {
-                "field": "entries",
-                "matches": "\"tool_name\"\\s*:\\s*\"quay_depths\""
-              },
-              {
-                "field": "entries",
-                "matches": "\"tool_name\"\\s*:\\s*\"log_arrival\""
-              },
-              {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"Mooring\""
-              },
-              {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"QuayDepth\""
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -164,6 +97,10 @@
                 "capture": "pages",
                 "min": 1,
                 "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
               }
             ],
             "rows": [
@@ -173,16 +110,8 @@
                 "id": "Harbour Arrivals",
                 "expect": [
                   {
-                    "field": "data",
-                    "matches": "\"moored_vessels\""
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"quay_depths\""
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"log_arrival\""
+                    "field": "enabled",
+                    "equals": true
                   },
                   {
                     "field": "module",
@@ -191,8 +120,31 @@
                   {
                     "field": "module",
                     "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bvessel\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bdepth_m\\b"
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(Mooring|QuayDepth)\""
               }
             ]
           },

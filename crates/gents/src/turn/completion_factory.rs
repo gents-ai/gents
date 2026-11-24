@@ -116,6 +116,7 @@ pub(crate) fn loop_config(
         configuration_guard: crate::turn::provider_input::configuration::configuration_guard(
             &agent_config.configuration,
         ),
+        tool_rebinding: None,
         on_rendered_request: Some(gents_inference::rendered_request::scope::arming_sink(
             capture_scope,
         )),

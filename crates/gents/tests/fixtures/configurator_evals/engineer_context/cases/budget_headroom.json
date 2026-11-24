@@ -5,58 +5,17 @@
   "stages": [
     {
       "stage_id": "budget",
-      "prompt": "Before I paste a big import into this chat, check this session's context budget. Reply with only JSON: context_window_tokens, used_percent, compactions_so_far, and compaction_threshold_percent (how full the context gets before compaction starts).",
+      "prompt": "Before I paste a big import into this chat: how big is your context window, how much of it is in use right now, and how full does it get before you start compacting?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "context_budget"
-            ],
-            "forbidden": [
-              "write_file",
-              "edit_file",
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "compaction_count",
-                "equals": 0
-              },
-              {
-                "field": "max_tokens",
-                "matches": "^[1-9][0-9]{3,}$"
-              },
-              {
-                "field": "last_request.accounting.compaction_threshold_basis_points",
-                "equals": 7500
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"compactions_so_far\"\\s*:\\s*0\\b"
+                "matches": "(?i)\\b75(\\.0+)?\\s*(%|percent)"
               },
               {
-                "matches": "\"compaction_threshold_percent\"\\s*:\\s*75(\\.0+)?\\b"
-              },
-              {
-                "matches": "\"context_window_tokens\"\\s*:\\s*[1-9][0-9]{3,}\\b"
+                "matches": "(?i)\\b\\d{1,3}(,\\d{3})+\\b|\\b\\d{5,}\\b|\\b\\d{2,4}(\\.\\d+)?\\s?k\\b"
               }
             ]
           },

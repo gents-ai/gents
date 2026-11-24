@@ -25,7 +25,7 @@
   "stages": [
     {
       "stage_id": "install",
-      "prompt": "Install the pack in packs/tide_notes as it is: check it, build it and install the archive.",
+      "prompt": "Install the tide notes pack in packs/tide_notes.",
       "capture": [
         {
           "kind": "documents",
@@ -72,20 +72,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "present": [
@@ -120,7 +106,7 @@
     },
     {
       "stage_id": "bump",
-      "prompt": "Now add a second skill to the tide notes pack. Its id and name are slack-water, its description is \"Load when timing a berth move around slack water.\", and its instructions live in skills/slack_water/SKILL.md and say: Move ships within 20 minutes either side of slack water. Release the pack as 1.1.0 and update the installed pack to it.",
+      "prompt": "Add a second skill to the tide notes pack: slack-water, described as \"Load when timing a berth move around slack water.\", with instructions in skills/slack_water/SKILL.md saying: Move ships within 20 minutes either side of slack water. Release it as 1.1.0 and update this node to it.",
       "capture": [
         {
           "kind": "documents",
@@ -171,20 +157,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

@@ -2,6 +2,7 @@ use gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME;
 use serde_json::{json, Value};
 
 use super::query::{collect_filter_field_keys, is_restricted_field, DefraQueryParams};
+use super::relation::{Observed, Shape};
 use gents_store::config_client::schema_introspection::{CollectionSchema, SchemaField};
 
 pub(crate) fn visible_fields<'a>(
@@ -98,19 +99,32 @@ pub fn diagnose_failed_query(
     )
 }
 
-pub fn discovery_payload(collection: &str, schema: &CollectionSchema) -> Value {
-    let visible = visible_fields(schema, collection);
+pub(crate) fn discovery_payload(observed: &Observed) -> Value {
+    let collection = observed.collection.as_str();
+    let visible = observed.visible();
     let fields: Vec<Value> = visible
         .iter()
-        .map(|f| json!({ "name": f.name, "type": f.type_name }))
+        .map(|name| {
+            let kind = observed.display(name).unwrap_or("unknown");
+            match observed.shape(name) {
+                Some(Shape::One(target) | Shape::Many(target)) => {
+                    json!({ "name": name, "type": kind, "relation": target })
+                }
+                _ => json!({ "name": name, "type": kind }),
+            }
+        })
         .collect();
-    let names: Vec<&str> = visible.iter().map(|f| f.name.as_str()).collect();
+    let names: Vec<&str> = visible
+        .iter()
+        .filter(|name| matches!(observed.shape(name), Some(Shape::Value { .. })))
+        .map(String::as_str)
+        .collect();
     json!({
         "collection": collection,
         "discovery": true,
         "count": fields.len(),
         "fields": fields,
-        "note": "Field inventory (restricted fields excluded). Read rows with next_call, keeping only the fields you need.",
+        "note": "Restricted fields excluded. Read rows with next_call; read a relation's fields as relation.field.",
         "next_call": {"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": ["find"], "collection": collection, "options": {"fields": names}}},
     })
 }
@@ -143,15 +157,30 @@ mod tests {
 
     #[test]
     fn the_field_inventory_names_a_query_call_that_reads_the_visible_fields() {
-        let schema = schema_from(&[("backend_id", "String"), ("auth", "JSON")]);
-        let payload = discovery_payload("InferenceBackend", &schema);
+        let scalar = |name: &str| json!({"kind": "SCALAR", "name": name, "ofType": null});
+        let response = json!({"data": {"__type": {"fields": [
+            {"name": "backend_id", "type": scalar("String")},
+            {"name": "auth", "type": scalar("JSON")},
+            {"name": "owner", "type": {"kind": "OBJECT", "name": "Node", "ofType": null}},
+            {"name": "weights", "type": {"kind": "LIST", "name": null, "ofType": {"kind": "NON_NULL", "name": null, "ofType": scalar("Float32")}}},
+        ]}}});
+        let observed = super::super::relation::parse("InferenceBackend", &response).unwrap();
+        let payload = discovery_payload(&observed);
         assert_eq!(
             payload["next_call"],
-            json!({"tool": "query", "args": {"argv": ["find"], "collection": "InferenceBackend", "options": {"fields": ["backend_id"]}}})
+            json!({"tool": "query", "args": {"argv": ["find"], "collection": "InferenceBackend", "options": {"fields": ["backend_id", "weights"]}}})
+        );
+        assert_eq!(
+            payload["fields"],
+            json!([
+                {"name": "backend_id", "type": "String"},
+                {"name": "owner", "type": "Node", "relation": "Node"},
+                {"name": "weights", "type": "[Float32!]"},
+            ])
         );
         assert_eq!(
             payload["note"],
-            "Field inventory (restricted fields excluded). Read rows with next_call, keeping only the fields you need."
+            "Restricted fields excluded. Read rows with next_call; read a relation's fields as relation.field."
         );
     }
 }

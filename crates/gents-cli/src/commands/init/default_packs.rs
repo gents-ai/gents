@@ -689,7 +689,7 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use clap::Parser as _;
     use gents_lean_vocab::families;
@@ -714,7 +714,7 @@ mod tests {
         bytes
     }
 
-    fn borrowed(archives: &[(String, Vec<u8>)]) -> Vec<(&str, &[u8])> {
+    pub(crate) fn borrowed(archives: &[(String, Vec<u8>)]) -> Vec<(&str, &[u8])> {
         archives
             .iter()
             .map(|(coordinate, bytes)| (coordinate.as_str(), bytes.as_slice()))
@@ -737,7 +737,7 @@ mod tests {
     /// call the Engineer's tools, and `gents/dynamic_workflows` a job plugin
     /// whose pack Tools ship its block at `check`, with a worker agent whose
     /// rootless host Tools take the Engineer's root.
-    async fn fixture_archives() -> Vec<(String, Vec<u8>)> {
+    pub(crate) async fn fixture_archives() -> Vec<(String, Vec<u8>)> {
         let build = |name: &'static str| {
             tokio::task::spawn_blocking(move || {
                 crate::commands::plugin::testing::build_plugin_afb(
@@ -839,7 +839,7 @@ mod tests {
             .collect()
     }
 
-    fn init_args(home: &Path, extra: &[&str]) -> crate::cli::InitArgs {
+    pub(crate) fn init_args(home: &Path, extra: &[&str]) -> crate::cli::InitArgs {
         let mut argv = vec![
             "gents",
             "init",
@@ -909,6 +909,36 @@ mod tests {
             .find(|(observed, _)| *observed == pack)
             .map(|(_, wiring)| *wiring)
             .unwrap()
+    }
+
+    pub(crate) async fn explained_engineer(
+        home: &Path,
+    ) -> (
+        gents_tools::surface::ToolSurfaceExplanation,
+        gents_documents::AgentContext,
+        gents_documents::Tools,
+    ) {
+        let (access, owner) = command::resolve_scope_owner(&scope(home)).await.unwrap();
+        let engineer = engineer_of(&access, &owner).await.unwrap().unwrap();
+        let explained = crate::commands::tools::explain_agent(
+            &access,
+            &owner,
+            &engineer,
+            &crate::commands::tools::configured_ceiling(home).unwrap(),
+        )
+        .await
+        .unwrap();
+        let (context, tools) = access
+            .transact_readonly("cli.core_packs.test", |txn| {
+                let (owner, engineer) = (&owner, &engineer);
+                Box::pin(async move {
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+                })
+            })
+            .await
+            .unwrap();
+        release(access).await;
+        (explained, context.unwrap(), tools.unwrap())
     }
 
     async fn engineer_hidden_tools(home: &Path) -> Vec<String> {

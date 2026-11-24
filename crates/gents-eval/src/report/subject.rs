@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::report::build::SlotClass;
 use crate::SubjectUsage;
 
-pub fn figures(subject: &SubjectUsage) -> [(&'static str, Option<u64>); 17] {
+pub fn figures(subject: &SubjectUsage) -> [(&'static str, Option<u64>); 19] {
     let first = subject.first_request.as_ref();
     let estimate = first.and_then(|first| first.estimate.as_ref());
     let tools = &subject.tool_calls;
@@ -39,6 +39,11 @@ pub fn figures(subject: &SubjectUsage) -> [(&'static str, Option<u64>); 17] {
         ("wall_ms", subject.wall_ms),
         ("model_ms", subject.model_ms),
         ("tool_ms", subject.tool_ms),
+        (
+            "first_request_first_token_ms",
+            first.and_then(|first| first.first_token_ms),
+        ),
+        ("median_first_token_ms", subject.median_first_token_ms),
     ]
 }
 

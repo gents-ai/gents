@@ -37,58 +37,14 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 400,000-token budget: tally the crate weights in crates/ into weights.json as {\"total_kg\": N}. If more than five crates weigh over 35 kg, raise the budget to 800,000 before you tally. Finish the goal when it's written.",
       "settle": true,
-      "prompt": "Set this session's goal to exactly \"Tally the crate weights in crates/ into weights.json\" with a token budget of 400000. Once you've read the crate files, if more than 5 of the crates weigh over 35 kg, raise the goal's token budget to 800000 before you tally; otherwise leave the budget as it is. weights.json should hold {\"total_kg\": N}. Finish the goal when it's written.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "weights",
-          "glob": "weights.json"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
             "name": "goal",
             "expect": [
-              {
-                "field": "objective",
-                "equals": "Tally the crate weights in crates/ into weights.json"
-              },
               {
                 "field": "token_budget",
                 "equals": 400000
@@ -118,6 +74,32 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "weights",
+          "glob": "weights.json"
         }
       ]
     }

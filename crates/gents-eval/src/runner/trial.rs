@@ -7,19 +7,25 @@ use tokio_util::sync::CancellationToken;
 
 use crate::checks::CheckRegistry;
 use crate::runner::liveness::cancel_requested;
+use crate::runner::outage::{Admission, ProviderGate};
 use crate::runner::progress::ProgressWriter;
 use crate::runner::projection::{completion, verdict_draft};
 use crate::runner::spec::trial_spec;
 use crate::runner::{
-    case_goal, completion_is_not_evidence, grade, run_view, view, EvidenceRecord, FrozenRun,
-    InFlight, PlannedTrial, Recorder, StageProgress, TrialBudget, TrialExecutor,
+    attempt_retryable, case_goal, grade, run_view, view, EvidenceRecord, FrozenRun, InFlight,
+    PlannedTrial, Recorder, StageProgress, TrialBudget, TrialExecutor,
 };
 use crate::TrialIdentity;
 
 pub(super) enum Slot {
     Skipped,
     Abandoned,
-    Completed { attempt: u32, not_evidence: bool },
+    ProviderDown,
+    Completed {
+        attempt: u32,
+        retryable: bool,
+        provider_answers: bool,
+    },
 }
 
 pub(super) struct TrialContext<'a> {
@@ -29,6 +35,7 @@ pub(super) struct TrialContext<'a> {
     pub(super) registry: &'a CheckRegistry,
     pub(super) cancel: &'a CancellationToken,
     pub(super) trial_budget: Option<&'a TrialBudget>,
+    pub(super) provider: &'a ProviderGate,
     pub(super) progress: &'a Arc<ProgressWriter>,
     pub(super) views: &'a ViewWriter,
 }
@@ -46,23 +53,10 @@ pub(super) async fn execute_trial(
         registry,
         cancel,
         trial_budget,
+        provider,
         progress,
         views,
     } = *context;
-    if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
-        return Ok(Slot::Skipped);
-    }
-    let _permit = if let Some(budget) = trial_budget {
-        let permit = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Ok(Slot::Skipped),
-            _ = admission_stopped.cancelled() => return Ok(Slot::Skipped),
-            permit = budget.0.acquire() => permit.context("trial budget closed")?,
-        };
-        Some(permit)
-    } else {
-        None
-    };
     if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
         return Ok(Slot::Skipped);
     }
@@ -80,6 +74,28 @@ pub(super) async fn execute_trial(
         .find(|cell| cell.spec.cell_id == planned.cell_id)
         .with_context(|| format!("run {run_id} froze no cell {:?}", planned.cell_id))?;
     let mut spec = trial_spec(frozen, planned, case, cell, executor.wants_script_key())?;
+    match provider
+        .admit(run_id, executor, &spec, admission_stopped)
+        .await
+    {
+        Admission::Admitted => {}
+        Admission::Stopped => return Ok(Slot::Skipped),
+        Admission::ProviderDown => return Ok(Slot::ProviderDown),
+    }
+    let _permit = if let Some(budget) = trial_budget {
+        let permit = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(Slot::Skipped),
+            _ = admission_stopped.cancelled() => return Ok(Slot::Skipped),
+            permit = budget.0.acquire() => permit.context("trial budget closed")?,
+        };
+        Some(permit)
+    } else {
+        None
+    };
+    if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
+        return Ok(Slot::Skipped);
+    }
     let goal = case_goal(case, &frozen.captures);
 
     let locator = executor.provision(&spec).await;
@@ -153,13 +169,18 @@ pub(super) async fn execute_trial(
     }
 
     let completion = completion(case, &evidence);
-    let not_evidence = completion_is_not_evidence(&completion);
-    if not_evidence {
+    let retryable = attempt_retryable(&completion);
+    let provider_answers = !retryable || executor.provider_answers(&spec).await;
+    if retryable {
         tracing::warn!(
             trial_id = %planned.trial_id,
             attempt = planned.attempt,
+            provider_answers,
             "eval trial learned nothing about its subject; the slot owes another attempt"
         );
+    }
+    if !provider_answers {
+        provider.suspect();
     }
     recorder
         .complete_trial(owner, &planned.trial_id, &completion)
@@ -182,7 +203,8 @@ pub(super) async fn execute_trial(
     views.refresh(frozen, recorder).await;
     Ok(Slot::Completed {
         attempt: planned.attempt,
-        not_evidence,
+        retryable,
+        provider_answers,
     })
 }
 
