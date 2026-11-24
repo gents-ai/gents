@@ -79,10 +79,15 @@ def idOf (create : SignedCreate) : SignedCreate := create
 commits, so no one can squat its marker first: the marker's `session_doc_id`
 is unique and the marker is created in the session's own transaction, so a
 second marker for a session that exists is refused, and a marker another
-actor creates first names an id no session of another signer takes. The
-policy gives the marker no create rule (document creation is the
-collection's), and needs none: such a marker is inert, since readers find a
-session's marker by that session's id. -/
+actor creates first names an id no session of another signer takes.
+
+The policy cannot refuse such a marker at its create. A create passes the
+Node's create gate on the authenticated actor alone (`Household.directCreate`):
+the policy language has no create permission per resource and no condition on
+another document, so it cannot require that the named session exists or that
+its creator signs the marker. A marker naming a session that does not exist
+is therefore accepted and inert: readers find a session's marker by that
+session's id, which only the session's own signer can produce. -/
 theorem marker_squatting_needs_the_creators_key (session squat : SignedCreate)
     (h : squat.signer ≠ session.signer) : idOf squat ≠ idOf session := by
   intro h_eq
