@@ -14,7 +14,7 @@ third-party = [
     { name = "tauri-macros" },
     { name = "tauri-utils" },
     { name = "objc2-app-kit" },
-    { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "34feab554c518000d7eb51a831f7de1a381445ac" },
+    { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" },
 ]
 
 # The Vera crates behind the opt-in `vera` feature, and vera-modules, which
@@ -23,8 +23,8 @@ third-party = [
 # The revision is the DefraDB pin in Cargo.toml.
 [traversal-excludes]
 third-party = [
-    { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "34feab554c518000d7eb51a831f7de1a381445ac" },
-    { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "34feab554c518000d7eb51a831f7de1a381445ac" },
-    { name = "vera-node", git = "https://github.com/sourcenetwork/vera.rs", rev = "2393539068539f30c84eae86101ad7c345024a99" },
-    { name = "vera-modules", git = "https://github.com/sourcenetwork/vera.rs", rev = "2393539068539f30c84eae86101ad7c345024a99" },
+    { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" },
+    { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" },
+    { name = "vera-node", git = "https://github.com/sourcenetwork/vera.rs", rev = "8193eac0c0cf19421ad1920dd678963585259d72" },
+    { name = "vera-modules", git = "https://github.com/sourcenetwork/vera.rs", rev = "8193eac0c0cf19421ad1920dd678963585259d72" },
 ]
