@@ -15,6 +15,7 @@ async fn fragmented_subscription_preserves_utf8_and_completion() {
     let mut subscription = GraphqlSubscription {
         events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
         renew_at: None,
+        renewal: SUBSCRIPTION_RENEWAL_PERIOD,
         ended: None,
     };
     assert_eq!(
@@ -39,6 +40,8 @@ enum Arrival {
     Malformed,
     LateData,
     Silence,
+    ExpiredEnd,
+    RevokedEnd,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -78,6 +81,8 @@ fn arriving(arrival: Arrival) -> Events {
         Arrival::Complete => b"event: complete\ndata: {}\n\n".to_vec(),
         Arrival::UnknownEvent => b"event: ping\ndata: {}\n\n".to_vec(),
         Arrival::Malformed => b"event: next\ndata: \xff\xfe\n\n".to_vec(),
+        Arrival::ExpiredEnd => b"event: gents-end\ndata: {\"reason\":\"expired\"}\n\n".to_vec(),
+        Arrival::RevokedEnd => b"event: gents-end\ndata: {\"reason\":\"revoked\"}\n\n".to_vec(),
         Arrival::Closed | Arrival::Silence => Vec::new(),
     };
     let delay = match arrival {
@@ -129,6 +134,7 @@ async fn every_receive_matches_the_lean_model() {
         let mut subscription = GraphqlSubscription {
             events: Some(arriving(case.input.arrival)),
             renew_at: case.input.minted.then(|| Instant::now() + DEADLINE),
+            renewal: SUBSCRIPTION_RENEWAL_PERIOD,
             ended: None,
         };
         if case.input.taken {
@@ -155,6 +161,7 @@ async fn renewal_offers_match_the_lean_model() {
         let mut subscription = GraphqlSubscription {
             events: Some(arriving(Arrival::Silence)),
             renew_at: i.minted.then(|| Instant::now() + DEADLINE),
+            renewal: SUBSCRIPTION_RENEWAL_PERIOD,
             ended: None,
         };
         if i.already_taken {

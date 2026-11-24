@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
@@ -363,6 +364,20 @@ pub(crate) fn defradb_bearer_authorization_with_config(
     audience: &str,
     config: &SigningConfig,
 ) -> Result<String> {
+    mint_defradb_bearer(did, audience, config, DEFRADB_BEARER_LIFETIME)
+}
+
+/// A bearer of `lifetime` minted now. A subscription handshake mints its own:
+/// its renewal, half a lifetime after its arm, then falls before the runtime
+/// ends the stream at the bearer's expiry (Lean
+/// `SubscriptionStream.a_fresh_bearer_renews_before_the_cut`). An endpoint
+/// reuses one for its other requests ([`crate::config_client::GraphqlEndpoint`]).
+pub(crate) fn mint_defradb_bearer(
+    did: &str,
+    audience: &str,
+    config: &SigningConfig,
+    lifetime: Duration,
+) -> Result<String> {
     let identity = raw_identity_from_signing_config(config).map_err(|source| {
         IdentityError::LoadSigningIdentity {
             did: did.to_owned(),
@@ -376,16 +391,11 @@ pub(crate) fn defradb_bearer_authorization_with_config(
             derived_did,
         });
     }
-    let token = identity::new_token(
-        &identity,
-        DEFRADB_BEARER_LIFETIME,
-        Some(audience.to_string()),
-        None,
-    )
-    .map_err(|source| IdentityError::MintBearer {
-        did: did.to_owned(),
-        source,
-    })?;
+    let token = identity::new_token(&identity, lifetime, Some(audience.to_string()), None)
+        .map_err(|source| IdentityError::MintBearer {
+            did: did.to_owned(),
+            source,
+        })?;
     let token = String::from_utf8(token).map_err(IdentityError::BearerNotUtf8)?;
     Ok(format!("Bearer {token}"))
 }

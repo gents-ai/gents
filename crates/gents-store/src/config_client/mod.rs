@@ -76,6 +76,7 @@ mod isolation_premise_tests;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
+pub use node_permissions::holds_node_read;
 pub mod node_readiness;
 pub mod owed;
 #[cfg(test)]
@@ -235,6 +236,13 @@ pub struct GraphqlEndpoint {
     /// What this endpoint's answers said of gzip request bodies, shared by
     /// the endpoint's clones (Lean `RequestEncoding`).
     request_encoding: RequestEncodingCell,
+    /// How long a bearer this endpoint mints lives, in seconds (kept small:
+    /// `ConfigAccess` holds an endpoint inline). A subscription is renewed at
+    /// half of it and the runtime ends it at its expiry.
+    bearer_lifetime_secs: u32,
+    /// The bearer this endpoint last minted for a request, shared by its
+    /// clones.
+    bearer: HeldBearer,
 }
 
 /// What an endpoint learned from its answers. It is not part of which
@@ -249,6 +257,51 @@ impl PartialEq for RequestEncodingCell {
 }
 
 impl Eq for RequestEncodingCell {}
+
+/// A request bearer and when it was minted. Minting derives a public key and
+/// signs a token, both elliptic-curve work, and a client makes about a
+/// request a second, so a bearer is reused until half its lifetime has
+/// passed: every request still carries one with at least half its life left.
+/// DefraDB bearers carry no nonce, so a captured one is usable for its whole
+/// lifetime either way. What an endpoint holds is not part of which endpoint
+/// it is, so two endpoints compare equal whatever they hold.
+#[derive(Clone, Default)]
+struct HeldBearer(Arc<std::sync::Mutex<Option<(std::time::Instant, String)>>>);
+
+impl HeldBearer {
+    fn reuse_or_mint(
+        &self,
+        lifetime: std::time::Duration,
+        mint: impl FnOnce() -> Result<String>,
+    ) -> Result<String> {
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((minted, bearer)) = held.as_ref() {
+            if minted.elapsed() < lifetime / 2 {
+                return Ok(bearer.clone());
+            }
+        }
+        let bearer = mint()?;
+        *held = Some((std::time::Instant::now(), bearer.clone()));
+        Ok(bearer)
+    }
+}
+
+impl std::fmt::Debug for HeldBearer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HeldBearer")
+    }
+}
+
+impl PartialEq for HeldBearer {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for HeldBearer {}
 
 impl GraphqlEndpoint {
     pub fn anonymous(url: impl Into<String>) -> Self {
@@ -265,6 +318,8 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             request_encoding: RequestEncodingCell::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         }
     }
 
@@ -286,6 +341,8 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             request_encoding: RequestEncodingCell::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         }
     }
 
@@ -313,6 +370,8 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             request_encoding: RequestEncodingCell::default(),
+            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         })
     }
 
@@ -334,6 +393,26 @@ impl GraphqlEndpoint {
         &self.url
     }
 
+    /// Mint this endpoint's bearers with `lifetime`; a subscription is then
+    /// renewed every half of it. A test reaches a renewal or an expiry in
+    /// seconds this way instead of the default minute.
+    /// Whole seconds; at least one.
+    pub fn with_bearer_lifetime(mut self, lifetime: std::time::Duration) -> Self {
+        self.bearer_lifetime_secs = u32::try_from(lifetime.as_secs()).unwrap_or(u32::MAX).max(1);
+        self.bearer = HeldBearer::default();
+        self
+    }
+
+    fn bearer_lifetime(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.bearer_lifetime_secs))
+    }
+
+    /// How long a subscription authorized by this endpoint's own bearer is
+    /// kept before it re-authenticates: half the bearer lifetime.
+    pub fn subscription_renewal_period(&self) -> std::time::Duration {
+        self.bearer_lifetime() / 2
+    }
+
     /// Require the client principal to sign Agent, AgentContext and Tools
     /// genesis blocks and supported configuration updates locally.
     pub fn with_client_signed_agent_creates(mut self) -> Self {
@@ -352,6 +431,7 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         self.client_signing_capability = Some(capability);
+        self.bearer = HeldBearer::default();
         Ok(self)
     }
 
@@ -484,13 +564,56 @@ impl GraphqlEndpoint {
                     self.delegation_audience.device_now()
                 )?
             ),
-            None => crate::identity::defradb_bearer_authorization_with_config(
-                did,
-                &self.audience()?,
-                &capability.config,
-            )?,
+            None => {
+                let audience = self.audience()?;
+                self.bearer.reuse_or_mint(self.bearer_lifetime(), || {
+                    Ok(crate::identity::mint_defradb_bearer(
+                        did,
+                        &audience,
+                        &capability.config,
+                        self.bearer_lifetime(),
+                    )?)
+                })?
+            }
         };
         Ok(Some(authorization))
+    }
+
+    /// Authorize a subscription handshake. A minted identity bearer is fresh
+    /// for each handshake, never reused, so the renewal falls half a lifetime
+    /// before the runtime ends the stream at the bearer's expiry; delegated and
+    /// delegation credentials are as for any request.
+    pub(crate) fn authorize_subscription(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder> {
+        let minted = match (&self.principal_did, &self.client_signing_capability) {
+            (Some(did), Some(capability))
+                if self.delegated_authorization.is_none()
+                    && self.delegation_audience.record().audience.is_none() =>
+            {
+                Some(crate::identity::mint_defradb_bearer(
+                    did,
+                    &self.audience()?,
+                    &capability.config,
+                    self.bearer_lifetime(),
+                )?)
+            }
+            _ => None,
+        };
+        let value = match minted {
+            Some(authorization) => {
+                let mut value = reqwest::header::HeaderValue::from_str(&authorization)
+                    .map_err(ConfigClientError::BearerHeader)?;
+                value.set_sensitive(true);
+                Some(value)
+            }
+            None => self.authorization_header()?,
+        };
+        Ok(match value {
+            Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
+            None => request,
+        })
     }
 
     fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {
