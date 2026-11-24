@@ -138,10 +138,7 @@ async fn list_summaries(
     let mut rows = oauth_credential_summaries_from_response(&response)
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-    /* the resolver's order */
-    rows.sort_by(|a, b| {
-        (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
-    });
+    rows.sort_by(resolver_order);
     Ok(rows)
 }
 
@@ -223,12 +220,10 @@ pub async fn list_accounts(
     node_did: &str,
 ) -> Result<Vec<AccountSummary>> {
     let rows = list_summaries(access, node_did, Some(&ACCOUNT_PROVIDERS)).await?;
-    /* each provider's default is its first enabled row in the resolver's order */
     let defaults: Vec<_> = ACCOUNT_PROVIDERS
         .iter()
         .filter_map(|provider| {
-            rows.iter()
-                .find(|row| row.provider == *provider && row.enabled)
+            pick_oauth_credential(&rows, node_did, provider, AccountPick::ProviderDefault)
         })
         .map(|row| row.credential_id.clone())
         .collect();

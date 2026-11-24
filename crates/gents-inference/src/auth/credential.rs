@@ -50,7 +50,7 @@ use labels::{
 use resolve::resolver_order;
 pub use resolve::{
     account_pick, pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential,
-    resolve_oauth_pool, AccountPick, NodeOAuthAccounts,
+    resolve_oauth_pool, AccountPick, AccountRow, NodeOAuthAccounts,
 };
 pub use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
 pub(crate) use resolve::{

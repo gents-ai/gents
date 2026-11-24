@@ -24,37 +24,90 @@ pub fn account_pick(auth: &BackendAuth) -> Option<AccountPick<'_>> {
     }
 }
 
-pub(super) fn resolver_order(a: &OAuthCredential, b: &OAuthCredential) -> std::cmp::Ordering {
-    (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
+/// The fields the resolver picks an account by, which an account row has
+/// with or without its tokens: a stored credential, or a listing's summary.
+pub trait AccountRow {
+    fn credential_id(&self) -> &str;
+    fn node_did(&self) -> &str;
+    fn provider(&self) -> &str;
+    fn enabled(&self) -> bool;
+    fn account_ref(&self) -> Option<&str>;
+    fn connected_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
 }
 
-pub fn pick_oauth_credential<'c>(
-    rows: impl IntoIterator<Item = &'c OAuthCredential>,
+impl AccountRow for OAuthCredential {
+    fn credential_id(&self) -> &str {
+        &self.credential_id
+    }
+    fn node_did(&self) -> &str {
+        &self.node_did
+    }
+    fn provider(&self) -> &str {
+        &self.provider
+    }
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+    fn account_ref(&self) -> Option<&str> {
+        self.account_ref.as_deref()
+    }
+    fn connected_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.connected_at
+    }
+}
+
+impl AccountRow for OAuthCredentialSummary {
+    fn credential_id(&self) -> &str {
+        &self.credential_id
+    }
+    fn node_did(&self) -> &str {
+        &self.node_did
+    }
+    fn provider(&self) -> &str {
+        &self.provider
+    }
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+    fn account_ref(&self) -> Option<&str> {
+        self.account_ref.as_deref()
+    }
+    fn connected_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.connected_at
+    }
+}
+
+pub(super) fn resolver_order<R: AccountRow>(a: &R, b: &R) -> std::cmp::Ordering {
+    (a.connected_at(), a.credential_id()).cmp(&(b.connected_at(), b.credential_id()))
+}
+
+pub fn pick_oauth_credential<'c, R: AccountRow + 'c>(
+    rows: impl IntoIterator<Item = &'c R>,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
-) -> Option<&'c OAuthCredential> {
+) -> Option<&'c R> {
     rows.into_iter()
-        .filter(|row| row.node_did == node_did && row.provider == provider && row.enabled)
+        .filter(|row| row.node_did() == node_did && row.provider() == provider && row.enabled())
         .filter(|row| match pick {
             AccountPick::ProviderDefault => true,
-            AccountPick::Reference(account_ref) => row.account_ref.as_deref() == account_ref,
+            AccountPick::Reference(account_ref) => row.account_ref() == account_ref,
         })
-        .min_by(|a, b| resolver_order(a, b))
+        .min_by(|a, b| resolver_order(*a, *b))
 }
 
 /// The accounts a pool backend rotates over (Lean `oauthPool`): every enabled
 /// row of `provider` the node owns, in the resolver's order.
-pub fn pick_oauth_pool<'c>(
-    rows: impl IntoIterator<Item = &'c OAuthCredential>,
+pub fn pick_oauth_pool<'c, R: AccountRow + 'c>(
+    rows: impl IntoIterator<Item = &'c R>,
     node_did: &str,
     provider: &str,
-) -> Vec<&'c OAuthCredential> {
+) -> Vec<&'c R> {
     let mut pool: Vec<_> = rows
         .into_iter()
-        .filter(|row| row.node_did == node_did && row.provider == provider && row.enabled)
+        .filter(|row| row.node_did() == node_did && row.provider() == provider && row.enabled())
         .collect();
-    pool.sort_by(|a, b| resolver_order(a, b));
+    pool.sort_by(|a, b| resolver_order(*a, *b));
     pool
 }
 
