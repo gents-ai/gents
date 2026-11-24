@@ -91,7 +91,17 @@ pub async fn interrupt_session_with_access(
             })
         })
         .await?;
-    Ok(interrupted?.active_request_id)
+    interrupted?;
+    Ok(
+        crate::request::interrupt::active_session_request_with_access(
+            access,
+            &target.session_id,
+            &target.node_did,
+            target.requester_did.as_deref(),
+        )
+        .await?
+        .map(|row| row.request_id),
+    )
 }
 
 #[cfg(test)]

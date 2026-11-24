@@ -1,25 +1,27 @@
 ---- MODULE InterruptCoverage ----
 \* lean: none
 \* crates: gents-session
-\* models: SessionQueue.InterruptGeneration.bump, SessionQueue.InterruptGeneration.runningInterrupted, SessionQueue.InterruptGeneration.wakeAtClaim, TransactionFence.fencedAgainst
+\* models: SessionQueue.InterruptGeneration.bump, SessionQueue.InterruptGeneration.runningInterrupted, SessionQueue.InterruptGeneration.wakeAtClaim, SessionQueue.InterruptGeneration.only_marker_and_session_writers_abort_an_interrupt, TransactionFence.fencedAgainst
 \* An interrupt of a session racing the claim of its pending request, the
 \* wakes published into it, and the writes a running turn makes.
 \*
 \* The session's interrupt marker carries a generation. The interrupt reads
-\* it by id and writes one past it, in one transaction; it conflicts only
-\* with another writer of the marker. A claim and a wake publication each
+\* it by id and writes one past it, in one transaction. A claim and a wake publication each
 \* read the marker by id when `ClaimReadsMarker` / `WakeReadsMarker` and
 \* record the generation on the row they write; a marker written after that
 \* read aborts their commit and they run again. A claimed request whose
 \* recorded generation is below the marker is interrupted; a wake whose
 \* recorded generation is below the marker when claimed is drained
 \* (Lean `InterruptGeneration`). A row that recorded nothing is never
-\* compared. Terminals and renewals write the request row and the session's
-\* other documents, which the interrupt neither reads nor writes.
+\* compared.
 \*
-\* `InterruptReads` is the other design: the interrupt reads the session
-\* document by id, which claims, wakes and `OtherWrites` write, so every such
-\* write aborts it, up to `Attempts` attempts.
+\* `InterruptReads`: the marker's access check reads the session document
+\* (the marker's read and update are the session's), so every write of the
+\* session document aborts an open attempt: claims, wakes and `OtherWrites`
+\* (terminals, titles, stops). The interrupt runs at most `Attempts` attempts
+\* (`TRANSACT_CONFLICT_MAX_RETRIES` + 1); it commits while fewer session
+\* writes land during its attempts than it has attempts. Requests' own rows,
+\* which renewals write, are read by no session interrupt.
 \*
 \* Covered: the request active at the interrupt's commit and the wakes
 \* pending at it. A request claimed and a wake published after the commit

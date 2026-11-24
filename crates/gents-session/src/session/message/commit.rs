@@ -593,17 +593,14 @@ pub async fn stage_planned_write_in_txn(
         let create = match &plan.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
         };
-        let active = crate::request::interrupt::interrupt_active_session_in_txn(
+        crate::request::interrupt::interrupt_session_in_txn(
             txn,
             &create.session_id,
             &create.node_did,
             Some(create.requester_did.as_str()),
         )
-        .await?;
-        if active.is_none() && create.node_did == cause.caller_node_did {
-            crate::request::hooks::points::session_halt(txn, &create.node_did, &create.session_id)
-                .await?;
-        }
+        .await?
+        .map_err(anyhow::Error::from)?;
     }
     match &plan.write {
         PlannedWrite::Request { create, .. } => {

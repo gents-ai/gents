@@ -129,10 +129,6 @@ pub async fn stop_session_with_access(
                         requester_did.as_deref(),
                     )
                     .await?;
-                if interrupted_request_id.is_none() {
-                    crate::request::hooks::points::session_halt(txn, &node_did, &session_id)
-                        .await?;
-                }
                 Ok(gents_protocol::operations::session::SessionStopReceipt {
                     status: gents_protocol::operations::session::SessionStopStatus::of(
                         interrupted_request_id.is_some(),

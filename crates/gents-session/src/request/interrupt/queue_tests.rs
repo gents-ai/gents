@@ -1132,10 +1132,10 @@ async fn a_session_interrupt_latches_a_request_claimed_before_it_commits() {
 
 /// The session interrupt writes only its marker (`InterruptGeneration`,
 /// `InterruptCoverage.tla` `InterruptNotPrevented`): with the interrupt read
-/// and about to commit, the session's running turn reaches its terminal,
-/// wakes are published into the session and claims of its pending requests
-/// run, and the interrupt still commits. The wakes committed before it are
-/// drained when claimed.
+/// and about to commit, the session's running turn reaches its terminal and
+/// wakes are published into the session, and the interrupt still commits
+/// within its attempts. The wakes committed before it are drained when
+/// claimed.
 #[tokio::test]
 async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
     use crate::request::lifecycle::RequestTerminalOutcome;
@@ -1185,7 +1185,7 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
     )
     .await;
     assert!(paused, "the other writes must commit inside the interrupt");
-    interrupted.expect("nothing but another interrupt aborts the interrupt");
+    interrupted.expect("the interrupt commits within its attempts");
     claim_pending(&fixture).await;
     let after = rows(&fixture.agent_access, &parent.session_id).await;
     let state = |doc: &str| {
@@ -1201,10 +1201,8 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
     node.shutdown().await.expect("shut down test node");
 }
 
-/// A session's marker is read in the session's requester scope, so a request
-/// whose requester is not its session's would record no generation and a
-/// session interrupt could not cover it. Client submission refuses such a
-/// request: it is never created.
+/// Client submission refuses a request whose requester is not its session's:
+/// it is never created.
 #[tokio::test]
 async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
     use crate::request::lifecycle::RequestIdentity;
@@ -1255,4 +1253,82 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
         .await
         .unwrap();
     assert_eq!(rows["data"]["AgentRequest"], json!([]));
+}
+
+/// External premise of `InterruptGeneration.interruptFootprint`
+/// (`a_session_writer_aborts_an_interrupt`,
+/// `only_marker_and_session_writers_abort_an_interrupt`): with a session
+/// interrupt read and about to commit, a write of the session document aborts
+/// that attempt and the interrupt lands on the next; a write of the session's
+/// running request does not abort it.
+#[tokio::test]
+async fn a_session_write_aborts_a_session_interrupt() {
+    for (writes_session, expected_attempts) in [(true, 2), (false, 1)] {
+        let case: ModeledCase = serde_json::from_value(json!({
+            "name": format!("session-write-{writes_session}"), "node_id": 1, "requester_id": 1,
+            "session_id": 903, "active_request_id": 103, "inputs": []
+        }))
+        .unwrap();
+        let fixture = fixture(&case).await;
+        let parent = fixture.parent.clone();
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let interrupt =
+            fixture
+                .agent_access
+                .transact_write("test.session_write_interrupt", |txn| {
+                    let (parent, attempts) = (&parent, &attempts);
+                    Box::pin(async move {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        interrupt_session_in_txn(
+                            txn,
+                            &parent.session_id,
+                            &parent.node_did,
+                            parent.requester_did.as_deref(),
+                        )
+                        .await
+                    })
+                });
+        let write = async {
+            let mutation = if writes_session {
+                let session = fixture
+                    .agent_access
+                    .execute(&format!(
+                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        parent.node_did, parent.session_id
+                    ))
+                    .await
+                    .expect("read the session")["data"]["AgentSession"][0]["_docID"]
+                    .as_str()
+                    .expect("the session")
+                    .to_owned();
+                format!(
+                    r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ tags: ["written"] }}) {{ _docID }} }}"#
+                )
+            } else {
+                format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    parent.doc_id
+                )
+            };
+            fixture
+                .agent_access
+                .write("test.session_write_interrupt.write", &mutation)
+                .await
+                .expect("the concurrent write commits");
+        };
+        let (interrupted, paused) = with_write_before_commit(interrupt, write).await;
+        assert!(paused, "the write must commit inside the interrupt");
+        interrupted.unwrap().expect("the interrupt is permitted");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            expected_attempts,
+            "writes the session document: {writes_session}"
+        );
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
 }
