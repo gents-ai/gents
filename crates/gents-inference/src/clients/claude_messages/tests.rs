@@ -498,7 +498,7 @@ fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) 
 }
 
 fn tool_call_arguments(events: &[RawStreamingChoice<StreamEnd>]) -> Value {
-    match &events[..] {
+    match events {
         [RawStreamingChoice::ToolCallDelta { .. }, RawStreamingChoice::ToolCall(call), ..] => {
             call.arguments.clone()
         }
