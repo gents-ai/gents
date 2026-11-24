@@ -1,6 +1,8 @@
+mod agent_home;
 mod claimed_request;
 pub mod lineage_fixtures;
 
+pub use agent_home::AgentHome;
 pub use claimed_request::{ClaimedRequest, ClaimedRequestBuilder, Stage};
 
 /// An explicitly empty set of lifecycle plugins, for a test below the bundled

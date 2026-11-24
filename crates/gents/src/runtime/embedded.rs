@@ -324,7 +324,7 @@ impl RunningRuntime {
 }
 
 pub async fn boot_runtime(
-    home: &EmbeddedHome,
+    home: &ServedHome,
     identity: Arc<dyn NodeIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(RunningRuntime, Gents)> {
@@ -339,7 +339,7 @@ pub async fn boot_runtime(
 /// a runtime that does not answer its shutdown signal cannot turn a reported
 /// failure into a hang.
 pub async fn boot_runtime_within(
-    home: &EmbeddedHome,
+    home: &ServedHome,
     identity: Arc<dyn NodeIdentity>,
     mut options: DocumentRuntimeOptions,
     ready_timeout: Duration,

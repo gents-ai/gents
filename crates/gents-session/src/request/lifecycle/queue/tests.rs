@@ -1,7 +1,6 @@
 use super::*;
-use crate::request::lifecycle::test_support::{
-    hints, parent_request, test_db, wake_queue_input, TestDb,
-};
+use crate::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
+use crate::test_support::AgentHome;
 
 use crate::request::lifecycle::{extract_single_doc_id, ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
@@ -122,7 +121,7 @@ mod pin_tests {
 }
 
 fn raw_queue_create_mutation(
-    db: &TestDb,
+    db: &AgentHome,
     request_id: &str,
     session_id: &str,
     input: &RequestInput,
@@ -163,7 +162,7 @@ fn raw_queue_create_mutation(
 }
 
 async fn insert_raw_queue_request(
-    db: &TestDb,
+    db: &AgentHome,
     request_id: &str,
     session_id: &str,
     input: &RequestInput,
@@ -183,7 +182,7 @@ async fn insert_raw_queue_request(
 /// Agent-owned queue fixture: written through the Agent's own signed access so
 /// the Agent's reads and transactions see the row it owns.
 async fn insert_agent_queue_request(
-    db: &TestDb,
+    db: &AgentHome,
     request_id: &str,
     session_id: &str,
     input: &RequestInput,
@@ -201,7 +200,7 @@ async fn insert_agent_queue_request(
 }
 
 async fn publish_signed_queue_request(
-    db: &TestDb,
+    db: &AgentHome,
     create: &mut gents_protocol::request_admission::AgentRequestCreate,
 ) -> String {
     create.admission =
@@ -253,7 +252,7 @@ async fn publish_signed_queue_request(
 
 #[tokio::test]
 async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
-    let db = test_db("ambiguous-request-doc-lookup").await;
+    let db = AgentHome::start("ambiguous-request-doc-lookup").await;
     let input = wake_queue_input(hints(QueueSource::User, QueuePolicy::Append));
     insert_raw_queue_request(&db, "duplicate-logical-id", "session-a", &input).await;
     insert_raw_queue_request(&db, "duplicate-logical-id", "session-b", &input).await;

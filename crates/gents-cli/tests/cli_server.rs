@@ -404,7 +404,10 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-bind-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-bind-{}", Uuid::new_v4().simple());
     run_init_json(
         &home_dir,
@@ -446,7 +449,10 @@ async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() 
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-stolen-port-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-stolen-port-{}", Uuid::new_v4().simple());
     run_init_json(
         &home_dir,
@@ -492,7 +498,10 @@ async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> 
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-held-port-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-held-port-{}", Uuid::new_v4().simple());
     run_init_json(
         &home_dir,
@@ -560,7 +569,10 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-nac-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-nac-{}", Uuid::new_v4().simple());
     run_init_json(
         &home_dir,
@@ -657,7 +669,10 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-metrics-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-metrics-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -1804,7 +1819,10 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-p2p-ready-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
@@ -1963,7 +1981,10 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-network-settings-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let p2p_port = allocate_port()?;
     let agent_name = format!("cli-network-settings-{}", Uuid::new_v4().simple());
@@ -2018,7 +2039,10 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-default-iroh-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-default-iroh-{}", Uuid::new_v4().simple());
@@ -2297,7 +2321,10 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-query-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-query-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -2709,7 +2736,10 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&caller_dir)?;
     let model_name = format!("mock-trace-home-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home_dir,
         &[
@@ -2774,7 +2804,10 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-mcp-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-mcp-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(

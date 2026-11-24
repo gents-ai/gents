@@ -16,6 +16,14 @@ pub struct SignedHome {
     pub user_access: ConfigAccess,
 }
 
+impl std::ops::Deref for SignedHome {
+    type Target = TestStore;
+
+    fn deref(&self) -> &TestStore {
+        &self.store
+    }
+}
+
 impl SignedHome {
     pub async fn start(name: &str, composition: Extensions) -> Self {
         Self::enroll(TestStore::start(name, composition).await, name).await

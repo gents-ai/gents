@@ -21,8 +21,10 @@ use serde_json::{json, Value};
 
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
-use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamPlan, StreamResponse,
+};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
@@ -740,7 +742,7 @@ const SCRIPTED_STAGE_FAILURE: &str = "scripted failure for the change-unit super
 /// One plan per stage prompt: the ReadWrite failure stage reaches the provider only on a
 /// host that enforces the WorkspaceWrite sandbox, so a shared response queue would hand
 /// its scripted failure to the supervisor inbox elsewhere.
-fn failure_inbox_backend() -> MockStreamingBackend {
+fn failure_inbox_backend() -> ScriptedBackend {
     let stage = StreamPlan::current_authored_user(
         "Test failure stage for change-unit:cycle-inbox",
         vec![StreamResponse::bad_request(SCRIPTED_STAGE_FAILURE)],
@@ -752,7 +754,7 @@ fn failure_inbox_backend() -> MockStreamingBackend {
             ["The failed stage reached the supervisor session."],
         )],
     );
-    MockStreamingBackend::start_with_plans(MODEL, vec![stage, inbox]).expect("mock provider starts")
+    ScriptedBackend::start_with_plans(MODEL, vec![stage, inbox]).expect("mock provider starts")
 }
 
 async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {

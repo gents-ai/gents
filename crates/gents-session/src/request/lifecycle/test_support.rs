@@ -2,7 +2,6 @@ use crate::request::lifecycle::RequestLifecycle;
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
 use gents_store::test_support::PIN_FIXED_DID;
@@ -243,63 +242,6 @@ pub async fn output_segment_snapshot(
         .await
         .expect("AgentOutputSegment read as its Agent");
     response["data"]["AgentOutputSegment"].clone()
-}
-
-/// A signed node with its user and the managed Agent access that owns the queue rows.
-pub struct TestDb {
-    pub node: std::sync::Arc<defra_node::Node>,
-    pub identity: std::sync::Arc<dyn NodeIdentity>,
-    pub agent_identity: std::sync::Arc<dyn NodeIdentity>,
-    pub user: gents_store::identity::KeyIdentity,
-    pub user_access: gents_store::config_client::ConfigAccess,
-    pub agent_access: gents_store::config_client::ConfigAccess,
-    pub _db: gents_store::test_support::TestStore,
-    pub _tempdir: tempfile::TempDir,
-}
-
-impl TestDb {
-    pub fn node_did(&self) -> &str {
-        self.identity.did()
-    }
-
-    pub fn agent_did(&self) -> &str {
-        self.agent_identity.did()
-    }
-}
-
-pub async fn test_db(name: &str) -> TestDb {
-    test_db_with(name, crate::test_support::no_lifecycle_plugins()).await
-}
-
-/// A signed test node composed with `composition`, for tests that need a
-/// plugin (such as Goals) that the session crate cannot name.
-pub async fn test_db_with(
-    name: &str,
-    composition: gents_store::node_extension::Extensions,
-) -> TestDb {
-    let signed_home = gents_documents::test_support::SignedHome::start(name, composition).await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)
-        .expect("derived test agent identity");
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent_identity.did()).unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    TestDb {
-        node,
-        identity,
-        agent_identity,
-        user,
-        user_access,
-        agent_access,
-        _db: db,
-        _tempdir: tempfile::tempdir().expect("queue fixture directory"),
-    }
 }
 
 pub async fn test_node() -> (

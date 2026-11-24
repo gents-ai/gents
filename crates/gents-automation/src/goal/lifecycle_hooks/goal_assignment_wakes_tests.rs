@@ -6,13 +6,13 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
-use gents_session::request::lifecycle::test_support::{test_db_with, TestDb};
+use gents_session::test_support::AgentHome;
 use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
 
 async fn parent(
-    db: &TestDb,
+    db: &AgentHome,
     session: &str,
     model: &wakes::Entry,
     documents: &mut RapidHashMap<u64, AgentRequest>,
@@ -137,7 +137,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
     for case in gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes::cases()
     {
         let name = case.input.name.as_str();
-        let db = test_db_with(name, crate::lifecycle_hooks::composition()).await;
+        let db = AgentHome::start_with(name, crate::lifecycle_hooks::composition()).await;
         let mut documents = RapidHashMap::new();
         let first = parent(&db, name, &case.input.first, &mut documents).await;
         let second = parent(&db, name, &case.input.second, &mut documents).await;
