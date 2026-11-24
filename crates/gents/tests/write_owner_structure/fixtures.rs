@@ -41,7 +41,6 @@ const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
 #[rustfmt::skip]
 const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[
     ("crates/gents-session/src/session/provider_context_reduction.rs", 1, "a durable-reduction conformance consumer kept in the root tests directory; it moves beside its owner in gents-session"),
-    ("crates/gents/src/lib.rs", 1, "the root tests/support fixtures compile into the library for the crates above; they move into the lowest owning crate's src/test_support"),
 ];
 
 /// Test-only implementations of production traits outside a `src/test_support`
