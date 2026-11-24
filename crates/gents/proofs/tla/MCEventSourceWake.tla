@@ -1,0 +1,4 @@
+---- MODULE MCEventSourceWake ----
+EXTENDS EventSourceWake
+
+====

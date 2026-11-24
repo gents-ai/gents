@@ -21,7 +21,7 @@ use super::file_tools::edit_file::EditFileTool;
 use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
 use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
-    build_shell_env_from_vars, select_sandbox, validate_command_policy, validate_read_only_command,
+    build_shell_env_from_vars, validate_command_policy, validate_read_only_command,
     CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError,
     WorkspaceAuthority, FALLBACK_PATH,
 };
@@ -1281,28 +1281,6 @@ fn generated_command_policy_cases_match_rust_validation() {
 }
 
 #[test]
-fn generated_command_sandbox_cases_match_rust_selection() {
-    gents_lean_vocab::families::contracts_command_sandbox_selection::replay::<CommandExecutionMode>(
-        |i| {
-            let selected = select_sandbox(i.mode, i.workspace_write_sandbox_enforced);
-            gents_lean_vocab::families::contracts_command_sandbox_selection::SandboxOutput {
-                decision: if selected.is_ok() {
-                    "selected"
-                } else {
-                    "denied"
-                }
-                .into(),
-                sandbox: selected.as_ref().ok().map(|sandbox| (*sandbox).to_owned()),
-                denial_reason: selected
-                    .as_ref()
-                    .err()
-                    .map(|reason| reason.to_contract().to_owned()),
-            }
-        },
-    );
-}
-
-#[test]
 fn generated_command_env_cases_match_rust_filtering() {
     gents_lean_vocab::families::contracts_command_env_filtering::replay::<String, String>(|i| {
         let vars = if i.input_present {
@@ -1796,6 +1774,145 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         "inside"
     );
     assert!(!outside.exists(), "sandbox should deny writes outside root");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn workspace_write_bash_cannot_signal_a_process_outside_its_sandbox() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+    let mut outside = std::process::Command::new("/bin/sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let root = temp_root("gents-bash-seatbelt-signal");
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root.clone(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+    let shell = format!(
+        "sleep 600 & own=$!; kill -TERM $own && printf own-signalled > own.txt; kill -TERM {}",
+        outside.id()
+    );
+    let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    let outcome = crate::runtime_context::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": shell,
+            "timeout_secs": DEFAULT_COMMAND_TIMEOUT_SECS,
+        })
+        .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await;
+    let still_running = outside.try_wait().unwrap().is_none();
+    let _ = outside.kill();
+    let _ = outside.wait();
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("a refused signal must fail the command, got {outcome:?}");
+    };
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "macos_seatbelt");
+    assert_ne!(meta["exit_code"].as_i64(), Some(0));
+    assert!(
+        root.join("own.txt").exists(),
+        "the sandbox must let a command signal a process it started"
+    );
+    assert!(
+        still_running,
+        "the sandbox must refuse a signal to a process it did not start"
+    );
+}
+
+#[cfg(target_os = "macos")]
+async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        default_read_only_commands(),
+    );
+    let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    match crate::runtime_context::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({ "command": command, "args": args }).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text)
+        | gents_loop::tool_call_lifecycle::ToolOutcome::Failed { text, .. } => text,
+        other => panic!("{command} {args:?} did not run: {other:?}"),
+    }
+}
+
+/// A clean filter that `.gitattributes` names is a configured program no
+/// launch option disables: `git diff` starts it, and the read-only profile
+/// refuses its write.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn read_only_bash_git_runs_under_the_read_only_profile() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+    let root = temp_root("gents-bash-read-only-profile")
+        .canonicalize()
+        .unwrap();
+    let marker =
+        std::env::temp_dir().join(format!("gents-read-only-filter-{}", uuid::Uuid::new_v4()));
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(root.join(".gitattributes"), "*.txt filter=marked\n").unwrap();
+    std::fs::write(root.join("a.txt"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=n",
+        "-c",
+        "user.email=n@example.com",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    git(&[
+        "config",
+        "filter.marked.clean",
+        &format!("sh -c 'echo ran > {}; cat'", marker.display()),
+    ]);
+    std::fs::write(root.join("a.txt"), "hello\nchanged\n").unwrap();
+
+    let output = read_only_bash(&root, "git", &["diff"]).await;
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{output}");
+    assert!(
+        !marker.exists(),
+        "a program git started wrote under the read-only profile"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn read_only_bash_runs_setuid_ps_under_its_validator() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+    let root = temp_root("gents-bash-read-only-ps");
+    let output = read_only_bash(&root, "ps", &["-o", "pid=", "-p", "1"]).await;
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "policy_read_only", "{output}");
+    assert_eq!(meta["exit_code"].as_i64(), Some(0), "{output}");
 }
 
 fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {

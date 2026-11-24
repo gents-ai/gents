@@ -6,11 +6,13 @@ use anyhow::Context;
 use anyhow::Result;
 
 use super::super::context::ToolError;
+use super::command_args::read_only_launch_args;
 #[cfg(target_os = "macos")]
 use super::command_credentials;
 use super::command_env::build_shell_env;
+use super::command_host_executable::admit_host_executable;
 use super::command_temp;
-use super::command_validation::policy_denial;
+use super::command_validation::{executable_name_lookup_key, policy_denial};
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority};
 use crate::native::DenialReason;
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -18,11 +20,26 @@ use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
 #[cfg(target_os = "macos")]
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
+/// Seatbelt cannot run these host programs: `ps` and `sudo` are setuid root,
+/// which the kernel refuses to execute inside a sandbox, and launchd answers
+/// `launchctl list` with an error to a sandboxed caller.
+pub(crate) const SEATBELT_REFUSED_PROGRAMS: &[&str] =
+    &["/bin/ps", "/usr/bin/sudo", "/bin/launchctl"];
+
+pub(crate) const READ_ONLY_SEATBELT: &str = "macos_seatbelt_read_only";
+
 pub(crate) fn select_sandbox(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
+    program: &str,
 ) -> std::result::Result<&'static str, DenialReason> {
     match mode {
+        CommandExecutionMode::ReadOnly
+            if workspace_write_sandbox_enforced
+                && !SEATBELT_REFUSED_PROGRAMS.contains(&program) =>
+        {
+            Ok(READ_ONLY_SEATBELT)
+        }
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
         CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
@@ -33,6 +50,109 @@ pub(crate) fn select_sandbox(
         CommandExecutionMode::ArtifactWrite => Err(DenialReason::ArtifactWriteSandboxUnavailable),
         CommandExecutionMode::WorkspaceWrite => Err(DenialReason::WorkspaceWriteSandboxUnavailable),
     }
+}
+
+pub(crate) fn read_only_reaches_network(command_key: &str) -> bool {
+    matches!(command_key, "curl" | "tailscale")
+}
+
+pub(crate) fn kernel_network(
+    mode: CommandExecutionMode,
+    network_mode: CommandNetworkMode,
+    reaches_network: bool,
+) -> bool {
+    let allows = network_mode.for_execution(mode).allows_network();
+    match mode {
+        CommandExecutionMode::ReadOnly => reaches_network && allows,
+        _ => allows,
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SeatbeltWrites {
+    Nothing,
+    WritableRoot,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SeatbeltProcessInfo {
+    SameSandbox,
+    All,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeatbeltProfile {
+    pub(crate) writes: SeatbeltWrites,
+    pub(crate) network: bool,
+    pub(crate) process_info: SeatbeltProcessInfo,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn write_capable_profile(network: bool) -> SeatbeltProfile {
+    SeatbeltProfile {
+        writes: SeatbeltWrites::WritableRoot,
+        network,
+        process_info: SeatbeltProcessInfo::SameSandbox,
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) fn seatbelt_profile(sandbox: &str, network: bool) -> Option<SeatbeltProfile> {
+    match sandbox {
+        "macos_seatbelt" => Some(write_capable_profile(network)),
+        READ_ONLY_SEATBELT => Some(SeatbeltProfile {
+            writes: SeatbeltWrites::Nothing,
+            network,
+            process_info: SeatbeltProcessInfo::All,
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rendered_profile(sandbox: &str, network: bool) -> Result<String> {
+    seatbelt_profile(sandbox, network)
+        .map(|profile| render_seatbelt_profile(&profile))
+        .with_context(|| format!("sandbox {sandbox} has no seatbelt profile"))
+}
+
+struct ReadOnlyLaunch {
+    program: String,
+    args: Vec<String>,
+    sandbox: &'static str,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    network: bool,
+}
+
+fn read_only_launch(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<ReadOnlyLaunch, ToolError> {
+    let resolved = admit_host_executable(command, root)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+    let program = resolved.as_deref().unwrap_or(command);
+    let sandbox = select_sandbox(policy.mode, workspace_write_sandbox_enforced(), program)
+        .map_err(|reason| policy_denial(policy, reason))?;
+    let key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_owned());
+    let contained = sandbox == READ_ONLY_SEATBELT;
+    Ok(ReadOnlyLaunch {
+        program: if contained { command } else { program }.to_owned(),
+        args: read_only_launch_args(contained, &key, args),
+        sandbox,
+        network: kernel_network(
+            policy.mode,
+            policy.network_mode,
+            read_only_reaches_network(&key),
+        ),
+    })
 }
 
 pub(super) fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
@@ -242,10 +362,35 @@ fn protected_command_for_policy(
         policy.mode,
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
     );
-    let mut profile = if bounded {
-        macos_workspace_write_policy(policy.effective_network_mode())
-    } else {
-        "(version 1)\n(allow default)\n".to_owned()
+    let read_only = (policy.mode == CommandExecutionMode::ReadOnly)
+        .then(|| read_only_launch(root, command, args, policy))
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let (mut profile, sandbox, command, args) = match &read_only {
+        Some(launch) if launch.sandbox == READ_ONLY_SEATBELT => (
+            rendered_profile(launch.sandbox, launch.network)?,
+            READ_ONLY_SEATBELT,
+            launch.program.as_str(),
+            launch.args.as_slice(),
+        ),
+        Some(launch) => (
+            "(version 1)\n(allow default)\n".to_owned(),
+            "macos_operator_state_guard",
+            launch.program.as_str(),
+            launch.args.as_slice(),
+        ),
+        None if bounded => (
+            macos_workspace_write_policy(policy.effective_network_mode()),
+            "macos_seatbelt",
+            command,
+            args,
+        ),
+        None => (
+            "(version 1)\n(allow default)\n".to_owned(),
+            "macos_operator_state_guard",
+            command,
+            args,
+        ),
     };
     if policy.mode == CommandExecutionMode::ArtifactWrite {
         profile.push_str("\n(deny file-link)\n");
@@ -280,15 +425,7 @@ fn protected_command_for_policy(
         .chain(["--".to_owned(), command.to_owned()])
         .chain(args.iter().cloned())
         .collect();
-    Ok((
-        SANDBOX_EXEC.to_owned(),
-        argv,
-        if bounded {
-            "macos_seatbelt"
-        } else {
-            "macos_operator_state_guard"
-        },
-    ))
+    Ok((SANDBOX_EXEC.to_owned(), argv, sandbox))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -308,10 +445,16 @@ fn sandboxed_command_for_policy(
     args: &[String],
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(String, Vec<String>, &'static str), ToolError> {
+    if policy.mode == CommandExecutionMode::ReadOnly {
+        let launch = read_only_launch(root, command_name, args, policy)?;
+        if launch.sandbox == READ_ONLY_SEATBELT {
+            return read_only_seatbelt_command(launch).map_err(Into::into);
+        }
+        return Ok((launch.program, launch.args, launch.sandbox));
+    }
     let sandbox = select_sandbox_for_execution(policy)?;
     match policy.mode {
-        CommandExecutionMode::ReadOnly => Ok((command_name.to_string(), args.to_vec(), sandbox)),
-        CommandExecutionMode::Unrestricted => {
+        CommandExecutionMode::ReadOnly | CommandExecutionMode::Unrestricted => {
             Ok((command_name.to_string(), args.to_vec(), sandbox))
         }
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite => {
@@ -331,7 +474,7 @@ fn sandboxed_command_for_policy(
 fn select_sandbox_for_execution(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<&'static str, ToolError> {
-    select_sandbox(policy.mode, workspace_write_sandbox_enforced())
+    select_sandbox(policy.mode, workspace_write_sandbox_enforced(), "")
         .map_err(|reason| policy_denial(policy, reason))
 }
 
@@ -372,15 +515,59 @@ fn sandboxed_workspace_write_command(
 }
 
 #[cfg(target_os = "macos")]
-/// Chromium registers its parent/child rendezvous before opening a page. These
-/// bootstrap names include its bundle ID and PID; permit only the rendezvous
-/// namespaces, not unrelated global services or additional filesystem access.
-/// See [Chromium's rendezvous owner](https://chromium.googlesource.com/chromium/src/+/main/base/apple/mach_port_rendezvous_mac.cc).
+fn read_only_seatbelt_command(
+    launch: ReadOnlyLaunch,
+) -> Result<(String, Vec<String>, &'static str)> {
+    let profile = rendered_profile(launch.sandbox, launch.network)?;
+    let argv = ["-p".to_owned(), profile, "--".to_owned(), launch.program]
+        .into_iter()
+        .chain(launch.args)
+        .collect();
+    Ok((SANDBOX_EXEC.to_owned(), argv, launch.sandbox))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_only_seatbelt_command(
+    _launch: ReadOnlyLaunch,
+) -> Result<(String, Vec<String>, &'static str)> {
+    anyhow::bail!("the read-only command sandbox requires macOS seatbelt on this build")
+}
+
+#[cfg(target_os = "macos")]
 pub(super) fn macos_workspace_write_policy(network_mode: CommandNetworkMode) -> String {
-    let network_policy = if network_mode.allows_network() {
-        "(allow network-outbound)\n(allow network-inbound)\n"
+    render_seatbelt_profile(&write_capable_profile(network_mode.allows_network()))
+}
+
+/// A read-only profile opens no file for writing except `/dev/null`, so it
+/// also refuses creating, renaming, linking, unlinking and changing the mode,
+/// owner or times of any file. Processes it starts inherit it.
+///
+/// Chromium registers its parent/child rendezvous before opening a page. These
+/// bootstrap names include its bundle ID and PID; a writable profile permits
+/// only the rendezvous namespaces, not unrelated global services or additional
+/// filesystem access.
+/// See [Chromium's rendezvous owner](https://chromium.googlesource.com/chromium/src/+/main/base/apple/mach_port_rendezvous_mac.cc).
+#[cfg(target_os = "macos")]
+pub(super) fn render_seatbelt_profile(profile: &SeatbeltProfile) -> String {
+    let writable = profile.writes == SeatbeltWrites::WritableRoot;
+    let process_info = match profile.process_info {
+        SeatbeltProcessInfo::SameSandbox => "(allow process-info* (target same-sandbox))",
+        SeatbeltProcessInfo::All => "(allow process-info*)",
+    };
+    let writable_rules = if writable {
+        r#"(allow mach-register
+    (global-name-prefix "org.chromium.Chromium.MachPortRendezvousServer.")
+    (global-name-prefix "com.google.chrome.for.testing.MachPortRendezvousServer."))
+(allow ipc-posix-shm-write*)
+(allow file-write* (subpath (param "WRITABLE_ROOT")))
+"#
     } else {
         ""
+    };
+    let network_rules = match (profile.network, writable) {
+        (false, _) => "",
+        (true, true) => "(allow network-outbound)\n(allow network-inbound)\n",
+        (true, false) => "(allow network-outbound)\n",
     };
     format!(
         r#"(version 1)
@@ -388,18 +575,13 @@ pub(super) fn macos_workspace_write_policy(network_mode: CommandNetworkMode) -> 
 (allow process-exec)
 (allow process-fork)
 (allow signal (target same-sandbox))
-(allow process-info* (target same-sandbox))
+{process_info}
 (allow sysctl-read)
 (allow mach-lookup)
-(allow mach-register
-    (global-name-prefix "org.chromium.Chromium.MachPortRendezvousServer.")
-    (global-name-prefix "com.google.chrome.for.testing.MachPortRendezvousServer."))
 (allow ipc-posix-sem)
 (allow ipc-posix-shm-read*)
-(allow ipc-posix-shm-write*)
 (allow file-read*)
 (allow file-write-data (literal "/dev/null"))
-(allow file-write* (subpath (param "WRITABLE_ROOT")))
-{network_policy}"#
+{writable_rules}{network_rules}"#
     )
 }

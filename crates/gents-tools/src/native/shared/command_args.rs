@@ -1,4 +1,7 @@
 use super::super::context::ToolError;
+use super::command_options::{
+    abbreviates_any_long, abbreviates_long, cluster_takes_next, go_flag_name, short_cluster_denied,
+};
 use super::command_validation::{
     executable_name_lookup_key, policy_denial, read_only_argument_denial,
 };
@@ -45,7 +48,11 @@ pub(super) fn validate_tailscale_args(
     })?;
 
     match subcommand {
-        "status" | "ip" | "netcheck" | "version" | "ping" => Ok(()),
+        "status" | "ip" | "netcheck" | "version" | "ping" => {
+            first_denied(&args[1..], policy, "tailscale", |arg| {
+                go_flag_name(arg).is_some_and(|name| matches!(name, "web" | "listen" | "browser"))
+            })
+        }
         other => Err(policy_denial(
             policy,
             DenialReason::ReadOnlySubcommandNotAllowlisted {
@@ -56,55 +63,80 @@ pub(super) fn validate_tailscale_args(
     }
 }
 
+const CURL_DENIED_LONG_OPTIONS: &[&str] = &[
+    "alt-svc",
+    "config",
+    "cookie-jar",
+    "create-dirs",
+    "data",
+    "data-ascii",
+    "data-binary",
+    "data-raw",
+    "data-urlencode",
+    "dump-header",
+    "etag-save",
+    "form",
+    "form-string",
+    "hsts",
+    "json",
+    "libcurl",
+    "next",
+    "output",
+    "output-dir",
+    "proto",
+    "proto-default",
+    "proto-redir",
+    "remote-header-name",
+    "remote-name",
+    "remote-name-all",
+    "request",
+    "ssl-sessions",
+    "stderr",
+    "trace",
+    "trace-ascii",
+    "upload-file",
+];
+const CURL_DENIED_SHORT_OPTIONS: &[char] =
+    &['c', 'd', 'D', 'F', 'J', 'K', 'o', 'O', 'Q', 'T', 'X', ':'];
+const CURL_VALUED_SHORT_OPTIONS: &[char] = &[
+    'A', 'b', 'C', 'e', 'E', 'H', 'm', 'P', 'r', 't', 'u', 'U', 'w', 'x', 'y', 'Y', 'z',
+];
+
+fn first_denied(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+    command: &str,
+    denied: impl Fn(&str) -> bool,
+) -> std::result::Result<(), ToolError> {
+    match args.iter().find(|arg| denied(arg.as_str())) {
+        Some(arg) => Err(read_only_argument_denial(policy, command, arg)),
+        None => Ok(()),
+    }
+}
+
+pub(super) fn validate_sed_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "sed", |arg| {
+        abbreviates_long(arg, "in-place", 1)
+            || short_cluster_denied(arg, &['i', 'I'], &['e', 'l', 'f'])
+    })
+}
+
 pub(super) fn validate_curl_args(
     args: &[String],
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(), ToolError> {
-    let mut has_http_url = false;
-    for arg in args {
-        if arg.starts_with("http://") || arg.starts_with("https://") {
-            has_http_url = true;
-        }
-
-        let mutating = matches!(
-            arg.as_str(),
-            "-d" | "--data"
-                | "--data-raw"
-                | "--data-binary"
-                | "--data-urlencode"
-                | "-F"
-                | "--form"
-                | "-T"
-                | "--upload-file"
-                | "-X"
-                | "--request"
-                | "-o"
-                | "--output"
-                | "-O"
-                | "--remote-name"
-                | "--remote-header-name"
-                | "-K"
-                | "--config"
-                | "--next"
-        ) || arg.starts_with("-d")
-            || arg.starts_with("--data=")
-            || arg.starts_with("-F")
-            || arg.starts_with("--form=")
-            || arg.starts_with("-T")
-            || arg.starts_with("--upload-file=")
-            || arg.starts_with("-X")
-            || arg.starts_with("--request=")
-            || arg.starts_with("-o")
-            || arg.starts_with("--output=")
-            || arg.starts_with("-O")
-            || arg.starts_with("-K")
-            || arg.starts_with("--config=");
-        if mutating {
-            return Err(read_only_argument_denial(policy, "curl", arg));
-        }
-    }
-
-    if !has_http_url {
+    first_denied(args, policy, "curl", |arg| {
+        abbreviates_any_long(arg, CURL_DENIED_LONG_OPTIONS)
+            || short_cluster_denied(arg, CURL_DENIED_SHORT_OPTIONS, CURL_VALUED_SHORT_OPTIONS)
+            || arg.contains("%output")
+    })?;
+    if !args
+        .iter()
+        .any(|arg| arg.starts_with("http://") || arg.starts_with("https://"))
+    {
         return Err(policy_denial(
             policy,
             DenialReason::ReadOnlyUrlRequired {
@@ -112,8 +144,64 @@ pub(super) fn validate_curl_args(
             },
         ));
     }
-
     Ok(())
+}
+
+pub(super) fn validate_file_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "file", |arg| {
+        abbreviates_long(arg, "compile", 1)
+            || short_cluster_denied(arg, &['C'], &['e', 'f', 'F', 'm', 'P'])
+    })
+}
+
+pub(super) fn validate_lsof_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "lsof", |arg| arg.starts_with("-D"))
+}
+
+const DATE_VALUED_SHORT_OPTIONS: &[char] = &['d', 'f', 'r', 'v', 'z'];
+
+fn date_takes_next(arg: &str) -> bool {
+    cluster_takes_next(arg, DATE_VALUED_SHORT_OPTIONS)
+        || (!arg.contains('=') && abbreviates_any_long(arg, &["date", "file", "reference"]))
+}
+
+pub(super) fn validate_date_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "date", |arg| {
+        abbreviates_long(arg, "set", 1)
+            || short_cluster_denied(arg, &['s'], &['I', 'd', 'f', 'r', 'v', 'z'])
+    })?;
+    if args.iter().any(|arg| arg == "-j") {
+        return Ok(());
+    }
+    let mut remaining = args.iter();
+    while let Some(arg) = remaining.next() {
+        if date_takes_next(arg) {
+            remaining.next();
+        } else if !arg.starts_with('-') && !arg.starts_with('+') {
+            return Err(read_only_argument_denial(policy, "date", arg));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_hostname_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "hostname", |arg| {
+        !arg.starts_with('-')
+            || abbreviates_any_long(arg, &["file", "boot"])
+            || short_cluster_denied(arg, &['F', 'b'], &[])
+    })
 }
 
 pub(super) fn validate_sudo_args(
@@ -184,7 +272,7 @@ fn deny_git_metadata_write_args(
         )
     })?;
     let subcommand_args = &args[subcommand_idx + 1..];
-    validate_git_read_only_flags(subcommand_args, policy)?;
+    validate_git_read_only_flags(subcommand, subcommand_args, policy)?;
 
     if git_read_subcommand_allowed_under_worktree_diff(subcommand) {
         if subcommand == "branch" {
@@ -272,7 +360,7 @@ pub(super) fn validate_git_args(
         )
     })?;
     let subcommand_args = &args[subcommand_idx + 1..];
-    validate_git_read_only_flags(subcommand_args, policy)?;
+    validate_git_read_only_flags(subcommand, subcommand_args, policy)?;
 
     match subcommand {
         "status" | "diff" | "show" | "log" | "ls-files" | "grep" | "rev-parse" => Ok(()),
@@ -292,9 +380,12 @@ pub(super) fn validate_ripgrep_args(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(), ToolError> {
     const UNSAFE_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
-    const UNSAFE_WITHOUT_ARGS: &[&str] = &["--search-zip", "-z"];
+    const VALUED: &[char] = &[
+        'A', 'B', 'C', 'd', 'e', 'E', 'f', 'g', 'j', 'm', 'M', 'r', 't', 'T',
+    ];
     for arg in args {
-        if UNSAFE_WITHOUT_ARGS.contains(&arg.as_str())
+        if arg == "--search-zip"
+            || short_cluster_denied(arg, &['z'], VALUED)
             || UNSAFE_WITH_ARGS
                 .iter()
                 .any(|option| arg == option || arg.starts_with(&format!("{option}=")))
@@ -354,26 +445,35 @@ fn find_git_subcommand(args: &[String]) -> Option<(usize, &str)> {
     None
 }
 
-fn validate_git_read_only_flags(
-    args: &[String],
-    policy: &CommandExecutionPolicy,
-) -> std::result::Result<(), ToolError> {
+fn git_read_only_flag_denied(subcommand: &str, arg: &str) -> bool {
     const UNSAFE_GIT_FLAGS: &[&str] = &[
         "--output",
         "--ext-diff",
-        "--textconv",
         "--exec",
         "--paginate",
+        "--show-signature",
     ];
-    for arg in args {
-        if UNSAFE_GIT_FLAGS.contains(&arg.as_str())
-            || arg.starts_with("--output=")
-            || arg.starts_with("--exec=")
-        {
-            return Err(read_only_argument_denial(policy, "git", arg));
-        }
-    }
-    Ok(())
+    UNSAFE_GIT_FLAGS.contains(&arg)
+        || arg.starts_with("--output=")
+        || arg.starts_with("--exec=")
+        || abbreviates_long(arg, "textconv", 5)
+        || arg.contains("%G")
+        || (subcommand == "grep"
+            && (abbreviates_long(arg, "open-files-in-pager", 1)
+                || short_cluster_denied(arg, &['O'], &['A', 'B', 'C', 'e', 'f', 'm'])))
+        || (subcommand == "status"
+            && (abbreviates_long(arg, "verbose", 1)
+                || short_cluster_denied(arg, &['v'], &['u', 'M'])))
+}
+
+fn validate_git_read_only_flags(
+    subcommand: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    first_denied(args, policy, "git", |arg| {
+        git_read_only_flag_denied(subcommand, arg)
+    })
 }
 
 fn validate_git_branch_args(
@@ -393,4 +493,51 @@ fn validate_git_branch_args(
         }
     }
     Ok(())
+}
+
+const GIT_READ_ONLY_GLOBAL_OPTIONS: &[&str] = &[
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "log.showSignature=false",
+    "--no-optional-locks",
+];
+
+pub(crate) fn read_only_launch_args(
+    kernel_contained: bool,
+    command_key: &str,
+    args: &[String],
+) -> Vec<String> {
+    let owned = |values: &[&str]| {
+        values
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>()
+    };
+    match command_key {
+        "git" => {
+            let mut launched = owned(GIT_READ_ONLY_GLOBAL_OPTIONS);
+            let mut inserted = false;
+            for arg in args {
+                launched.push(arg.clone());
+                if !inserted && !arg.starts_with('-') {
+                    inserted = true;
+                    if matches!(arg.as_str(), "diff" | "show" | "log") {
+                        launched.extend(owned(&["--no-ext-diff", "--no-textconv"]));
+                    }
+                }
+            }
+            launched
+        }
+        "curl" => owned(&["--proto", "=http,https", "--proto-redir", "=http,https"])
+            .into_iter()
+            .chain(args.iter().cloned())
+            .collect(),
+        "sed" if !kernel_contained => std::iter::once("--sandbox".to_owned())
+            .chain(args.iter().cloned())
+            .collect(),
+        _ => args.to_vec(),
+    }
 }

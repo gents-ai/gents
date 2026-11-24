@@ -132,6 +132,7 @@ structure Policy where
 
 inductive SandboxKind where
   | policyReadOnly
+  | macosSeatbeltReadOnly
   | macosSeatbelt
   | unsandboxedUnrestricted
   deriving DecidableEq, Repr
@@ -140,10 +141,48 @@ namespace SandboxKind
 
 def toContract : SandboxKind → String
   | .policyReadOnly => "policy_read_only"
+  | .macosSeatbeltReadOnly => "macos_seatbelt_read_only"
   | .macosSeatbelt => "macos_seatbelt"
   | .unsandboxedUnrestricted => "unsandboxed_unrestricted"
 
 end SandboxKind
+
+inductive WriteScope where
+  | nothing
+  | writableRoot
+  deriving DecidableEq, Repr
+
+namespace WriteScope
+
+def toContract : WriteScope → String
+  | .nothing => "nothing"
+  | .writableRoot => "writable_root"
+
+end WriteScope
+
+inductive ProcessScope where
+  | sameSandbox
+  | all
+  deriving DecidableEq, Repr
+
+namespace ProcessScope
+
+def toContract : ProcessScope → String
+  | .sameSandbox => "same_sandbox"
+  | .all => "all"
+
+end ProcessScope
+
+/-- What a Seatbelt profile lets the command and every process it starts do:
+where it writes, whether it opens outbound connections (a write-capable profile
+with network also accepts inbound ones), and which processes it may inspect.
+Under every profile it reads files, starts processes, which inherit the
+profile, and signals only processes in its own sandbox. -/
+structure SeatbeltProfile where
+  writes : WriteScope
+  network : Bool
+  processInfo : ProcessScope
+  deriving DecidableEq, Repr
 
 inductive SandboxDecision where
   | selected (sandbox : SandboxKind)

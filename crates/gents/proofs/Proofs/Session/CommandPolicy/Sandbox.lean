@@ -4,8 +4,8 @@ namespace CommandPolicy
 
 /-- A bounded command inherits the sandbox's offline default, not the host's
 network authority. Explicit network configuration still meets the existing tool
-ceiling before launch. Unrestricted and argv-validated read-only commands retain
-their own enforcement owners. -/
+ceiling before launch. A read-only command's kernel network is `kernelNetwork`;
+an unrestricted command has no kernel owner. -/
 def effectiveNetworkMode (mode : ExecutionMode) (network : NetworkMode) : NetworkMode :=
   match mode, network with
   | .workspaceWrite, .inherit | .artifactWrite, .inherit => .disabled
@@ -52,11 +52,27 @@ theorem full_access_preserves_tool_root (mode : ExecutionMode) (configured withi
 theorem unrestricted_preserves_execution_root (configured full within : Bool) :
     useWorkspaceRoot .unrestricted configured full within = false := by simp [useWorkspaceRoot]
 
+/-- Host programs a Seatbelt profile cannot run: `ps` and `sudo` are setuid
+root, and the kernel refuses to execute a setuid program inside a sandbox; launchd
+answers `launchctl list` with an error to any sandboxed caller. A read-only
+request whose resolved program is one of them runs outside the profile, bounded
+by its argument validator: `ps` has no option that writes or starts a program,
+`sudo` accepts only `/bin/launchctl`, and `launchctl` accepts only `list`,
+`print`, `print-disabled` and `blame`, which ask launchd and start nothing.
+A process the profile contains cannot execute `ps` or `sudo` at all. -/
+def seatbeltRefusedPrograms : List String :=
+  ["/bin/ps", "/usr/bin/sudo", "/bin/launchctl"]
+
 def selectSandbox
     (support : RuntimeSupport)
-    (mode : ExecutionMode) : SandboxDecision :=
+    (mode : ExecutionMode)
+    (program : String) : SandboxDecision :=
   match mode with
-  | .readOnly => .selected .policyReadOnly
+  | .readOnly =>
+      if support.workspaceWriteSandboxEnforced && !seatbeltRefusedPrograms.contains program then
+        .selected .macosSeatbeltReadOnly
+      else
+        .selected .policyReadOnly
   | .unrestricted => .selected .unsandboxedUnrestricted
   | .workspaceWrite =>
       if support.workspaceWriteSandboxEnforced then
@@ -69,5 +85,49 @@ def selectSandbox
         .selected .macosSeatbelt
       else
         .denied .artifactWriteSandboxUnavailable
+
+/-- A read-only command reads the workspace and the host; reaching the network
+is a read only for the commands whose purpose it is: `curl` fetches a URL and
+every `tailscale` subcommand asks the local daemon over its socket. -/
+def readOnlyReachesNetwork (request : CommandRequest) : Bool :=
+  ["curl", "tailscale"].contains request.lookupCommand
+
+def NetworkMode.allowsNetwork : NetworkMode → Bool
+  | .disabled => false
+  | .inherit | .enabled => true
+
+/-- Whether the kernel lets the command open a network connection. A bounded
+command follows its effective network mode; a read-only command reaches the
+network only when it is a network reader and the policy has not disabled the
+network. -/
+def kernelNetwork (mode : ExecutionMode) (network : NetworkMode) (reachesNetwork : Bool) : Bool :=
+  match mode with
+  | .readOnly => reachesNetwork && (effectiveNetworkMode mode network).allowsNetwork
+  | _ => (effectiveNetworkMode mode network).allowsNetwork
+
+/-- The Seatbelt profile each sandbox applies. A workspace or artifact command
+writes only under its writable root and sees only its own processes. A
+read-only command writes nothing: no file is created, written, renamed, linked,
+unlinked or changed in mode, owner or time anywhere, and the only file it may
+open for writing is `/dev/null`; it may inspect every process, which `lsof` and
+other diagnostics need, but signal only its own. -/
+def seatbeltProfile (sandbox : SandboxKind) (network : Bool) : Option SeatbeltProfile :=
+  match sandbox with
+  | .macosSeatbelt => some { writes := .writableRoot, network, processInfo := .sameSandbox }
+  | .macosSeatbeltReadOnly => some { writes := .nothing, network, processInfo := .all }
+  | .policyReadOnly | .unsandboxedUnrestricted => none
+
+/-- The kernel profile a command runs under: the selected sandbox's profile with
+its network decision, or none when no profile contains it. -/
+def commandProfile
+    (support : RuntimeSupport)
+    (policy : Policy)
+    (request : CommandRequest)
+    (program : String) : Option SeatbeltProfile :=
+  match selectSandbox support policy.mode program with
+  | .selected sandbox =>
+      seatbeltProfile sandbox
+        (kernelNetwork policy.mode policy.networkMode (readOnlyReachesNetwork request))
+  | .denied _ => none
 
 end CommandPolicy
