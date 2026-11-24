@@ -14,7 +14,7 @@ def binding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",
     some "context", some "workspace-authority", "full-semantic-fingerprint", 20, 1⟩
 def limited : Snapshot :=
-  ⟨⟨.usageLimited, 0, false, false⟩, 0, none, 10, [], 37, some 1000⟩
+  ⟨⟨.usageLimited, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.usageLimited, 0, true, true, true, true, binding⟩
 def resetAt : Nat := 3600
 

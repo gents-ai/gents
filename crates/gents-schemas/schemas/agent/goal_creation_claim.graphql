@@ -10,7 +10,6 @@ type GoalCreationClaim @policy(id: "$household", resource: "children") @index(fi
     node_did: String @index @immutable
     objective: String @immutable
     token_budget: Int @immutable
-    blocked_audit_threshold: Int @immutable
     max_infrastructure_retries: Int @immutable
     created_at: String @index @immutable
 }

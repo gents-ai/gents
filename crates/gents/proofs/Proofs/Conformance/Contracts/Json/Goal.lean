@@ -177,35 +177,39 @@ structure GoalTransitionCase where
   name : String
   pre : Goals.State
   action : Goals.Action
-  blockedAuditThreshold : Nat := Goals.blockedAuditThreshold
 
-def goalCaseState (status : Goals.Status) (audits : Nat := 0)
+def goalCaseState (status : Goals.Status)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
-  { status := status, blockedAudits := audits,
-    wrapupRequested := requested, wrapupCompleted := completed }
+  { status := status, wrapupRequested := requested, wrapupCompleted := completed }
 
 def goalTransitionCases : List GoalTransitionCase :=
   [ { name := "active_pause", pre := goalCaseState .active,
       action := .pause }
-  , { name := "budget_wrapup_pauses", pre := goalCaseState .budgetLimited 0 true false,
+  , { name := "budget_wrapup_pauses", pre := goalCaseState .budgetLimited true false,
       action := .pause }
   , { name := "budget_wrapup_resumes_with_obligation",
-      pre := goalCaseState .paused 0 true false, action := .resume }
-  , { name := "blocked_resume_resets_audits", pre := goalCaseState .blocked 3,
+      pre := goalCaseState .paused true false, action := .resume }
+  , { name := "paused_after_wrapup_resumes_with_fresh_budget",
+      pre := goalCaseState .paused true true, action := .resume }
+  , { name := "finished_wrapup_resumes_with_fresh_budget",
+      pre := goalCaseState .budgetLimited true true, action := .resume }
+  , { name := "owed_wrapup_cannot_resume", pre := goalCaseState .budgetLimited true false,
+      action := .resume }
+  , { name := "blocked_resumes", pre := goalCaseState .blocked,
       action := .resume }
   , { name := "complete_from_active", pre := goalCaseState .active,
       action := .complete }
   , { name := "complete_rewrite_rejected", pre := goalCaseState .complete,
       action := .complete }
-  , { name := "active_stop", pre := goalCaseState .active 2,
+  , { name := "active_stop", pre := goalCaseState .active,
       action := .stop }
   , { name := "paused_stop", pre := goalCaseState .paused,
       action := .stop }
-  , { name := "blocked_stop_preserves_audits", pre := goalCaseState .blocked 3,
+  , { name := "blocked_stop", pre := goalCaseState .blocked,
       action := .stop }
   , { name := "usage_limited_stop", pre := goalCaseState .usageLimited,
       action := .stop }
-  , { name := "budget_stop_preserves_wrapup_history", pre := goalCaseState .budgetLimited 0 true false,
+  , { name := "budget_stop_preserves_wrapup_history", pre := goalCaseState .budgetLimited true false,
       action := .stop }
   , { name := "complete_stop_rejected", pre := goalCaseState .complete,
       action := .stop }
@@ -215,36 +219,24 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .complete }
   , { name := "stopped_cannot_resume", pre := goalCaseState .stopped,
       action := .resume }
-  , { name := "same_request_dedupes", pre := goalCaseState .active 2,
-      action := .blockedAudit .sameRequest }
-  , { name := "same_condition_increments", pre := goalCaseState .active 1,
-      action := .blockedAudit .sameCondition }
-  , { name := "third_same_condition_blocks", pre := goalCaseState .active 2,
-      action := .blockedAudit .sameCondition }
-  , { name := "new_condition_resets", pre := goalCaseState .active 2,
-      action := .blockedAudit .newCondition }
-  , { name := "budget_blocked_audit_rejected", pre := goalCaseState .budgetLimited 2 true false,
-      action := .blockedAudit .sameCondition }
-  , { name := "operator_blocks_active", pre := goalCaseState .active,
-      action := .operatorBlock }
+  , { name := "one_report_blocks_active", pre := goalCaseState .active,
+      action := .block }
+  , { name := "paused_block_rejected", pre := goalCaseState .paused,
+      action := .block }
+  , { name := "blocked_block_rejected", pre := goalCaseState .blocked,
+      action := .block }
+  , { name := "budget_block_rejected", pre := goalCaseState .budgetLimited true false,
+      action := .block }
   , { name := "usage_limit_stops_active", pre := goalCaseState .active,
       action := .usageLimit }
   , { name := "budget_exhaustion_latches_wrapup", pre := goalCaseState .active,
       action := .budgetExhausted }
-  , { name := "wrapup_finishes", pre := goalCaseState .budgetLimited 0 true false,
+  , { name := "budget_exhaustion_after_fresh_resume", pre := goalCaseState .active,
+      action := .budgetExhausted }
+  , { name := "wrapup_finishes", pre := goalCaseState .budgetLimited true false,
       action := .wrapupFinished }
-  , { name := "wrapup_abandons_after_retry_bound", pre := goalCaseState .budgetLimited 0 true false,
+  , { name := "wrapup_abandons_after_retry_bound", pre := goalCaseState .budgetLimited true false,
       action := .wrapupAbandoned }
-  , { name := "clean_turn_resets_audits", pre := goalCaseState .active 2,
-      action := .cleanTurn }
-  , { name := "clean_turn_rejected_while_blocked", pre := goalCaseState .blocked 3,
-      action := .cleanTurn }
-  , { name := "configured_threshold_keeps_third_audit_active", pre := goalCaseState .active 2,
-      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
-  , { name := "configured_threshold_blocks_at_bound", pre := goalCaseState .active 3,
-      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
-  , { name := "threshold_one_blocks_first_audit", pre := goalCaseState .active,
-      action := .blockedAudit .newCondition, blockedAuditThreshold := 1 }
   ]
 
 inductive GoalActionWire where
@@ -252,15 +244,11 @@ inductive GoalActionWire where
   | resume
   | stop
   | complete
-  | blockedAuditSameRequest
-  | blockedAuditSameCondition
-  | blockedAuditNewCondition
-  | operatorBlock
+  | block
   | usageLimit
   | budgetExhausted
   | wrapupFinished
   | wrapupAbandoned
-  | cleanTurn
   deriving Lean.ToJson
 
 def GoalActionWire.ofModel : Goals.Action → GoalActionWire
@@ -268,39 +256,29 @@ def GoalActionWire.ofModel : Goals.Action → GoalActionWire
   | .resume => .resume
   | .stop => .stop
   | .complete => .complete
-  | .blockedAudit .sameRequest => .blockedAuditSameRequest
-  | .blockedAudit .sameCondition => .blockedAuditSameCondition
-  | .blockedAudit .newCondition => .blockedAuditNewCondition
-  | .operatorBlock => .operatorBlock
+  | .block => .block
   | .usageLimit => .usageLimit
   | .budgetExhausted => .budgetExhausted
   | .wrapupFinished => .wrapupFinished
   | .wrapupAbandoned => .wrapupAbandoned
-  | .cleanTurn => .cleanTurn
 
 def GoalActionWire.toModel : GoalActionWire → Goals.Action
   | .pause => .pause
   | .resume => .resume
   | .stop => .stop
   | .complete => .complete
-  | .blockedAuditSameRequest => .blockedAudit .sameRequest
-  | .blockedAuditSameCondition => .blockedAudit .sameCondition
-  | .blockedAuditNewCondition => .blockedAudit .newCondition
-  | .operatorBlock => .operatorBlock
+  | .block => .block
   | .usageLimit => .usageLimit
   | .budgetExhausted => .budgetExhausted
   | .wrapupFinished => .wrapupFinished
   | .wrapupAbandoned => .wrapupAbandoned
-  | .cleanTurn => .cleanTurn
 
 structure GoalTransitionInput where
   name : String
   preStatus : Goals.Status
-  preBlockedAudits : Nat
   preWrapupRequested : Bool
   preWrapupCompleted : Bool
   action : GoalActionWire
-  blockedAuditThreshold : Nat
   deriving Lean.ToJson
 
 /-- A rejected step leaves the goal as it was, so the observed state after a
@@ -308,7 +286,6 @@ rejection is the state before it. -/
 structure GoalTransitionOutput where
   accepted : Bool
   status : Goals.Status
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
   deriving Lean.ToJson
@@ -316,17 +293,84 @@ structure GoalTransitionOutput where
 @[conformance_family]
 def goalTransition : Family GoalTransitionInput GoalTransitionOutput where
   inputs := goalTransitionCases.map fun w =>
-    { name := w.name, preStatus := w.pre.status, preBlockedAudits := w.pre.blockedAudits
+    { name := w.name, preStatus := w.pre.status
     , preWrapupRequested := w.pre.wrapupRequested, preWrapupCompleted := w.pre.wrapupCompleted
-    , action := GoalActionWire.ofModel w.action, blockedAuditThreshold := w.blockedAuditThreshold }
+    , action := GoalActionWire.ofModel w.action }
   model := fun i =>
     let pre : Goals.State :=
-      { status := i.preStatus, blockedAudits := i.preBlockedAudits
+      { status := i.preStatus
       , wrapupRequested := i.preWrapupRequested, wrapupCompleted := i.preWrapupCompleted }
-    let result := Goals.step? pre i.action.toModel i.blockedAuditThreshold
+    let result := Goals.step? pre i.action.toModel
     let post := result.getD pre
-    { accepted := result.isSome, status := post.status, blockedAudits := post.blockedAudits
+    { accepted := result.isSome, status := post.status
     , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
+
+def goalStatusesAll : List Goals.Status :=
+  [.active, .paused, .blocked, .usageLimited, .budgetLimited, .complete, .stopped]
+
+/-- Every Goal state a user's message can meet. -/
+def goalMessageStates : List Goals.State :=
+  goalStatusesAll.flatMap fun status =>
+    [(false, false), (true, false), (true, true), (false, true)].map fun (requested, completed) =>
+      goalCaseState status requested completed
+
+structure GoalMessageResumeInput where
+  name : String
+  status : Goals.Status
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+structure GoalMessageResumeOutput where
+  resumed : Bool
+  status : Goals.Status
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+/-- `Goals.resumeOnMessage` over every Goal state: a user's message resumes
+only a blocked Goal. -/
+@[conformance_family]
+def goalMessageResume : Family GoalMessageResumeInput GoalMessageResumeOutput where
+  inputs := goalMessageStates.map fun pre =>
+    { name := pre.status.toDefraDB ++ (if pre.wrapupRequested then "_requested" else "") ++
+        (if pre.wrapupCompleted then "_completed" else "")
+    , status := pre.status, wrapupRequested := pre.wrapupRequested
+    , wrapupCompleted := pre.wrapupCompleted }
+  model := fun i =>
+    let pre : Goals.State :=
+      { status := i.status, wrapupRequested := i.wrapupRequested
+      , wrapupCompleted := i.wrapupCompleted }
+    let post := (Goals.resumeOnMessage pre).getD pre
+    { resumed := (Goals.resumeOnMessage pre).isSome, status := post.status
+    , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
+
+structure GoalBudgetInput where
+  name : String
+  tokenBudget : Option Nat
+  tokensUsed : Nat
+  deriving Lean.ToJson
+
+/-- `Goals.budgetReached` and `Goals.initialBudget`: when a Goal's charged
+tokens reach its budget, and the budget a new Goal starts with. -/
+structure GoalBudgetOutput where
+  reached : Bool
+  initial : Option Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalBudget : Family GoalBudgetInput GoalBudgetOutput where
+  inputs :=
+    [ { name := "under_budget", tokenBudget := some 1000, tokensUsed := 999 }
+    , { name := "at_budget", tokenBudget := some 1000, tokensUsed := 1000 }
+    , { name := "over_budget", tokenBudget := some 1000, tokensUsed := 1001 }
+    , { name := "lifted_budget", tokenBudget := none, tokensUsed := 5000000 }
+    , { name := "default_budget_unspent", tokenBudget := none, tokensUsed := 0 }
+    , { name := "default_budget_reached", tokenBudget := some Goals.defaultTokenBudget,
+        tokensUsed := Goals.defaultTokenBudget } ]
+  model := fun i =>
+    { reached := Goals.budgetReached i.tokenBudget i.tokensUsed
+    , initial := Goals.initialBudget i.tokenBudget }
 
 structure GoalCreateCase where
   name : String
@@ -335,12 +379,12 @@ structure GoalCreateCase where
 
 def createRequest (owner session objective : String) (budget : Option Int := none)
     (goalTools : Bool := true) (goalCreate : Bool := true)
-    (threshold : Option Int := none) (retries : Option Int := none) :
+    (retries : Option Int := none) :
     GoalAutomation.CreateRequest :=
   { caller := owner, currentSession := session
   , requestedOwner := owner, requestedSession := session
   , objective := objective, objectiveNonempty := !objective.isEmpty
-  , tokenBudget := budget, blockedAuditThreshold := threshold
+  , tokenBudget := budget
   , maxInfrastructureRetries := retries, goalTools := goalTools, goalCreate := goalCreate }
 
 def goalCreateCases : List GoalCreateCase :=
@@ -352,8 +396,7 @@ def goalCreateCases : List GoalCreateCase :=
   let canonical : GoalAutomation.Fingerprint :=
     { owner := "did:a", session := "session-a"
     , objective := "ship feature", tokenBudget := none }
-  let pinned := createRequest "did:a" "session-a" "ship feature" (threshold := some 5)
-    (retries := some 4)
+  let pinned := createRequest "did:a" "session-a" "ship feature" (retries := some 4)
   [ { name := "authorized_fresh", request := base, existing := none }
   , { name := "authorized_duplicate_idempotent", request := base,
       existing := some (GoalAutomation.createFingerprint base) }
@@ -398,9 +441,6 @@ def goalCreateCases : List GoalCreateCase :=
   , { name := "zero_retry_limit_valid",
       request := createRequest "did:a" "session-a" "ship" (retries := some 0),
       existing := none }
-  , { name := "zero_threshold_invalid",
-      request := createRequest "did:a" "session-a" "ship" (threshold := some 0),
-      existing := none }
   , { name := "negative_retry_limit_invalid",
       request := createRequest "did:a" "session-a" "ship" (retries := some (-1)),
       existing := none }
@@ -418,42 +458,38 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   [ { name := "absent_goal_uses_ordinary_publication", nodeDid, taskId, fireKey
-      declaration := ⟨none, none, none, none⟩ }
+      declaration := ⟨none, none, none⟩ }
   , { name := "objective_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none, none, none⟩ }
+      declaration := ⟨some "implement feature", none, none⟩ }
   , { name := "positive_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 1000, none, none⟩ }
+      declaration := ⟨some "implement feature", some 1000, none⟩ }
   , { name := "maximum_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget, none, none⟩ }
+      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget, none⟩ }
   , { name := "same_task_fire_is_scoped_to_other_node",
       nodeDid := "did:key:z-other-feature-owner", taskId, fireKey
-      declaration := ⟨some "implement feature", none, none, none⟩ }
+      declaration := ⟨some "implement feature", none, none⟩ }
   , { name := "blank_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "", none, none, none⟩ }
+      declaration := ⟨some "", none, none⟩ }
   , { name := "whitespace_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "   ", none, none, none⟩ }
+      declaration := ⟨some "   ", none, none⟩ }
   , { name := "budget_without_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨none, some 1000, none, none⟩ }
+      declaration := ⟨none, some 1000, none⟩ }
   , { name := "zero_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 0, none, none⟩ }
+      declaration := ⟨some "implement feature", some 0, none⟩ }
   , { name := "negative_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some (-1), none, none⟩ }
+      declaration := ⟨some "implement feature", some (-1), none⟩ }
   , { name := "overflow_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature",
-        some (GoalAutomation.maxTokenBudget + 1), none, none⟩ }
+        some (GoalAutomation.maxTokenBudget + 1), none⟩ }
   , { name := "goal_limits_use_atomic_goal_publication", nodeDid, taskId,
       fireKey := "schedule:2026-09-03T12:00:00Z"
-      declaration := ⟨some "implement feature", none, some 5, some 4⟩ }
+      declaration := ⟨some "implement feature", none, some 4⟩ }
   , { name := "zero_retry_limit_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none, none, some 0⟩ }
-  , { name := "threshold_without_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨none, none, some 5, none⟩ }
+      declaration := ⟨some "implement feature", none, some 0⟩ }
   , { name := "retry_limit_without_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨none, none, none, some 4⟩ }
-  , { name := "zero_threshold_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none, some 0, none⟩ }
+      declaration := ⟨none, none, some 4⟩ }
   , { name := "negative_retry_limit_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none, none, some (-1)⟩ }
+      declaration := ⟨some "implement feature", none, some (-1)⟩ }
   ]
 
 def budgetWire (budget : Option Int) : Option Lean.Json := budget.map Lean.toJson
@@ -466,20 +502,17 @@ structure GoalFingerprintWire where
   session : String
   objective : String
   tokenBudget : Option Lean.Json
-  blockedAuditThreshold : Option Int
   maxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 def GoalFingerprintWire.ofModel (f : GoalAutomation.Fingerprint) : GoalFingerprintWire :=
   { owner := f.owner, session := f.session, objective := f.objective
   , tokenBudget := budgetWire f.tokenBudget
-  , blockedAuditThreshold := f.blockedAuditThreshold
   , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 def GoalFingerprintWire.toModel (f : GoalFingerprintWire) : GoalAutomation.Fingerprint :=
   { owner := f.owner, session := f.session, objective := f.objective
   , tokenBudget := budgetOfWire f.tokenBudget
-  , blockedAuditThreshold := f.blockedAuditThreshold
   , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 /-- A token budget is a JSON number: the overflow case carries
@@ -493,7 +526,6 @@ structure GoalCreateInput where
   objective : String
   objectiveNonempty : Bool
   tokenBudget : Option Lean.Json
-  blockedAuditThreshold : Option Int
   maxInfrastructureRetries : Option Int
   goalTools : Bool
   goalCreate : Bool
@@ -505,7 +537,6 @@ def GoalCreateInput.ofCase (w : GoalCreateCase) : GoalCreateInput :=
   , requestedOwner := w.request.requestedOwner, requestedSession := w.request.requestedSession
   , objective := w.request.objective, objectiveNonempty := w.request.objectiveNonempty
   , tokenBudget := budgetWire w.request.tokenBudget
-  , blockedAuditThreshold := w.request.blockedAuditThreshold
   , maxInfrastructureRetries := w.request.maxInfrastructureRetries
   , goalTools := w.request.goalTools, goalCreate := w.request.goalCreate
   , existingFingerprint := w.existing.map GoalFingerprintWire.ofModel }
@@ -515,7 +546,6 @@ def GoalCreateInput.request (i : GoalCreateInput) : GoalAutomation.CreateRequest
   , requestedOwner := i.requestedOwner, requestedSession := i.requestedSession
   , objective := i.objective, objectiveNonempty := i.objectiveNonempty
   , tokenBudget := budgetOfWire i.tokenBudget
-  , blockedAuditThreshold := i.blockedAuditThreshold
   , maxInfrastructureRetries := i.maxInfrastructureRetries
   , goalTools := i.goalTools, goalCreate := i.goalCreate }
 
@@ -541,7 +571,6 @@ structure TaskGoalDeclarationInput where
   name : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
-  goalBlockedAuditThreshold : Option Int
   goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
@@ -554,12 +583,10 @@ def taskGoalDeclaration : Family TaskGoalDeclarationInput TaskGoalDeclarationOut
   inputs := taskGoalPublicationCases.map fun w =>
     { name := w.name, goalObjective := w.declaration.goalObjective
     , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
-    , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
     , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
   model := fun i =>
     { declarationValid := GoalAutomation.validTaskGoalDeclaration
-        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
-          i.goalMaxInfrastructureRetries⟩ }
+        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalMaxInfrastructureRetries⟩ }
 
 structure TaskGoalPublicationInput where
   name : String
@@ -568,7 +595,6 @@ structure TaskGoalPublicationInput where
   fireKey : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
-  goalBlockedAuditThreshold : Option Int
   goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
@@ -576,14 +602,12 @@ def TaskGoalPublicationInput.ofCase (w : TaskGoalPublicationCase) : TaskGoalPubl
   { name := w.name, nodeDid := w.nodeDid, taskId := w.taskId, fireKey := w.fireKey
   , goalObjective := w.declaration.goalObjective
   , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
-  , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
   , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
 
 def TaskGoalPublicationInput.publication (i : TaskGoalPublicationInput) :
     GoalAutomation.TaskPublication :=
   GoalAutomation.decideTaskPublication
-    ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
-      i.goalMaxInfrastructureRetries⟩
+    ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalMaxInfrastructureRetries⟩
     i.nodeDid i.taskId i.fireKey
 
 structure TaskGoalPublicationIdentity where

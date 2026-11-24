@@ -175,7 +175,6 @@ impl PauseOnHalt {
             "tokens_used": goal.tokens_used.unwrap_or_default().max(0),
             "active_time_seconds": goal.current_active_time_seconds(now),
             "active_started_at": paused.status.accrues_active_time().then_some(event.at.as_str()),
-            "consecutive_blocked_audits": paused.blocked_audits,
             "wrapup_requested": paused.wrapup_requested,
             "wrapup_completed": paused.wrapup_completed,
             "updated_at": event.at,
@@ -190,9 +189,7 @@ impl PauseOnHalt {
             crate::triggers::lifecycle_hooks::settle_goal_outcomes(
                 &goal.node_did,
                 &goal.goal_id,
-                goal.last_blocked_reason
-                    .as_deref()
-                    .unwrap_or(paused.status.as_str()),
+                paused.status.as_str(),
                 &event.at,
             ),
         ])
@@ -532,7 +529,6 @@ struct TaskFire {
     goal_id: Option<String>,
     goal_objective: Option<String>,
     goal_token_budget: Option<i64>,
-    goal_blocked_audit_threshold: Option<i64>,
     goal_max_infrastructure_retries: Option<i64>,
     #[serde(default)]
     goal_assignment_applied: bool,
@@ -546,9 +542,7 @@ fn restarted_goal_fields(at: &str, baseline: i64) -> serde_json::Value {
         "token_usage_baseline": baseline,
         "active_time_seconds": 0,
         "active_started_at": at,
-        "consecutive_blocked_audits": 0,
-        "last_blocked_request_id": null,
-        "last_blocked_reason": null,
+        "blocked_reason": null,
         "last_continued_from_request_id": null,
         "wrapup_requested": false,
         "wrapup_completed": false,
@@ -614,12 +608,11 @@ impl TaskGoalAssignment {
             .map(str::trim)
             .filter(|objective| !objective.is_empty())
             .context("Goal-backed Task has no objective")?;
-        let budget = fire.goal_token_budget;
         anyhow::ensure!(
-            budget.is_none_or(|budget| budget > 0),
+            fire.goal_token_budget.is_none_or(|budget| budget > 0),
             "Task Goal budget must be positive"
         );
-        let blocked_audit_threshold = fire.goal_blocked_audit_threshold;
+        let budget = initial_goal_budget(fire.goal_token_budget);
         let max_infrastructure_retries = fire.goal_max_infrastructure_retries;
         let baseline = || {
             usage
@@ -637,7 +630,7 @@ impl TaskGoalAssignment {
             effects.push(crate::triggers::lifecycle_hooks::settle_goal_outcomes(
                 &goal.node_did,
                 &goal.goal_id,
-                goal.last_blocked_reason.as_deref().unwrap_or(&goal.status),
+                &goal.status,
                 at,
             ));
         }
@@ -661,7 +654,6 @@ impl TaskGoalAssignment {
                     "objective": objective,
                     "status": GoalStatus::Active.as_str(),
                     "token_budget": budget,
-                    "blocked_audit_threshold": blocked_audit_threshold,
                     "max_infrastructure_retries": max_infrastructure_retries,
                     "continuation_sequence": 0,
                     "assignment_root_request_doc_id": request.doc_id,
@@ -707,7 +699,6 @@ impl TaskGoalAssignment {
                         "tokens_used": goal.tokens_used.unwrap_or_default().max(0),
                         "active_time_seconds": goal.current_active_time_seconds(now),
                         "active_started_at": post.status.accrues_active_time().then_some(at),
-                        "consecutive_blocked_audits": post.blocked_audits,
                         "wrapup_requested": post.wrapup_requested,
                         "wrapup_completed": post.wrapup_completed,
                     })
@@ -720,7 +711,6 @@ impl TaskGoalAssignment {
                         "objective": objective,
                         "status": GoalStatus::Active.as_str(),
                         "token_budget": budget,
-                        "blocked_audit_threshold": blocked_audit_threshold,
                         "max_infrastructure_retries": max_infrastructure_retries,
                         "assignment_root_request_doc_id": request.doc_id,
                         "continuation_sequence": next_sequence,
@@ -796,6 +786,75 @@ impl Hook<ClaimApplied> for TaskGoalAssignment {
     }
 
     fn decide(&self, event: &ClaimApplied, rows: &[Vec<Row>]) -> Outcome<()> {
+        match Self::effects(event, rows) {
+            Ok(effects) => Outcome::effects(effects),
+            Err(error) => Outcome::Refuse(format!("{error:#}")),
+        }
+    }
+}
+
+/// `request.claim.applied`: a user's message claimed in the session of a
+/// blocked Goal answers the block, so the Goal resumes and the message's turn
+/// is its next turn (Lean `Goals.resumeOnMessage`). A user's message is a
+/// request core admitted from a client that nothing caused: no trigger (a Goal
+/// continuation or a Task fire), no parent request and no parent tool call (an
+/// Agent's session message). The Goal is written compare-and-set on the
+/// revision it was shown.
+struct ResumeOnMessage {
+    manifest: Manifest,
+}
+
+impl ResumeOnMessage {
+    fn applies(event: &ClaimApplied) -> bool {
+        let request = &event.request;
+        event.client
+            && event.fire.is_none()
+            && request.caused_by_trigger_kind.is_none()
+            && request.caused_by_parent_request_doc_id.is_none()
+            && request.caused_by_parent_tool_call_doc_id.is_none()
+            && request.input.goal_continuation.is_none()
+    }
+
+    fn effects(event: &ClaimApplied, rows: &[Vec<Row>]) -> Result<Vec<Effect>> {
+        let [sessions, goals] = rows else {
+            bail!("Goal message resume was not shown its declared rows");
+        };
+        let Some((goal, row)) = canonical_goal(&event.request.session_id, sessions, goals)? else {
+            return Ok(Vec::new());
+        };
+        let Some(post) = goal.state().and_then(GoalState::resume_on_message) else {
+            return Ok(Vec::new());
+        };
+        let now = DateTime::parse_from_rfc3339(&event.at)
+            .context("claim time is not RFC 3339")?
+            .with_timezone(&Utc);
+        Ok(vec![Effect::Write(Write::Update {
+            doc: row.doc.clone(),
+            expected: row.revision,
+            value: operator_resume::resume_state_input(&goal, post, None, now),
+            conflict: None,
+        })])
+    }
+}
+
+impl Hook<ClaimApplied> for ResumeOnMessage {
+    type Value = ();
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn reads(&self, event: &ClaimApplied) -> Vec<Query> {
+        if !Self::applies(event) {
+            return Vec::new();
+        }
+        canonical_goal_reads(&event.request.node_did, &event.request.session_id).into()
+    }
+
+    fn decide(&self, event: &ClaimApplied, rows: &[Vec<Row>]) -> Outcome<()> {
+        if !Self::applies(event) {
+            return Outcome::effects(Vec::new());
+        }
         match Self::effects(event, rows) {
             Ok(effects) => Outcome::effects(effects),
             Err(error) => Outcome::Refuse(format!("{error:#}")),
@@ -949,6 +1008,9 @@ pub fn register(registry: &mut Registry) {
         manifest: manifest(),
     }));
     registry.claim_applied.push(Arc::new(TaskGoalAssignment {
+        manifest: manifest(),
+    }));
+    registry.claim_applied.push(Arc::new(ResumeOnMessage {
         manifest: manifest(),
     }));
     registry.session_resume.push(Arc::new(RestageOnResume {

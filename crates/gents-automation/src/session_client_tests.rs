@@ -557,7 +557,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,

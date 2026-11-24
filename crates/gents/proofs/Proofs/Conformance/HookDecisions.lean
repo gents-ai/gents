@@ -258,7 +258,6 @@ inductive HaltVerdictKind where
 
 structure PausedGoalWire where
   status : String
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
   deriving Lean.ToJson
@@ -274,7 +273,7 @@ def GoalHaltOutput.ofVerdict : GoalHalt.Verdict → GoalHaltOutput
   | .unreadableHalt => { kind := .unreadableHalt, paused := none }
   | .pause paused =>
       { kind := .pause
-        paused := some { status := paused.status.toDefraDB, blockedAudits := paused.blockedAudits
+        paused := some { status := paused.status.toDefraDB
                          wrapupRequested := paused.wrapupRequested
                          wrapupCompleted := paused.wrapupCompleted } }
 
@@ -285,7 +284,7 @@ def goalHalt : Family GoalHaltInput GoalHaltOutput where
       updated := c.updated.map StampWire.ofStamp, halt := StampWire.ofStamp c.halt }
   model := fun i =>
     let goal := (i.status.bind Goals.Status.fromDefraDB?).map fun status =>
-      (⟨⟨status, 0, false, false⟩, i.updated.bind (·.instant)⟩ : GoalHalt.Goal)
+      (⟨⟨status, false, false⟩, i.updated.bind (·.instant)⟩ : GoalHalt.Goal)
     GoalHaltOutput.ofVerdict (GoalHalt.verdict goal i.halt.instant)
 
 /-! The bound on a declared history read (`Hooks.historyPermitted`). -/

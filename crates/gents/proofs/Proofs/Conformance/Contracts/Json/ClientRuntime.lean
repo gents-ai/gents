@@ -48,7 +48,7 @@ def interruptDelivery : Family InterruptDeliveryInput InterruptDeliveryOutput wh
   model := fun i =>
     { expected := QueuedSteering.interruptDeliveryTarget i.planned i.active
       goalPaused :=
-        (QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused }
+        (QueuedSteering.interruptDeliveryGoal true ⟨.active, false, false⟩).status == .paused }
 
 deriving instance Lean.ToJson for QueuedSteering.AgentSteerDisposition,
   SessionQueue.BoundaryInputKind

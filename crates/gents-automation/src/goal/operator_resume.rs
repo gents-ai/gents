@@ -534,11 +534,9 @@ pub(super) fn resume_state_input(
     let timestamp = now.to_rfc3339();
     let mut input = serde_json::json!({
         "status": post.status.as_str(),
-        "consecutive_blocked_audits": post.blocked_audits,
         "wrapup_requested": post.wrapup_requested,
         "wrapup_completed": post.wrapup_completed,
-        "last_blocked_request_id": null,
-        "last_blocked_reason": null,
+        "blocked_reason": null,
         "last_failure": null,
         "infrastructure_retry_count": 0,
         "completion_evidence": null,

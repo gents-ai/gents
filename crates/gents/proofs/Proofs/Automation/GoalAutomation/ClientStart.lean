@@ -332,9 +332,9 @@ def replace? (s : State) (assignments : Assignments) (replacement : Replacement)
         snapshot :=
           { revision := replacement.nextRevision, objective := TextNormalization.canonicalObjective objective
             execution :=
-              { goal := ⟨.active, 0, false, false⟩, sequence := 0
+              { goal := ⟨.active, false, false⟩, sequence := 0
                 lastContinuedFrom := none, latestRequest := 0, children := []
-                tokensUsed := 0, tokenBudget := budget.map Int.toNat } }
+                tokensUsed := 0, tokenBudget := Goals.initialBudget (budget.map Int.toNat) } }
         rootRequest := replacement.firstRequest, usageBaseline := replacement.sessionUsage
         activeSeconds := 0 }
     some (post, ⟨fresh, current :: assignments.retained⟩)

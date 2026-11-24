@@ -43,25 +43,22 @@ impl Provider {
         }
         match self.attempts.fetch_add(1, Ordering::SeqCst) {
             0 => None,
-            audit @ (1 | 3 | 5) => Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
-                &format!("goal-blocked-audit-{}", audit.div_ceil(2)),
+            1 => Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                "goal-blocked-report",
                 "update_goal",
                 &json!({"status":"blocked", "reason":BLOCKED_REASON}).to_string(),
             ))),
-            2 | 4 | 6 => Some(ChatAction::Sse(fake_llm::completion_text_sse(
-                "The dependency is still unavailable.",
-            ))),
-            7 => Some(ChatAction::HttpError(
+            2 => Some(ChatAction::HttpError(
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 json!({"error":{"type":"insufficient_quota", "code":"insufficient_quota", "message":"Your monthly usage limit has been reached."}}).to_string(),
             )),
-            8 => Some(ChatAction::GatedSse(
+            3 => Some(ChatAction::GatedSse(
                 vec![(Duration::ZERO, format!("data: {}\n\n", json!({"choices":[{"delta":{"content":RESUMING},"finish_reason":null}],"usage":null})))],
                 Arc::clone(&self.gate),
                 fake_llm::completion_text_sse(" and finished."),
                 emitted.clone(),
             )),
-            9.. => Some(ChatAction::Sse(fake_llm::completion_text_sse(WRAPUP))),
+            4.. => Some(ChatAction::Sse(fake_llm::completion_text_sse(WRAPUP))),
         }
     }
 
@@ -93,7 +90,7 @@ pub async fn wait_for_source_blocked(
             let settled = value["data"]["Goal"].as_array().is_some_and(|goals| {
                 goals.len() == 1
                     && goals[0]["status"] == "blocked"
-                    && goals[0]["last_blocked_reason"] == BLOCKED_REASON
+                    && goals[0]["blocked_reason"] == BLOCKED_REASON
             }) && value["data"]["AgentRequest"]
                 .as_array()
                 .is_some_and(|requests| {

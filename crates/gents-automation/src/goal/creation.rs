@@ -156,7 +156,7 @@ fn goal_creation_claim_query(creation_key: String, session_doc_id: &str) -> Stri
     let session_doc_id = escape_graphql_string(session_doc_id);
     format!(
         r#"{{ GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
-            node_did session_id objective token_budget blocked_audit_threshold max_infrastructure_retries
+            node_did session_id objective token_budget max_infrastructure_retries
         }} }}"#
     )
 }
@@ -170,7 +170,6 @@ fn goal_creation_claim_fingerprint(
         session_id: String,
         objective: String,
         token_budget: Option<i64>,
-        blocked_audit_threshold: Option<i64>,
         max_infrastructure_retries: Option<i64>,
     }
     let claims: Vec<ClaimRow> = rows(response, "GoalCreationClaim")?;
@@ -187,7 +186,6 @@ fn goal_creation_claim_fingerprint(
             objective: claim.objective,
             token_budget: claim.token_budget.map(i128::from),
             limits: gents_protocol::goal::GoalLimits {
-                blocked_audit_threshold: claim.blocked_audit_threshold,
                 max_infrastructure_retries: claim.max_infrastructure_retries,
             },
         }))
@@ -380,7 +378,6 @@ async fn stage_goal_and_claim_typed(
                         .field(goal_creation_claim::SESSION_ID)
                         .field(goal_creation_claim::OBJECTIVE)
                         .field(goal_creation_claim::TOKEN_BUDGET)
-                        .field(goal_creation_claim::BLOCKED_AUDIT_THRESHOLD)
                         .field(goal_creation_claim::MAX_INFRASTRUCTURE_RETRIES),
                 )
                 .filter(Filter::eq(
@@ -430,9 +427,6 @@ async fn stage_goal_and_claim_typed(
                 .and_then(serde_json::Value::as_i64)
                 .map(i128::from),
             limits: gents_protocol::goal::GoalLimits {
-                blocked_audit_threshold: claim
-                    .get("blocked_audit_threshold")
-                    .and_then(serde_json::Value::as_i64),
                 max_infrastructure_retries: claim
                     .get("max_infrastructure_retries")
                     .and_then(serde_json::Value::as_i64),
@@ -460,7 +454,6 @@ async fn stage_goal_and_claim_typed(
                 "requester_did": session.session.requester_did,
                 "objective": objective,
                 "token_budget": token_budget,
-                "blocked_audit_threshold": limits.blocked_audit_threshold,
                 "max_infrastructure_retries": limits.max_infrastructure_retries,
                 "created_at": now,
             }),
@@ -470,10 +463,11 @@ async fn stage_goal_and_claim_typed(
         .await?;
     }
 
+    let goal_budget = initial_goal_budget(token_budget);
     if let Some(goal) = goals.first().cloned() {
         if !goals.iter().all(|candidate| {
             candidate.objective.trim() == objective
-                && candidate.token_budget == token_budget
+                && candidate.token_budget == goal_budget
                 && candidate.pinned_limits() == limits
         }) {
             return Err(CreateGoalForSessionError::Conflict);
@@ -501,18 +495,16 @@ async fn stage_goal_and_claim_typed(
             "requester_did": session.session.requester_did,
             "objective": objective,
             "status": status.as_str(),
-            "token_budget": token_budget,
+            "token_budget": goal_budget,
             "tokens_used": 0,
             "token_usage_baseline": baseline,
             "assignment_root_request_doc_id": first_request_doc_id,
             "active_time_seconds": 0,
             "active_started_at": status.accrues_active_time().then_some(now),
-            "consecutive_blocked_audits": initial_state.blocked_audits,
             "continuation_sequence": 0,
             "wrapup_requested": initial_state.wrapup_requested,
             "wrapup_completed": initial_state.wrapup_completed,
             "infrastructure_retry_count": 0,
-            "blocked_audit_threshold": limits.blocked_audit_threshold,
             "max_infrastructure_retries": limits.max_infrastructure_retries,
             "created_at": now,
             "updated_at": now,
@@ -530,21 +522,18 @@ async fn stage_goal_and_claim_typed(
             node_did: node_did.to_string(),
             objective: objective.to_string(),
             status: status.as_str().to_string(),
-            token_budget,
+            token_budget: goal_budget,
             tokens_used: Some(0),
             token_usage_baseline: Some(baseline),
             assignment_root_request_doc_id: first_request_doc_id.map(str::to_owned),
             active_time_seconds: Some(0),
             active_started_at: status.accrues_active_time().then(|| now.to_string()),
-            consecutive_blocked_audits: Some(initial_state.blocked_audits),
-            last_blocked_request_id: None,
-            last_blocked_reason: None,
+            blocked_reason: None,
             last_continued_from_request_id: None,
             continuation_sequence: Some(0),
             wrapup_requested: Some(initial_state.wrapup_requested),
             wrapup_completed: Some(initial_state.wrapup_completed),
             infrastructure_retry_count: Some(0),
-            blocked_audit_threshold: limits.blocked_audit_threshold,
             max_infrastructure_retries: limits.max_infrastructure_retries,
             last_failure: None,
             completion_evidence: None,
@@ -708,7 +697,6 @@ async fn create_goal_for_session_inner(
                         start,
                         initial_state: GoalState {
                             status: GoalStatus::Active,
-                            blocked_audits: 0,
                             wrapup_requested: false,
                             wrapup_completed: false,
                         },
@@ -762,7 +750,7 @@ async fn create_goal_for_session_inner(
                 .map_err(CreateGoalForSessionError::Storage)?;
             if let Some(existing) = existing {
                 if existing.objective.trim() == start.objective
-                    && existing.token_budget == token_budget
+                    && existing.token_budget == initial_goal_budget(token_budget)
                     && existing.pinned_limits() == requested_fingerprint.limits
                     && claim == Some(requested_fingerprint.clone())
                 {

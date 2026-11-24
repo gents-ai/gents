@@ -20,16 +20,11 @@ pub(super) async fn load_timeline_goal_versions_for_session(
                     height: version.height,
                     parent_commit_cids: version.parent_commit_cids,
                     status: goal.status,
-                    consecutive_blocked_audits: goal
-                        .consecutive_blocked_audits
-                        .unwrap_or_default()
-                        .max(0),
                     wrapup_requested: goal.wrapup_requested.unwrap_or(false),
                     wrapup_completed: goal.wrapup_completed.unwrap_or(false),
                     token_budget: goal.token_budget,
                     tokens_used: goal.tokens_used.unwrap_or_default().max(0),
-                    last_blocked_request_id: goal.last_blocked_request_id,
-                    last_blocked_reason: goal.last_blocked_reason,
+                    blocked_reason: goal.blocked_reason,
                     last_failure: goal.last_failure,
                     completion_evidence: goal.completion_evidence,
                     created_at: goal.created_at,

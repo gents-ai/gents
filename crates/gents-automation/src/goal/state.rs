@@ -39,46 +39,29 @@ pub enum GoalDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalAuditObservation {
-    SameRequest,
-    SameCondition,
-    NewCondition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalAction {
     Pause,
     Resume,
     Stop,
     Complete,
-    BlockedAudit(GoalAuditObservation),
-    OperatorBlock,
+    /// One blocked report (Lean `Goals.Action.block`).
+    Block,
     UsageLimit,
     BudgetExhausted,
     WrapupFinished,
     WrapupAbandoned,
-    CleanTurn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalState {
     pub status: GoalStatus,
-    pub blocked_audits: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
 }
 
 impl GoalState {
+    /// Lean `Goals.step?`.
     pub fn step(self, action: GoalAction) -> Option<Self> {
-        self.step_with_blocked_audit_threshold(action, BLOCKED_AUDIT_THRESHOLD)
-    }
-
-    /// Lean `Goals.step?` with the Goal's pinned blocked-audit threshold.
-    pub fn step_with_blocked_audit_threshold(
-        self,
-        action: GoalAction,
-        blocked_audit_threshold: i64,
-    ) -> Option<Self> {
         match action {
             GoalAction::Pause
                 if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) =>
@@ -92,16 +75,17 @@ impl GoalState {
                 if matches!(
                     self.status,
                     GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::UsageLimited
-                ) =>
+                ) || (self.status == GoalStatus::BudgetLimited && self.wrapup_completed) =>
             {
+                let owed = self.wrapup_requested && !self.wrapup_completed;
                 Some(Self {
-                    status: if self.wrapup_requested && !self.wrapup_completed {
+                    status: if owed {
                         GoalStatus::BudgetLimited
                     } else {
                         GoalStatus::Active
                     },
-                    blocked_audits: 0,
-                    ..self
+                    wrapup_requested: owed,
+                    wrapup_completed: false,
                 })
             }
             GoalAction::Complete
@@ -121,25 +105,7 @@ impl GoalState {
                     ..self
                 })
             }
-            GoalAction::BlockedAudit(observation) if self.status == GoalStatus::Active => {
-                let blocked_audits = match observation {
-                    GoalAuditObservation::SameRequest => self.blocked_audits.max(0),
-                    GoalAuditObservation::SameCondition => {
-                        self.blocked_audits.max(0).saturating_add(1)
-                    }
-                    GoalAuditObservation::NewCondition => 1,
-                };
-                Some(Self {
-                    status: if blocked_audits >= blocked_audit_threshold {
-                        GoalStatus::Blocked
-                    } else {
-                        GoalStatus::Active
-                    },
-                    blocked_audits,
-                    ..self
-                })
-            }
-            GoalAction::OperatorBlock if self.status == GoalStatus::Active => Some(Self {
+            GoalAction::Block if self.status == GoalStatus::Active => Some(Self {
                 status: GoalStatus::Blocked,
                 ..self
             }),
@@ -166,42 +132,28 @@ impl GoalState {
                     ..self
                 })
             }
-            GoalAction::CleanTurn if self.status == GoalStatus::Active => Some(Self {
-                blocked_audits: 0,
-                ..self
-            }),
             _ => None,
         }
     }
+
+    /// Lean `Goals.resumeOnMessage`: a user's message into the session of a
+    /// blocked Goal resumes it.
+    pub fn resume_on_message(self) -> Option<Self> {
+        (self.status == GoalStatus::Blocked)
+            .then(|| self.step(GoalAction::Resume))
+            .flatten()
+    }
 }
 
-pub fn next_blocked_audit(
-    previous_count: i64,
-    previous_reason: Option<&str>,
-    previous_request_id: Option<&str>,
-    reason: &str,
-    request_id: &str,
-    blocked_audit_threshold: i64,
-) -> (i64, bool) {
-    let observation = if previous_request_id == Some(request_id) {
-        GoalAuditObservation::SameRequest
-    } else if previous_reason == Some(reason) {
-        GoalAuditObservation::SameCondition
-    } else {
-        GoalAuditObservation::NewCondition
-    };
-    let state = GoalState {
-        status: GoalStatus::Active,
-        blocked_audits: previous_count,
-        wrapup_requested: false,
-        wrapup_completed: false,
-    }
-    .step_with_blocked_audit_threshold(
-        GoalAction::BlockedAudit(observation),
-        blocked_audit_threshold,
-    )
-    .expect("blocked audit is legal from active");
-    (state.blocked_audits, state.status == GoalStatus::Blocked)
+/// Lean `Goals.budgetReached`: charged tokens reached the token budget; an
+/// absent budget is lifted.
+pub fn goal_budget_reached(token_budget: Option<i64>, tokens_used: i64) -> bool {
+    token_budget.is_some_and(|budget| budget <= tokens_used)
+}
+
+/// Lean `Goals.initialBudget`: the budget a new Goal starts with.
+pub fn initial_goal_budget(requested: Option<i64>) -> Option<i64> {
+    Some(requested.unwrap_or(gents_protocol::goal::DEFAULT_GOAL_TOKEN_BUDGET))
 }
 
 pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {
@@ -281,7 +233,7 @@ fn operator_action_for_status(current: GoalStatus, target: GoalStatus) -> Option
     Some(match target {
         GoalStatus::Active => GoalAction::Resume,
         GoalStatus::Paused => GoalAction::Pause,
-        GoalStatus::Blocked => GoalAction::OperatorBlock,
+        GoalStatus::Blocked => GoalAction::Block,
         GoalStatus::UsageLimited => GoalAction::UsageLimit,
         GoalStatus::BudgetLimited => GoalAction::BudgetExhausted,
         GoalStatus::Complete => GoalAction::Complete,

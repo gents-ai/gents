@@ -7,7 +7,7 @@ fn goal_creation_claim_selection(node_did: &str, session_id: &str, session_doc_i
             order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
         ) {{ {GOAL_FIELDS} }}
         GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }}, session_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
-            goal_id node_did session_id objective token_budget blocked_audit_threshold max_infrastructure_retries
+            goal_id node_did session_id objective token_budget max_infrastructure_retries
         }}"#,
         escape_graphql_string(node_did),
         escape_graphql_string(session_id),
@@ -125,9 +125,6 @@ fn verify_goal_creation_claim_cross_check(
             .and_then(serde_json::Value::as_i64)
             .map(i128::from),
         limits: GoalLimits {
-            blocked_audit_threshold: claim
-                .get("blocked_audit_threshold")
-                .and_then(serde_json::Value::as_i64),
             max_infrastructure_retries: claim
                 .get("max_infrastructure_retries")
                 .and_then(serde_json::Value::as_i64),
@@ -137,7 +134,7 @@ fn verify_goal_creation_claim_cross_check(
         goal.node_did == node_did
             && goal.session_id == session_id
             && goal.objective.trim() == expected_claim.objective
-            && goal.token_budget == token_budget
+            && goal.token_budget == initial_goal_budget(token_budget)
             && goal.pinned_limits() == limits
             && claim_goal_id == goal.goal_id
             && claim == expected_claim,

@@ -2906,7 +2906,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
         SESSION,
         Some("Already terminal"),
         Some(GoalStatus::Complete),
-        None,
+        Some(crate::goal::initial_goal_budget(None)),
         None,
     )
     .await
@@ -3940,8 +3940,8 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
 }
 
 #[tokio::test]
-async fn resume_resets_blocked_audit_identity_and_count() {
-    let db = test_db("goal-resume-audit-reset").await;
+async fn resume_clears_the_blocked_reason() {
+    let db = test_db("goal-resume-blocked-reason").await;
     let did = db.node_identity.did();
     let (user, agent) = goal_creation_actors(&db).await;
     let access = db.client_access(&user);
@@ -3956,24 +3956,26 @@ async fn resume_resets_blocked_audit_identity_and_count() {
         &agent_access,
         did,
         SESSION,
-        Some("Resume with a fresh blocked audit"),
+        Some("Resume after a blocked report"),
         Some(GoalStatus::Active),
         None,
         None,
     )
     .await
     .unwrap();
-    seed_goal_fields_from_access(&agent_access, &goal,
-        r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await;
+    seed_goal_fields_from_access(
+        &agent_access,
+        &goal,
+        r#"status: "blocked", blocked_reason: "needs approval", active_started_at: null"#,
+    )
+    .await;
     let receipt = crate::goal::resume_goal_request(&access, &user, did, SESSION, "request-3")
         .await
         .unwrap();
     assert!(receipt.created);
     let resumed = load_goal_as(&access, did).await.unwrap();
     assert_eq!(resumed.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(resumed.consecutive_blocked_audits, Some(0));
-    assert_eq!(resumed.last_blocked_request_id, None);
-    assert_eq!(resumed.last_blocked_reason, None);
+    assert_eq!(resumed.blocked_reason, None);
     assert_eq!(goal_children_from_access(&agent_access).await.len(), 1);
 }
 
@@ -4269,11 +4271,8 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
         Some(true)
     );
     let content = child["content"].as_str().unwrap();
-    assert!(content.contains("one final wrap-up turn"), "{content}");
-    assert!(
-        content.contains("Do not expect another automatic continuation"),
-        "{content}"
-    );
+    assert!(content.contains("one wrap-up turn"), "{content}");
+    assert!(content.contains("do not start new work"), "{content}");
 }
 
 #[tokio::test]

@@ -265,7 +265,7 @@ async fn observe_repeat(f: &Fixture, first_child: &str) -> Value {
                 "child":number(&child.request_id),"sequence":sequence})
         })
         .collect();
-    json!({"status":g.status,"blocked_audits":g.consecutive_blocked_audits.unwrap_or(0),
+    json!({"status":g.status,
         "wrapup_requested":g.wrapup_requested.unwrap_or(false),
         "wrapup_completed":g.wrapup_completed.unwrap_or(false),
         "sequence":g.continuation_sequence(),
