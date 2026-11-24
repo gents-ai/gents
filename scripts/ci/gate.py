@@ -272,6 +272,42 @@ def fail(message):
     sys.exit(2)
 
 
+# Sanitizing an artifact name to `[A-Za-z0-9._-]`: GitHub bans space, " ,
+# : < > | ? * \ /, and leading/trailing whitespace in artifact names (and
+# rejects an empty one). Unit keys legitimately contain several of these —
+# `build:portable:3` or `ts-browser:1/3` — so the ci-latency upload name is
+# built here rather than in the action's YAML, and test_gate.py asserts it.
+LATENCY_ARTIFACT_FORBIDDEN = ' ",:<>|?*\\/'
+
+
+def latency_artifact_name(unit):
+    """The upload-artifact name for a gate unit's latency sample (W53)."""
+    name = "ci-latency-" + re.sub(rf"[{re.escape(LATENCY_ARTIFACT_FORBIDDEN)}\s/]", "-", unit).strip("-")
+    if not name or len(name) > 256:
+        fail(f"artifact name for unit {unit!r} is empty or over 256 characters")
+    return name
+
+
+def latency_sample_paths(unit):
+    """Where the gate-record action stages a unit's latency sample (W53)."""
+    directory = Path(os.environ["RUNNER_TEMP"]) / "latency-sample"
+    return directory, latency_artifact_name(unit)
+
+
+def latency_sample(unit):
+    """Stage a unit's latency sample for the ci-latency collector (W53).
+
+    Writes record.json ({unit, run_id}) — the collector's source of the
+    exact unit key — into the staging directory and prints the sanitized
+    artifact name, NUL-terminated for `read -d ""`.
+    """
+    directory, name = latency_sample_paths(unit)
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / "record.json", "w") as record:
+        json.dump({"unit": unit, "run_id": os.environ.get("GITHUB_RUN_ID", "")}, record)
+    sys.stdout.write(f"{name}\0")
+
+
 def workspace():
     """Member name -> (directory, workspace dependencies of every kind)."""
     return parse_workspace(workspace_metadata())
@@ -1029,14 +1065,36 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
     return verdict == "ok"
 
 
+def latency_json():
+    """The W53 per-run latency JSON block gate.py writes to $GITHUB_STEP_SUMMARY."""
+    latency = {
+        "steps": [
+            {"step": label, "seconds": round(seconds, 1)}
+            for label, _, _, seconds in results
+        ],
+        "total_seconds": round(sum(seconds for *_, seconds in results), 1),
+    }
+    return json.dumps(latency, indent=2)
+
+
 def report():
     lines = ["| step | result | tests | seconds |", "|---|---|---|---|"]
     lines += [f"| `{label}` | {verdict} | {counts} | {seconds:.0f} |" for label, verdict, counts, seconds in results]
     table = "\n".join(lines)
     print("\n" + table, flush=True)
+    # W53: machine-readable latency block for cross-run tracking.
+    latency_block = latency_json()
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(table + "\n")
+            summary.write(
+                "\n```json\n" + latency_block + "\n```\n"
+            )
+    # Also drop it where the latency collector can find it (W53).
+    path = os.environ.get("GATE_LATENCY_JSON", os.path.join(os.environ.get("RUNNER_TEMP", "."), "latency.json"))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        f.write(latency_block)
     return all(verdict == "ok" for _, verdict, _, _ in results)
 
 
@@ -1947,11 +2005,18 @@ def main():
     commands.add_parser("packages").add_argument("groups", nargs="+")
     commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
     commands.add_parser("record", help="record that a plan unit passed on this runner").add_argument("unit")
+    commands.add_parser("latency-sample", help="print the W53 latency sample's staging directory and "
+                                               "sanitized artifact name, NUL-separated").add_argument("unit")
     commands.add_parser("runners", help="reserve runners for the merge queue (.github/ci-runners.json `reserve`)") \
         .add_argument("--apply", action="store_true")
     arguments = parser.parse_args()
     if arguments.command == "runners":
         reconcile_runners(arguments.apply)
+        return
+    if arguments.command == "latency-sample":
+        # One NUL-terminated field: the consumer's `read -d ""` reads a
+        # single record, and the staging directory is the action's constant.
+        latency_sample(arguments.unit)
         return
     if arguments.command == "verdict":
         needs = json.loads(os.environ["NEEDS"])
