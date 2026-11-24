@@ -10,6 +10,7 @@
     "record linkage",
     "guarded updates and deletes",
     "self-granted write access",
-    "another agent's read and write access, granted, exercised and revoked"
+    "another agent's read and write access, granted, exercised and revoked",
+    "per-record access for other agents in one collection, granted, exercised and revoked"
   ]
 }
