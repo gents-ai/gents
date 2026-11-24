@@ -75,6 +75,7 @@ where
             approval_home: None,
             request_admission,
             root_execution_guard: None,
+            tool_rebinding: None,
             auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks::default(),
             #[cfg(test)]
             driven_deadline: None,
@@ -161,6 +162,16 @@ where
         guard: Option<gents_tools::surface::RootExecutionGuard>,
     ) -> Self {
         self.root_execution_guard = guard;
+        self
+    }
+
+    /// Lets a request whose config call commits its own Tools rebind to the
+    /// generation holding the change from its next turn.
+    pub(in crate::runtime::agent) fn with_tool_rebinding(
+        mut self,
+        source: super::RebindingSource,
+    ) -> Self {
+        self.tool_rebinding = Some(source);
         self
     }
 

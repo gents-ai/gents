@@ -97,6 +97,15 @@ impl PackInstaller {
                 })
             })
             .collect();
+        let rebinding = if commit {
+            crate::tools_rebinding::after_tools_commit(&self.envelope).await
+        } else {
+            crate::tools_rebinding::ToolsRebinding::NotOwn
+        };
+        let rebound = matches!(
+            rebinding,
+            crate::tools_rebinding::ToolsRebinding::Rebound { .. }
+        );
         let call = |verb: &[&str]| {
             let mut argv = verb.to_vec();
             argv.push(&coordinate);
@@ -106,11 +115,13 @@ impl PackInstaller {
             json!({"argv": argv, "options": {"agent": agent}})
         };
         ordered! {
-            "effect": match (commit, remove) {
-                (true, false) => "The pack's plugins are selected on the agent's Tools; a fresh request can call them.",
-                (true, true) => "The pack's plugins are no longer selected on the agent's Tools.",
-                (false, _) => "Nothing was written; wired lists what the call below would change.",
+            "effect": match (commit, remove, rebound) {
+                (true, false, true) => "The pack's plugins are selected on your Tools; your next turn can call them.",
+                (true, false, false) => "The pack's plugins are selected on the agent's Tools; a fresh request can call them.",
+                (true, true, _) => "The pack's plugins are no longer selected on the agent's Tools.",
+                (false, _, _) => "Nothing was written; wired lists what the call below would change.",
             },
+            "next_turn": super::rebinding::next_turn(&rebinding),
             "wired": wired,
             "pack": coordinate,
             "agent": agent,

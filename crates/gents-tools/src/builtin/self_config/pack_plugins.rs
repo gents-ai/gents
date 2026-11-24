@@ -74,7 +74,7 @@ impl PackInstaller {
             "installed": installed.record,
             "next_call": single,
             "next_calls": discovery,
-            "guidance": if installed.plugins.is_empty() { "The pack's assets and pages are installed; a page appears in ux list." } else { "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin." },
+            "guidance": if installed.plugins.is_empty() { "The pack's assets and pages are installed; a page appears in ux list." } else { "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; call each selected plugin from your next turn." },
             "granted_authority": plan.authority,
             "plugins": installed.plugins,
             "artifact_digest": distribution.digest(),

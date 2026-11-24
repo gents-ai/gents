@@ -20,7 +20,7 @@ use super::surface_publication::{
 use gents_pack::plugin::store::{PublishedPluginReadError, ReadOutcome, StoreReadPin};
 use gents_protocol::error_chain::ErrorChain;
 
-pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
+pub(in crate::runtime::agent) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 pub(super) const CONTROL_RECONCILE_LOCAL_DEBOUNCE: Duration = Duration::from_millis(250);
 pub(super) const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);

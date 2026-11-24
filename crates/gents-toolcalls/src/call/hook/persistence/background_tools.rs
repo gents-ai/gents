@@ -102,7 +102,8 @@ impl DefraSessionHook {
             .await;
         }
 
-        let Some(target_tool) = self.background_tool_registry.get(target_name) else {
+        let bindings = self.tool_bindings();
+        let Some(target_tool) = bindings.background_tool_registry.get(target_name) else {
             return complete_spawn_process_failure(
                 self,
                 &mut parent_lifecycle,
@@ -112,7 +113,7 @@ impl DefraSessionHook {
                     "/tool_name",
                     target_name,
                     format!("tool '{target_name}' is not allowed for backgrounding by this agent"),
-                    self.background_tool_registry.allowlist(),
+                    bindings.background_tool_registry.allowlist(),
                 ),
                 None,
             )
@@ -142,10 +143,10 @@ impl DefraSessionHook {
             )
             .await;
         }
-        let selected_tool_identity = self.remote_tools.as_ref().and_then(|remote| {
+        let selected_tool_identity = bindings.remote_tools.as_ref().and_then(|remote| {
             gents_tools::mcp::meta::selected_remote_identity(target_name, &target_args, remote)
         });
-        let lifetime = self
+        let lifetime = bindings
             .background_tool_registry
             .timeouts()
             .for_execution(

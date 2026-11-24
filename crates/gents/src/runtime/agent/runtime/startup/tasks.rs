@@ -67,6 +67,7 @@ pub(super) fn runtime_context(
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
         job_driver,
         enrollment_authority: enrollment_handle.clone(),
+        active_snapshots: Default::default(),
     };
     runtime
 }

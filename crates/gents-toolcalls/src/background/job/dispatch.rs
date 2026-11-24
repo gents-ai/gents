@@ -198,7 +198,7 @@ pub async fn run_step0(
                         unwired.missing.join(", ")
                     ),
                     format!(
-                        "Next: add {} to your Tools with config [\"pack\",\"wire\",\"{}\"] (it needs the pack grant; without it ask the operator to run `gents config pack wire {coordinate} --agent <you>`), start a fresh request, then call `{tool}` again",
+                        "Next: add {} to your Tools with config [\"pack\",\"wire\",\"{}\"] and call `{tool}` again next turn (needs the pack grant; else ask the operator to run `gents config pack wire {coordinate} --agent <you>` and retry next request)",
                         unwired.missing.join(", "),
                         installed.owner_pack_coordinate.as_deref().unwrap_or("<PACK>"),
                     ),
@@ -865,7 +865,7 @@ fn step0_refusal(
         Refusal::NotAvailable => (
             FailureClass::ServiceUnavailable,
             format!("{tool} has no job grant for this agent"),
-            format!("Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships {coordinate}>\"], which writes its `job` block (it needs the pack grant; without it ask the operator to run `gents config pack wire {coordinate} --agent <you>`), then start a fresh request"),
+            format!("Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships {coordinate}>\"] for its `job` block and call it next turn (needs the pack grant; else ask the operator to run `gents config pack wire {coordinate} --agent <you>`, then retry next request)"),
         ),
         Refusal::DepthExceeded => (
             FailureClass::PolicyDenied,

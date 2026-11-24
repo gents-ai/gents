@@ -429,7 +429,7 @@ pub(crate) fn write_grant_guidance(
             "how": format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there and you do not hold the tools category of config, so you cannot add it. The node's User, or an agent that configures your Tools (the Engineer), adds it with config {{\"argv\":[\"tools\",\"update\"],\"options\":{{\"agent\":YOUR_AGENT_DID}},\"set\":{{\"datastore\":{{...}}}}}}."),
         });
     }
-    let how = format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there yet. Add it with next_call, then write in a fresh request.");
+    let how = format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there yet. Add it with next_call, then write in your next turn.");
     match datastore {
         Some(group) => {
             let mut group = group.clone();

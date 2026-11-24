@@ -42,6 +42,22 @@ impl SelectedConfiguration {
         self.check_documents(self.documents.clone(), true).await
     }
 
+    /// Whether the selected documents of `collection` are still at the
+    /// versions this generation resolved.
+    pub async fn current_in(
+        &self,
+        collection: gents_store::collection::Collection,
+    ) -> Result<bool, ConfigurationVisibilityError> {
+        self.validate()?;
+        let documents = self
+            .documents
+            .iter()
+            .filter(|document| document.collection == collection)
+            .cloned()
+            .collect();
+        self.check_documents(documents, true).await
+    }
+
     fn validate(&self) -> Result<(), ConfigurationVisibilityError> {
         if !matches!(self.documents.first(), Some(doc) if doc.collection == gents_store::collection::Collection::Agent)
             || self.documents.iter().any(|doc| {

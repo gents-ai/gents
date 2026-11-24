@@ -17,7 +17,7 @@ Stop at the first break:
 4. Is the trigger enabled and pointing at an enabled task?
 5. Was a fire recorded? Check the trigger's status and last error.
 6. Was a request created? Read its state and failure reason.
-7. Did the agent have the tools? Tools apply to later requests only.
+7. Did the agent have the tools? Tools apply to later turns only.
 
 ## A tool is missing
 
