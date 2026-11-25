@@ -251,8 +251,11 @@ impl Session {
 mod tests {
     use super::*;
     use crate::plugin::rounds;
+    use crate::test_support::doubles::{
+        AskingToolEffects, FatalToolEffects, FormCheckingToolEffects, RecordingToolEffects,
+        RoundClock, SlowToolEffects,
+    };
     use gents_pack::{plugin::PluginBudget, plugin::PluginOutcome, plugin::PluginVerdict};
-    use std::sync::Mutex;
 
     #[test]
     fn support_includes_lifecycle_and_job_tools() {
@@ -270,102 +273,9 @@ mod tests {
         ));
     }
 
-    #[derive(Default)]
-    struct Tools(Mutex<Vec<(u32, String, Value)>>);
-
-    impl ToolEffectDispatcher for Tools {
-        fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
-            Box::pin(async {
-                ["query", "charts"]
-                    .into_iter()
-                    .map(|name| ToolDefinition {
-                        name: name.into(),
-                        description: String::new(),
-                        parameters: json!({"type":"object"}),
-                    })
-                    .collect()
-            })
-        }
-
-        fn call<'a>(
-            &'a self,
-            _parent: &'a gents_loop::tool::ToolCallEnvelope,
-            ordinal: u32,
-            name: &'a str,
-            arguments: &'a str,
-        ) -> gents_loop::tool::BoxFuture<
-            'a,
-            Result<gents_loop::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
-        > {
-            Box::pin(async move {
-                let input: Value = serde_json::from_str(arguments).unwrap();
-                self.0
-                    .lock()
-                    .unwrap()
-                    .push((ordinal, name.to_owned(), input.clone()));
-                let result = match name {
-                    "query" => json!({"columns":["day","sales"],"rows":[["Mon",10],["Tue",20]]}),
-                    "charts" => {
-                        assert_eq!(
-                            input["data"],
-                            json!({"columns":["day","sales"],"rows":[["Mon",10],["Tue",20]]})
-                        );
-                        json!({"alt":"Sales by day","rendered":true})
-                    }
-                    _ => {
-                        return Err(ToolEffectError::Unavailable(
-                            "tool is not on this request's selected surface".into(),
-                        ));
-                    }
-                };
-                Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
-                    result.to_string(),
-                ))
-            })
-        }
-    }
-
     #[tokio::test]
     async fn a_child_is_asked_for_a_structured_result_only_where_it_offers_one() {
-        #[derive(Default)]
-        struct Forms(Mutex<Vec<Value>>);
-
-        impl ToolEffectDispatcher for Forms {
-            fn call<'a>(
-                &'a self,
-                _parent: &'a gents_loop::tool::ToolCallEnvelope,
-                _ordinal: u32,
-                _name: &'a str,
-                arguments: &'a str,
-            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-                Box::pin(async move {
-                    self.0
-                        .lock()
-                        .unwrap()
-                        .push(serde_json::from_str(arguments).unwrap());
-                    Ok(ToolOutcome::Completed("{}".into()))
-                })
-            }
-
-            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
-                Box::pin(async {
-                    [
-                        ("files", json!({"raw_json": {"type": "boolean"}})),
-                        ("named", json!({"raw_json": {"type": "string"}})),
-                        ("plain", json!({})),
-                    ]
-                    .into_iter()
-                    .map(|(name, properties)| ToolDefinition {
-                        name: name.into(),
-                        description: String::new(),
-                        parameters: json!({"type": "object", "properties": properties}),
-                    })
-                    .collect()
-                })
-            }
-        }
-
-        let forms = Arc::new(Forms::default());
+        let forms = Arc::new(FormCheckingToolEffects::default());
         let parent = gents_loop::tool::ToolCallEnvelope::default()
             .with_effects(Some(forms.clone() as Arc<dyn ToolEffectDispatcher>));
         let mut session = Session::for_call(true, &parent).unwrap();
@@ -393,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn rounds_chain_a_query_result_into_a_chart_without_model_calls() {
-        let tools = Arc::new(Tools::default());
+        let tools = Arc::new(RecordingToolEffects::default());
         let parent = gents_loop::tool::ToolCallEnvelope::default()
             .with_effects(Some(tools.clone() as Arc<dyn ToolEffectDispatcher>));
         {
@@ -455,7 +365,7 @@ mod tests {
         let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.path().to_owned(),
         )));
-        let tools = Arc::new(Tools::default());
+        let tools = Arc::new(RecordingToolEffects::default());
         for granted in [false, true] {
             let selected = gents_documents::PluginToolRef {
                 plugin: "team/plugin".into(),
@@ -487,7 +397,7 @@ mod tests {
         let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.path().to_owned(),
         )));
-        let tools = Arc::new(Tools::default());
+        let tools = Arc::new(RecordingToolEffects::default());
         let input = json!({"value": 1, "state": "caller", "tool_calls": false,
             "tool_results": {"forged": true}});
         for (granted, live) in [(false, true), (true, false), (true, true)] {
@@ -528,40 +438,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_fatal_hook_termination_cannot_be_swallowed_by_the_guest() {
-        struct Fatal;
-        impl ToolEffectDispatcher for Fatal {
-            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
-                Box::pin(async {
-                    ["query"]
-                        .into_iter()
-                        .map(|name| ToolDefinition {
-                            name: name.into(),
-                            description: String::new(),
-                            parameters: json!({"type":"object"}),
-                        })
-                        .collect()
-                })
-            }
-
-            fn call<'a>(
-                &'a self,
-                _parent: &'a gents_loop::tool::ToolCallEnvelope,
-                _: u32,
-                _: &'a str,
-                _: &'a str,
-            ) -> gents_loop::tool::BoxFuture<
-                'a,
-                Result<gents_loop::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
-            > {
-                Box::pin(async {
-                    Err(ToolEffectError::Fatal(
-                        "durable child settlement failed".into(),
-                    ))
-                })
-            }
-        }
         let parent = gents_loop::tool::ToolCallEnvelope::default()
-            .with_effects(Some(Arc::new(Fatal) as Arc<dyn ToolEffectDispatcher>));
+            .with_effects(Some(
+                Arc::new(FatalToolEffects) as Arc<dyn ToolEffectDispatcher>
+            ));
         {
             let session = Session::for_call(true, &parent).unwrap();
             let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -622,7 +502,7 @@ mod tests {
         for case in gents_lean_vocab::families::plugin_resources_availabilities::cases() {
             let granted = case.input.grant;
             let live: Option<Arc<dyn ToolEffectDispatcher>> = match case.input.dispatcher.as_str() {
-                "live" | "child" => Some(Arc::new(Tools::default())),
+                "live" | "child" => Some(Arc::new(RecordingToolEffects::default())),
                 "absent" => None,
                 dispatcher => panic!("unknown dispatcher scope {dispatcher}"),
             };
@@ -689,60 +569,13 @@ mod tests {
         });
     }
 
-    #[derive(Clone)]
-    struct RoundClock(Arc<Mutex<std::time::Instant>>);
-
-    impl RoundClock {
-        pub fn new() -> Self {
-            Self(Arc::new(Mutex::new(std::time::Instant::now())))
-        }
-
-        fn now(&self) -> std::time::Instant {
-            *self.0.lock().unwrap()
-        }
-
-        fn advance(&self, milliseconds: u64) {
-            *self.0.lock().unwrap() += std::time::Duration::from_millis(milliseconds);
-        }
-    }
-
     #[tokio::test]
     async fn serving_children_is_not_charged_to_the_guest_clock() {
-        struct Slow(RoundClock);
-        impl ToolEffectDispatcher for Slow {
-            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
-                Box::pin(async {
-                    ["slow"]
-                        .into_iter()
-                        .map(|name| ToolDefinition {
-                            name: name.into(),
-                            description: String::new(),
-                            parameters: json!({"type":"object"}),
-                        })
-                        .collect()
-                })
-            }
-
-            fn call<'a>(
-                &'a self,
-                _parent: &'a gents_loop::tool::ToolCallEnvelope,
-                _: u32,
-                _: &'a str,
-                _: &'a str,
-            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-                let clock = self.0.clone();
-                Box::pin(async move {
-                    clock.advance(400);
-                    Ok(ToolOutcome::Completed("\"slow\"".into()))
-                })
-            }
-        }
         let clock = RoundClock::new();
-        let parent =
-            gents_loop::tool::ToolCallEnvelope::default()
-                .with_effects(Some(
-                    Arc::new(Slow(clock.clone())) as Arc<dyn ToolEffectDispatcher>
-                ));
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(
+                Arc::new(SlowToolEffects(clock.clone())) as Arc<dyn ToolEffectDispatcher>
+            ));
         {
             let session = Session::for_call(true, &parent).unwrap();
             let guest_clock = clock.clone();
@@ -793,59 +626,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_child_parked_on_operator_consent_is_not_charged_to_the_guest_clock() {
-        struct Asking(std::path::PathBuf, std::path::PathBuf, RoundClock);
-        impl ToolEffectDispatcher for Asking {
-            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
-                Box::pin(async {
-                    ["read"]
-                        .into_iter()
-                        .map(|name| ToolDefinition {
-                            name: name.into(),
-                            description: String::new(),
-                            parameters: json!({"type":"object"}),
-                        })
-                        .collect()
-                })
-            }
-
-            fn call<'a>(
-                &'a self,
-                _parent: &'a gents_loop::tool::ToolCallEnvelope,
-                _: u32,
-                _: &'a str,
-                _: &'a str,
-            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-                let home = self.0.clone();
-                let target = self.1.clone();
-                let clock = self.2.clone();
-                Box::pin(async move {
-                    let resolved = gents_pack::plugin::allowed::resolve(
-                        &target.display().to_string(),
-                        None,
-                        None,
-                        &home,
-                    )
-                    .unwrap();
-                    let request = gents_tools::plugin::approval::Request::new(
-                        "team/plugin",
-                        &resolved,
-                        gents_pack::pack::BindAccess::Read,
-                        None,
-                    );
-                    clock.advance(400);
-                    let allowed = gents_tools::plugin::approval::ask(
-                        None,
-                        &home,
-                        &request,
-                        gents_tools::plugin::approval::WAIT,
-                    )
-                    .await
-                    .unwrap();
-                    assert!(allowed, "the operator allowed the child's path");
-                    Ok(ToolOutcome::Completed("\"allowed\"".into()))
-                })
-            }
-        }
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("in.json");
@@ -858,7 +638,7 @@ mod tests {
         .unwrap();
         let clock = RoundClock::new();
         let parent = gents_loop::tool::ToolCallEnvelope::default().with_effects(Some(Arc::new(
-            Asking(home.path().to_owned(), target, clock.clone()),
+            AskingToolEffects(home.path().to_owned(), target, clock.clone()),
         )
             as Arc<dyn ToolEffectDispatcher>));
         {

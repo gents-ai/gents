@@ -1,4 +1,5 @@
 pub mod background_completion;
+pub mod doubles;
 pub mod plugin;
 pub mod plugin_job;
 pub mod self_config;

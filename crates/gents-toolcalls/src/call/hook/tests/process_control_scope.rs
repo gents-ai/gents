@@ -41,36 +41,15 @@ async fn unowned_live_process_group_keeps_the_retained_owner_record() {
         registry.process_records.remove("stale-doc");
     }
 }
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::test_support::doubles::PendingTool;
 use gents_store::identity::NodeIdentity;
 
-struct PendingTool;
-
-impl ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "slow_tool".into()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "slow_tool".into(),
-                description: "Held work for principal-scoped process controls".into(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
+fn slow_pending_tool() -> PendingTool {
+    PendingTool::new(
+        "slow_tool",
+        "Held work for principal-scoped process controls",
+        json!({"type":"object"}),
+    )
 }
 
 async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> serde_json::Value {
@@ -195,7 +174,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
     let hook = signed_hook_as(&node, identity.did(), FailurePolicy::default())
         .await
         .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-            vec![Box::new(PendingTool)],
+            vec![Box::new(slow_pending_tool())],
             &["slow_tool".into()],
         ))
         .with_background_execution_registry(executions.clone());
@@ -359,7 +338,7 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     let owner = signed_hook(&node, FailurePolicy::default())
         .await
         .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-            vec![Box::new(PendingTool)],
+            vec![Box::new(slow_pending_tool())],
             &["slow_tool".into()],
         ))
         .with_background_execution_registry(executions.clone());
@@ -548,7 +527,7 @@ mod job_control {
             let owner = signed_hook_as(&node, db.node_identity.did(), FailurePolicy::default())
                 .await
                 .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-                    vec![Box::new(PendingTool)],
+                    vec![Box::new(slow_pending_tool())],
                     &["slow_tool".into()],
                 ))
                 .with_background_execution_registry(executions.clone());

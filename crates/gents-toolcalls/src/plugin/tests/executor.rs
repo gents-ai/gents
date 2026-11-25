@@ -1049,7 +1049,6 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let home = fx.home.path().to_owned();
-        let queue = approval::queue_dir(&home);
         let spawned_token = tokio_util::sync::CancellationToken::new();
         let envelope = session_call(
             &work,
@@ -1059,30 +1058,21 @@ mod bound {
                 ..Default::default()
             },
         );
-        let call = async {
-            tokio::spawn(async move {
-                gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
-                    tool.as_ref(),
-                    args(&target),
-                    &envelope,
-                )
-                .await
-            })
+        let operator = approval::testing::Operator::answer(&home, approval::Answer::Once)
             .await
-            .unwrap()
-        };
-        let operator = async {
-            let request = loop {
-                if let Some(request) = approval::pending(&home).unwrap().into_iter().next() {
-                    break request;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            };
-            assert!(queue.join(format!("{}.json", request.id)).is_file());
-            approval::decide(&home, &request.id, approval::Answer::Once).unwrap();
-            assert!(queue.join(format!("{}.decision", request.id)).is_file());
-        };
-        let (outcome, ()) = tokio::join!(call, operator);
+            .unwrap();
+        let call_args = args(&target);
+        let call = tokio::spawn(async move {
+            gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
+                tool.as_ref(),
+                call_args,
+                &envelope,
+            )
+            .await
+        });
+        let (outcome, prompt) = tokio::join!(call, operator);
+        let outcome = outcome.unwrap();
+        assert!(prompt.unwrap().contains(&target.display().to_string()));
         assert!(
             matches!(&outcome, gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
             "{outcome:?}"

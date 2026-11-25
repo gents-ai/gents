@@ -8,67 +8,10 @@ use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
 use chrono::{SubsecRound, Utc};
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_toolcalls::test_support::background_hook::{
     budget_hook_fixture, invoke, tool_row, BudgetHookFixture,
 };
-struct NamedPendingTool(String);
-
-impl ToolDyn for NamedPendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.0.clone()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: self.0.clone(),
-                description: "Held background work".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
-
-struct NoisyTool(String);
-
-impl ToolDyn for NoisyTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.0.clone()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: self.0.clone(),
-                description: "Completes with long output".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { Ok("x".repeat(100)) })
-    }
-}
+use gents_toolcalls::test_support::doubles::{PendingTool, StaticTool};
 
 #[tokio::test]
 async fn configured_background_lifetimes_and_waits_follow_the_target() {
@@ -108,8 +51,8 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let hook = hook
         .with_background_tool_registry(BackgroundToolRegistry::from_config(
             vec![
-                Box::new(NamedPendingTool("bash".into())),
-                Box::new(NamedPendingTool(remote_name.clone())),
+                Box::new(PendingTool::named("bash")),
+                Box::new(PendingTool::named(remote_name.clone())),
             ],
             &config,
         ))
@@ -202,7 +145,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
 async fn background_completion_summary_honors_the_configured_output_budget() {
     let executions = BackgroundExecutionRegistry::default();
     let registry = BackgroundToolRegistry::from_tools(
-        vec![Box::new(NoisyTool("bash".into()))],
+        vec![Box::new(StaticTool::new("bash", "x".repeat(100)))],
         &["bash".into()],
     );
     let fixture = budget_hook_fixture(

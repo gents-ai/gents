@@ -1,42 +1,12 @@
 use gents_inference::llm::message::{Message, UserContent};
 use gents_inference::llm::ToolCallHookAction;
 use gents_store::identity::NodeIdentity;
-use serde_json::json;
 
 use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-
-struct PanickingTool;
-
-impl ToolDyn for PanickingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "panicking_tool".into()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "panicking_tool".into(),
-                description: "Panic regression at the background execution owner".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { panic!("intentional background tool panic") })
-    }
-}
+use gents_toolcalls::test_support::doubles::PanickingTool;
 
 #[tokio::test]
 async fn accepted_background_panic_terminalizes_and_notifies_before_release() {

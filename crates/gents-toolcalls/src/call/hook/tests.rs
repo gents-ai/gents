@@ -999,6 +999,9 @@ async fn interruption_leaves_background_workers_running() {
     let process_name = format!("background-parent-cascade-{}", uuid::Uuid::new_v4());
     let name = process_name.clone();
     let token = tokens[0].clone();
+    let process_started = Arc::new(tokio::sync::Notify::new());
+    let started_notify = process_started.clone();
+    let started = process_started.notified();
     let worker = tokio::spawn(async move {
         gents_session::exec::run_managed_exec(gents_session::exec::ManagedExecRequest {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
@@ -1010,20 +1013,17 @@ async fn interruption_leaves_background_workers_running() {
             environment: None,
             tool_name: Some(name),
             live_output: None,
-            process_recorder: None,
+            process_recorder: Some(gents_session::exec::ownership::ProcessRecorder::new(
+                move |_| {
+                    started_notify.notify_one();
+                },
+            )),
         })
         .await
     });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !gents_session::exec::status::active_native_executors()
-            .iter()
-            .any(|p| p.tool_name.as_deref() == Some(process_name.as_str()))
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .unwrap();
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
     assert!(tokens.iter().all(|token| !token.is_cancelled()));
     assert!(!worker.is_finished());

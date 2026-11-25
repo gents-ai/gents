@@ -226,6 +226,10 @@ pub struct JobDriver {
     /// Every row ever kicked, for tests that assert a wake reached no row.
     #[cfg(test)]
     pub(crate) kicked: Mutex<Vec<String>>,
+    #[cfg(test)]
+    pub(crate) idle_notify: tokio::sync::Notify,
+    #[cfg(test)]
+    pub(crate) waiting_for_permit: tokio::sync::Notify,
 }
 
 impl JobDriver {
@@ -246,6 +250,10 @@ impl JobDriver {
             failures: Mutex::new(RapidHashMap::new()),
             #[cfg(test)]
             kicked: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            idle_notify: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            waiting_for_permit: tokio::sync::Notify::new(),
         })
     }
 
@@ -337,6 +345,8 @@ impl JobDriver {
             tokio::spawn(async move { driver.drive(&row_doc_id, &actor, work).await });
         } else {
             in_flight.remove(row_doc_id);
+            #[cfg(test)]
+            self.idle_notify.notify_waiters();
         }
         Some(outcome)
     }
@@ -388,6 +398,8 @@ impl JobDriver {
             tokio::spawn(async move { driver.drive(&row_doc_id, &actor, work).await });
         } else {
             in_flight.remove(row_doc_id);
+            #[cfg(test)]
+            self.idle_notify.notify_waiters();
         }
         Some(out)
     }
@@ -410,6 +422,8 @@ impl JobDriver {
             );
             if !(again || dirty) {
                 in_flight.remove(row_doc_id);
+                #[cfg(test)]
+                self.idle_notify.notify_waiters();
                 return;
             }
         }
@@ -421,6 +435,8 @@ impl JobDriver {
         row_doc_id: &str,
         actor: &identity::Did,
     ) -> (bool, Result<StepOutcome>) {
+        #[cfg(test)]
+        self.waiting_for_permit.notify_waiters();
         let _permit = self
             .permits
             .acquire()

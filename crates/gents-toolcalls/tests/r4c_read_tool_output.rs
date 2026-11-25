@@ -1,75 +1,13 @@
 use gents_inference::llm::ToolCallHookAction;
-use gents_loop::tool::BoxFuture;
-use gents_loop::tool::ToolDefinition;
-use gents_loop::tool::{ToolDyn, ToolError};
+use gents_loop::tool::ToolDyn;
 use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
+use gents_toolcalls::test_support::doubles::{PendingTool, StaticTool};
 use serde_json::{json, Value};
 
 use gents_store::test_support::TestStore;
 use gents_toolcalls::call::hook::fixtures::r4c_private_support::{
     accepted_call, assert_accepted_control_rows, setup_private_hook,
 };
-
-struct StaticTool {
-    name: &'static str,
-    result: String,
-}
-
-impl ToolDyn for StaticTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.name.to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.to_string(),
-                description: "test tool".to_string(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { Ok(self.result.clone()) })
-    }
-}
-
-struct PendingTool;
-
-impl ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "slow_tool".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "slow_tool".to_string(),
-                description: "test tool".to_string(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
 
 async fn setup_hook(
     test_name: &str,
@@ -228,22 +166,45 @@ async fn read_tool_output_running_returns_live_stream_tail() {
     .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
-    let mut result = json!({});
-    for attempt in 0..40 {
-        result = read_tool_output(
-            &hook,
-            &format!("read-running-{attempt}"),
-            json!({ "tool_call_id": tool_call_id }),
-        )
-        .await;
-        if result["output"]
-            .as_str()
-            .is_some_and(|output| output.contains("live"))
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    let access = hook.actor_access().expect("selected agent");
+    let escaped_id = gents_store::graphql::escape_graphql_string(tool_call_id);
+    gents_store::test_support::read_when_changed(
+        &access,
+        "AgentOutputSegment",
+        "live output segment",
+        async || {
+            let response = access
+                .execute(&format!(
+                    r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_id}" }} }}, limit: 1) {{ _docID request_doc_id session_id node_did requester_did }} }}"#
+                ))
+                .await
+                .expect("read background row");
+            let row = &response["data"]["AgentToolCall"][0];
+            let output = gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+                &access,
+                row["_docID"].as_str().unwrap(),
+                row["request_doc_id"].as_str().unwrap(),
+                row["session_id"].as_str().unwrap(),
+                row["node_did"].as_str().unwrap(),
+                row["requester_did"].as_str(),
+            )
+            .await
+            .expect("observe canonical output")
+            .into_text();
+            if output.contains("live") {
+                Ok(())
+            } else {
+                Err(output)
+            }
+        },
+    )
+    .await;
+    let result = read_tool_output(
+        &hook,
+        "read-running",
+        json!({ "tool_call_id": tool_call_id }),
+    )
+    .await;
 
     assert_eq!(result["status"].as_str(), Some("running"));
     assert_eq!(result["tool_name"].as_str(), Some("bash_unrestricted"));
@@ -276,10 +237,7 @@ async fn read_tool_output_terminal_reads_persisted_result() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-terminal",
         registry(
-            vec![Box::new(StaticTool {
-                name: "complete_tool",
-                result: "done\n".to_string(),
-            })],
+            vec![Box::new(StaticTool::new("complete_tool", "done\n"))],
             &["complete_tool"],
         ),
     )
@@ -324,10 +282,7 @@ async fn read_tool_output_terminal_preserves_native_command_envelope() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-native",
         registry(
-            vec![Box::new(StaticTool {
-                name: "bash",
-                result: persisted.to_string(),
-            })],
+            vec![Box::new(StaticTool::new("bash", persisted.to_string()))],
             &["bash"],
         ),
     )
@@ -364,10 +319,7 @@ async fn read_tool_output_pages_gap_free_across_budget() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-paging",
         registry(
-            vec![Box::new(StaticTool {
-                name: "large_tool",
-                result: large.clone(),
-            })],
+            vec![Box::new(StaticTool::new("large_tool", large.clone()))],
             &["large_tool"],
         ),
     )
@@ -460,10 +412,7 @@ async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-utf8-page-boundary",
         registry(
-            vec![Box::new(StaticTool {
-                name: "utf8_tool",
-                result: raw.clone(),
-            })],
+            vec![Box::new(StaticTool::new("utf8_tool", raw.clone()))],
             &["utf8_tool"],
         ),
     )
@@ -542,10 +491,7 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-stdout-stderr-paging",
         registry(
-            vec![Box::new(StaticTool {
-                name: "bash",
-                result: native_result.clone(),
-            })],
+            vec![Box::new(StaticTool::new("bash", native_result.clone()))],
             &["bash"],
         ),
     )
@@ -634,7 +580,7 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
 async fn read_tool_output_rejects_non_backgrounded() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-foreground",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let foreground_call_id = create_foreground_tool_call(&hook).await;
@@ -660,14 +606,14 @@ async fn read_tool_output_rejects_unauthorized() {
         &db,
         "parent-one",
         "session-one",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let (hook_2, _session_2, _request_2) = setup_hook_on_db(
         &db,
         "parent-two",
         "session-two",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let handle = background_tool(&hook_2, "sibling-bg", "slow_tool").await;
@@ -687,7 +633,7 @@ async fn read_tool_output_rejects_unauthorized() {
 async fn read_tool_output_has_exact_accepted_parent_tool_call_row() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-no-row",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let handle = background_tool(&hook, "bg-no-row", "slow_tool").await;

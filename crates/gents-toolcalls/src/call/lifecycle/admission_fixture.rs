@@ -1041,17 +1041,12 @@ async fn execute_fixture_write(
     operation: &'static str,
     mutation: &str,
 ) {
-    let mut backoff = std::time::Duration::from_millis(5);
-    let mut last_error = None;
-    for _ in 0..8 {
-        match access.write(operation, mutation).await {
-            Ok(_) => return,
-            Err(error) => last_error = Some(error),
-        }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(std::time::Duration::from_millis(200));
-    }
-    panic!("fixture write kept failing: {mutation}: {last_error:?}");
+    access
+        .transact_write(operation, |txn| {
+            Box::pin(async move { txn.execute(mutation).await })
+        })
+        .await
+        .unwrap_or_else(|error| panic!("fixture write failed: {mutation}: {error:?}"));
 }
 
 pub async fn update(access: &gents_store::config_client::ConfigAccess, doc_id: &str, fields: &str) {

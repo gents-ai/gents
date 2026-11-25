@@ -56,7 +56,6 @@ const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
     ("gents-service", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-session", 8, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-store", 10, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-toolcalls", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-tools", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
 ];
 
@@ -83,7 +82,6 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents-service", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-session", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-store", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-toolcalls", 20, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-tools", 44, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
 ];
 

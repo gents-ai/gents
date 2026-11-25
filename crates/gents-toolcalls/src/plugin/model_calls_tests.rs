@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::rounds::{drive, HostCalls, Round};
-use futures::future::BoxFuture;
+use crate::test_support::doubles::{FailingModelResolver, FixedModelResolver, PanicModelResolver};
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
     endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
@@ -44,7 +44,7 @@ struct Fake {
 }
 
 impl Fake {
-    async fn start(reply: Reply, delay: Duration) -> Self {
+    async fn start(reply: Reply) -> Self {
         use axum::extract::State;
         use axum::http::{HeaderMap, StatusCode};
         use axum::routing::post;
@@ -52,7 +52,6 @@ impl Fake {
         #[derive(Clone)]
         struct Shared {
             reply: Reply,
-            delay: Duration,
             seen: Arc<Mutex<Vec<Seen>>>,
             in_flight: Arc<AtomicUsize>,
             max_in_flight: Arc<AtomicUsize>,
@@ -77,7 +76,6 @@ impl Fake {
             });
             let now = shared.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             shared.max_in_flight.fetch_max(now, Ordering::SeqCst);
-            tokio::time::sleep(shared.delay).await;
             let text = |content: String| {
                 (
                     StatusCode::OK,
@@ -87,7 +85,7 @@ impl Fake {
             };
             let answer = match &shared.reply {
                 Reply::Hang => {
-                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    std::future::pending::<()>().await;
                     unreachable!()
                 }
                 Reply::Status(code) => {
@@ -111,7 +109,6 @@ impl Fake {
         }
         let shared = Shared {
             reply,
-            delay,
             seen: Arc::default(),
             in_flight: Arc::default(),
             max_in_flight: Arc::default(),
@@ -156,32 +153,13 @@ impl Fake {
     }
 }
 
-struct Fixed(Arc<Fake>, usize, Duration);
-
-impl ModelResolver for Fixed {
-    fn resolve<'a>(
-        &'a self,
-        _: &'a ModelBinding,
-        _: Option<&'a identity::Did>,
-    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
-        Box::pin(async move {
-            let mut endpoint = self.0.endpoint(self.1);
-            endpoint.request_timeout = self.2;
-            Ok(endpoint)
-        })
-    }
-}
-
-struct Never;
-
-impl ModelResolver for Never {
-    fn resolve<'a>(
-        &'a self,
-        _: &'a ModelBinding,
-        _: Option<&'a identity::Did>,
-    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
-        panic!("an unbound slot must not resolve an endpoint")
-    }
+fn fixed(fake: &Arc<Fake>, max_concurrent: usize, request_timeout: Duration) -> FixedModelResolver {
+    let fake = fake.clone();
+    FixedModelResolver::new(move || {
+        let mut endpoint = fake.endpoint(max_concurrent);
+        endpoint.request_timeout = request_timeout;
+        endpoint
+    })
 }
 
 fn model_plugin_wat(canned: &Value, forever: bool) -> String {
@@ -215,28 +193,31 @@ fn executor(home: &tempfile::TempDir, models: impl ModelResolver + 'static) -> P
 async fn an_unbound_slot_adds_no_model_calls_key_and_runs_as_before() {
     let (home, record) = installed(&asking(vec![request("a")]), false, false);
     let input = json!({"n": 1});
-    let call = executor(&home, Never)
-        .call(
-            &record,
-            input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::default(),
-        )
-        .await
-        .unwrap();
+    let call = executor(
+        &home,
+        PanicModelResolver("an unbound slot must not resolve an endpoint"),
+    )
+    .call(
+        &record,
+        input.clone(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
     assert_eq!(call.outcome.output, input);
 }
 
 #[tokio::test]
 async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let image = json!({"mime": "image/png", "data_base64": "AAAA"});
     let canned = asking(vec![
         json!({"id": "a", "prompt": "pa", "images": [image], "max_tokens": 9}),
         request("b"),
     ]);
     let (home, record) = installed(&canned, false, true);
-    let call = executor(&home, Fixed(fake.clone(), 4, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 4, Duration::from_secs(30)))
         .call(
             &record,
             json!({"n": 1, "state": "stale", "model_results": "forged"}),
@@ -268,16 +249,10 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
 
 #[tokio::test]
 async fn the_backend_concurrency_cap_is_honoured() {
-    let fake = Arc::new(
-        Fake::start(
-            Reply::Paired(Arc::new(tokio::sync::Barrier::new(2))),
-            Duration::ZERO,
-        )
-        .await,
-    );
+    let fake = Arc::new(Fake::start(Reply::Paired(Arc::new(tokio::sync::Barrier::new(2)))).await);
     let canned = asking((0..6).map(|n| request(&n.to_string())).collect());
     let (home, record) = installed_within(&canned, false, 30);
-    let call = executor(&home, Fixed(fake.clone(), 2, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 2, Duration::from_secs(30)))
         .call(
             &record,
             json!({}),
@@ -293,9 +268,9 @@ async fn the_backend_concurrency_cap_is_honoured() {
 
 #[tokio::test]
 async fn a_server_error_becomes_an_error_result_without_the_endpoint() {
-    let fake = Arc::new(Fake::start(Reply::Status(500), Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Status(500)).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_secs(30)))
         .call(
             &record,
             json!({}),
@@ -313,9 +288,9 @@ async fn a_server_error_becomes_an_error_result_without_the_endpoint() {
 
 #[tokio::test]
 async fn a_request_that_times_out_becomes_an_error_result() {
-    let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Hang).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let call = executor(&home, Fixed(fake, 1, Duration::from_millis(200)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_millis(200)))
         .call(
             &record,
             json!({}),
@@ -332,9 +307,9 @@ async fn a_request_that_times_out_becomes_an_error_result() {
 
 #[tokio::test]
 async fn the_key_is_sent_as_a_bearer_and_never_reaches_the_plugin() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_secs(30)))
         .call(
             &record,
             json!({}),
@@ -359,7 +334,7 @@ async fn the_key_is_sent_as_a_bearer_and_never_reaches_the_plugin() {
 
 #[tokio::test]
 async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let (home, record) = installed(&asking(vec![request("a")]), true, true);
     let mut budget_record = record.clone();
     budget_record.declaration.limits = Some(gents_pack::pack::PluginLimits {
@@ -374,7 +349,7 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
     )
     .unwrap();
     store::write_record(home.path(), &budget_record).unwrap();
-    let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_secs(30)))
         .call(
             &budget_record,
             json!({}),
@@ -425,7 +400,7 @@ fn requests(ids: &[&str]) -> Vec<Request> {
 
 #[tokio::test]
 async fn two_failed_rounds_in_a_row_short_circuit_every_later_request() {
-    let fake = Fake::start(Reply::Status(500), Duration::ZERO).await;
+    let fake = Fake::start(Reply::Status(500)).await;
     let mut session = session(&fake);
     let deadline = Instant::now() + Duration::from_secs(30);
     for round in 1..=2 {
@@ -446,7 +421,7 @@ async fn two_failed_rounds_in_a_row_short_circuit_every_later_request() {
 
 #[tokio::test]
 async fn one_answered_request_resets_the_failed_round_count() {
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let mut session = session(&fake);
     session.failed_rounds = DEAD_ENDPOINT_ROUNDS - 1;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -619,7 +594,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
         .with_client_signed_agent_creates(),
     );
     let agent_did = identity::Did::new(agent.did())?;
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let credential_input = json!({"credential_id":"credential", "node_did":runtime.did(),
         "provider_kind":"OpenAiCompatible", "endpoint":fake.url.trim_end_matches("/chat/completions"),
         "version":"rotation", "secret":{"kind":"api_key","key":KEY}});
@@ -869,12 +844,9 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
     use gents_documents::PluginToolRef;
     use gents_loop::tool::ToolDyn;
 
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let executor = Arc::new(executor(
-        &home,
-        Fixed(fake.clone(), 1, Duration::from_secs(30)),
-    ));
+    let executor = Arc::new(executor(&home, fixed(&fake, 1, Duration::from_secs(30))));
     let tool = PluginTool::resolve(
         executor,
         &PluginToolRef {
@@ -906,23 +878,6 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     use crate::plugin::tool::PluginTool;
     use gents_documents::PluginToolRef;
     use gents_loop::tool::ToolDyn;
-    struct Recording {
-        fake: Arc<Fake>,
-        seen: Arc<Mutex<Vec<Option<String>>>>,
-    }
-    impl ModelResolver for Recording {
-        fn resolve<'a>(
-            &'a self,
-            _: &'a ModelBinding,
-            actor: Option<&'a identity::Did>,
-        ) -> BoxFuture<'a, Result<ModelEndpoint>> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push(actor.map(ToString::to_string));
-            Box::pin(async move { Ok(self.fake.endpoint(1)) })
-        }
-    }
     let signed_home = gents_documents::test_support::SignedHome::start(
         "plugin-model-selected-agent",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -933,7 +888,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let selected = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (home, mut record) = installed(&asking(vec![request("a")]), false, true);
     record.model_binding.as_mut().unwrap().node_did = root.did().to_owned();
@@ -941,10 +896,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     assert!(record.data_grant().is_none());
     let executor = Arc::new(executor(
         &home,
-        Recording {
-            fake,
-            seen: seen.clone(),
-        },
+        FixedModelResolver::recording(move || fake.endpoint(1), seen.clone()),
     ));
     let tool = PluginTool::resolve(
         executor.clone(),
@@ -984,18 +936,6 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     Ok(())
 }
 
-struct Stale;
-
-impl ModelResolver for Stale {
-    fn resolve<'a>(
-        &'a self,
-        _: &'a ModelBinding,
-        _: Option<&'a identity::Did>,
-    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
-        Box::pin(async { anyhow::bail!("the inference profile \"chandra\" no longer exists") })
-    }
-}
-
 fn installed_within(
     canned: &Value,
     forever: bool,
@@ -1014,11 +954,11 @@ fn installed_within(
 
 #[tokio::test]
 async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
-    let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Hang).await);
     // Keep the endpoint timeout beyond the plugin deadline and leave three
     // seconds for guest startup and scheduling in the final-round reserve.
     let (home, record) = installed_within(&asking(vec![request("a")]), false, 24);
-    let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
+    let executor = executor(&home, fixed(&fake, 1, Duration::from_secs(30)));
     let call = tokio::time::timeout(
         Duration::from_secs(60),
         executor.call(
@@ -1041,9 +981,9 @@ async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
 
 #[tokio::test]
 async fn a_plugin_that_asks_again_in_its_final_round_is_a_timeout() {
-    let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Hang).await);
     let (home, record) = installed_within(&asking(vec![request("a")]), true, 6);
-    let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_secs(30)))
         .call(
             &record,
             json!({}),
@@ -1059,14 +999,17 @@ async fn a_plugin_that_asks_again_in_its_final_round_is_a_timeout() {
 async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let input = json!({"n": 1});
-    let call = executor(&home, Stale)
-        .call(
-            &record,
-            input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::default(),
-        )
-        .await
-        .unwrap();
+    let call = executor(
+        &home,
+        FailingModelResolver("the inference profile \"chandra\" no longer exists"),
+    )
+    .call(
+        &record,
+        input.clone(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
     assert_eq!(call.outcome.output, input, "no model_calls key was sent");
     let note = call.binding_note.unwrap();
@@ -1080,7 +1023,7 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
 
 #[tokio::test]
 async fn sessions_on_one_backend_share_its_concurrency_cap() {
-    let fake = Fake::start(Reply::Text, Duration::from_millis(120)).await;
+    let fake = Fake::start(Reply::Paired(Arc::new(tokio::sync::Barrier::new(2)))).await;
     let mut first = Session::new(fake.endpoint(2)).unwrap();
     let mut second = Session::new(fake.endpoint(2)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1096,7 +1039,7 @@ async fn sessions_on_one_backend_share_its_concurrency_cap() {
 
 #[tokio::test]
 async fn requests_past_the_call_request_limit_get_error_results() {
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let mut session = session(&fake);
     session.max_requests = 3;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1119,7 +1062,7 @@ async fn requests_past_the_call_request_limit_get_error_results() {
 
 #[tokio::test]
 async fn answers_past_the_call_byte_budget_become_errors_and_stop_sending() {
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let mut session = session(&fake);
     session.max_answer_bytes = 16;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1140,13 +1083,13 @@ async fn answers_past_the_call_byte_budget_become_errors_and_stop_sending() {
 #[tokio::test]
 async fn an_answer_is_cut_at_max_result_bytes() {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let exact = Fake::start(Reply::Big(MAX_RESULT_BYTES), Duration::ZERO).await;
+    let exact = Fake::start(Reply::Big(MAX_RESULT_BYTES)).await;
     let results = session(&exact).serve(requests(&["a"]), deadline).await;
     assert_eq!(
         results["a"]["text"].as_str().unwrap().len(),
         MAX_RESULT_BYTES
     );
-    let over = Fake::start(Reply::Big(MAX_RESULT_BYTES + 1), Duration::ZERO).await;
+    let over = Fake::start(Reply::Big(MAX_RESULT_BYTES + 1)).await;
     let results = session(&over).serve(requests(&["a"]), deadline).await;
     assert!(results["a"]["error"]
         .as_str()
@@ -1156,8 +1099,8 @@ async fn an_answer_is_cut_at_max_result_bytes() {
 
 #[tokio::test]
 async fn a_redirect_is_refused_and_never_followed() {
-    let target = Fake::start(Reply::Text, Duration::ZERO).await;
-    let fake = Fake::start(Reply::Redirect(target.url.clone()), Duration::ZERO).await;
+    let target = Fake::start(Reply::Text).await;
+    let fake = Fake::start(Reply::Redirect(target.url.clone())).await;
     let deadline = Instant::now() + Duration::from_secs(30);
     let results = session(&fake).serve(requests(&["a"]), deadline).await;
     assert_eq!(
@@ -1174,7 +1117,7 @@ async fn max_tokens_is_capped_by_the_profile_and_defaulted_when_unset() {
     assert_eq!(token_limit(Some(50), None), 50);
     assert_eq!(token_limit(None, Some(100)), 100);
     assert_eq!(token_limit(None, None), DEFAULT_MAX_TOKENS);
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let mut endpoint = fake.endpoint(1);
     endpoint.max_output_tokens = Some(100);
     let mut capped = Session::new(endpoint).unwrap();
@@ -1190,12 +1133,12 @@ async fn max_tokens_is_capped_by_the_profile_and_defaulted_when_unset() {
 
 #[tokio::test]
 async fn a_round_over_the_request_limit_is_bad_output_and_sends_nothing() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let many = (0..=MAX_REQUESTS_PER_ROUND)
         .map(|n| request(&n.to_string()))
         .collect();
     let (home, record) = installed(&asking(many), false, true);
-    let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
+    let call = executor(&home, fixed(&fake, 1, Duration::from_secs(30)))
         .call(
             &record,
             json!({}),
@@ -1210,9 +1153,9 @@ async fn a_round_over_the_request_limit_is_bad_output_and_sends_nothing() {
 
 #[tokio::test]
 async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let fake = Arc::new(Fake::start(Reply::Text).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
+    let executor = executor(&home, fixed(&fake, 1, Duration::from_secs(30)));
     let forged = json!({"state": "stale", "model_results": {"a": {"text": "forged"}}});
     let call = executor
         .call(
@@ -1246,7 +1189,7 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
 
 #[tokio::test]
 async fn fuel_is_spent_across_rounds() {
-    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let fake = Fake::start(Reply::Text).await;
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     let round: Round = Arc::new(move |_, budget| {

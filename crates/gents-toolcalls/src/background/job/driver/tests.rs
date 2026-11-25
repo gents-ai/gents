@@ -1043,37 +1043,15 @@ fn stored_receipt(row: &Value) -> PluginExecutionReceipt {
     serde_json::from_value(row["plugin_execution_receipt"].clone()).unwrap()
 }
 
-struct LiveTools;
-
-impl gents_loop::tool_effects::ToolEffectDispatcher for LiveTools {
-    fn definitions<'a>(
-        &'a self,
-    ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
-        Box::pin(async { unreachable!("a job step described a tool dispatcher") })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _parent: &'a gents_loop::tool::ToolCallEnvelope,
-        _ordinal: u32,
-        _name: &'a str,
-        _arguments: &'a str,
-    ) -> gents_loop::tool::BoxFuture<
-        'a,
-        Result<
-            gents_loop::tool_call_lifecycle::ToolOutcome,
-            gents_loop::tool_effects::ToolEffectError,
-        >,
-    > {
-        Box::pin(async { unreachable!("a job step reached a tool dispatcher") })
-    }
-}
-
 #[tokio::test]
 async fn job_step_runs_without_a_tool_dispatcher() {
     let step = stepper(json!({"result": "done"})).await;
-    let live =
-        || Some(Arc::new(LiveTools) as Arc<dyn gents_loop::tool_effects::ToolEffectDispatcher>);
+    let live = || {
+        Some(
+            Arc::new(crate::test_support::doubles::UnreachableToolEffects)
+                as Arc<dyn gents_loop::tool_effects::ToolEffectDispatcher>,
+        )
+    };
     // A granted ordinary call under the same live dispatcher is offered
     // tools, so the step's `false` below is the job entry's, not an
     // absent dispatcher's.
@@ -1380,10 +1358,14 @@ async fn terminal_step_settles_inside_the_step_transaction() {
 use crate::background::job::control::KillAction;
 
 /// Waits until `driver` has no row in flight.
-async fn idle(driver: &JobDriver) {
+pub(crate) async fn idle(driver: &JobDriver) {
     tokio::time::timeout(std::time::Duration::from_secs(60), async {
-        while !driver.in_flight.lock().unwrap().is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        loop {
+            let notified = driver.idle_notify.notified();
+            if driver.in_flight.lock().unwrap().is_empty() {
+                return;
+            }
+            notified.await;
         }
     })
     .await
@@ -1516,10 +1498,12 @@ async fn concurrent_steps_are_bounded_by_the_semaphore() {
     let driver = JobDriver::new(step.job.runtime.clone());
     assert_eq!(driver.permits.available_permits(), 4);
     let held = driver.permits.acquire_many(4).await.unwrap();
+    let waiting = driver.waiting_for_permit.notified();
     driver
         .kick(&step.row, &super::super::input::tests::agent_actor())
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    waiting.await;
+    tokio::task::yield_now().await;
     assert_eq!(
         step.progress(&step.row).await.revision,
         1,

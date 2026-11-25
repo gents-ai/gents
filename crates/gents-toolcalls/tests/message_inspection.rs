@@ -1,13 +1,10 @@
-use anyhow::Result;
 use gents_documents::AgentToolConfig;
 use gents_protocol::message::{AssistantContent, Message};
 use gents_session::session::message::inspection::*;
-use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
-/// The Goal the Goals plugin reports for the inspected session.
-struct ReadWorkerGoal;
+use gents_toolcalls::test_support::doubles::ReadWorkerGoal;
 
 #[tokio::test]
 async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
@@ -330,57 +327,4 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
     drop(worker);
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
-}
-
-#[async_trait::async_trait]
-impl gents_session::session::message::SessionMessageGoals for ReadWorkerGoal {
-    async fn session_goal_in_txn(
-        &self,
-        _txn: &ConfigApplyTxn<'_>,
-        _node_did: &str,
-        session_id: &str,
-    ) -> Result<Option<gents_session::session::message::SessionGoal>> {
-        Ok(
-            (session_id == "read-worker").then(|| gents_session::session::message::SessionGoal {
-                goal_id: "read-worker-goal".to_owned(),
-                status: "active".to_owned(),
-                objective: "verify shard R3a".to_owned(),
-                tokens_used: Some(0),
-                token_budget: Some(1000),
-                active_time_seconds: Some(0),
-                assignment_root_request_doc_id: None,
-            }),
-        )
-    }
-
-    async fn stage_goal_backed_request_in_txn(
-        &self,
-        _txn: &ConfigApplyTxn<'_>,
-        _objective: &str,
-        _token_budget: Option<i64>,
-        _limits: gents_protocol::goal::GoalLimits,
-        _request: &gents_protocol::request_admission::AgentRequestCreate,
-    ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
-        anyhow::bail!("session inspection stages no request")
-    }
-
-    async fn prepare_goal_input_in_txn(
-        &self,
-        _txn: &ConfigApplyTxn<'_>,
-        _node_did: &str,
-        _session_id: &str,
-        _agent_did: &str,
-        _requester_did: Option<&str>,
-        _input: gents_protocol::request_input::RequestInput,
-    ) -> Result<gents_protocol::request_input::RequestInput> {
-        anyhow::bail!("session inspection prepares no request input")
-    }
-
-    async fn request_assignment(
-        &self,
-        _access: &gents_store::config_client::ConfigAccess,
-        _request: &gents_protocol::row::AgentRequestRow,
-    ) -> Result<gents_session::session::message::RequestGoalAssignment> {
-        anyhow::bail!("session inspection observes no request assignment")
-    }
 }

@@ -144,9 +144,6 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             })
             .unwrap();
         drop(reservation);
-        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(5);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(chrono::Utc::now() >= deadline);
         assert!(processor
             .persist_received_partial_turn("persist deadline-expired assistant turn")
             .await
