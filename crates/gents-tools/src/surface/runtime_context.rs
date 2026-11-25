@@ -27,6 +27,7 @@ pub struct ToolRuntimeContext {
     pub(super) tasks: Arc<dyn TaskRunService>,
     pub(super) registry_url: Option<String>,
     pub(super) native_executables: NativeExecutables,
+    pub(super) skills: Vec<gents_documents::skills::Skill>,
 }
 
 impl ToolRuntimeContext {
@@ -73,6 +74,7 @@ impl ToolRuntimeContext {
             tasks: Arc::new(NoTaskRunService),
             registry_url: None,
             native_executables: NativeExecutables::default(),
+            skills: Vec::new(),
         }
     }
 
@@ -97,6 +99,7 @@ impl ToolRuntimeContext {
             tasks: Arc::new(NoTaskRunService),
             registry_url: None,
             native_executables: NativeExecutables::default(),
+            skills: Vec::new(),
         }
     }
 
@@ -114,6 +117,7 @@ impl ToolRuntimeContext {
         runtime.identity = Some(agent.node_identity().clone());
         runtime.agent_identity = Some(agent.agent_identity().clone());
         runtime.configuration = agent.configuration.clone();
+        runtime.skills = agent.skills.clone();
         runtime
     }
 

@@ -10,54 +10,98 @@
       "skill_id": "plan-app"
     },
     {
+      "covers": [
+        "config datastore",
+        "schema collection",
+        "schema collections",
+        "schema fields",
+        "schema relationships",
+        "schema indexes",
+        "schema embeddings",
+        "schema views",
+        "schema view",
+        "schema evolution",
+        "schema migration",
+        "schema version"
+      ],
       "description": "Load before creating or changing a collection: keys, duplicates, history, links, search.",
       "instructions": "./skills/design_data/SKILL.md",
       "name": "design-data",
       "skill_id": "design-data"
     },
     {
+      "covers": [
+        "config mcp-service"
+      ],
       "description": "Load when data comes from a file, API, service or web page, once or on repeat. Makes reruns safe.",
       "instructions": "./skills/import_data/SKILL.md",
       "name": "import-data",
       "skill_id": "import-data"
     },
     {
+      "covers": [
+        "config page"
+      ],
       "description": "Load before making or changing a page or screen, or fixing how it looks: blocks, tokens, preview.",
       "instructions": "./skills/design_page/SKILL.md",
       "name": "design-page",
       "skill_id": "design-page"
     },
     {
+      "covers": [
+        "config automation",
+        "config event-source",
+        "config schedule",
+        "config task",
+        "config trigger"
+      ],
       "description": "Load before schedules, event sources, triggers or tasks. Routes events to one consumer and stops loops.",
       "instructions": "./skills/automate/SKILL.md",
       "name": "automate",
       "skill_id": "automate"
     },
     {
+      "covers": [
+        "config policy",
+        "schema collections policy"
+      ],
       "description": "Load when some people must not see or change data, or before sharing it. What the node enforces.",
       "instructions": "./skills/control_access/SKILL.md",
       "name": "control-access",
       "skill_id": "control-access"
     },
     {
+      "covers": [
+        "config pack"
+      ],
       "description": "Load to bundle an app as a pack, install or update a pack, or give an agent a pack's tool.",
       "instructions": "./skills/package_or_install/SKILL.md",
       "name": "package-or-install",
       "skill_id": "package-or-install"
     },
     {
+      "covers": [
+        "config plugin",
+        "config plugin-source"
+      ],
       "description": "Load when a rule, price or check must give the same answer every time: a tested plugin.",
       "instructions": "./skills/exact_rules/SKILL.md",
       "name": "exact-rules",
       "skill_id": "exact-rules"
     },
     {
+      "covers": [
+        "config agent-target"
+      ],
       "description": "Load before a big build, or before handing a part or an independent check to a helper agent.",
       "instructions": "./skills/use_helpers/SKILL.md",
       "name": "use-helpers",
       "skill_id": "use-helpers"
     },
     {
+      "covers": [
+        "config trigger explain"
+      ],
       "description": "Load first when something didn't happen or went wrong: never fired, didn't get it, stopped working, can't find a tool.",
       "instructions": "./skills/troubleshoot/SKILL.md",
       "name": "troubleshoot",

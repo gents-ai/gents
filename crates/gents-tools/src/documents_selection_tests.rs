@@ -232,6 +232,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             instructions: "private skill".into(),
             source_directory: None,
             tool_refs: vec![],
+            covers: vec![],
             display_name: None,
             enabled: true,
         };

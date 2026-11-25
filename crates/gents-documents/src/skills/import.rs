@@ -144,6 +144,7 @@ pub fn load_skill_source(
                 .to_owned(),
         ),
         tool_refs,
+        covers: Vec::new(),
         display_name,
         interface_json,
         enabled: true,

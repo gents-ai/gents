@@ -183,6 +183,7 @@ pub fn build_self_config_tools(
             runtime_identity: None,
             plugins,
             tasks,
+            skill_pointers: Arc::default(),
         },
         config,
         None,
@@ -255,6 +256,7 @@ pub async fn build_runtime_self_config_tools(
             runtime_identity: Some(runtime_identity),
             plugins,
             tasks,
+            skill_pointers: Arc::default(),
         },
         config,
         Some(binding),
@@ -269,6 +271,7 @@ pub struct SelfConfigRuntime {
     pub runtime_identity: Option<Arc<dyn NodeIdentity>>,
     pub plugins: Arc<dyn crate::plugin_host::PluginHost>,
     pub tasks: Arc<dyn crate::task_run::TaskRunService>,
+    pub skill_pointers: Arc<crate::skill_pointer::SkillPointers>,
 }
 
 pub fn build_self_config_tools_with_runtime(
@@ -284,6 +287,7 @@ pub fn build_self_config_tools_with_runtime(
         runtime_identity,
         plugins,
         tasks,
+        skill_pointers,
     } = runtime;
     if !config.enabled {
         return Vec::new();
@@ -339,6 +343,7 @@ pub fn build_self_config_tools_with_runtime(
         ceiling_plugins: config.ceiling_plugins.clone(),
         plugin_builder: config.plugin_builder.clone(),
         ux_preview_assets: config.ux_preview_assets.clone(),
+        skill_pointers,
         envelope: gents_loop::tool::ToolCallEnvelope::default(),
     }));
     tools
