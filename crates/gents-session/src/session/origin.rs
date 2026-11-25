@@ -323,12 +323,20 @@ pub async fn verified_creation_origin(
     }))
 }
 
-/// The cause named by `scope`'s verified creation receipt, read from the
-/// session row alone; `None` when the session carries no verified receipt.
-pub async fn verified_creation_cause(
+/// The cause and opening request named by `scope`'s verified creation receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedCreationInfo {
+    pub cause: gents_protocol::session::SessionCreationCause,
+    pub opening_request_doc_id: String,
+}
+
+/// The cause and opening request named by `scope`'s verified creation receipt,
+/// read from the session row alone; `None` when the session carries no verified
+/// receipt.
+pub async fn verified_creation_cause_and_opening(
     access: &ConfigAccess,
     scope: &SessionScope,
-) -> Result<Option<gents_protocol::session::SessionCreationCause>> {
+) -> Result<Option<VerifiedCreationInfo>> {
     let rows = session_rows(
         access,
         &session_scope_filter(
@@ -350,7 +358,25 @@ pub async fn verified_creation_cause(
     else {
         return Ok(None);
     };
-    Ok(verified_creation_receipt(&owner.session, &owner.doc_id, cause).map(|_| cause))
+    Ok(
+        verified_creation_receipt(&owner.session, &owner.doc_id, cause).map(|receipt| {
+            VerifiedCreationInfo {
+                cause,
+                opening_request_doc_id: receipt.opening_request_doc_id.clone(),
+            }
+        }),
+    )
+}
+
+/// The cause named by `scope`'s verified creation receipt, read from the
+/// session row alone; `None` when the session carries no verified receipt.
+pub async fn verified_creation_cause(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<gents_protocol::session::SessionCreationCause>> {
+    Ok(verified_creation_cause_and_opening(access, scope)
+        .await?
+        .map(|info| info.cause))
 }
 
 /// The opening request `scope`'s session recorded in its provenance when it
