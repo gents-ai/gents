@@ -76,11 +76,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
-    /* the shared allocator's port: an ephemeral one, once its listener is
-    dropped below, can be taken by an outbound connection before the
-    runtime binds it (`TestPortReservation.tla`, `EphemeralOverlap`) */
-    let port = gents::support::ports::allocate_port().unwrap();
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let initial_config = std::fs::read(home.join("init.json")).unwrap();
     let failed = tokio::time::timeout(
         Duration::from_secs(30),
