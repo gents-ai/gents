@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::plugin_job_support::{
-    boot_job_harness, effects, guest_pin, job_call, job_row, reboot_job_harness, result, spawn,
-    wait_job, JobHarness, PlanEntry,
+    boot_job_harness, effects, guest_pin, job_call, job_child_states, job_row,
+    reboot_job_harness_observing_children, result, spawn, wait_job, JobHarness, PlanEntry,
 };
 use crate::support::trial_store_at;
 use gents_inference::test_support::scripted_backend::{
@@ -31,7 +31,7 @@ struct JobCrashReady {
     data_path: PathBuf,
     plugin_home: PathBuf,
     row_doc_id: String,
-    child_states: Vec<(String, String)>,
+    child_ids: Vec<String>,
 }
 
 fn entry(when: Value, output: gents_toolcalls::background::job::job::JobStepOutput) -> PlanEntry {
@@ -61,29 +61,7 @@ fn restart_job_plan() -> Vec<PlanEntry> {
 }
 
 async fn child_states(h: &JobHarness, row_doc_id: &str) -> Vec<(String, String)> {
-    let response = h.actors.fixture.access.clone()
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-            gents_store::graphql::escape_graphql_string(row_doc_id),
-        ))
-        .await
-        .expect("read the job children");
-    let mut states: Vec<(String, String)> = response["data"]["AgentRequest"]
-        .as_array()
-        .expect("children array")
-        .iter()
-        .map(|row| {
-            (
-                row["_docID"].as_str().expect("child doc id").to_string(),
-                row["lifecycle_state"]
-                    .as_str()
-                    .expect("child state")
-                    .to_string(),
-            )
-        })
-        .collect();
-    states.sort();
-    states
+    job_child_states(&h.actors.fixture.access, row_doc_id).await
 }
 
 async fn job_row_fields(h: &JobHarness, row_doc_id: &str) -> Value {
@@ -156,7 +134,7 @@ async fn run_job_crash_worker(ready_path: &Path) {
     let ready = JobCrashReady {
         data_path: h.db.path().to_path_buf(),
         plugin_home: h.plugin_home.clone(),
-        child_states,
+        child_ids: child_states.into_iter().map(|(id, _)| id).collect(),
         row_doc_id,
     };
     let mut connection = tokio::net::UnixStream::connect(ready_path).await.unwrap();
@@ -202,7 +180,7 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     .expect("job crash worker readiness");
     child.start_kill().expect("kill the job crash worker");
     child.wait().await.expect("reap the job crash worker");
-    assert_eq!(ready.child_states.len(), 3, "{:?}", ready.child_states);
+    assert_eq!(ready.child_ids.len(), 3, "{:?}", ready.child_ids);
 
     let restart_plans = SLOTS
         .iter()
@@ -214,13 +192,26 @@ async fn plugin_job_survives_a_restart_mid_panel() {
             )
         })
         .collect();
-    let h = reboot_job_harness(
+    let (h, crashed_states) = reboot_job_harness_observing_children(
         &ready.data_path,
         ready.plugin_home.clone(),
         SESSION,
+        &ready.row_doc_id,
         restart_plans,
     )
     .await;
+    let crashed_ids: Vec<&String> = crashed_states.iter().map(|(id, _)| id).collect();
+    let ready_ids: Vec<&String> = ready.child_ids.iter().collect();
+    assert_eq!(
+        crashed_ids, ready_ids,
+        "retained children differ from pre-crash children"
+    );
+    assert!(
+        crashed_states
+            .iter()
+            .any(|(_, state)| state == "processing"),
+        "expected at least one processing child at crash: {crashed_states:?}"
+    );
 
     let view = wait_job(&h, TOOL_CALL, |v| {
         matches!(
@@ -235,11 +226,10 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
     assert!(row["cancel_cause"].is_null(), "{row}");
     assert!(!row["plugin_execution_receipt"].is_null(), "{row}");
-    let crash_ids: Vec<&String> = ready.child_states.iter().map(|(id, _)| id).collect();
     let finals = child_states(&h, &ready.row_doc_id).await;
     let final_ids: Vec<&String> = finals.iter().map(|(id, _)| id).collect();
-    assert_eq!(final_ids, crash_ids, "the job gained or lost a child");
-    for ((id, before), (_, after)) in ready.child_states.iter().zip(&finals) {
+    assert_eq!(final_ids, crashed_ids, "the job gained or lost a child");
+    for ((id, before), (_, after)) in crashed_states.iter().zip(&finals) {
         assert!(
             RequestLifecycleState::is_terminal_str(Some(after)),
             "child {id} ended {after}"

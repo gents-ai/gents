@@ -370,17 +370,53 @@ pub(crate) async fn boot_job_harness(
     }
 }
 
+/// Reads every child `AgentRequest` row for `row_doc_id` sorted by `_docID`.
+pub(crate) async fn job_child_states(
+    access: &ConfigAccess,
+    row_doc_id: &str,
+) -> Vec<(String, String)> {
+    let response = access
+        .clone()
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
+            gents_store::graphql::escape_graphql_string(row_doc_id),
+        ))
+        .await
+        .expect("read the job children");
+    let mut states: Vec<(String, String)> = response["data"]["AgentRequest"]
+        .as_array()
+        .expect("children array")
+        .iter()
+        .map(|row| {
+            (
+                row["_docID"].as_str().expect("child doc id").to_string(),
+                row["lifecycle_state"]
+                    .as_str()
+                    .expect("child state")
+                    .to_string(),
+            )
+        })
+        .collect();
+    states.sort();
+    states
+}
+
 /// Boots a second runtime on the store and plugin home a killed worker left
-/// behind. It installs nothing and writes no request.
-pub(crate) async fn reboot_job_harness(
+/// behind, returning the durable child request states observed before the
+/// recovery runtime starts. It installs nothing and writes no request.
+pub(crate) async fn reboot_job_harness_observing_children(
     data_path: &Path,
     plugin_home: PathBuf,
     session_id: &str,
+    row_doc_id: &str,
     plans: Vec<StreamPlan>,
-) -> JobHarness {
+) -> (JobHarness, Vec<(String, String)>) {
     let db = trial_store_at(data_path).await;
     let user = crate::support::load_managed_fixture_user(&db).await;
     let access = db.client_access(&user);
+    // Snapshot crashed child states after the worker is dead and before
+    // startup recovery runs (modeled in PluginJobCrashObservation.tla).
+    let pre_reboot_children = job_child_states(&access, row_doc_id).await;
     let response = access.execute("{ DefaultAgentSelection { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
     let rows = response["data"]["Agent"]
         .as_array()
@@ -435,13 +471,16 @@ pub(crate) async fn reboot_job_harness(
         .await;
     }
     let runtime = boot_runtime(&db, &plugin_home, PreparedAcceptedTurn { backend }).await;
-    JobHarness {
-        db,
-        actors,
-        plugin_home,
-        runtime,
-        session_id: session_id.into(),
-    }
+    (
+        JobHarness {
+            db,
+            actors,
+            plugin_home,
+            runtime,
+            session_id: session_id.into(),
+        },
+        pre_reboot_children,
+    )
 }
 
 fn address(h: &JobHarness, tool_call_id: &str) -> JobKey {
