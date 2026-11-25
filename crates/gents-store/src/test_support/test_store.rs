@@ -7,7 +7,7 @@ use crate::local::home::{HomeServing, NodeConfigure, NodeProjection, ServedHome}
 use crate::local::{ProjectedOperationSource, ProjectedPluginRef, ToolSourcePolicy};
 use crate::node_extension::Extensions;
 
-struct NoToolSources;
+pub struct NoToolSources;
 
 impl ToolSourcePolicy for NoToolSources {
     fn node_operation_sources(

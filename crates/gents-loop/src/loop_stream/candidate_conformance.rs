@@ -12,9 +12,8 @@ use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::NoopSessionHook;
-use crate::test_support::fixed_tool::FixedTool;
+use crate::test_support::doubles::RebindingEchoTool as Echo;
 use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
-use crate::tool::{BoxFuture, ToolDefinition, ToolError};
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct TypedReply {
@@ -121,73 +120,6 @@ fn error(kind: &str) -> CompletionError {
         "overflow" => r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#,
         _ => "status code 503: unavailable",
     }.into())
-}
-
-/// Echoes each call; the call of the accepted tool turn `rebind_at` stages
-/// the toolset that adds `rebound`, as a config call committing the
-/// request's own Tools does.
-struct Echo {
-    rebind_at: Option<u64>,
-    calls: Arc<std::sync::atomic::AtomicU64>,
-    staged: Arc<Mutex<Option<ReboundTools>>>,
-}
-
-impl Echo {
-    fn new(input: &family::Input) -> Self {
-        Self {
-            rebind_at: input.rebind_at,
-            calls: Default::default(),
-            staged: Default::default(),
-        }
-    }
-
-    fn rebinding(&self) -> ToolRebinding {
-        let staged = self.staged.clone();
-        Arc::new(move || {
-            let staged = staged.lock().unwrap().take();
-            Box::pin(async move { staged })
-        })
-    }
-}
-
-impl ToolDyn for Echo {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "echo".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "echo".into(),
-                description: "echo".into(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        let turn = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if self.rebind_at == Some(turn) {
-            *self.staged.lock().unwrap() = Some(ReboundTools {
-                tools: Arc::new(vec![
-                    Box::new(Echo {
-                        rebind_at: None,
-                        calls: self.calls.clone(),
-                        staged: self.staged.clone(),
-                    }) as Box<dyn ToolDyn>,
-                    Box::new(FixedTool::new("rebound", "REBOUND")),
-                ]),
-                preamble: None,
-                configuration_guard: None,
-            });
-        }
-        Box::pin(async { Ok("ECHOED".into()) })
-    }
 }
 
 fn config(
@@ -415,7 +347,7 @@ async fn observe(
     let allowances = Arc::new(Mutex::new(Vec::new()));
     let mut config = config(input, captures.clone(), allowances.clone());
     config.provider_call.capture = capture;
-    let echo = Echo::new(input);
+    let echo = Echo::new(input.rebind_at);
     config.tool_rebinding = Some(echo.rebinding());
     let budget = config.aggregate_token_budget.clone();
     if let Some(usage) = input.nested_usage.clone() {
@@ -613,7 +545,9 @@ async fn generated_completion_text_discards_retracted_previews() {
             model(&input.calls),
             Message::user("hi"),
             Vec::new(),
-            Arc::new(vec![Box::new(Echo::new(&input)) as Box<dyn ToolDyn>]),
+            Arc::new(vec![
+                Box::new(Echo::new(input.rebind_at)) as Box<dyn ToolDyn>
+            ]),
             config(&input, Default::default(), Default::default()),
         )
         .await;

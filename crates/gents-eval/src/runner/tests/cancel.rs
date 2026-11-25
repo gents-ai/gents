@@ -1,33 +1,7 @@
 use super::*;
-
-struct CancelOnFirstExecute {
-    run: CancellationToken,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for CancelOnFirstExecute {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
-        self.run.cancel();
-        cancel.cancelled().await;
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
-}
+use crate::test_support::doubles::{
+    CancelOnFirstExecute, MarkAfterComplete, MarkOnFirstExecute, MarksThenWaits,
+};
 
 #[tokio::test]
 async fn cancel_stops_launching_and_leaves_in_flight_rows_null() {
@@ -61,39 +35,6 @@ async fn cancel_stops_launching_and_leaves_in_flight_rows_null() {
         .await
         .unwrap()
         .is_empty());
-}
-
-struct MarkOnFirstExecute {
-    inner: ScriptedExecutor,
-    runs_dir: PathBuf,
-    run_id: String,
-    marked: AtomicBool,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for MarkOnFirstExecute {
-    fn isolation(&self) -> Isolation {
-        self.inner.isolation()
-    }
-
-    fn wants_script_key(&self) -> bool {
-        self.inner.wants_script_key()
-    }
-
-    async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
-        self.inner.provision(spec).await
-    }
-
-    async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
-        if !self.marked.swap(true, Ordering::SeqCst) {
-            request_cancel(&self.runs_dir, &self.run_id).unwrap();
-        }
-        self.inner.execute(spec, cancel).await
-    }
-
-    async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
-        self.inner.recollect(at, captures).await
-    }
 }
 
 #[tokio::test]
@@ -202,43 +143,6 @@ async fn a_marker_written_before_the_loop_starts_launches_nothing() {
     );
 }
 
-struct MarkAfterComplete<'a> {
-    inner: DocumentRecorder<'a>,
-    runs_dir: PathBuf,
-}
-
-#[async_trait::async_trait]
-impl Recorder for MarkAfterComplete<'_> {
-    async fn create_trial(&self, owner: &str, identity: &TrialIdentity) -> Result<()> {
-        self.inner.create_trial(owner, identity).await
-    }
-
-    async fn append_verdict(
-        &self,
-        owner: &str,
-        split: EvalSplit,
-        draft: &VerdictDraft,
-    ) -> Result<()> {
-        self.inner.append_verdict(owner, split, draft).await
-    }
-
-    async fn complete_trial(
-        &self,
-        owner: &str,
-        trial_id: &str,
-        completion: &TrialCompletion,
-    ) -> Result<()> {
-        self.inner
-            .complete_trial(owner, trial_id, completion)
-            .await?;
-        request_cancel(&self.runs_dir, "run-late").map(|_| ())
-    }
-
-    async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
-        self.inner.load_trials(owner, run_id).await
-    }
-}
-
 #[tokio::test]
 async fn a_marker_written_after_the_last_completion_is_not_a_cancelled_run() {
     let (launching, pack) = launching("captured_rows_count").await;
@@ -342,42 +246,6 @@ async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
             .collect();
     attempts.sort();
     assert_eq!(attempts, vec![(1, false), (2, true)]);
-}
-
-struct MarksThenWaits {
-    runs_dir: PathBuf,
-    run_id: String,
-    interrupted: AtomicBool,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for MarksThenWaits {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
-        request_cancel(&self.runs_dir, &self.run_id).unwrap();
-        if tokio::time::timeout(STALL_CEILING, cancel.cancelled())
-            .await
-            .is_ok()
-        {
-            self.interrupted.store(true, Ordering::SeqCst);
-        }
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
 }
 
 #[tokio::test]

@@ -1,126 +1,8 @@
 use super::*;
-use crate::tool::BoxFuture;
-use crate::tool::ToolDefinition;
-
-struct PendingTool;
-
-impl ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "pending".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "pending".to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
-
-struct FastTool;
-
-impl ToolDyn for FastTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "fast".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "fast".to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { Ok("ok".to_string()) })
-    }
-}
-
-fn plugin_receipt() -> gents_protocol::plugin::PluginExecutionReceipt {
-    gents_protocol::plugin::PluginExecutionReceipt {
-        coordinate: "fixture@1".into(),
-        artifact_digest: "artifact".into(),
-        input_digest: "input".into(),
-        output_digest: None,
-        authority: None,
-        limits: None,
-        verdict: gents_protocol::plugin::PluginExecutionVerdict::Failed,
-    }
-}
-
-struct ReceiptTool {
-    delay: bool,
-    forge_text: bool,
-}
-
-impl ToolDyn for ReceiptTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "receipt".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "receipt".into(),
-                description: "fixture".into(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { Ok(serde_json::to_string(&plugin_receipt()).unwrap()) })
-    }
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the tool must become ready past the deadline within one poll"
-    )]
-    fn call_with_receipt<'a>(
-        &'a self,
-        args: String,
-        context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, crate::tool::ToolDispatchResult> {
-        Box::pin(async move {
-            if self.delay {
-                std::thread::sleep(Duration::from_millis(30));
-            }
-            crate::tool::ToolDispatchResult {
-                result: self.call(args, context).await,
-                plugin_receipt: (!self.forge_text).then(plugin_receipt),
-                deferred_writes: None,
-            }
-        })
-    }
-}
+use crate::test_support::doubles::{
+    plugin_receipt, LifecycleReceiptTool as ReceiptTool, PendingTool,
+};
+use crate::test_support::fixed_tool::FixedTool;
 
 #[tokio::test]
 async fn receipt_shaped_output_does_not_create_native_evidence() {
@@ -193,7 +75,7 @@ async fn managed_call_times_out_at_request_deadline() {
     )
     .call();
 
-    let outcome = call_tool_managed(&PendingTool, "{}".to_string(), &scope_call).await;
+    let outcome = call_tool_managed(&PendingTool::pending(), "{}".to_string(), &scope_call).await;
 
     assert!(matches!(outcome, ToolOutcome::TimedOut { .. }));
 }
@@ -204,7 +86,7 @@ async fn managed_call_cancels_before_inner_future_completes() {
     token.cancel();
     let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
 
-    let outcome = call_tool_managed(&PendingTool, "{}".to_string(), &scope_call).await;
+    let outcome = call_tool_managed(&PendingTool::pending(), "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Cancelled);
 }
@@ -218,7 +100,8 @@ async fn managed_call_preserves_fast_success() {
     )
     .call();
 
-    let outcome = call_tool_managed(&FastTool, "{}".to_string(), &scope_call).await;
+    let outcome =
+        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Completed("ok".to_string()));
 }
@@ -229,7 +112,8 @@ async fn managed_call_prefers_fired_cancellation_over_ready_output() {
     token.cancel();
     let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
 
-    let outcome = call_tool_managed(&FastTool, "{}".to_string(), &scope_call).await;
+    let outcome =
+        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Cancelled);
 }

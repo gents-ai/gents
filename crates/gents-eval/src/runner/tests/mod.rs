@@ -1,15 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::anyhow;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::checks::{Check, CheckDescription, CheckVerdict};
 use crate::runner::freeze::tests::Launching;
+use crate::test_support::doubles::{passed_evidence as passed, progress_when};
 use crate::{
     invalidate_run, load_run, load_trials, load_verdicts, OutcomeKind, TrialCompletion,
-    TrialIdentity, TrialRecord, VerdictDraft, VerdictRecord,
+    TrialRecord, VerdictRecord,
 };
 use gents_documents::EvalFixtureDocument;
 use gents_documents::EvalFixtureFile;
@@ -117,10 +116,6 @@ fn options() -> RunOptions {
     }
 }
 
-fn passed() -> TrialEvidence {
-    ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", vec![json!({})])
-}
-
 fn key(case_id: &str, attempt: u32) -> ScriptKey {
     ScriptKey {
         cell_label: "base".into(),
@@ -172,28 +167,6 @@ fn verdict_keys(
         .collect();
     keys.sort();
     keys
-}
-
-/// Re-reads the run's progress file at the loop's marker poll until `found`
-/// answers, and fails with the last progress read once the file has not
-/// changed for [`STALL_CEILING`]. The file has no change notification.
-async fn progress_when<T>(run_dir: &Path, what: &str, found: impl Fn(&Progress) -> Option<T>) -> T {
-    let mut reread = tokio::time::interval(marker_poll(&RunOptions::default()));
-    let mut last = None;
-    let mut changed = std::time::Instant::now();
-    loop {
-        reread.tick().await;
-        let progress = read_progress(run_dir);
-        if let Some(answer) = progress.as_ref().and_then(&found) {
-            return answer;
-        }
-        if progress != last {
-            last = progress;
-            changed = std::time::Instant::now();
-        } else if changed.elapsed() >= STALL_CEILING {
-            panic!("{what}: the progress stayed {last:?} for {STALL_CEILING:?}");
-        }
-    }
 }
 
 const RUNNER_TARGET: &str = "gents_eval::runner";

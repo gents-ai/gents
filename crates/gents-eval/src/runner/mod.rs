@@ -5,7 +5,7 @@ mod files;
 pub mod freeze;
 pub mod goal;
 pub mod grade;
-mod liveness;
+pub(crate) mod liveness;
 mod outage;
 pub mod plan;
 pub mod progress;

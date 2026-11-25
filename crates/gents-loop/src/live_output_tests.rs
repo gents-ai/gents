@@ -1,6 +1,7 @@
 use super::presentation::{append_json_channel, append_plain_channel, channel_plan, push_literal};
 use super::writer::drain_utf8;
 use super::*;
+use crate::test_support::doubles::MemoryAppender;
 use gents_protocol::output::PresentationPart;
 
 #[tokio::test]
@@ -75,24 +76,6 @@ fn whole(raw: &str) -> CapturedChannel<'_> {
         raw,
         rendered: raw,
         shown: 0..raw.len(),
-    }
-}
-
-#[derive(Debug, Default)]
-struct MemoryAppender(std::sync::Mutex<String>);
-
-impl CanonicalOutputAppender for MemoryAppender {
-    fn append<'a>(
-        &'a self,
-        text: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<std::ops::Range<u64>, LiveOutputError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            let mut source = self.0.lock().unwrap();
-            let start = source.len() as u64;
-            source.push_str(text);
-            Ok(start..source.len() as u64)
-        })
     }
 }
 

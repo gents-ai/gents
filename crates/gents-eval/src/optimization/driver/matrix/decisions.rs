@@ -1,6 +1,5 @@
 use tokio_util::sync::CancellationToken;
 
-use super::doubles::{DeadlineProposer, FeedbackCheck};
 use super::fixtures::{
     base_executor, budgets, fail, pass, policy, repeating_proposer, script, with_usage,
     CANDIDATE_PROMPT, DEFINITION, FEEDBACK, FEEDBACK_DEFINITION, HELD_OUT_CASES, SMALL_DEFINITION,
@@ -20,6 +19,7 @@ use crate::optimization::policy::{Decision, InconclusiveReason, RejectReason};
 use crate::optimization::proposer::ScriptedProposer;
 use crate::report::load_run_rows;
 use crate::runner::ScriptedExecutor;
+use crate::test_support::doubles::{DeadlineProposer, FeedbackCheck};
 use crate::{load_run, load_verdicts};
 use gents_documents::EvalSplit;
 
@@ -349,7 +349,7 @@ async fn a_checkpoint_that_regresses_on_held_out_fails_the_job() {
 #[tokio::test]
 async fn feedback_reaches_the_proposer_only_from_the_train_run() {
     let harness = Harness::new().await;
-    let registry = CheckRegistry::builtin().with(Box::new(FeedbackCheck));
+    let registry = CheckRegistry::builtin().with(Box::new(FeedbackCheck { feedback: FEEDBACK }));
     let proposer = repeating_proposer(CANDIDATE_PROMPT);
     let request = harness.request("feedback", FEEDBACK_DEFINITION, budgets(1_000));
     drive(

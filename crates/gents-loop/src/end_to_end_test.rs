@@ -1,19 +1,18 @@
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use gents_protocol::message::Message;
-use rig::completion::CompletionError;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 
 use crate::backend_provider::BackendProviderKind;
 use crate::loop_stream::{run_loop_to_text, LoopConfig, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
-use crate::session_hook::SessionHook;
+use crate::test_support::doubles::{
+    AdmissionGate, EchoTool, GatedModel, PendingTool, ReadEchoTool, RecordedCall, RecordingHook,
+    ResponsesTool, SettlementGate,
+};
 use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
-use crate::tool::{Tool, ToolDefinition, ToolDyn};
-use crate::tool_call_lifecycle::ToolOutcome;
-use crate::{HookAction, ToolCallHookAction};
+use crate::tool::ToolDyn;
 
 #[cfg(feature = "native")]
 mod provider_finish_tests;
@@ -33,223 +32,12 @@ fn sent_histories(model: &ScriptedProvider) -> Vec<String> {
         .collect()
 }
 
-struct EchoTool {
-    calls: Arc<Mutex<Vec<String>>>,
-    policy_allows: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct EchoArgs {
-    text: String,
-}
-
-impl Tool for EchoTool {
-    const NAME: &'static str = "echo";
-    type Error = crate::tool::ToolError;
-    type Args = EchoArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Echoes its input, uppercased.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": { "text": { "type": "string" } },
-                "required": ["text"],
-            }),
-        }
-    }
-
-    fn admit(
-        &self,
-        _args: &Self::Args,
-        _context: &crate::tool::ToolCallEnvelope,
-    ) -> Result<(), Self::Error> {
-        if self.policy_allows {
-            Ok(())
-        } else {
-            Err(crate::tool::ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-                text: "echo denied by tool policy".into(),
-            })
-        }
-    }
-
-    fn into_dyn_error(error: Self::Error) -> crate::tool::ToolError {
-        error
-    }
-
-    async fn call(
-        &self,
-        args: Self::Args,
-        _context: &crate::tool::ToolCallEnvelope,
-    ) -> Result<Self::Output, Self::Error> {
-        self.calls
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(args.text.clone());
-        Ok(args.text.to_uppercase())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RecordedCall {
-    CompletionCall { prompt: String },
-    ToolCall { tool_name: String },
-    AdmissionRejected { tool_name: String, outcome: String },
-    ToolResult { tool_name: String, outcome: String },
-}
-
-#[derive(Clone, Default)]
-struct RecordingHook {
-    log: Arc<Mutex<Vec<RecordedCall>>>,
-    deny_dispatch: bool,
-    admission_gate: Option<Arc<AdmissionGate>>,
-    settlement_gate: Option<Arc<SettlementGate>>,
-}
-
-#[derive(Default)]
-struct AdmissionGate {
-    entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
-}
-
-#[derive(Default)]
-struct SettlementGate {
-    entered: tokio::sync::Notify,
-    dropped: std::sync::atomic::AtomicBool,
-    caller: Mutex<Option<&'static str>>,
-}
-
 #[cfg(test)]
 tokio::task_local! {
     /// A task-local the caller of the loop stream sets, standing in for the
     /// ones that remain (the workspace-approval context, the rendered-request
     /// capture scope): settlement the stream drives must observe the caller's.
     static CALLER_SCOPE: &'static str;
-}
-
-impl RecordingHook {
-    fn log(&self, call: RecordedCall) {
-        self.log
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(call);
-    }
-
-    fn calls(&self) -> Vec<RecordedCall> {
-        self.log
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
-    }
-}
-
-#[async_trait]
-impl SessionHook for RecordingHook {
-    type Error = std::convert::Infallible;
-
-    async fn on_completion_call_with_context(
-        &self,
-        prompt: &Message,
-        _history: &[Message],
-        _context: Option<&Message>,
-    ) -> HookAction {
-        self.log(RecordedCall::CompletionCall {
-            prompt: prompt.rag_text().unwrap_or_default(),
-        });
-        HookAction::Continue
-    }
-
-    async fn on_tool_call(
-        &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        _args: &str,
-        _context: &crate::tool::ToolCallEnvelope,
-    ) -> ToolCallHookAction {
-        self.log(RecordedCall::ToolCall {
-            tool_name: tool_name.to_string(),
-        });
-        if let Some(gate) = &self.admission_gate {
-            gate.entered.notify_one();
-            gate.release.notified().await;
-        }
-        if self.deny_dispatch {
-            ToolCallHookAction::Terminate {
-                reason: "dispatch not acknowledged".to_owned(),
-            }
-        } else {
-            ToolCallHookAction::Continue
-        }
-    }
-
-    async fn on_tool_admission_rejected(
-        &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        _args: &str,
-        outcome: &ToolOutcome,
-    ) -> HookAction {
-        self.log(RecordedCall::AdmissionRejected {
-            tool_name: tool_name.to_string(),
-            outcome: outcome.model_facing_text().to_string(),
-        });
-        HookAction::Continue
-    }
-
-    async fn on_tool_result(
-        &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        _args: &str,
-        outcome: &ToolOutcome,
-    ) -> HookAction {
-        if let Some(gate) = &self.settlement_gate {
-            struct Dropped(Arc<SettlementGate>);
-            impl Drop for Dropped {
-                fn drop(&mut self) {
-                    self.0
-                        .dropped
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-            let _guard = Dropped(gate.clone());
-            *gate.caller.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
-            gate.entered.notify_one();
-            std::future::pending::<()>().await;
-        }
-        self.log(RecordedCall::ToolResult {
-            tool_name: tool_name.to_string(),
-            outcome: outcome.model_facing_text().to_string(),
-        });
-        HookAction::Continue
-    }
-
-    async fn foreground_live_output_writer(
-        &self,
-        internal_call_id: &str,
-    ) -> crate::live_output::LiveToolOutputWriter {
-        crate::live_output::LiveToolOutputRegistry::default()
-            .writer_for(internal_call_id.to_string())
-            .await
-    }
-
-    async fn session_id(&self) -> Option<String> {
-        Some("in-memory-session".to_string())
-    }
-
-    async fn register_stream_tool_call_identity(
-        &self,
-        _internal_call_id: &str,
-        _result_id: &str,
-        _call_id: Option<&str>,
-    ) {
-    }
 }
 
 fn scripted_tool_call() -> RawStreamingChoice<()> {
@@ -333,76 +121,11 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use futures::StreamExt;
-    use rig::completion::{CompletionModel, CompletionRequest, CompletionResponse};
-    use rig::streaming::StreamingCompletionResponse;
 
     use crate::loop_stream::LoopStreamItem;
     use crate::session_hook::NoopSessionHook;
 
-    struct GatedChunk {
-        open: Arc<AtomicBool>,
-        emitted: Arc<AtomicBool>,
-    }
-    impl futures::Stream for GatedChunk {
-        type Item = Result<RawStreamingChoice<()>, CompletionError>;
-
-        fn poll_next(
-            self: std::pin::Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            if !self.open.load(Ordering::SeqCst) || self.emitted.swap(true, Ordering::SeqCst) {
-                return std::task::Poll::Pending;
-            }
-            std::task::Poll::Ready(Some(Ok(RawStreamingChoice::Message(
-                "received partial".into(),
-            ))))
-        }
-    }
-    #[derive(Clone)]
-    struct Model {
-        open: Arc<AtomicBool>,
-        emitted: Arc<AtomicBool>,
-        call: crate::provider_call::ProviderCall,
-    }
-    impl crate::provider_call::ForCall for Model {
-        fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
-            Self {
-                call: call.clone(),
-                ..self.clone()
-            }
-        }
-    }
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for Model {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!()
-        }
-
-        async fn completion(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            unreachable!()
-        }
-
-        async fn stream(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
-            Ok(StreamingCompletionResponse::stream(Box::pin(GatedChunk {
-                open: self.open.clone(),
-                emitted: self.emitted.clone(),
-            })))
-        }
-    }
-
-    let model = Model {
+    let model = GatedModel {
         call: Default::default(),
         open: Arc::new(AtomicBool::new(false)),
         emitted: Arc::new(AtomicBool::new(false)),
@@ -440,49 +163,6 @@ async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
 
     use crate::tool_call_lifecycle::runtime::ToolRequestIdentity;
 
-    struct PendingTool {
-        dropped: Arc<AtomicBool>,
-        observed: Arc<Mutex<Option<String>>>,
-    }
-    impl ToolDyn for PendingTool {
-        fn hidden(&self) -> bool {
-            false
-        }
-        fn name(&self) -> String {
-            "echo".into()
-        }
-
-        fn definition<'a>(&'a self, _: String) -> crate::tool::BoxFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "echo".into(),
-                    description: "pending".into(),
-                    parameters: serde_json::json!({"type": "object"}),
-                }
-            })
-        }
-
-        fn call<'a>(
-            &'a self,
-            _: String,
-            context: &'a crate::tool::ToolCallEnvelope,
-        ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
-            struct Dropped(Arc<AtomicBool>);
-            impl Drop for Dropped {
-                fn drop(&mut self) {
-                    self.0.store(true, Ordering::SeqCst);
-                }
-            }
-            let marker = Dropped(self.dropped.clone());
-            let observed = self.observed.clone();
-            Box::pin(async move {
-                let _marker = marker;
-                *observed.lock().unwrap() = context.runtime().unwrap().request_id;
-                std::future::pending().await
-            })
-        }
-    }
-
     let dropped = Arc::new(AtomicBool::new(false));
     let observed = Arc::new(Mutex::new(None));
     let model = scripted(vec![vec![
@@ -490,8 +170,10 @@ async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
         RawStreamingChoice::FinalResponse(()),
     ]]);
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(PendingTool {
-        dropped: dropped.clone(),
-        observed: observed.clone(),
+        name: "echo",
+        description: "pending",
+        dropped: Some(dropped.clone()),
+        observed: Some(observed.clone()),
     })]);
     let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry {
         identity: Some(ToolRequestIdentity::new(
@@ -645,7 +327,10 @@ fn steering_loop_config() -> LoopConfig {
 async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
     use futures::StreamExt;
 
-    let gate = Arc::new(SettlementGate::default());
+    let gate = Arc::new(SettlementGate {
+        read_scope: Some(|| CALLER_SCOPE.try_with(|scope| *scope).ok()),
+        ..Default::default()
+    });
     let hook = RecordingHook {
         settlement_gate: Some(gate.clone()),
         ..Default::default()
@@ -881,40 +566,8 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
 #[tokio::test]
 async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without_invoking() {
     use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
-    use crate::tool::{BoxFuture, ToolError, ToolFootprint};
     use futures::StreamExt;
 
-    struct ReadTool(Arc<std::sync::atomic::AtomicUsize>);
-    impl ToolDyn for ReadTool {
-        fn hidden(&self) -> bool {
-            false
-        }
-        fn name(&self) -> String {
-            "echo".into()
-        }
-        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "echo".into(),
-                    description: String::new(),
-                    parameters: serde_json::json!({"type":"object"}),
-                }
-            })
-        }
-        fn call<'a>(
-            &'a self,
-            _: String,
-            _context: &'a crate::tool::ToolCallEnvelope,
-        ) -> BoxFuture<'a, Result<String, ToolError>> {
-            Box::pin(async {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok("done".into())
-            })
-        }
-        fn footprint(&self, _: &str, _: &crate::tool::ToolCallEnvelope) -> ToolFootprint {
-            ToolFootprint::Read
-        }
-    }
     for case in gents_lean_vocab::families::admission_handoff_owned_loop::cases() {
         let mut invocations = Vec::new();
         for count in [1, 2] {
@@ -933,7 +586,7 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
             let model = scripted(vec![choices]);
             let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let tools: Arc<Vec<Box<dyn ToolDyn>>> =
-                Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
+                Arc::new(vec![Box::new(ReadEchoTool(invoked.clone()))]);
             let gate = Arc::new(AdmissionGate::default());
             let hook = RecordingHook {
                 admission_gate: Some(gate.clone()),

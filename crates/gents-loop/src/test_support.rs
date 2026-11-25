@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub(crate) mod doubles;
 pub mod fixed_tool;
 pub mod scripted_provider;
 

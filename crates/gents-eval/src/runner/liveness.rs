@@ -69,7 +69,7 @@ pub(super) fn refuse_if_held(run_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn marker_poll(options: &RunOptions) -> Duration {
+pub(crate) fn marker_poll(options: &RunOptions) -> Duration {
     options
         .poll_backoff_base
         .min(Duration::from_secs(MARKER_POLL_CAP_SECS))

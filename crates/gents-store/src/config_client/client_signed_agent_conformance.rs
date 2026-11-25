@@ -43,45 +43,25 @@ fn client_goal_graphs_use_the_bundled_canonical_lineage() {
 
 #[tokio::test]
 async fn publication_observer_refuses_local_transactions_before_callback() {
-    use super::{
-        AgentPublicationObserver, ConfigAccess, ConfigClientError, ConfigRelationshipGrant,
-    };
+    use super::{ConfigAccess, ConfigClientError};
+    use crate::test_support::doubles::PanicPublicationObserver;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
 
-    struct Never;
-    #[async_trait::async_trait]
-    impl AgentPublicationObserver for Never {
-        async fn before_commit(
-            &self,
-            _: &str,
-            _: &[ConfigRelationshipGrant],
-        ) -> Result<(), ConfigClientError> {
-            panic!("observer must not run")
-        }
-        async fn committed(&self) -> Result<(), ConfigClientError> {
-            panic!("observer must not run")
-        }
-        async fn commit_failed(&self, _: bool) -> Result<(), ConfigClientError> {
-            panic!("observer must not run")
-        }
-        async fn before_grant(&self, _: &ConfigRelationshipGrant) -> Result<(), ConfigClientError> {
-            panic!("observer must not run")
-        }
-        async fn granted(&self, _: &ConfigRelationshipGrant) -> Result<(), ConfigClientError> {
-            panic!("observer must not run")
-        }
-    }
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node);
     let invoked = AtomicBool::new(false);
     let result = access
-        .transact_write_with_agent_publication("test.local_publication", Arc::new(Never), |_| {
-            invoked.store(true, Ordering::SeqCst);
-            Box::pin(async { Ok::<_, ConfigClientError>(()) })
-        })
+        .transact_write_with_agent_publication(
+            "test.local_publication",
+            Arc::new(PanicPublicationObserver),
+            |_| {
+                invoked.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok::<_, ConfigClientError>(()) })
+            },
+        )
         .await;
     assert!(matches!(
         result,

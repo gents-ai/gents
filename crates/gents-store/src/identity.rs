@@ -47,6 +47,8 @@ pub use enrollment_grant::{
 pub(crate) use enrollment_grant::{
     close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
 };
+#[cfg(test)]
+pub(crate) use enrollment_grant::{NativeTuples, TupleChanges};
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};

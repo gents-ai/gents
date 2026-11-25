@@ -2,7 +2,6 @@ use std::sync::atomic::AtomicBool;
 
 use tokio_util::sync::CancellationToken;
 
-use super::doubles::{CancellingExecutor, CancelsFirstValidationRun, ErroringProposer};
 use super::fixtures::{
     base_executor, budgets, fail, repeating_proposer, script, script_attempts, CANDIDATE_PROMPT,
     DEFINITION, VALIDATION_CASES,
@@ -18,6 +17,9 @@ use crate::optimization::proposer::ScriptedProposer;
 use crate::optimization::subject::{baseline_text, materialize_candidate, materialize_pack};
 use crate::optimization::target::JobTarget;
 use crate::runner::ScriptedExecutor;
+use crate::test_support::doubles::{
+    CancellingExecutor, CancelsFirstValidationRun, ErroringProposer,
+};
 use gents_documents::EvalSplit;
 
 #[tokio::test]

@@ -1084,28 +1084,6 @@ mod tests {
 
     #[tokio::test]
     async fn submitted_request_that_loses_access_returns_unavailable_after_change() {
-        struct RevokeOnObservation {
-            owner: ConfigAccess,
-            reader: identity::Did,
-            doc: String,
-            done: std::sync::atomic::AtomicBool,
-        }
-        #[async_trait::async_trait]
-        impl ObservationHook for RevokeOnObservation {
-            async fn on_state(&self, _state: &str, _session_id: Option<&str>) {
-                if self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
-                self.owner
-                    .delete_actor_relationship("AgentRequest", &self.doc, "reader", &self.reader)
-                    .await
-                    .unwrap();
-                self.owner.write("eval.test.signal_after_revoke", &format!(
-                    "mutation {{ update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"processing\"}}) {{ _docID }} }}",
-                    escape_graphql_string(&self.doc)
-                )).await.unwrap();
-            }
-        }
         let home = EmbeddedHome::create_temp("observe-revoked").await.unwrap();
         insert_request(&home, "req-revoked", "pending").await;
         let owner =
@@ -1128,7 +1106,7 @@ mod tests {
             .await
             .unwrap();
         let reader_access = ConfigAccess::local_as(home.node.clone(), reader_did.clone());
-        let hook = RevokeOnObservation {
+        let hook = crate::test_support::doubles::RevokeOnObservation {
             owner,
             reader: reader_did,
             doc,
@@ -1184,29 +1162,11 @@ mod tests {
         );
     }
 
-    struct DeadlineHook {
-        states: std::sync::atomic::AtomicUsize,
-        interrupts: std::sync::atomic::AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl ObservationHook for DeadlineHook {
-        async fn on_state(&self, _state: &str, _session_id: Option<&str>) {
-            self.states
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        async fn on_interrupt_requested(&self) {
-            self.interrupts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
     #[tokio::test]
     async fn await_terminal_with_reports_each_state_and_one_deadline_interrupt() {
         let home = EmbeddedHome::create_temp("observe-hook").await.unwrap();
         insert_request(&home, "req-stuck", "pending").await;
-        let hook = DeadlineHook {
+        let hook = crate::test_support::doubles::DeadlineHook {
             states: std::sync::atomic::AtomicUsize::new(0),
             interrupts: std::sync::atomic::AtomicUsize::new(0),
         };

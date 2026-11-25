@@ -1,36 +1,13 @@
 use super::*;
-
-struct Named(&'static str);
-
-impl ToolDyn for Named {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.0.into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.0.into(),
-                description: "contract".into(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _: &'a ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { Ok("called".into()) })
-    }
-}
+use crate::test_support::fixed_tool::FixedTool;
 
 fn surface(names: &[&'static str]) -> Vec<Box<dyn ToolDyn>> {
     names
         .iter()
-        .map(|name| Box::new(Named(name)) as Box<dyn ToolDyn>)
+        .map(|name| {
+            Box::new(FixedTool::new(name, "called").with_description("contract"))
+                as Box<dyn ToolDyn>
+        })
         .collect()
 }
 

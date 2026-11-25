@@ -4,12 +4,22 @@ use crate::tool::{BoxFuture, ToolCallEnvelope, ToolDefinition, ToolDyn, ToolErro
 
 pub struct FixedTool {
     name: &'static str,
+    description: &'static str,
     output: &'static str,
 }
 
 impl FixedTool {
     pub fn new(name: &'static str, output: &'static str) -> Self {
-        Self { name, output }
+        Self {
+            name,
+            description: name,
+            output,
+        }
+    }
+
+    pub fn with_description(mut self, description: &'static str) -> Self {
+        self.description = description;
+        self
     }
 }
 
@@ -26,7 +36,7 @@ impl ToolDyn for FixedTool {
         Box::pin(async {
             ToolDefinition {
                 name: self.name.into(),
-                description: self.name.into(),
+                description: self.description.into(),
                 parameters: serde_json::json!({"type":"object"}),
             }
         })

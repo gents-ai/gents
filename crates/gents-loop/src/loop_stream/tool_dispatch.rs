@@ -526,51 +526,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::{BoxFuture, ToolDefinition, ToolError};
+    use crate::test_support::doubles::{
+        AdmissionGateTool as AdmissionGate, EffectHook, ParseOnlyTool, ReadyAfterWallDeadline,
+        StrictArgsTool,
+    };
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
-
-    #[derive(Debug, serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct ArgumentFixture {
-        text: String,
-        mode: Option<ArgumentMode>,
-    }
-
-    #[derive(Debug, serde::Deserialize)]
-    enum ArgumentMode {
-        Normal,
-    }
-
-    struct ParseOnlyTool;
-
-    impl crate::tool::Tool for ParseOnlyTool {
-        const NAME: &'static str = "parse";
-        type Error = ToolError;
-        type Args = ArgumentFixture;
-        type Output = String;
-
-        async fn definition(&self, _: String) -> ToolDefinition {
-            ToolDefinition {
-                name: "parse".into(),
-                description: String::new(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        }
-
-        async fn call(
-            &self,
-            args: Self::Args,
-            _context: &crate::tool::ToolCallEnvelope,
-        ) -> Result<String, Self::Error> {
-            panic!(
-                "invalid arguments must never execute; parsed text {:?} in mode {:?}",
-                args.text, args.mode
-            )
-        }
-    }
 
     #[tokio::test]
     async fn generated_argument_failures_follow_streamed_provider_reason() {
@@ -658,110 +621,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    struct EffectHook {
-        invoked: AtomicBool,
-        rejected: AtomicBool,
-        block_before: bool,
-        cleanup_fails: bool,
-        cleaned: AtomicBool,
-        parent_settled: AtomicBool,
-        terminate_before: bool,
-    }
-
-    #[async_trait::async_trait]
-    impl SessionHook for EffectHook {
-        type Error = std::convert::Infallible;
-
-        async fn admit_tool_effect(
-            &self,
-            _: &str,
-            _: u32,
-            _: &str,
-            _: &str,
-            _: &crate::tool::ToolCallEnvelope,
-        ) -> Result<String, String> {
-            Ok("derived-call".into())
-        }
-        async fn finish_tool_effect(
-            &self,
-            _: &str,
-            interruption: Option<&ToolOutcome>,
-        ) -> Result<(), String> {
-            if interruption.is_some() {
-                self.cleaned.store(true, Ordering::SeqCst);
-                if self.cleanup_fails {
-                    return Err("durable cleanup unavailable".into());
-                }
-            }
-            Ok(())
-        }
-        async fn on_completion_call_with_context(
-            &self,
-            _: &gents_protocol::message::Message,
-            _: &[gents_protocol::message::Message],
-            _: Option<&gents_protocol::message::Message>,
-        ) -> HookAction {
-            HookAction::Continue
-        }
-        async fn on_tool_call(
-            &self,
-            _: &str,
-            _: Option<String>,
-            _: &str,
-            _: &str,
-            _: &crate::tool::ToolCallEnvelope,
-        ) -> ToolCallHookAction {
-            self.invoked.store(true, Ordering::SeqCst);
-            if self.terminate_before {
-                return ToolCallHookAction::Terminate {
-                    reason: "child hook terminated".into(),
-                };
-            }
-            if self.block_before {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-            ToolCallHookAction::Skip {
-                reason: "specialized side effect".into(),
-            }
-        }
-        async fn on_tool_admission_rejected(
-            &self,
-            _: &str,
-            _: Option<String>,
-            _: &str,
-            _: &str,
-            _: &ToolOutcome,
-        ) -> HookAction {
-            self.rejected.store(true, Ordering::SeqCst);
-            HookAction::Continue
-        }
-        async fn on_tool_result(
-            &self,
-            _: &str,
-            _: Option<String>,
-            internal_id: &str,
-            _: &str,
-            _: &ToolOutcome,
-        ) -> HookAction {
-            if internal_id == "parent" {
-                self.parent_settled.store(true, Ordering::SeqCst);
-            }
-            HookAction::Continue
-        }
-        async fn foreground_live_output_writer(
-            &self,
-            id: &str,
-        ) -> crate::live_output::LiveToolOutputWriter {
-            crate::live_output::LiveToolOutputRegistry::default()
-                .writer_for(id)
-                .await
-        }
-        async fn session_id(&self) -> Option<String> {
-            None
-        }
-        async fn register_stream_tool_call_identity(&self, _: &str, _: &str, _: Option<&str>) {}
     }
 
     #[tokio::test]
@@ -1019,98 +878,6 @@ mod tests {
         }
     }
 
-    struct ReadyAfterWallDeadline {
-        deadline_at: DateTime<Utc>,
-        called: Arc<AtomicBool>,
-        fails: bool,
-    }
-
-    impl ToolDyn for ReadyAfterWallDeadline {
-        fn hidden(&self) -> bool {
-            false
-        }
-        fn name(&self) -> String {
-            "ready_after_wall_deadline".into()
-        }
-
-        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "ready_after_wall_deadline".into(),
-                    description: "wall-clock deadline regression".into(),
-                    parameters: serde_json::json!({"type": "object"}),
-                }
-            })
-        }
-
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the tool must become ready past the wall deadline within one poll"
-        )]
-        fn call<'a>(
-            &'a self,
-            _args: String,
-            _context: &'a crate::tool::ToolCallEnvelope,
-        ) -> BoxFuture<'a, Result<String, ToolError>> {
-            Box::pin(async move {
-                self.called.store(true, Ordering::SeqCst);
-                let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
-                std::thread::sleep(remaining + std::time::Duration::from_millis(10));
-                if self.fails {
-                    Err(ToolError::ReportedFailure {
-                        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
-                        text: "tool failed".into(),
-                    })
-                } else {
-                    Ok("late success".into())
-                }
-            })
-        }
-    }
-
-    struct AdmissionGate {
-        name: &'static str,
-        admitted: bool,
-    }
-
-    impl ToolDyn for AdmissionGate {
-        fn hidden(&self) -> bool {
-            false
-        }
-        fn name(&self) -> String {
-            self.name.into()
-        }
-
-        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: self.name.into(),
-                    description: String::new(),
-                    parameters: serde_json::json!({"type": "object"}),
-                }
-            })
-        }
-
-        fn call<'a>(
-            &'a self,
-            _args: String,
-            _context: &'a crate::tool::ToolCallEnvelope,
-        ) -> BoxFuture<'a, Result<String, ToolError>> {
-            Box::pin(async { Ok(String::new()) })
-        }
-
-        fn admit(&self, _args: &str, _context: &ToolCallEnvelope) -> Result<(), ToolError> {
-            if self.admitted {
-                Ok(())
-            } else {
-                Err(ToolError::ReportedFailure {
-                    class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-                    text: "refused by the tool's own admission".into(),
-                })
-            }
-        }
-    }
-
     #[test]
     fn plugin_child_admission_matches_the_lean_model() {
         gents_lean_vocab::families::plugin_resources_child_routes::replay(|i| {
@@ -1193,40 +960,6 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
-        use crate::tool::{Tool, ToolDefinition};
-
-        struct StrictArgsTool {
-            calls: Arc<AtomicUsize>,
-        }
-        #[derive(Debug, thiserror::Error)]
-        #[error("strict tool error")]
-        struct StrictToolError;
-        #[derive(serde::Deserialize)]
-        struct StrictArgs {
-            text: String,
-        }
-        impl Tool for StrictArgsTool {
-            const NAME: &'static str = "strict";
-            type Error = StrictToolError;
-            type Args = StrictArgs;
-            type Output = String;
-            async fn definition(&self, _prompt: String) -> ToolDefinition {
-                ToolDefinition {
-                    name: Self::NAME.to_string(),
-                    description: String::new(),
-                    parameters: serde_json::json!({"type": "object"}),
-                }
-            }
-            async fn call(
-                &self,
-                args: Self::Args,
-                _context: &crate::tool::ToolCallEnvelope,
-            ) -> Result<Self::Output, Self::Error> {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok(format!("ran with {}", args.text))
-            }
-        }
-
         #[derive(serde::Deserialize)]
         struct Case {
             termination: String,

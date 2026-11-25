@@ -1,36 +1,5 @@
 use super::*;
-
-struct BudgetExecutor {
-    started: tokio::sync::mpsc::UnboundedSender<(String, tokio::sync::oneshot::Sender<()>)>,
-    active: std::sync::atomic::AtomicUsize,
-    peak: std::sync::atomic::AtomicUsize,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for BudgetExecutor {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-    async fn execute(&self, spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
-        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-        self.peak.fetch_max(active, Ordering::SeqCst);
-        let (send, receive) = tokio::sync::oneshot::channel();
-        self.started.send((spec.trial_id.clone(), send)).unwrap();
-        receive.await.unwrap();
-        self.active.fetch_sub(1, Ordering::SeqCst);
-        passed()
-    }
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
-}
+use crate::test_support::doubles::BudgetExecutor;
 
 #[tokio::test]
 async fn shared_trial_budget_reuses_capacity_across_runs_without_exceeding_ceiling() {
