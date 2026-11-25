@@ -87,13 +87,12 @@ impl Provider {
         backend: &ScriptedBackend,
     ) -> Result<()> {
         for (index, gate) in GATES.iter().enumerate() {
-            tokio::time::timeout(Duration::from_secs(90), async {
-                while !root.join(format!("release-related-{index}")).is_file() {
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-            })
+            tokio::time::timeout(
+                Duration::from_secs(90),
+                crate::support::wait_for_file(&root.join(format!("release-related-{index}"))),
+            )
             .await
-            .context("editor did not release the related worker")?;
+            .context("editor did not release the related worker")??;
             backend.release(gate);
         }
         Ok(())

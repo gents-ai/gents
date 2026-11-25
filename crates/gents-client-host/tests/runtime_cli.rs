@@ -330,20 +330,19 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while gents_desktop_bridge::host::local::connect(&paths)
-            .await
-            .is_err()
-        {
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        support::wait_for_listener(&paths, || {
             assert!(
                 installation.try_wait().unwrap().is_none(),
                 "{}",
                 std::fs::read_to_string(&log_path).unwrap()
             );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+            Ok(())
+        }),
+    )
     .await
+    .unwrap()
     .unwrap();
     let mut client = support::Attachment::start(&paths).await;
     client

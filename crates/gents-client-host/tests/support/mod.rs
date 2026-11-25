@@ -18,6 +18,7 @@ pub struct Attachment {
     pub(super) installation_build: Option<String>,
     input: Option<FramedWrite<ChildStdin, LengthDelimitedCodec>>,
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
+    saw_update: bool,
 }
 
 pub fn native_binary(name: &str) -> Result<PathBuf> {
@@ -73,6 +74,7 @@ impl Attachment {
             installation_build: None,
             input: Some(input),
             output,
+            saw_update: false,
         };
         attachment
             .send(json!({"kind":"hello", "version":protocol::PROTOCOL_VERSION}))
@@ -104,7 +106,26 @@ impl Attachment {
             .expect("native reply deadline")
             .expect("native output closed")
             .unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        if value["kind"] == "updated" {
+            self.saw_update = true;
+        }
+        value
+    }
+
+    #[cfg_attr(not(feature = "runtime-e2e"), allow(dead_code))]
+    pub async fn wait_for_update(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.saw_update) {
+            return Ok(());
+        }
+        while let Some(frame) = self.output.next().await {
+            let value: Value = serde_json::from_slice(&frame?)?;
+            if value["kind"] == "updated" {
+                self.saw_update = false;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("native output closed before an update arrived")
     }
 
     pub async fn call(&mut self, id: u32, name: &str, args: Value) -> Value {
@@ -173,6 +194,48 @@ impl Attachment {
         self.wait_for_output_eof().await;
         let status = self.wait_for_exit().await;
         assert!(status.success());
+    }
+}
+
+#[cfg_attr(not(feature = "runtime-e2e"), allow(dead_code))]
+pub async fn wait_for_file(path: &Path) -> Result<()> {
+    use notify::{EventKind, RecursiveMode, Watcher as _};
+    let parent = path
+        .parent()
+        .context("watched file must have a parent directory")?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event {
+            if !matches!(event.kind, EventKind::Access(_)) {
+                let _ = tx.send(());
+            }
+        }
+    })?;
+    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+    while !path.is_file() {
+        rx.recv()
+            .await
+            .context("file watcher closed unexpectedly")?;
+    }
+    Ok(())
+}
+
+/// Cross-process IPC readiness (`local::connect`) has no universal OS
+/// notification seam: Unix long paths create `/tmp/gents-client-<uid>/` on
+/// bind and Windows uses named pipes, so callers share this single wait helper.
+pub async fn wait_for_listener(
+    paths: &DesktopPaths,
+    mut check_alive: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    loop {
+        if gents_desktop_bridge::host::local::connect(paths)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        check_alive()?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

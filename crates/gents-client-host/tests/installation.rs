@@ -52,22 +52,21 @@ async fn check_shared_installation(home: &str) {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if local::connect(&paths).await.is_ok() {
-                break;
-            }
-            if let Some(status) = server.try_wait().unwrap() {
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        support::wait_for_listener(&paths, || {
+            if let Some(status) = server.try_wait()? {
                 panic!(
                     "native installation exited with {status}: {}",
                     std::fs::read_to_string(dir.path().join("server.log")).unwrap()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+            Ok(())
+        }),
+    )
     .await
-    .expect("native installation startup");
+    .expect("native installation startup")
+    .unwrap();
     let mut first = Attachment::start(&paths).await;
     let mut second = Attachment::start(&paths).await;
     assert_eq!(first.snapshot(1).await["client"]["clientDid"], seed_did);
@@ -244,18 +243,9 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
         while let Some(frame) = current.next().await {
             frame.unwrap();
         }
-        loop {
-            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
-                Ok(lock) => {
-                    drop(lock);
-                    break;
-                }
-                Err(error) if error.lock_held().is_some() => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(error) => panic!("{error:#}"),
-            }
-        }
+        gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir())
+            .await
+            .unwrap();
     })
     .await
     .unwrap();
