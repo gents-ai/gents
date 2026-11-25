@@ -557,6 +557,7 @@ impl AgentToolSurfaceConfig {
         );
 
         ToolSurface {
+            withheld_agent_targets: Vec::new(),
             hidden_tool_names: self.hidden_tool_names.clone(),
             host_tools: self.host_tools.clone(),
             root_execution_guard: self.root_execution_guard.clone(),
@@ -598,7 +599,7 @@ impl AgentToolSurfaceConfig {
                 categories: effective_policy.self_config_category_set(),
                 ..self.self_config.clone()
             },
-            lsp: effective_policy.lsp.then(|| {
+            lsp: effective_policy.lsp.then_some(()).and_then(|()| {
                 let doc =
                     gents_documents::LspConfigDocument::parse_operator(self.lsp_config.as_deref())
                         .unwrap_or_default();
@@ -628,8 +629,8 @@ impl AgentToolSurfaceConfig {
                 let constraints = crate::native::lsp::constraints_from_effective_policy(
                     &effective_policy,
                     overlay,
-                );
-                crate::native::lsp::LspToolConfig {
+                )?;
+                Some(crate::native::lsp::LspToolConfig {
                     lsp: true,
                     file: effective_policy.file,
                     digest: crate::native::lsp::config_digest(&workspace, &servers, &constraints),
@@ -644,7 +645,7 @@ impl AgentToolSurfaceConfig {
                     diagnostics_deduplicate: doc.diagnostics_deduplicate.unwrap_or(false),
                     idle_timeout: doc.idle_timeout(),
                     action_timeout: self.lsp_action_timeout,
-                }
+                })
             }),
         }
     }
@@ -656,12 +657,11 @@ impl AgentToolSurfaceConfig {
         active_agent_dids: &RapidHashSet<String>,
         plugins: &dyn crate::plugin_host::PluginHost,
     ) -> Result<ToolSurface> {
-        let mut agent_tools = self.agent_tools.clone();
-        agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
-        });
-        self.resolve_with_agent_tools(node, own_node_did, plugins, agent_tools)
-            .await
+        let mut surface = self
+            .resolve_with_agent_tools(node, own_node_did, plugins, self.agent_tools.clone())
+            .await?;
+        surface.retain_agent_targets(own_node_did, active_agent_dids);
+        Ok(surface)
     }
 
     #[cfg(test)]

@@ -12,6 +12,11 @@ import { reconcileSelection } from "./selectionReconcile";
 import { noticeUnkeptChanges } from "./unkeptChangeNotices";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
+import {
+  createSessionShownStore,
+  keepsSeen,
+  type SessionShownStore,
+} from "./sessionShown";
 import { createProviderStore, type ProviderStore } from "./providerStore";
 import { createProviders } from "./providers";
 import { createLocalServer } from "./localServer";
@@ -123,7 +128,8 @@ export function createDesktopApp({
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);
   noticeUnkeptChanges(stores.fleet);
-  keepSeen(stores);
+  const sessionShown = createSessionShownStore();
+  keepSeen(stores, sessionShown);
   watchNotifications(stores);
   const sharing =
     given ??
@@ -141,25 +147,29 @@ export function createDesktopApp({
     lifecycle,
     actions,
     sharing,
+    sessionShown,
   };
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;
 
 /* the open session is seen while the window shows it, so work that ends
-   in front of the reader never reads as new */
-function keepSeen(stores: ShellStores) {
+   in front of the reader never reads as new; a session left selected
+   behind another page (the list, on a narrow window) is not on screen */
+function keepSeen(stores: ShellStores, sessionShown: SessionShownStore) {
   seenMarks.start(new Date().toISOString());
   mailboxSeen.start(new Date().toISOString());
   const stamp = () => {
-    if (typeof document !== "undefined" && document.visibilityState === "hidden")
-      return;
+    const visible =
+      typeof document === "undefined" || document.visibilityState !== "hidden";
     const { nodeDid, sessionId } = stores.selection.getState();
     const session = listedSession(stores.fleet.getState(), nodeDid, sessionId);
-    if (session) seenMarks.set(sessionKeyOf(session), seenMarkOf(session));
+    if (session && keepsSeen(visible, sessionShown.getState().shown, true))
+      seenMarks.set(sessionKeyOf(session), seenMarkOf(session));
   };
   stores.selection.subscribe(stamp);
   stores.fleet.subscribe(stamp);
+  sessionShown.subscribe(stamp);
   if (typeof document !== "undefined")
     document.addEventListener("visibilitychange", stamp);
   stamp();

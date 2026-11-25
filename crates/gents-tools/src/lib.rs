@@ -7,10 +7,12 @@ pub mod plugin;
 pub mod plugin_host;
 pub mod rendering;
 pub mod runtime_context;
+pub mod skill_pointer;
 pub mod surface;
 pub mod task_run;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+pub mod tools_rebinding;
 pub mod ux_data;
 pub mod ux_preview;
 

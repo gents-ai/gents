@@ -2,9 +2,10 @@
 
 Run a JavaScript workflow as a background job. Pass `script` (required), a
 module exporting `module.exports = (input) => output`; `args` is available as
-`input.args` (`args.handle` names the run), and `agent_budget` bounds child
-starts (default 8; pass the number spawned). The call returns a receipt now;
-the result arrives later as a message. End your turn after the call.
+`input.args` (required `args.handle` names the run), and `agent_budget`
+bounds child starts (default 8; pass the number spawned). The call returns a
+receipt now; the result arrives later as a message. End your turn after the
+call.
 
 Each step receives `pin` (null initially), `args`, `agent_budget`, `children`
 (slot to `{state: live|completed|failed|interrupted, title, usage}`), `ceiling`

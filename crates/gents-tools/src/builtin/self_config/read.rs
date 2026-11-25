@@ -212,8 +212,8 @@ impl SelfConfigCore {
             "tool_grants": {
                 "configured": { "lsp": lsp_selected, "network_mode": configured_network_mode },
                 "confirmed_by": "canonical Tools selection decoded from durable configuration",
-                "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working agent.",
-                "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
+                "activation": "Your own Tools apply from your next turn, another agent's from its next request. Only a successful call proves a tool works.",
+                "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed. A read-only bash policy runs no language server, so lsp is offered only with an Unrestricted bash mode whose execution_mode is not read_only.",
             },
             "runtime_effective": {
                 "meaning": "agent_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools update with options.agent to select the role.",

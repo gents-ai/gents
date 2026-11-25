@@ -243,6 +243,18 @@ jobs:
       - name: Check gate selection and test guards
         run: make gate-selftest
 
+      - name: Check the workflow artifact names
+        run: |
+          set -euo pipefail
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
+          "${python}" .github/scripts/check-artifact-names.py
+
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
@@ -281,7 +293,7 @@ jobs:
         env:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
         run: |
-          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, lint-variants, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
           echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
           printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
@@ -370,7 +382,8 @@ jobs:
           unit: fmt
 
   # The product build without test features, then clippy over every target of
-  # the changed crates and their dependents.
+  # the changed crates and their dependents. It and lint-variants run side by
+  # side on the portable runners, within their role's compile parallelism.
   lint:
     needs: [plan, repository-guard]
     # Fork pull requests never run on a self-hosted runner: its account shares
@@ -380,10 +393,11 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'lint')
-    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.portable }}
     timeout-minutes: 90
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ fromJSON(needs.plan.outputs.plan).build_jobs.portable || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
       # actions/checkout runs `git submodule` about ten times per job (status,
       # then foreach to set and remove credentials, again in its post step). On
@@ -431,7 +445,7 @@ jobs:
 
       - uses: ./.github/actions/rust-runner
         with:
-          role: macos
+          role: portable
 
       - name: Install cargo-hakari
         run: .github/scripts/setup-hakari.sh
@@ -476,6 +490,50 @@ jobs:
         uses: ./.github/actions/gate-record
         with:
           unit: lint
+
+  # The builds beside the product's: clippy over the live suites in their own
+  # incremental tree, the CLI's Vera feature, gents-loop for WASI and the
+  # desktop app's native-e2e capability check, for the crates the change reaches.
+  lint-variants:
+    needs: [plan, repository-guard]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'lint-variants')
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.portable }}
+    timeout-minutes: 90
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ fromJSON(needs.plan.outputs.plan).build_jobs.portable || vars.CARGO_BUILD_JOBS || '12' }}
+    steps:
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+        with:
+          role: portable
+
+      - name: Check the live suites, the Vera and WASI builds and the desktop capabilities
+        run: make gate-run JOB=lint-variants
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+      - name: Record the pass
+        if: success()
+        uses: ./.github/actions/gate-record
+        with:
+          unit: lint-variants
 
   # Proofs, the files generated from them, the one-consumer-per-family scan
   # and, when the runtime group does not run them, the structure ratchets.
@@ -1024,6 +1082,7 @@ jobs:
       - repository-guard
       - fmt
       - lint
+      - lint-variants
       - contract
       - test
       - build

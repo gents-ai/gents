@@ -32,6 +32,7 @@ impl Eq for EndpointAuthentication {}
 pub struct RuntimeEndpoints {
     capability: ClientSigningCapability,
     endpoints: RwLock<RapidHashMap<(String, String), GraphqlEndpoint>>,
+    bearer_lifetime: Option<std::time::Duration>,
 }
 
 impl RuntimeEndpoints {
@@ -39,7 +40,15 @@ impl RuntimeEndpoints {
         Self {
             capability,
             endpoints: RwLock::default(),
+            bearer_lifetime: None,
         }
+    }
+
+    /// Every endpoint opened from now on mints bearers of `lifetime`
+    /// ([`GraphqlEndpoint::with_bearer_lifetime`]).
+    pub fn with_bearer_lifetime(mut self, lifetime: std::time::Duration) -> Self {
+        self.bearer_lifetime = Some(lifetime);
+        self
     }
 
     pub fn endpoint(&self, node: &str, url: &str) -> Result<GraphqlEndpoint> {
@@ -53,6 +62,9 @@ impl RuntimeEndpoints {
         }
         let mut endpoint = GraphqlEndpoint::as_principal(url, self.capability.did())
             .with_client_signing_capability(self.capability.clone())?;
+        if let Some(lifetime) = self.bearer_lifetime {
+            endpoint = endpoint.with_bearer_lifetime(lifetime);
+        }
         endpoint.client_authentication = Arc::new(EndpointAuthentication::Runtime {
             node: node.to_owned(),
             current: tokio::sync::Mutex::new(None),

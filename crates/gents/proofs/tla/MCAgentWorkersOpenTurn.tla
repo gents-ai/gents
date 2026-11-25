@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkersOpenTurn ----
+EXTENDS AgentWorkers
+
+====

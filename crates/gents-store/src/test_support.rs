@@ -33,34 +33,55 @@ pub fn unreached_deadline_at() -> chrono::DateTime<chrono::Utc> {
 
 /// Resolves with the first `Ok` that `read` returns, re-running it after each
 /// change to `collection` that `reader` observes, and fails with `what` and
-/// the last `Err` once `collection` has not changed for [`STALL_CEILING`].
-/// The subscription opens before the first read, so a change committed
-/// between two reads is never missed; `read` must change its answer only
-/// together with a change to `collection` that `reader` observes: a reader
-/// other than the rows' owner sees a child row when its session link is
-/// published, which is a later change to the child's own collection.
-pub async fn read_when_changed<R, T, L, F>(
-    reader: &R,
-    collection: &str,
-    what: &str,
-    mut read: F,
-) -> T
+/// the last `Err` once that `Err` has stayed the same for [`STALL_CEILING`].
+/// The ceiling measures the wait's own answer, not the collection: writes the
+/// answer does not reflect (a lease renewal, a row the reader cannot see)
+/// keep a collection changing while the wait makes no progress. The
+/// subscription opens before the first read, so a change committed between
+/// two reads is never missed; `read` must change its answer only together
+/// with a change to `collection` that `reader` observes: a reader other than
+/// the rows' owner sees a child row when its session link is published,
+/// which is a later change to the child's own collection.
+pub async fn read_when_changed<R, T, L, F>(reader: &R, collection: &str, what: &str, read: F) -> T
 where
     R: snapshot_reader::SnapshotReader + ?Sized,
     F: AsyncFnMut() -> Result<T, L>,
     L: std::fmt::Display,
 {
     let mut changes = reader.subscribe_changes(collection).await;
+    observe_until(STALL_CEILING, async || changes.recv().await, read)
+        .await
+        .unwrap_or_else(|last| {
+            panic!("{what}: {collection} showed no new answer for {STALL_CEILING:?}; last: {last}")
+        })
+}
+
+/// Re-runs `read` after each `changed` until it returns `Ok`, or returns the
+/// last `Err`, rendered, once `read` has given that same answer for
+/// `ceiling` however often `changed` fires.
+async fn observe_until<T, L, F, C>(
+    ceiling: std::time::Duration,
+    mut changed: C,
+    mut read: F,
+) -> Result<T, String>
+where
+    F: AsyncFnMut() -> Result<T, L>,
+    L: std::fmt::Display,
+    C: AsyncFnMut(),
+{
+    let mut answer = String::new();
+    let mut deadline = tokio::time::Instant::now() + ceiling;
     loop {
         let last = match read().await {
-            Ok(value) => return value,
-            Err(last) => last,
+            Ok(value) => return Ok(value),
+            Err(last) => last.to_string(),
         };
-        if tokio::time::timeout(STALL_CEILING, changes.recv())
-            .await
-            .is_err()
-        {
-            panic!("{what}: {collection} unchanged for {STALL_CEILING:?}; last: {last}");
+        if last != answer {
+            answer = last;
+            deadline = tokio::time::Instant::now() + ceiling;
+        }
+        if tokio::time::timeout_at(deadline, changed()).await.is_err() {
+            return Err(answer);
         }
     }
 }
@@ -498,3 +519,6 @@ pub(crate) fn config_signer() -> crate::config_client::ClientSigningCapability {
     crate::config_client::ClientSigningCapability::from_ed25519_key(&key.private_key_bytes())
         .unwrap()
 }
+
+#[cfg(test)]
+mod tests;

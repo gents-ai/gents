@@ -659,7 +659,7 @@ async fn datastore_help_says_what_fill_means() {
         "fill: correlation uses the request/trigger correlation ID",
         "Omit fill for caller-supplied values",
         "omitted or empty means none",
-        "current request keeps its existing tools",
+        "call the tool in your next turn",
         r#"Caller value: {"name":"correlation"}. Runtime ID: {"name":"request_correlation","fill":"correlation"}"#,
     ] {
         assert!(page.contains(line), "{line}\n{page}");
@@ -1975,7 +1975,7 @@ async fn ux_preview_reports_text_first_through_the_config_tool() {
 
 #[tokio::test]
 async fn help_pages_stay_within_their_size_ceilings() {
-    let (_fixture, tools) = authenticated_setup(
+    let (_fixture, tools) = skilled_setup(
         "help-sizes",
         &["node", "agent", "tools", "profile", "automation"],
     )
@@ -2010,7 +2010,7 @@ async fn help_pages_stay_within_their_size_ceilings() {
         "{groups}"
     );
     assert!(groups.contains("A group in set replaces that whole group"));
-    assert!(groups.contains("from the next request"), "{groups}");
+    assert!(groups.contains("from your next turn"), "{groups}");
     assert!(
         !groups.contains("clamped to"),
         "the group list carries no shapes: {groups}"
@@ -2063,10 +2063,7 @@ async fn receipts_stay_within_their_size_ceilings() {
         echoed["to"]["chars"].is_u64() && echoed["to"]["sha256"].is_string(),
         "a long value the caller sent is summarized: {created}"
     );
-    assert!(
-        created.contains("from the next request") || created.contains("later requests"),
-        "{created}"
-    );
+    assert!(created.contains("from your next turn"), "{created}");
     let read = text(&tools, json!({"argv":["datastore","get","isles"]})).await;
     assert!(
         read.contains("latest_snapshot"),
@@ -2089,7 +2086,7 @@ async fn receipts_stay_within_their_size_ceilings() {
     )
     .await;
     assert!(
-        tools_update.contains("from the next request"),
+        tools_update.contains("from your next turn"),
         "{tools_update}"
     );
     let validate = text(&tools, json!({"argv":["validate"]})).await;

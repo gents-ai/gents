@@ -99,16 +99,20 @@ fn failed(
         );
     }
     let score_bp = (classify(kind, provider_reason) == EvidenceClass::Fail).then_some(0);
+    let mut row = synthetic(
+        stage,
+        check,
+        kind,
+        provider_reason,
+        score_bp,
+        "stage_failed",
+    );
+    if let Some(detail) = &observed.failure_detail {
+        row.raw["detail"] = json!(detail);
+    }
     VerdictRow {
         feedback: names_failure.then(|| failure_feedback(observed)),
-        ..synthetic(
-            stage,
-            check,
-            kind,
-            provider_reason,
-            score_bp,
-            "stage_failed",
-        )
+        ..row
     }
 }
 
@@ -170,7 +174,7 @@ fn synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::completion_is_not_evidence;
+    use crate::runner::attempt_retryable;
     use crate::runner::projection::completion;
     use crate::runner::scripted::ScriptedExecutor;
     use crate::{
@@ -191,6 +195,7 @@ mod tests {
                     stage_id: id.to_string(),
                     prompt: "p".into(),
                     seed: None,
+                    expect_fire: true,
                     deadline_secs: None,
                     settle: false,
                     continuation: None,
@@ -395,7 +400,7 @@ mod tests {
             case_trial_score(EvalReducer::WeightedMean, &views(&rows)),
             CaseTrialScore::NotEvidence
         );
-        assert!(completion_is_not_evidence(&completion(&case, &evidence)));
+        assert!(attempt_retryable(&completion(&case, &evidence)));
     }
 
     #[test]

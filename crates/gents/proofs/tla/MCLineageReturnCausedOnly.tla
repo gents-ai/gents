@@ -1,0 +1,3 @@
+---- MODULE MCLineageReturnCausedOnly ----
+EXTENDS LineageReturn
+====

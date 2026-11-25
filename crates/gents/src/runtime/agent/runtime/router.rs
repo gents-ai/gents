@@ -373,7 +373,7 @@ where
                         pending_request = Some(request);
                         continue;
                     }
-                    permit = dispatcher.reserve() => permit,
+                    permit = dispatcher.for_request(&request).reserve() => permit,
                 };
                 let permit = permit.map_err(|_| {
                     anyhow!(

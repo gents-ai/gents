@@ -177,7 +177,7 @@ export function Title({
           variant="quiet"
           size="icon-xs"
           aria-label={`Rename ${title}`}
-          className="opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100"
+          className="opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:hidden"
           onClick={() => setEditing(true)}
         >
           <Pencil />
@@ -217,6 +217,8 @@ export function GoalUnavailable({ label, text }: { label: string; text: string }
 const GOAL_RESUME: Record<string, string> = {
   blocked: "Reply in this chat, or press Resume.",
   budget_limited: "Raise or lift the budget, then press Resume.",
+  paused:
+    "Press Resume. What a blocked report does, and the goal's ceilings, are set with `gents automation goal policy`.",
 };
 
 /* Decimal strings carry the runtime's signed 64-bit counters; display

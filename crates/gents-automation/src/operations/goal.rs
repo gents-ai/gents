@@ -126,7 +126,7 @@ pub fn set_decision(
         D::ReasonNotAccepted
     } else if target == GoalTarget::Keep && fields == GoalFieldChange::None && !auto_resume {
         D::NothingToChange
-    } else if working && (auto_resume || fields == GoalFieldChange::ClearBudget || !agent_target) {
+    } else if working && (auto_resume || !agent_target) {
         D::PersonOnly
     } else if working && fields != GoalFieldChange::None && changes_status {
         D::FieldsNeedKeep
@@ -653,13 +653,41 @@ pub async fn set_in_txn(
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
         return Ok(Err(GoalOperationError::NoGoal(session_id.to_owned())));
     };
-    let plan = match admit_set_in_txn(txn, actor, &goal, input, obligations_unmet).await? {
+    let mut plan = match admit_set_in_txn(txn, actor, &goal, input, obligations_unmet).await? {
         Ok(plan) => plan,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    Ok(apply_set_in_txn(txn, &plan)
-        .await?
-        .ok_or(GoalOperationError::Stale))
+    let outcome = if actor == GoalActor::WorkingAgent && input.target() == GoalTarget::Block {
+        let policy =
+            crate::goal::stop_policy::load_goal_stop_policy_in_txn(txn, &goal.doc_id).await?;
+        let record: crate::goal::progress::ProgressRecord = goal
+            .progress_record
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        let confirming = crate::goal::progress::reported_blocked(&record);
+        crate::goal::stop_policy::on_blocked_report(policy.on_blocked, confirming)
+    } else {
+        crate::goal::stop_policy::BlockedOutcome::Pause
+    };
+    let refusal = match outcome {
+        crate::goal::stop_policy::BlockedOutcome::Pause => None,
+        crate::goal::stop_policy::BlockedOutcome::Confirm => {
+            Some(GoalOperationError::ConfirmBlocked)
+        }
+        crate::goal::stop_policy::BlockedOutcome::Continue => Some(GoalOperationError::KeepTrying),
+    };
+    if refusal.is_some() {
+        if let Some(state) = goal.state() {
+            plan.post = state;
+        }
+    }
+    let applied = apply_set_in_txn(txn, &plan).await?;
+    Ok(match (applied, refusal) {
+        (None, _) => Err(GoalOperationError::Stale),
+        (Some(_), Some(refusal)) => Err(refusal),
+        (Some(updated), None) => Ok(updated),
+    })
 }
 
 /// Sets the session's Goal as whoever `access` acts for.
@@ -688,6 +716,83 @@ pub async fn set(
         })
         .await
         .map_err(passthrough)?
+}
+
+/// Sets the stop policy of the session's Goal as whoever `access` acts for.
+/// ACP admits only the working Agent's `session_admin` (its person); the
+/// working Agent itself can read its Goal's policy but neither create nor
+/// change it.
+pub async fn set_stop_policy(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    input: &gents_protocol::operations::goal::GoalStopPolicyInput,
+) -> Result<gents_protocol::goal::GoalStopPolicy, GoalOperationError> {
+    access
+        .transact_signed_conflict_rebuild("goal.set_stop_policy", move |txn| {
+            Box::pin(async move {
+                let Some(session) =
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                else {
+                    return Ok(Err(GoalOperationError::SessionMissing(
+                        session_id.to_owned(),
+                    )));
+                };
+                let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                else {
+                    return Ok(Err(GoalOperationError::NoGoal(session_id.to_owned())));
+                };
+                let stored =
+                    crate::goal::stop_policy::load_goal_stop_policy_in_txn(txn, &goal.doc_id)
+                        .await?;
+                let policy = match input.apply(&stored) {
+                    Ok(policy) => policy,
+                    Err(refusal) => return Ok(Err(refusal)),
+                };
+                let agent_doc_id = agent_doc_id_in_txn(txn, &session.session.agent_did).await?;
+                crate::goal::stop_policy::write_goal_stop_policy_in_txn(
+                    txn,
+                    &crate::goal::stop_policy::PolicyTarget {
+                        goal_doc_id: &goal.doc_id,
+                        session_doc_id: &session.doc_id,
+                        agent_did: &session.session.agent_did,
+                        agent_doc_id: &agent_doc_id,
+                        node_did,
+                    },
+                    &policy,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(Ok(policy))
+            })
+        })
+        .await
+        .map_err(passthrough)?
+}
+
+/// The Agent document by its unique `agent_did`, so the read is fenced by the
+/// database.
+async fn agent_doc_id_in_txn(txn: &ConfigApplyTxn<'_>, agent_did: &str) -> anyhow::Result<String> {
+    use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::doc_id())
+        .filter(Filter::eq(fields::AGENT_DID, agent_did))
+        .limit(2)
+        .render();
+    let response = txn.run(&rendered).await?;
+    let rows = response["data"]["Agent"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Agent lookup omitted its result"))?;
+    let [agent] = rows.as_slice() else {
+        anyhow::bail!("a Goal's stop policy requires one visible Agent document");
+    };
+    agent["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("the Agent has no physical document ID"))
 }
 
 /// Sets the Goal the working Agent's calling request is assigned, as that

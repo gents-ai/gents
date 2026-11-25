@@ -134,6 +134,9 @@ pub struct ToolSurface {
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: Option<gents_documents::RemoteTools>,
     agent_tools: AgentToolConfig,
+    /// Selected local agent targets left out because the generation does not
+    /// run their agent ([`Self::retain_agent_targets`]).
+    withheld_agent_targets: Vec<AgentTargetDocument>,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     pub(crate) enable_context_budget_tool: bool,
@@ -305,13 +308,24 @@ impl ToolSurface {
         own_node_did: &str,
         active_agent_dids: &RapidHashSet<String>,
     ) {
-        self.agent_tools.targets.retain(|target| {
-            if target.target_node_did == own_node_did {
-                active_agent_dids.contains(&target.agent_did)
-            } else {
-                true
-            }
-        });
+        let (kept, withheld) = std::mem::take(&mut self.agent_tools.targets)
+            .into_iter()
+            .partition(|target| {
+                target.target_node_did != own_node_did
+                    || active_agent_dids.contains(&target.agent_did)
+            });
+        self.agent_tools.targets = kept;
+        self.withheld_agent_targets.extend(withheld);
+    }
+
+    /// The selected agent targets [`Self::agent_targets`] leaves out because
+    /// their agent does not run.
+    pub fn withheld_agent_targets(&self) -> &[AgentTargetDocument] {
+        if self.agent_tools.enabled {
+            &self.withheld_agent_targets
+        } else {
+            &[]
+        }
     }
 
     /// The names the model is shown: [`Self::tool_names`] without those
@@ -438,6 +452,13 @@ impl ToolSurface {
         let mut tools = self
             .host_tools
             .build_native_tools_with_writethrough(writethrough, &runtime.native_executables)?;
+        let skill_pointers = std::sync::Arc::new(crate::skill_pointer::SkillPointers::new(
+            if self.enable_skills {
+                runtime.skills.clone()
+            } else {
+                Vec::new()
+            },
+        ));
         if self.self_config.enabled {
             let agent = runtime
                 .agent_identity
@@ -511,7 +532,8 @@ impl ToolSurface {
                 )?
                 .with_tools_category(
                     self.self_config.enabled && self.self_config.categories.contains("tools"),
-                ),
+                )
+                .with_skill_pointers(skill_pointers.clone()),
             ));
         }
         if self.enable_p2p_tool {
@@ -631,6 +653,7 @@ impl ToolSurface {
                     runtime_identity: runtime.identity.clone(),
                     plugins: runtime.plugins.clone(),
                     tasks: runtime.tasks.clone(),
+                    skill_pointers,
                 },
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),

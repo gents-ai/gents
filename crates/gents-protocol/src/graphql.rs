@@ -17,9 +17,9 @@ pub use response::{
 };
 #[cfg(feature = "native")]
 pub use transport::{
-    execute_graphql_async, execute_graphql_with_variables_async, graphql_endpoint_available,
-    graphql_error_is_retryable, graphql_transport_error_in_chain, graphql_transport_source,
-    store_http_client_builder,
+    execute_graphql_async, execute_graphql_encoded, execute_graphql_with_variables_async,
+    graphql_endpoint_available, graphql_error_is_retryable, graphql_transport_error_in_chain,
+    graphql_transport_source, store_http_client_builder, RequestEncoding,
 };
 pub use transport::{GraphqlRequestOptions, POOLED_CONNECTION_IDLE_LIMIT};
 pub use turn_state::{

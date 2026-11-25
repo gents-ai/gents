@@ -593,6 +593,7 @@ fn skill_from_document(doc: &gents_documents::SkillDocument) -> gents_documents:
         instructions: doc.instructions.clone().unwrap_or_default(),
         source_directory: doc.source_directory.clone(),
         tool_refs: doc.tool_refs.clone(),
+        covers: doc.covers.clone(),
         display_name: doc.display_name.clone(),
         enabled: doc.enabled,
     }

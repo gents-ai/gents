@@ -171,6 +171,7 @@ async fn schema_agent_node() -> (gents_store::test_support::TestStore, SchemaToo
             .unwrap(),
         home: None,
         caller: None,
+        skill_pointers: Arc::default(),
     };
     (db, tool)
 }
@@ -184,6 +185,7 @@ fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
         access: ConfigAccess::local_as(node.clone(), runtime),
         home: None,
         caller: None,
+        skill_pointers: Arc::default(),
     }
 }
 

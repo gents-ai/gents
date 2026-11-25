@@ -17,7 +17,6 @@ structure CommandSandboxCase where
   category : String
   mode : ExecutionMode
   workspaceWriteSandboxEnforced : Bool
-  program : String
   lookupCommand : String
   networkMode : NetworkMode
   decision : SandboxDecision
@@ -65,17 +64,16 @@ def sandboxCase
     (name category : String)
     (mode : ExecutionMode)
     (workspaceWriteSandboxEnforced : Bool)
-    (program : String := "/usr/bin/git")
+    (lookupCommand : String := "git")
     (network : NetworkMode := .inherit) : CommandSandboxCase :=
   let support := { workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced }
   { name := name
   , category := category
   , mode := mode
   , workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced
-  , program := program
-  , lookupCommand := (program.splitOn "/").getLastD program
+  , lookupCommand := lookupCommand
   , networkMode := network
-  , decision := selectSandbox support mode program
+  , decision := selectSandbox support mode
   }
 
 def envInput
@@ -97,6 +95,11 @@ def envCase
   , expected := filteredEnv (envInput envKey inputPresent) envKey
   }
 
+/-- The commands the read-only tool runs without a configured allowed prefix.
+Each runs under the read-only Seatbelt profile. `ps` and `sudo` are setuid root,
+which the kernel refuses to execute inside a sandbox, and launchd refuses
+`launchctl list` to a sandboxed caller, so none of the three is listed: each is
+refused as any unlisted command is. -/
 def defaultReadOnlyAllowlist : List String :=
   [ "pwd"
   , "ls"
@@ -118,12 +121,9 @@ def defaultReadOnlyAllowlist : List String :=
   , "uptime"
   , "df"
   , "vm_stat"
-  , "ps"
   , "lsof"
   , "curl"
-  , "launchctl"
   , "tailscale"
-  , "sudo"
   ]
 
 def readOnlySafetyPolicy : Policy :=
@@ -355,11 +355,6 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "curl"
       ["-fsS", "https://example.com/metrics"]
   , readOnlySafetyCase
-      "read_only_launchctl_print_allows"
-      "launchctl"
-      "launchctl"
-      ["print", "system/com.example.agent"]
-  , readOnlySafetyCase
       "read_only_tailscale_status_allows"
       "tailscale"
       "tailscale"
@@ -369,11 +364,6 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "tailscale"
       "tailscale"
       ["netcheck"]
-  , readOnlySafetyCase
-      "read_only_sudo_launchctl_print_allows"
-      "sudo"
-      "sudo"
-      ["/bin/launchctl", "print", "system/com.example.agent"]
   , readOnlySafetyCase
       "read_only_git_global_config_denies"
       "git"
@@ -475,35 +465,25 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "curl"
       ["-fsS", "example.com/metrics"]
   , readOnlySafetyCase
-      "read_only_launchctl_bootout_denies"
-      "launchctl"
-      "launchctl"
-      ["bootout", "system/com.example.agent"]
+      "read_only_ps_is_not_listed_denies"
+      "ps"
+      "ps"
+      ["-o", "pid=", "-p", "1"]
   , readOnlySafetyCase
-      "read_only_launchctl_missing_subcommand_denies"
+      "read_only_sudo_is_not_listed_denies"
+      "sudo"
+      "sudo"
+      ["/bin/launchctl", "print", "system/com.example.agent"]
+  , readOnlySafetyCase
+      "read_only_launchctl_is_not_listed_denies"
+      "/bin/launchctl"
       "launchctl"
-      "launchctl"
-      []
+      ["print", "system/com.example.agent"]
   , readOnlySafetyCase
       "read_only_tailscale_up_denies"
       "tailscale"
       "tailscale"
       ["up"]
-  , readOnlySafetyCase
-      "read_only_sudo_launchctl_wrong_path_denies"
-      "sudo"
-      "sudo"
-      ["/usr/bin/launchctl", "print", "system/com.example.agent"]
-  , readOnlySafetyCase
-      "read_only_sudo_rm_denies"
-      "sudo"
-      "sudo"
-      ["rm", "-rf", "/tmp/gents-nope"]
-  , readOnlySafetyCase
-      "read_only_sudo_missing_command_denies"
-      "sudo"
-      "sudo"
-      []
   ] ++ readOnlyWriteAndExecCases
 
 def commandPolicyCases : List CommandPolicyCase :=
@@ -520,32 +500,14 @@ def commandSandboxCases : List CommandSandboxCase :=
       "read_only_sandbox_selection"
       .readOnly
       true
-      "/usr/bin/curl"
+      "curl"
   , sandboxCase
       "read_only_network_reader_under_disabled_network_is_offline"
       "read_only_sandbox_selection"
       .readOnly
       true
-      "/usr/bin/curl"
+      "curl"
       .disabled
-  , sandboxCase
-      "read_only_setuid_ps_runs_under_its_validator"
-      "read_only_sandbox_selection"
-      .readOnly
-      true
-      "/bin/ps"
-  , sandboxCase
-      "read_only_setuid_sudo_runs_under_its_validator"
-      "read_only_sandbox_selection"
-      .readOnly
-      true
-      "/usr/bin/sudo"
-  , sandboxCase
-      "read_only_launchctl_runs_under_its_validator"
-      "read_only_sandbox_selection"
-      .readOnly
-      true
-      "/bin/launchctl"
   , sandboxCase
       "read_only_without_backend_selects_policy_read_only"
       "read_only_sandbox_selection"
@@ -561,7 +523,7 @@ def commandSandboxCases : List CommandSandboxCase :=
       "workspace_write_sandbox_selection"
       .workspaceWrite
       true
-      "/usr/bin/git"
+      "git"
       .enabled
   , sandboxCase
       "workspace_write_unenforced_denies"

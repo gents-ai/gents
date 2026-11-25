@@ -2,8 +2,8 @@
 """The pull request gate, shared by CI and `make gate`.
 
   gate.py plan [--base REF | --files FILE]   select jobs for a change
-  gate.py run JOB                            run one job (fmt, lint, contract, ts-*, test:<group>,
-                                             build:<archive>, shard:<archive>[:<index>])
+  gate.py run JOB                            run one job (fmt, lint, lint-variants, contract, ts-*,
+                                             test:<group>, build:<archive>, shard:<archive>[:<index>])
   gate.py all [--base REF]                   plan, then run every selected job
   gate.py packages GROUP...                  list the crates of test groups
   gate.py verdict                            decide the `gate` job from NEEDS
@@ -67,7 +67,7 @@ def __getattr__(name):
 # registering a runner with a role's labels.
 INVENTORY = ROOT / ".github/ci-runners.json"
 # Roles the CI workflow's non-matrix jobs run on.
-WORKFLOW_ROLES = ("linux", "browser", "macos")
+WORKFLOW_ROLES = ("linux", "browser", "macos", "portable")
 HOSTED_LINUX = "ubuntu-latest"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
@@ -270,6 +270,42 @@ TS_LEAN = [
 def fail(message):
     print(f"gate: {message}", file=sys.stderr)
     sys.exit(2)
+
+
+# Sanitizing an artifact name to `[A-Za-z0-9._-]`: GitHub bans space, " ,
+# : < > | ? * \ /, and leading/trailing whitespace in artifact names (and
+# rejects an empty one). Unit keys legitimately contain several of these —
+# `build:portable:3` or `ts-browser:1/3` — so the ci-latency upload name is
+# built here rather than in the action's YAML, and test_gate.py asserts it.
+LATENCY_ARTIFACT_FORBIDDEN = ' ",:<>|?*\\/'
+
+
+def latency_artifact_name(unit):
+    """The upload-artifact name for a gate unit's latency sample (W53)."""
+    name = "ci-latency-" + re.sub(rf"[{re.escape(LATENCY_ARTIFACT_FORBIDDEN)}\s/]", "-", unit).strip("-")
+    if not name or len(name) > 256:
+        fail(f"artifact name for unit {unit!r} is empty or over 256 characters")
+    return name
+
+
+def latency_sample_paths(unit):
+    """Where the gate-record action stages a unit's latency sample (W53)."""
+    directory = Path(os.environ["RUNNER_TEMP"]) / "latency-sample"
+    return directory, latency_artifact_name(unit)
+
+
+def latency_sample(unit):
+    """Stage a unit's latency sample for the ci-latency collector (W53).
+
+    Writes record.json ({unit, run_id}) — the collector's source of the
+    exact unit key — into the staging directory and prints the sanitized
+    artifact name, NUL-terminated for `read -d ""`.
+    """
+    directory, name = latency_sample_paths(unit)
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / "record.json", "w") as record:
+        json.dump({"unit": unit, "run_id": os.environ.get("GITHUB_RUN_ID", "")}, record)
+    sys.stdout.write(f"{name}\0")
 
 
 def workspace():
@@ -657,10 +693,8 @@ def portable_shards():
 
 
 def vera_tests(packages):
-    """The packages whose `vera` tests a job runs, space-separated: none on a
-    pull request, whose runs leave the Vera node's build to the merge queue."""
-    if os.environ.get("GATE_EVENT") == "pull_request":
-        return ""
+    """The packages whose `vera` tests a job runs, space-separated: those of the
+    job's packages that have them, on a pull request as in the merge queue."""
     return " ".join(package for package in packages if package in VERA_TESTS)
 
 
@@ -716,9 +750,17 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
     affected, tested, ts, proofs = reach["affected"], reach["tested"], reach["ts"], reach["proofs"]
     rust = bool(changed)
     tla = tla_specs(files, members, everything)
+    # The live suites (`live-e2e`) run after merge; lint them when they or a
+    # crate they use changed.
+    live_e2e_lint = [package for package in ("gents", "gents-cli") if package in built]
+    # The CLI's `vera` feature check, wherever the Vera tests run.
+    lint_vera = "gents-cli" in built
     jobs = {
         "fmt": rust,
         "lint": rust,
+        # The builds beside the product's: the live suites, the Vera feature,
+        # gents-loop for WASI and the desktop app's capability check.
+        "lint-variants": bool(live_e2e_lint) or lint_vera or bool({"gents-loop", "gents-desktop-tauri"} & built),
         "contract": rust or ts or proofs or "contract" in tags or bool(tla),
         "ts-packages": ts,
         "ts-unit": ts,
@@ -806,6 +848,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         entry["unit"] = entry["job"]
     for entry in archives:
         entry["unit"] = f"build:{entry['archive']}" + (f":{entry['partition']}" if entry.get("partition") else "")
+    placed = {role: placement(role) for role in WORKFLOW_ROLES}
     return {
         "tier": tier,
         "everything": everything,
@@ -828,16 +871,11 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             "tla": tla,
         },
         "core_packs": everything or "core-packs" in tags,
-        # The lint job's iOS check of gents-desktop-tauri: only when it or a
-        # workspace crate it depends on changed (the toolchain and lock change
-        # everything).
-        "ios_check": "gents-desktop-tauri" in built,
-        # The live suites (`live-e2e`) run after merge; lint them when they or a
-        # crate they use changed.
-        "live_e2e_lint": [package for package in ("gents", "gents-cli") if package in built],
-        # The CLI's `vera` feature check, off on a pull request like the Vera tests.
-        "lint_vera": "gents-cli" in built and os.environ.get("GATE_EVENT") != "pull_request",
-        "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
+        "live_e2e_lint": live_e2e_lint,
+        "lint_vera": lint_vera,
+        "runs_on": {role: where["runs_on"] for role, where in placed.items()},
+        # The Cargo build jobs each role's runners may use (empty: the workflow's default).
+        "build_jobs": {role: where["build_jobs"] for role, where in placed.items()},
     }
 
 
@@ -1029,14 +1067,36 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
     return verdict == "ok"
 
 
+def latency_json():
+    """The W53 per-run latency JSON block gate.py writes to $GITHUB_STEP_SUMMARY."""
+    latency = {
+        "steps": [
+            {"step": label, "seconds": round(seconds, 1)}
+            for label, _, _, seconds in results
+        ],
+        "total_seconds": round(sum(seconds for *_, seconds in results), 1),
+    }
+    return json.dumps(latency, indent=2)
+
+
 def report():
     lines = ["| step | result | tests | seconds |", "|---|---|---|---|"]
     lines += [f"| `{label}` | {verdict} | {counts} | {seconds:.0f} |" for label, verdict, counts, seconds in results]
     table = "\n".join(lines)
     print("\n" + table, flush=True)
+    # W53: machine-readable latency block for cross-run tracking.
+    latency_block = latency_json()
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(table + "\n")
+            summary.write(
+                "\n```json\n" + latency_block + "\n```\n"
+            )
+    # Also drop it where the latency collector can find it (W53).
+    path = os.environ.get("GATE_LATENCY_JSON", os.path.join(os.environ.get("RUNNER_TEMP", "."), "latency.json"))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        f.write(latency_block)
     return all(verdict == "ok" for _, verdict, _, _ in results)
 
 
@@ -1051,8 +1111,9 @@ def run_fmt(selection):
 
 
 def run_lint(selection):
-    packages, affected = package_flags(selection), set(selection["built"])
-    profile = profile_flags()
+    if not system_preflight():
+        return
+    packages, profile = package_flags(selection), profile_flags()
     # gents-workspace-hack keeps per-crate and joint test builds on one feature
     # set (the archive builds every portable crate in one invocation). `verify`
     # and `manage-deps` do not fit its dev-dependency-only, unify-target-host =
@@ -1061,21 +1122,23 @@ def run_lint(selection):
     # The product build: no test targets, so no dev-dependency features.
     sh(["cargo", "check", *packages, *profile])
     sh(["cargo", "clippy", *packages, "--all-targets", *profile, "--", "-D", "warnings"])
+
+
+def run_lint_variants(selection):
+    if not system_preflight():
+        return
+    built, profile = set(selection["built"]), profile_flags()
     # Live suites run after merge; they must still compile and lint clean.
     for package in selection.get("live_e2e_lint", []):
         sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
            env={**os.environ, **side_tree_env("live-e2e")})
     if selection.get("lint_vera"):
         sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
-    if "gents-loop" in affected:
+    if "gents-loop" in built:
+        sh(["rustup", "target", "add", "wasm32-wasip1"])
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
-    if "gents-desktop-tauri" in affected:
+    if "gents-desktop-tauri" in built:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
-    if selection.get("ios_check") and sys.platform == "darwin":
-        # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
-        sh(["rustup", "target", "add", "aarch64-apple-ios-sim"])
-        sh(["cargo", "check", "-p", "gents-desktop-tauri", "--lib", "--target", "aarch64-apple-ios-sim", *profile],
-           env={**os.environ, **side_tree_env("ios-check")})
 
 
 def run_contract(selection):
@@ -1656,10 +1719,10 @@ def run_shard(selection, name, index=None):
 def side_tree_env(name):
     """A lint build's own target tree inside the kept one, built incrementally.
 
-    The iOS check and the live-e2e lints build every workspace crate under a
-    target or feature set no other build shares (38 and 11 min from scratch on
-    a Studio, #3926), which sccache does not serve. Each gets its own
-    incremental tree: incremental units in the shared tree would replace the
+    The live-e2e lints build every crate below gents and gents-cli under a
+    feature set no other build shares (11 min from scratch on a Studio,
+    #3926), which sccache does not serve. They get their own incremental
+    tree: incremental units in the shared tree would replace the
     non-incremental ones the other builds reuse. Inside the kept tree, it
     survives the checkout's `git clean` and counts toward the runner's
     reclamation.
@@ -1706,6 +1769,8 @@ def run(selection, job):
         run_fmt(selection)
     elif job == "lint":
         run_lint(selection)
+    elif job == "lint-variants":
+        run_lint_variants(selection)
     elif job == "contract":
         run_contract(selection)
     elif job in TS_JOBS:
@@ -1722,8 +1787,9 @@ def run(selection, job):
 
 # The workflow job that runs each plan job, and the jobs every event runs.
 WORKFLOW_JOBS = {
-    "fmt": "fmt", "lint": "lint", "contract": "contract", "ts-packages": "desktop-packages",
-    "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
+    "fmt": "fmt", "lint": "lint", "lint-variants": "lint-variants", "contract": "contract",
+    "ts-packages": "desktop-packages", "ts-unit": "desktop-ui", "ts-browser": "desktop-ui",
+    "ts-fuzz": "desktop-ui-bombadil",
 }
 # Matrix jobs: a plan job `<prefix>:<name>` runs in the workflow job `<prefix>`.
 MATRIX_JOBS = ("test", "build", "shard")
@@ -1767,8 +1833,12 @@ def reuse_units(selection):
     if "fmt" in jobs:
         units.append({"unit": "fmt", "job": "fmt", "slice": {}, "closure": "fmt", "runs_on": routed("fmt")})
     if "lint" in jobs:
-        lint = {key: selection.get(key) for key in ("built", "everything", "live_e2e_lint", "ios_check", "lint_vera")}
+        lint = {key: selection.get(key) for key in ("built", "everything")}
         units.append({"unit": "lint", "job": "lint", "slice": lint, "closure": "gated", "runs_on": routed("lint")})
+    if "lint-variants" in jobs:
+        variants = {key: selection.get(key) for key in ("built", "live_e2e_lint", "lint_vera")}
+        units.append({"unit": "lint-variants", "job": "lint-variants", "slice": variants, "closure": "gated",
+                      "runs_on": routed("lint-variants")})
     if "contract" in jobs:
         units.append({"unit": "contract", "job": "contract", "slice": selection["contract"], "closure": "tree",
                       "runs_on": routed("contract")})
@@ -1947,11 +2017,18 @@ def main():
     commands.add_parser("packages").add_argument("groups", nargs="+")
     commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
     commands.add_parser("record", help="record that a plan unit passed on this runner").add_argument("unit")
+    commands.add_parser("latency-sample", help="print the W53 latency sample's staging directory and "
+                                               "sanitized artifact name, NUL-separated").add_argument("unit")
     commands.add_parser("runners", help="reserve runners for the merge queue (.github/ci-runners.json `reserve`)") \
         .add_argument("--apply", action="store_true")
     arguments = parser.parse_args()
     if arguments.command == "runners":
         reconcile_runners(arguments.apply)
+        return
+    if arguments.command == "latency-sample":
+        # One NUL-terminated field: the consumer's `read -d ""` reads a
+        # single record, and the staging directory is the action's constant.
+        latency_sample(arguments.unit)
         return
     if arguments.command == "verdict":
         needs = json.loads(os.environ["NEEDS"])

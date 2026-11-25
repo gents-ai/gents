@@ -323,7 +323,8 @@ impl LspPool {
             return Err(super::ARTIFACT_SCOPE_DENIAL.into());
         }
         key.validate_operator_guard(call)?;
-        let constraints = super::overlay_lsp_constraints(call, &config.constraints);
+        let constraints = super::overlay_lsp_constraints(call, &config.constraints)
+            .ok_or_else(|| super::READ_ONLY_DENIAL.to_owned())?;
         let protects_credentials = constraints.to_spawn_policy().mode.protects_credentials();
         let current_credentials =
             crate::native::current_managed_command_credential_snapshot(call, protects_credentials)
@@ -525,7 +526,8 @@ impl LspPool {
         let cancel = crate::runtime_context::tool_runtime_context(call)
             .map(|runtime| runtime.cancellation_token);
         let workspace = key.workspace_root.clone();
-        let constraints = super::overlay_lsp_constraints(call, &config.constraints);
+        let constraints = super::overlay_lsp_constraints(call, &config.constraints)
+            .ok_or_else(|| ClientStartError::Admission(super::READ_ONLY_DENIAL.into()))?;
         let command = prepare_managed_command(
             call,
             &workspace,

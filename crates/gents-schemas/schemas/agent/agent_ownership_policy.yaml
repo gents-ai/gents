@@ -281,6 +281,20 @@ resources:
         expr: working_agent + parent->delete
       - name: delete
         expr: parent->delete
+  - name: goal_policies
+    relations:
+      - name: parent
+        types: [agents]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->session_read
+      - name: update
+        expr: parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+    create: {parent: parent, requires: session_admin}
   - name: goal_receipts
     relations:
       - name: parent

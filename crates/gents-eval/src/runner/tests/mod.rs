@@ -110,9 +110,10 @@ fn cell(cell_id: &str, pack: &Path) -> CellRequest {
 
 fn options() -> RunOptions {
     RunOptions {
-        trial_budget: None,
         poll_backoff_base: Duration::from_millis(1),
         poll_backoff_cap: Duration::from_millis(2),
+        provider_probe_gap: Duration::from_millis(1),
+        ..RunOptions::default()
     }
 }
 
@@ -314,9 +315,9 @@ async fn a_marker_written_during_the_backoff_ends_the_wait() {
     let mut request = request(&launching, &pack, "run-backoff");
     one_slot(&mut request);
     let unreached = RunOptions {
-        trial_budget: None,
         poll_backoff_base: UNREACHED_DEADLINE,
         poll_backoff_cap: UNREACHED_DEADLINE,
+        ..RunOptions::default()
     };
     let runs_dir = launching.runs_dir();
     let run_dir = runs_dir.join("run-backoff");

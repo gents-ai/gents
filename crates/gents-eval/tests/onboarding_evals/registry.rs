@@ -100,7 +100,7 @@ fn every_registered_suite_validates_and_uses_shipped_checks() {
                     evidence.captures.insert(
                         capture.name().into(),
                         match capture {
-                            EvalCapture::Documents { .. } => {
+                            EvalCapture::Documents { .. } | EvalCapture::Runs { .. } => {
                                 CaptureResult::Documents { rows: vec![] }
                             }
                             EvalCapture::Schema { .. } => CaptureResult::Schema {

@@ -6,6 +6,71 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the harness pauses a Goal after 3 consecutive goal turns without
+  progress, judged from what its Agent did, never its text: a turn makes
+  progress when it changes the Goal or makes a tool call (name, canonical
+  arguments, result) the previous turn did not. The Goal pauses as `paused`
+  with reason `no_progress` and resumes like any paused Goal. A running
+  background job before its deadline counts as waiting, not as no progress.
+- Breaking: a Goal has a stop policy its user sets and its Agent cannot change
+  (new `GoalStopPolicy` document, policy resource `goal_policies`): what one
+  blocked report does (`stop_first`, the default; `confirm_once`, one
+  confirmation turn first; `keep_trying`, the report is kept and the Goal goes
+  on), a token ceiling (the enforced budget is the smaller of the Goal's own
+  budget and the ceiling), a turn ceiling and `lifted`. Set it with `gents
+  automation goal policy --session S`. The working Agent may now change or
+  clear its own Goal's budget; the user's ceiling still bounds it. The
+  Household policy ID changes, so an existing home is refused once.
+- Eval seed stages take `expect_fire` (default `true`). With `false` the stage
+  passes once the trial home is quiet with nothing fired for its seed, and
+  fails if anything fires. A seed nothing fires for, in a trial runtime that
+  kept running, now fails the subject (`model_acceptance`) instead of counting
+  as infrastructure. A failed stage's verdicts carry what ended it in
+  `raw.detail` (each failing trigger's recorded error, a seed nothing fired
+  for), which `eval trial` prints. A `runs` capture reads every trigger-fired
+  request that came into being while its stage ran, whoever started it, with
+  its session, state, final message and tool results, selected by
+  `trigger_id`, `source_collection` or `of_seed`. Breaking: `eval checks
+  --json` prints `{"checks": [...], "stage_fields": [...]}`; the text output
+  lists the stage fields after the checks.
+- An Agent's request workers no longer follow its backend's `max_concurrent`.
+  Each Agent runs up to eight requests at each of three causal levels (hop 0,
+  hop 1, hop 2 and deeper), so a delegate, the delegate it starts, and other
+  sessions start while the turn that caused them is open; only model calls
+  wait for the backend, per call. A session's title audit (and any auxiliary
+  request) waits in a lane of its own, so it no longer waits for the turn of
+  its own session to end. `gents status` reports 24 workers per Agent.
+  Plugin model calls take their permit from the same backend pool as agent
+  calls (it was a second limiter of the same size), so a backend's server runs
+  at most `max_concurrent` calls from one runtime, and a backend the runtime
+  does not admit (unavailable, not yet probed) refuses plugin calls. Setup (`gents init`'s
+  model choice, the shell and the desktop) recommends the unset default for a
+  local server (it recommended 1) and 8 for hosted accounts.
+- Breaking: every inference call records `first_token_at`, when the
+  provider streamed the call's first text, reasoning or tool-call delta;
+  response headers, keep-alives and message ids are not tokens. It is null for
+  a call that was not streamed or that failed before a token, and each retry
+  records its own. On the Claude Messages wire a tool call now streams its
+  name as a tool-call delta when its block starts. A home whose
+  `InferenceCall` predates the field is refused as an older home (exit code
+  65) and left unchanged; start a new home.
+- Eval trials report the subject's time to first token, from a call's
+  `started_at` to its `first_token_at`: `subject_usage` holds the first
+  request's (`first_request.first_token_ms`, unknown when that first call
+  streamed no token) and the median over the subject's turns that streamed
+  one (`median_first_token_ms`). `eval trial` prints both, `eval show` adds
+  their medians per cell and run, and `eval compare` shows their change on
+  passing trials.
+- The Engineer creates document access policies. `config` `policy create`
+  registers a policy it writes (resources with typed relations and union
+  permissions; names beginning `Gents` are the runtime's) as the calling
+  Agent, which needs node permission `add-dac-policy`, now in the default
+  Agent's `policy-delegate` set. The receipt gives the `@policy` line that
+  binds it to a new collection; `policy grant` and `policy revoke` change its
+  relations per document. Under `self_config_no_lockout` an Agent no longer
+  revokes its own document relations. On a home initialised earlier the
+  Engineer was issued the set without `add-dac-policy`, so `policy create`
+  is refused there.
 - Eval trials record what the subject agent itself spent, beside the
   home-wide `usage`: each completion's `subject_usage` holds its first request's
   prompt tokens and estimated component split (tool schemas among them), its

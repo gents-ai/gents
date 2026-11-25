@@ -82,6 +82,7 @@ def resource : Family ResourceInput (Option String) where
     "AgentSessionGoalControl",
     "AgentSessionInputEdit",
     "AgentSessionGoalReceipt",
+    "GoalStopPolicy",
     "AgentMessage",
     "AgentOutputSegment",
     "AgentToolCall",

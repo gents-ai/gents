@@ -75,18 +75,6 @@ def validateRipgrepArgs (args : List String) : Decision :=
   | some arg => .deny (.readOnlyArgumentNotAllowed "rg" arg)
   | none => .allow
 
-def launchctlSubcommandAllowed (subcommand : String) : Bool :=
-  stringIn subcommand ["list", "print", "print-disabled", "blame"]
-
-def validateLaunchctlArgs (args : List String) : Decision :=
-  match args with
-  | [] => .deny (.readOnlySubcommandRequired "launchctl")
-  | subcommand :: _ =>
-      if launchctlSubcommandAllowed subcommand then
-        .allow
-      else
-        .deny (.readOnlySubcommandNotAllowlisted "launchctl" subcommand)
-
 def tailscaleSubcommandAllowed (subcommand : String) : Bool :=
   stringIn subcommand ["status", "ip", "netcheck", "version", "ping"]
 
@@ -314,37 +302,14 @@ def validateHostnameArgs (args : List String) : Decision :=
   | some arg => .deny (.readOnlyArgumentNotAllowed "hostname" arg)
   | none => .allow
 
-def sudoCommandName (command : String) : String :=
-  if stringMatches command "/bin/launchctl"
-      || stringMatches command "/usr/bin/launchctl"
-      || stringMatches command "/sbin/launchctl" then
-    "launchctl"
-  else
-    command
-
-def validateSudoArgs (args : List String) : Decision :=
-  match args with
-  | [] => .deny (.readOnlySubcommandRequired "sudo")
-  | command :: rest =>
-      let commandName := sudoCommandName command
-      if stringMatches commandName "launchctl" then
-        if stringMatches command "/bin/launchctl" then
-          validateLaunchctlArgs rest
-        else
-          .deny (.readOnlyArgumentNotAllowed "sudo" command)
-      else
-        .deny (.readOnlySubcommandNotAllowlisted "sudo" commandName)
-
 def validateReadOnlyArgs (request : CommandRequest) : Decision :=
   match request.lookupCommand with
   | "sed" => validateSedArgs request.args
   | "find" => validateFindArgs request.args
   | "git" => validateGitArgs request.args
   | "rg" => validateRipgrepArgs request.args
-  | "launchctl" => validateLaunchctlArgs request.args
   | "tailscale" => validateTailscaleArgs request.args
   | "curl" => validateCurlArgs request.args
-  | "sudo" => validateSudoArgs request.args
   | "file" => validateFileArgs request.args
   | "lsof" => validateLsofArgs request.args
   | "date" => validateDateArgs request.args

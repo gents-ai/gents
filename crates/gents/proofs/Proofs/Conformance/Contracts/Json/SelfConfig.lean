@@ -139,18 +139,26 @@ structure LockoutRow where
   isSelf : Bool
   deriving Lean.ToJson
 
+structure RelationLockoutRow where
+  delete : Bool
+  noLockout : Bool
+  isSelf : Bool
+  deriving Lean.ToJson
+
 structure LockoutInput where
   rows : List LockoutRow
+  relationRows : List RelationLockoutRow
   deriving Lean.ToJson
 
 structure LockoutOutput where
   «protected» : List String
   kept : List Bool
+  relationKept : List Bool
   deriving Lean.ToJson
 
 /-- The node permissions a no-lockout Agent keeps against its own revoke (as a
-sorted set), and for each permission and change whether the lockout guard
-keeps it. -/
+sorted set), for each permission and change whether the lockout guard keeps it,
+and for each document relation change whether the guard admits it. -/
 @[conformance_family]
 def policyLockout : Family LockoutInput LockoutOutput where
   inputs :=
@@ -158,12 +166,17 @@ def policyLockout : Family LockoutInput LockoutOutput where
     [{ rows := permissions.flatMap fun permission =>
         [false, true].flatMap fun delete =>
           [false, true].flatMap fun noLockout =>
-            [false, true].map fun isSelf => { permission, delete, noLockout, isSelf } }]
+            [false, true].map fun isSelf => { permission, delete, noLockout, isSelf }
+       relationRows := [false, true].flatMap fun delete =>
+          [false, true].flatMap fun noLockout =>
+            [false, true].map fun isSelf => { delete, noLockout, isSelf } }]
   model := fun i =>
     { «protected» := Identity.GrantSets.lockoutProtected.eraseDups.mergeSort fun a b => a ≤ b
       kept := i.rows.map fun row =>
         Identity.GrantSets.selfChangeKeepsLockout row.noLockout row.isSelf
-          ⟨.permission row.permission, row.delete, true, false⟩ }
+          ⟨.permission row.permission, row.delete, true, false⟩
+      relationKept := i.relationRows.map fun row =>
+        Identity.GrantSets.relationChangeKeepsLockout row.noLockout row.isSelf row.delete }
 
 structure FieldValueWire where
   field : String

@@ -10,7 +10,7 @@ use crate::plugin::rounds::{drive, HostCalls, Round};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
-    endpoint_for, AccessModels, ModelBinding, ModelCallLimiters, ModelEndpoint, ModelResolver,
+    endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
 };
 use gents_pack::plugin::store::{self, InstalledPlugin};
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
@@ -40,7 +40,7 @@ struct Fake {
     seen: Arc<Mutex<Vec<Seen>>>,
     in_flight: Arc<AtomicUsize>,
     max_in_flight: Arc<AtomicUsize>,
-    limiters: Arc<ModelCallLimiters>,
+    pools: Arc<gents_inference::admission::BackendCallPools>,
 }
 
 impl Fake {
@@ -121,7 +121,7 @@ impl Fake {
             seen: shared.seen.clone(),
             in_flight: shared.in_flight.clone(),
             max_in_flight: shared.max_in_flight.clone(),
-            limiters: Arc::default(),
+            pools: Arc::default(),
         };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(handle))
@@ -141,7 +141,9 @@ impl Fake {
             api_key: Some(KEY.to_owned()),
             model: "chandra".to_owned(),
             max_concurrent,
-            limiter: self.limiters.limiter(&self.url, max_concurrent),
+            admission: self
+                .pools
+                .for_backend("fake", &self.url, max_concurrent, 100),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(30),
             max_output_tokens: None,
@@ -513,7 +515,10 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
         .unwrap();
     assert_eq!(endpoint.url, "http://127.0.0.1:1/v1/chat/completions");
     assert_eq!(endpoint.model, "test-model");
-    assert_eq!(endpoint.max_concurrent, 1);
+    assert_eq!(
+        endpoint.max_concurrent,
+        usize::try_from(gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT).unwrap()
+    );
     assert!(endpoint.api_key.is_none());
     let error = models
         .resolve(&binding("gone"), Some(&actor))

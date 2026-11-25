@@ -44,6 +44,57 @@ pub async fn authenticated_setup(
     (fixture, tools)
 }
 
+/// The Engineer's catalog as the shipped pack_builder pack declares it.
+pub fn pack_builder_skills() -> Vec<gents_documents::skills::Skill> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../core-packs/pack_builder/pack_config.json");
+    let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let text = |skill: &Value, field: &str| skill[field].as_str().unwrap_or_default().to_owned();
+    config["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|skill| gents_documents::skills::Skill {
+            skill_id: text(skill, "skill_id"),
+            node_did: String::new(),
+            name: text(skill, "name"),
+            description: text(skill, "description"),
+            instructions: String::new(),
+            source_directory: None,
+            tool_refs: Vec::new(),
+            covers: skill["covers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            display_name: None,
+            enabled: true,
+        })
+        .collect()
+}
+
+/// `authenticated_setup` for a caller whose catalog holds the shipped
+/// pack_builder skills.
+pub async fn skilled_setup(
+    label: &str,
+    categories: &[&str],
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = crate::test_support::self_config_fixture(label).await;
+    fixture.grant_selected_configuration().await;
+    let mut grants = config(categories);
+    grants.agent_did = fixture.agent_did().to_owned();
+    grants.preview = true;
+    let tools = fixture.tools_with_skills(
+        &grants,
+        std::sync::Arc::new(gents_tools::skill_pointer::SkillPointers::new(
+            pack_builder_skills(),
+        )),
+    );
+    (fixture, tools)
+}
+
 pub async fn structured_failure(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> Value {
     let tool = tools
         .iter()

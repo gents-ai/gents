@@ -7,25 +7,28 @@ namespace Lsp
 open CommandPolicy
 
 /-- A language server is a long-lived process the runtime starts for a
-workspace, and it writes while it works: rust-analyzer runs `cargo metadata`
-and `cargo check`, which write `Cargo.lock` and `target/` in the workspace;
-ruby-lsp writes `.ruby-lsp/` and elixir-ls `.elixir_ls/` in the workspace;
-gopls, tsserver, deno and the Python servers write caches under the user's cache
-directory; and every server may use the temporary directory. So under a
-read-only command policy, a host with a sandbox backend runs language servers
-under the workspace-write sandbox, which confines their writes to the
-workspace and its temporary directory and refuses the user's cache directory; a
-host without a backend has no profile to confine them and runs them
-unrestricted. Under every other mode a server runs under that mode's sandbox. -/
-def serverSandbox (sandboxEnforced : Bool) (mode : ExecutionMode) : ExecutionMode :=
+workspace, and it writes and executes while it works: rust-analyzer runs
+`cargo metadata` and `cargo check`, which run build scripts and proc macros and
+write `Cargo.lock` and `target/`; ruby-lsp writes `.ruby-lsp/` and elixir-ls
+`.elixir_ls/` in the workspace; gopls, tsserver, deno and the Python servers
+write caches under the user's cache directory. A read-only command policy
+grants none of that, so under it no language server runs: the surface does not
+offer the `lsp` tool, and a call whose request narrows the policy to read-only
+is refused before any server starts. Under every other mode a server runs under
+that mode's sandbox. -/
+def serverSandbox (mode : ExecutionMode) : Option ExecutionMode :=
   match mode with
-  | .readOnly => if sandboxEnforced then .workspaceWrite else .unrestricted
-  | .workspaceWrite => .workspaceWrite
-  | .artifactWrite => .artifactWrite
-  | .unrestricted => .unrestricted
+  | .readOnly => none
+  | .workspaceWrite => some .workspaceWrite
+  | .artifactWrite => some .artifactWrite
+  | .unrestricted => some .unrestricted
 
-theorem server_sandbox_never_widens_a_bounded_mode (enforced : Bool) :
-    serverSandbox enforced .workspaceWrite = .workspaceWrite ∧
-      serverSandbox enforced .artifactWrite = .artifactWrite := ⟨rfl, rfl⟩
+theorem read_only_runs_no_server (mode : ExecutionMode) :
+    serverSandbox mode = none ↔ mode = .readOnly := by
+  cases mode <;> simp [serverSandbox]
+
+theorem server_sandbox_is_the_command_mode (mode : ExecutionMode) (sandbox : ExecutionMode)
+    (runs : serverSandbox mode = some sandbox) : sandbox = mode := by
+  cases mode <;> simp [serverSandbox] at runs <;> exact runs.symm
 
 end Lsp

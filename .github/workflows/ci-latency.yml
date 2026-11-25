@@ -1,0 +1,146 @@
+name: CI latency report
+
+# Nightly trend for the gate's per-job latency (W53). Gate jobs record their
+# sample as the `ci-latency-<unit>` artifact; this run is the only writer of
+# the `ci-latency-data` branch: it downloads every sample from recent CI runs,
+# appends each as one JSONL line with the same fetch-rebase-retry discipline as
+# the append script, then renders latency.jsonl into a Markdown trend table in
+# this run's summary (the branch stays append-only data; the summary is the
+# human view).
+
+on:
+  schedule:
+    - cron: "47 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  # The collector pushes the refreshed latency.jsonl back to ci-latency-data.
+  contents: write
+  # Reading other runs' artifacts.
+  actions: read
+
+concurrency:
+  group: ci-latency-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Collect every sample the recent CI runs recorded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Two days of completed CI runs is plenty for a daily cadence.
+          run_ids="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?status=completed&created=>$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=100" \
+            --jq '.workflow_runs[].id')"
+          for run_id in $run_ids; do
+            # One directory per run and artifact: the unit key inside
+            # record.json identifies the sample, never the artifact name.
+            for name in $(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.name | startswith("ci-latency-")) | .name'); do
+              # One directory per run and artifact: the unit key inside
+              # record.json identifies the sample, never the artifact name.
+              gh run download "${run_id}" --name "${name}" --dir "${RUNNER_TEMP}/samples/${run_id}/${name}" \
+                || echo "::warning::sample ${name} of run ${run_id} did not download"
+            done
+          done
+          echo "collected $(find "${RUNNER_TEMP}/samples" -name record.json | wc -l) samples"
+
+      - name: Append the samples to the data branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The token reaches git through the environment, never argv or
+          # .git/config (checkout ran with persist-credentials: false).
+          basic=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+
+          # First run bootstraps the store; later runs dedupe against it, so
+          # the two-day lookback never appends a sample twice.
+          if ! git ls-remote --exit-code --heads origin ci-latency-data > /dev/null; then
+            git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+              switch --orphan ci-latency-data
+            git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+              commit --allow-empty -m "[ci-omit] init"
+            git push -q origin ci-latency-data
+            git switch -
+          fi
+          git fetch --depth 1 origin ci-latency-data
+          seen="$(git show origin/ci-latency-data:latency.jsonl 2> /dev/null \
+            | jq -r '.run_id + "/" + .job' | sort -u || true)"
+
+          while IFS= read -r record; do
+            pair="$(jq -r '.run_id + "/" + .unit' "${record}")"
+            if grep -qxF "${pair}" <<< "${seen}"; then
+              continue
+            fi
+            seen="${seen}${pair}"$'\n'
+            # The sample carries the gate's {steps: [{step, seconds}],
+            # total_seconds}; wrap it with the record's run and exact unit.
+            # run_id is a string (GITHUB_RUN_ID through the record), so --arg.
+            jq -n --arg job "$(jq -r '.unit' "${record}")" \
+                --arg run_id "$(jq -r '.run_id' "${record}")" \
+                --slurpfile lat "${record%/record.json}/latency.json" \
+                '{run_id: $run_id, job: $job, steps: $lat[0].steps,
+                  total_seconds: $lat[0].total_seconds}' \
+              | .github/scripts/append-ci-latency.sh \
+              || echo "::warning::appending $(basename "${record}") failed"
+          done < <(find "${RUNNER_TEMP}/samples" -name record.json)
+
+      - name: Render the trend
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          basic=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+          # The trend lives in two places: this run's summary tab (fresh every
+          # night) and trend.md on the data branch (stable URL, history via
+          # the branch's commit log). The renderer never writes the branch;
+          # this step owns both writes.
+          git fetch --depth 1 origin ci-latency-data
+          scripts/ci/ci-latency-report.py --since-days 30 --out "${RUNNER_TEMP}/trend.md"
+
+          # Commit trend.md on the data branch: worktree + index built from
+          # the fetched ref, without touching this checkout.
+          tree=$(git show -s --format=%T origin/ci-latency-data)
+          blob=$(git hash-object -w "${RUNNER_TEMP}/trend.md")
+          trend_tree=$(git mktree \
+            < <(git ls-tree origin/ci-latency-data | grep -v '\btrend\.md$' \
+                ; printf '100644 blob %s\ttrend.md\n' "${blob}"))
+          commit=$(git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+            commit-tree "${trend_tree}" -p origin/ci-latency-data \
+            -m "[ci-omit] trend ${GITHUB_RUN_ID}")
+          # Same fetch-rebase-retry discipline as the samples: a concurrent
+          # writer moves the branch, we rebuild on top; a lost trend is never
+          # a failed run.
+          for _ in 1 2 3 4 5; do
+            if git push -q origin "${commit}:refs/heads/ci-latency-data"; then
+              break
+            fi
+            git fetch -q origin ci-latency-data
+            new_tree=$(git show -s --format=%T origin/ci-latency-data)
+            if [ "${new_tree}" = "${tree}" ]; then
+              continue
+            fi
+            trend_tree=$(git mktree \
+              < <(git ls-tree origin/ci-latency-data | grep -v '\btrend\.md$' \
+                  ; printf '100644 blob %s\ttrend.md\n' "${blob}"))
+            commit=$(git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+              commit-tree "${trend_tree}" -p origin/ci-latency-data \
+              -m "[ci-omit] trend ${GITHUB_RUN_ID}")
+          done

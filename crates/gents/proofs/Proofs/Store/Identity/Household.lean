@@ -206,6 +206,12 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" ["working_agent"] [("parent", "read")],
         permission "update" ["working_agent"] [("parent", "delete")],
         permission "delete" [] [("parent", "delete")]] }
+  , { name := "goal_policies"
+      relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩]
+      permissions := [permission "read" ["reader"] [("parent", "session_read")],
+        permission "update" [] [("parent", "session_admin")],
+        permission "delete" [] [("parent", "session_admin")]]
+      create := some ("parent", "session_admin") }
   , { name := "goal_receipts"
       relations := [⟨"parent", ["goal_controls"], []⟩, ⟨"reader", ["actor"], []⟩]
       permissions := [permission "read" ["reader"] [("parent", "read")],
@@ -518,6 +524,42 @@ theorem without_bypass_document_acp_decides (fuel : Nat) (state : State)
     (actor resource id : String) :
     nativeRead false fuel state actor resource id = allowed fuel state actor resource id "read" := by
   simp [nativeRead, readObserved]
+
+/-- A create gate `(relation, required)` admits a create only when the creator
+holds `required` on the object the new document names through `relation`.
+Premise: DefraDB checks the gate against the parent named in the create, in the
+creating transaction. -/
+def gatedCreateAllowed (definitions : List ResourceDefinition) (state : State)
+    (actor resource parentResource parentId : String) : Bool :=
+  match (definitions.find? (·.name == resource)).bind (·.create) with
+  | none => true
+  | some (_, required) => allowedIn definitions 5 state actor parentResource parentId required
+
+/-- A Goal's stop policy (`goal_policies`): what a blocked report does and the
+user's budget ceiling. Its parent is the working Agent's Agent document, which
+a User signs, so only the Agent's `session_admin` (its user owner or an
+administrator) creates, updates or deletes it; the working Agent is granted
+`reader` and reads it. The Goal document stays writable by its working Agent;
+the policy is a separate document because ACP authorizes whole documents. -/
+def goalPolicyFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"agents", "worker", "user"⟩,
+      ⟨"goal_policies", "policy", "user"⟩],
+    relations := [⟨"agents", "worker", "parent", .object "nodes" "node"⟩,
+      ⟨"agents", "worker", "session_writer", .actor "worker"⟩,
+      ⟨"agents", "worker", "executor", .actor "worker"⟩,
+      ⟨"goal_policies", "policy", "parent", .object "agents" "worker"⟩,
+      ⟨"goal_policies", "policy", "reader", .actor "worker"⟩],
+    enrolled := [] }
+
+theorem the_working_agent_reads_but_cannot_change_its_goal_policy :
+    [allowed 5 goalPolicyFixture "worker" "goal_policies" "policy" "read",
+     allowed 5 goalPolicyFixture "worker" "goal_policies" "policy" "update",
+     allowed 5 goalPolicyFixture "worker" "goal_policies" "policy" "delete",
+     gatedCreateAllowed policy goalPolicyFixture "worker" "goal_policies" "agents" "worker",
+     allowed 5 goalPolicyFixture "user" "goal_policies" "policy" "update",
+     gatedCreateAllowed policy goalPolicyFixture "user" "goal_policies" "agents" "worker",
+     allowed 5 goalPolicyFixture "stranger" "goal_policies" "policy" "read"] =
+    [true, false, false, false, true, true, false] := by native_decide
 
 /-- An Agent-created Agent is owned by the creating Agent. The Node parent
 separately gives its user owner inherited control; an ungranted sibling has no
@@ -1197,8 +1239,10 @@ def check (state : State) : Action → Option Bool
 
 open Lean
 
-def policyYamlOf (definitions : List ResourceDefinition) : String :=
-  "name: Gents identity ownership model\nresources:\n" ++ String.join (definitions.map fun resource =>
+def policyName : String := "Gents identity ownership model"
+
+def policyYamlNamed (name : String) (definitions : List ResourceDefinition) : String :=
+  "name: " ++ name ++ "\nresources:\n" ++ String.join (definitions.map fun resource =>
     "  - name: " ++ resource.name ++ "\n" ++
     (if resource.relations.isEmpty then "    relations: []\n" else "    relations:\n") ++
     String.join (resource.relations.map fun relation =>
@@ -1215,6 +1259,9 @@ def policyYamlOf (definitions : List ResourceDefinition) : String :=
     (match resource.create with
      | none => ""
      | some (parent, required) => "    create: {parent: " ++ parent ++ ", requires: " ++ required ++ "}\n"))
+
+def policyYamlOf (definitions : List ResourceDefinition) : String :=
+  policyYamlNamed policyName definitions
 
 def policyYaml : String := policyYamlOf policy
 

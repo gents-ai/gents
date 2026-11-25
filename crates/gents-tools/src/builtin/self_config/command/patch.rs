@@ -138,6 +138,13 @@ impl ConfigCommandTool {
             _ => unreachable!("patch verb"),
         };
         match outcome {
+            Ok(outcome)
+                if outcome.committed
+                    && outcome.collection == SelfConfigTarget::Tools.collection_name() =>
+            {
+                let rebinding = crate::tools_rebinding::after_tools_commit(&self.envelope).await;
+                outcome_text(&super::rebinding::applied(outcome, rebinding))
+            }
             Ok(outcome) => outcome_text(&outcome),
             Err(ops::ApplyFailure::Other(error)) => Err(error),
             Err(ops::ApplyFailure::Inference { document, error }) => inference_refusal(

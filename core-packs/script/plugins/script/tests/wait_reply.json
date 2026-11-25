@@ -1,0 +1,127 @@
+{
+  "input": {
+    "script": "const run = await tools.agent_new({agent: 'engineer', prompt: 'Count the open tickets; reply with only JSON.'}); const done = await wait(run); return {open: done.reply.open, state: done.lifecycle_state, done};"
+  },
+  "tools": {
+    "definitions": [
+      {
+        "name": "agent_new",
+        "description": "Starts a session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "agent_session_read",
+        "description": "Reads a session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "view": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "calls": [
+      {
+        "tool_name": "agent_new",
+        "arguments": {
+          "agent": "engineer",
+          "prompt": "Count the open tickets; reply with only JSON."
+        },
+        "result": {
+          "ok": true,
+          "session_id": "s-1",
+          "request_id": "r-1",
+          "tool_call_id": "t-1",
+          "await_mode": "background",
+          "status": "queued"
+        }
+      },
+      {
+        "tool_name": "agent_session_read",
+        "arguments": {
+          "session_id": "s-1",
+          "view": "last"
+        },
+        "result": {
+          "ok": true,
+          "session_id": "s-1",
+          "view": "last",
+          "request": {
+            "request_id": "r-1",
+            "lifecycle_state": "running",
+            "terminal_reason": null,
+            "terminalized_at": null
+          },
+          "messages": {
+            "items": [
+              {
+                "role": "assistant",
+                "text": "Counting.",
+                "text_truncated": false
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      },
+      {
+        "tool_name": "agent_session_read",
+        "arguments": {
+          "session_id": "s-1",
+          "view": "last"
+        },
+        "result": {
+          "ok": true,
+          "session_id": "s-1",
+          "view": "last",
+          "request": {
+            "request_id": "r-1",
+            "lifecycle_state": "completed",
+            "terminal_reason": null,
+            "terminalized_at": "2026-11-24T00:00:02Z"
+          },
+          "messages": {
+            "items": [
+              {
+                "role": "assistant",
+                "text": "{\"open\": 4}",
+                "text_truncated": false
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "open": 4,
+    "state": "completed",
+    "done": {
+      "reply": {
+        "open": 4
+      },
+      "reply_truncated": false,
+      "request_id": "r-1",
+      "lifecycle_state": "completed",
+      "terminal_reason": null,
+      "terminalized_at": "2026-11-24T00:00:02Z",
+      "session_id": "s-1"
+    }
+  }
+}

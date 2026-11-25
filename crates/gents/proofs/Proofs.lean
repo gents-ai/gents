@@ -24,6 +24,7 @@ import Proofs.Runtime.StreamBatch
 import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
+import Proofs.Shared.RequestEncoding
 import Proofs.Shared.ToolResultText
 import Proofs.Session.TitleText
 import Proofs.Session.ToolResultThreading
@@ -69,6 +70,8 @@ import Proofs.Documents.Operations
 import Proofs.Documents.ScopeTemplates
 import Proofs.Automation.Triggers
 import Proofs.Automation.Goals
+import Proofs.Automation.GoalProgress
+import Proofs.Automation.GoalStopPolicy
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Automation.GoalAutomation.Operations
@@ -94,6 +97,7 @@ import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Tools.SchemaCollections
+import Proofs.Tools.SkillPointer
 import Proofs.P2P.Operations
 import Proofs.P2P.Enrollment.RouteFence
 import Proofs.Clients.ServiceLifecycle

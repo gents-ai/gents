@@ -7,32 +7,6 @@ use super::command_validation::{
 };
 use super::CommandExecutionPolicy;
 use crate::native::DenialReason;
-use std::path::Path;
-
-pub(super) fn validate_launchctl_args(
-    args: &[String],
-    policy: &CommandExecutionPolicy,
-) -> std::result::Result<(), ToolError> {
-    let subcommand = args.first().map(String::as_str).ok_or_else(|| {
-        policy_denial(
-            policy,
-            DenialReason::ReadOnlySubcommandRequired {
-                command: "launchctl".to_string(),
-            },
-        )
-    })?;
-
-    match subcommand {
-        "list" | "print" | "print-disabled" | "blame" => Ok(()),
-        other => Err(policy_denial(
-            policy,
-            DenialReason::ReadOnlySubcommandNotAllowlisted {
-                command: "launchctl".to_string(),
-                subcommand: other.to_string(),
-            },
-        )),
-    }
-}
 
 pub(super) fn validate_tailscale_args(
     args: &[String],
@@ -202,36 +176,6 @@ pub(super) fn validate_hostname_args(
             || abbreviates_any_long(arg, &["file", "boot"])
             || short_cluster_denied(arg, &['F', 'b'], &[])
     })
-}
-
-pub(super) fn validate_sudo_args(
-    args: &[String],
-    policy: &CommandExecutionPolicy,
-) -> std::result::Result<(), ToolError> {
-    let command = args.first().map(String::as_str).ok_or_else(|| {
-        policy_denial(
-            policy,
-            DenialReason::ReadOnlySubcommandRequired {
-                command: "sudo".to_string(),
-            },
-        )
-    })?;
-    let command_name = Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command);
-
-    match command_name {
-        "launchctl" if command == "/bin/launchctl" => validate_launchctl_args(&args[1..], policy),
-        "launchctl" => Err(read_only_argument_denial(policy, "sudo", command)),
-        other => Err(policy_denial(
-            policy,
-            DenialReason::ReadOnlySubcommandNotAllowlisted {
-                command: "sudo".to_string(),
-                subcommand: other.to_string(),
-            },
-        )),
-    }
 }
 
 pub(super) fn validate_git_worktree_diff_policy(

@@ -36,6 +36,7 @@ const FORBIDDEN_FUNCTIONS: &[&str] = &[
     "defradb_conflict_retry_backoff",
     "execute_graphql_async_with_tx",
     "execute_graphql_async",
+    "execute_graphql_encoded",
 ];
 
 const FORBIDDEN_METHODS: &[&str] = &[

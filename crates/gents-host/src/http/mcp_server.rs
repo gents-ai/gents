@@ -86,7 +86,7 @@ impl DefraQueryMcp {
 #[tool_router]
 impl DefraQueryMcp {
     #[tool(
-        description = "Read documents as the caller: argv:[fields], [find], [count], [search], [explain], [help,COMMAND]. Caller-signed DefraDB bearer required on every call. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page; search ranks keywords with native BM25. Explain inspects a native plan; executing it requires options.mode:execute."
+        description = "Read documents as the caller: argv:[fields], [find], [count], [search], [explain], [help,COMMAND]. Caller-signed DefraDB bearer required on every call. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page; search ranks BM25 keywords or vectors. Explain inspects a native plan; executing it requires options.mode:execute."
     )]
     async fn query(
         &self,

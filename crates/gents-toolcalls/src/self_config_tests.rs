@@ -4452,6 +4452,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
             runtime_identity: Some(fixture.db.node_identity.clone()),
             plugins: test_plugins(),
             tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            skill_pointers: Arc::default(),
         },
         &tool_config,
         Some(fixture.node_binding.clone()),

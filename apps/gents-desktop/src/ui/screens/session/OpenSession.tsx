@@ -210,12 +210,14 @@ export function OpenSession() {
                       : "pointer-events-none translate-y-1 opacity-0",
                   )}
                 >
-                  <NodeAgentStack
-                    nodeDid={session?.nodeDid}
-                    agentDid={session?.agentDid}
-                    size="sm"
-                    keyboard
-                  />
+                  <div className="shrink-0">
+                    <NodeAgentStack
+                      nodeDid={session?.nodeDid}
+                      agentDid={session?.agentDid}
+                      size="sm"
+                      keyboard
+                    />
+                  </div>
                   <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
                     {session ? (
                       <Title

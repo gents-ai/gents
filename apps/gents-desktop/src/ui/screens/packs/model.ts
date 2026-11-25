@@ -5,6 +5,7 @@ import type { InstalledPack, PackInfo } from "@source-inc/gents-desktop-client";
 import type { UxPluginRecord } from "@/contrib/plugins-store";
 import type { Contribution } from "@/contrib/types";
 import type { NodeView } from "../../../hooks/fleetStore";
+import type { ScrollPlace } from "@/hooks/useKeptScroll";
 import { errorText } from "../../../lib/errorText";
 import type { RegistryPage } from "../agent/useRegistrySearch";
 import {
@@ -114,8 +115,11 @@ export const keepRegistryPage = (registry: RegistryPage) =>
       : { registry, authors: [...named].sort((a, b) => a.localeCompare(b)) };
   });
 export const usePacksAuthors = () => useStore(listView, (s) => s.authors);
-export const rememberPacksScroll = (view: PacksView, top: number) =>
-  listView.setState((s) => ({ scroll: { ...s.scroll, [view]: top } }));
+export const packsScroll: ScrollPlace<PacksView> = {
+  read: (view) => listView.getState().scroll[view],
+  keep: (view, top) =>
+    listView.setState((s) => ({ scroll: { ...s.scroll, [view]: top } })),
+};
 /** the registry's packs from one publisher, on the Packs page */
 export const showPublisher = (author: string) =>
   listView.setState({ view: "registry", query: "", author });

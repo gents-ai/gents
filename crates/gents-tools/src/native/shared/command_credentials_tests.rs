@@ -91,7 +91,7 @@ async fn command_isolation_seatbelt_matches_lean() {
         CommandNetworkMode,
         SeatbeltWrites,
     >() {
-        let sandbox = select_sandbox(case.input.mode, true, "").unwrap();
+        let sandbox = select_sandbox(case.input.mode, true).unwrap();
         let network = kernel_network(
             case.input.mode,
             case.input.network,

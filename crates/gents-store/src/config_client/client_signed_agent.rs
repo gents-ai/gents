@@ -328,12 +328,14 @@ pub(super) fn update_target(mutation: &str, variables: &Value, collection: &str)
     )?;
     let query::query_parse::ParsedOperation::Mutation {
         mutations,
+        excluded,
         explain: None,
     } = parsed
     else {
         return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
     };
     if mutations.len() != 1
+        || !excluded.is_empty()
         || mutations[0].mutation_type != query::MutationType::Update
         || mutations[0].collection_name != collection
         || mutations[0].encryption().is_some()

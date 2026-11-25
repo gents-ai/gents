@@ -1,5 +1,5 @@
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -24,6 +24,7 @@ pub struct ScriptKey {
 pub struct ScriptedExecutor {
     table: RapidHashMap<ScriptKey, TrialEvidence>,
     default: Option<TrialEvidence>,
+    provider: Mutex<VecDeque<bool>>,
     pub calls: Mutex<Vec<ScriptKey>>,
 }
 
@@ -32,8 +33,19 @@ impl ScriptedExecutor {
         Self {
             table: RapidHashMap::new(),
             default: None,
+            provider: Mutex::new(VecDeque::new()),
             calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The answers to the next `provider_answers` calls, in order; the provider
+    /// answers once they run out.
+    pub fn with_provider_answers(self, answers: impl IntoIterator<Item = bool>) -> Self {
+        self.provider
+            .lock()
+            .expect("the scripted provider answers")
+            .extend(answers);
+        self
     }
 
     pub fn with(mut self, key: ScriptKey, evidence: TrialEvidence) -> Self {
@@ -63,6 +75,7 @@ impl ScriptedExecutor {
                 request_id: None,
                 terminal_state: Some(RequestLifecycleState::Completed),
                 failure_kind: None,
+                failure_detail: None,
                 provider_reason: None,
                 messages: Vec::new(),
                 tool_calls: Vec::new(),
@@ -91,6 +104,7 @@ impl ScriptedExecutor {
                 request_id: None,
                 terminal_state: Some(RequestLifecycleState::Failed),
                 failure_kind: Some(kind),
+                failure_detail: None,
                 provider_reason: reason,
                 messages: Vec::new(),
                 tool_calls: Vec::new(),
@@ -98,6 +112,13 @@ impl ScriptedExecutor {
                 captures: BTreeMap::new(),
             }],
         )
+    }
+
+    pub fn provider_answers_left(&self) -> usize {
+        self.provider
+            .lock()
+            .expect("the scripted provider answers")
+            .len()
     }
 
     fn scripted(&self, spec: &TrialSpec) -> Option<&TrialEvidence> {
@@ -122,6 +143,14 @@ impl TrialExecutor for ScriptedExecutor {
 
     fn wants_script_key(&self) -> bool {
         true
+    }
+
+    async fn provider_answers(&self, _spec: &TrialSpec) -> bool {
+        self.provider
+            .lock()
+            .expect("the scripted provider answers")
+            .pop_front()
+            .unwrap_or(true)
     }
 
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator {

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
+pub const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs covers display_name interface_json enabled created_at tags";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +29,14 @@ pub struct SkillDocument {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub tool_refs: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub covers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,

@@ -325,9 +325,6 @@ impl DenialReason {
                     ("find", _) => {
                         "find arguments that can write or execute are not allowed".into()
                     }
-                    ("sudo", arg) if arg.ends_with("launchctl") => {
-                        "sudo launchctl must use the absolute /bin/launchctl path".into()
-                    }
                     ("git", arg)
                         if arg == "-C"
                             || arg == "-c"
@@ -364,21 +361,15 @@ impl DenialReason {
                     ),
                 }
             }
-            Self::ReadOnlySubcommandRequired { command } => match command.as_str() {
-                "sudo" => "sudo requires an approved command".into(),
-                _ => format!("{command} requires a read-only subcommand"),
-            },
+            Self::ReadOnlySubcommandRequired { command } => {
+                format!("{command} requires a read-only subcommand")
+            }
             Self::ReadOnlySubcommandNotAllowlisted {
                 command,
                 subcommand,
-            } => match command.as_str() {
-                "sudo" => {
-                    format!("sudo command is not allowed by the read-only bash tool: {subcommand}")
-                }
-                _ => format!(
-                    "{command} subcommand is not allowed by the read-only bash tool: {subcommand}"
-                ),
-            },
+            } => format!(
+                "{command} subcommand is not allowed by the read-only bash tool: {subcommand}"
+            ),
             Self::ReadOnlyUrlRequired { command } => {
                 format!("{command} requires an http:// or https:// URL in the read-only bash tool")
             }

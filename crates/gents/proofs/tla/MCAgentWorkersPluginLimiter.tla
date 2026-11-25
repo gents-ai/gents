@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkersPluginLimiter ----
+EXTENDS AgentWorkers
+
+====

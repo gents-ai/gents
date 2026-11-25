@@ -17,11 +17,17 @@ use gents_store::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_name,
 };
 
+pub(super) mod runs;
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct CaptureBindings<'a> {
     pub subject: Option<&'a crate::runner::subject_binding::SubjectAgent>,
     pub evaluator_did: Option<&'a str>,
     pub request_id: Option<&'a str>,
+    pub seed_doc_id: Option<&'a str>,
+    /// The trigger-fired requests that existed before the stage began;
+    /// absent, none are excluded.
+    pub prior_runs: Option<&'a BTreeSet<String>>,
 }
 
 #[cfg(test)]
@@ -122,6 +128,32 @@ pub(super) async fn run_captures_with_access(
                     results.insert(name.clone(), result);
                 }
             }
+            Capture::Runs {
+                name,
+                trigger_id,
+                source_collection,
+                of_seed,
+            } => match runs::capture_runs(
+                access,
+                trial_did,
+                &runs::RunSelector {
+                    trigger: trigger_id.clone(),
+                    collection: source_collection.clone(),
+                    of_seed: *of_seed,
+                },
+                bindings,
+            )
+            .await
+            {
+                Ok(rows) => {
+                    results.insert(name.clone(), CaptureResult::Documents { rows });
+                }
+                Err(error) => tracing::warn!(
+                    error = %format!("{error:#}"),
+                    capture = %name,
+                    "eval runs capture failed; the stage records no capture under that name"
+                ),
+            },
         }
     }
     results

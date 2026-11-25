@@ -90,7 +90,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
     ),
     (
         "policy",
-        "node permissions and document relationships, delegated as this agent",
+        "node permissions, document policies and relationships, as this agent",
     ),
     (
         "plugin",
@@ -392,6 +392,7 @@ pub struct ConfigCommandTool {
     pub(super) ceiling_plugins: Option<BTreeSet<String>>,
     pub(super) plugin_builder: Option<std::path::PathBuf>,
     pub(super) ux_preview_assets: Option<std::path::PathBuf>,
+    pub(super) skill_pointers: Arc<crate::skill_pointer::SkillPointers>,
     /// The call this copy serves; [`Tool::call`] sets it on its own copy.
     pub(super) envelope: gents_loop::tool::ToolCallEnvelope,
 }
@@ -461,8 +462,12 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
             Ok(text) => append_receipt(&text, &receipt).map_err(Into::into),
             Err(error) => {
                 let (message, recovery) = call.failure_guidance(&error, &words, deleting);
+                let skill = (!help)
+                    .then(|| call.failure_skill(context, &words))
+                    .flatten();
                 let failure = ordered! {
                     "error": message,
+                    "skill": skill,
                     "batch": crud::BatchFailure::in_error(&error).map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
                     "recovery": recovery,
                     "config_execution": receipt,
@@ -477,6 +482,29 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
 }
 
 impl ConfigCommandTool {
+    /// The line a failed non-help call names the caller's covering skill with,
+    /// the first time that resource fails in this request.
+    fn failure_skill(
+        &self,
+        context: &gents_loop::tool::ToolCallEnvelope,
+        argv: &[String],
+    ) -> Option<String> {
+        let (resource, rest) = argv.split_first()?;
+        let path = [CONFIG_TOOL_NAME, help::help_resource(resource)]
+            .into_iter()
+            .chain(
+                rest.iter()
+                    .map(String::as_str)
+                    .filter(|word| !word.starts_with('-') && *word != "preview"),
+            )
+            .collect::<Vec<_>>();
+        let request = context
+            .runtime()
+            .and_then(|runtime| runtime.request_id)
+            .unwrap_or_default();
+        self.skill_pointers.failure(&request, &path)
+    }
+
     /// Whether the caller holds the agent catalog grant (category `node`).
     ///
     /// A shared Context or Tools edit lands on every agent that selects it, so
@@ -491,7 +519,7 @@ impl ConfigCommandTool {
             return self.ux_preview(argv).await;
         }
         if let Some(resource) = config_help_resource(argv) {
-            return self.help(resource, help_verb(argv));
+            return self.pointed_help(resource, help_verb(argv));
         }
         let Some(command) = argv.first().map(String::as_str) else {
             bail!("missing config command; see [\"help\"]");

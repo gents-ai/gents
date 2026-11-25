@@ -50,7 +50,7 @@ class RegistryTests(unittest.TestCase):
                 self.assertIn(f"`{pack}`", readme, f"{suite['id']}: its README justifies enabling {pack}")
 
     def test_selection_matches_an_id_or_its_first_word(self):
-        self.assertEqual(suites.select(SOURCE, "l4", "1/1"), ["l4-automation"])
+        self.assertEqual(suites.select(SOURCE, "l3", "1/1"), ["l3-datastore"])
         self.assertEqual(suites.select(SOURCE, "native-packs", "1/1"), ["native-packs"])
         with self.assertRaisesRegex(SystemExit, "ambiguous"):
             suites.select(SOURCE, "engineer", "1/1")

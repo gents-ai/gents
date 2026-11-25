@@ -26,12 +26,7 @@ impl ConfigCommandTool {
         let Some(requested) = resource else {
             return Ok(self.help_index(&enabled));
         };
-        let resource = match requested {
-            "agent" => "agent",
-            "event_source" => "event-source",
-            "ux" => "page",
-            other => other,
-        };
+        let resource = help_resource(requested);
         let granted = resource == "get"
             || enabled
                 .iter()
@@ -125,6 +120,23 @@ impl ConfigCommandTool {
         Ok(out)
     }
 
+    /// A resource's help page ends with the line naming the caller's skill
+    /// that covers it; the index names none.
+    pub(super) fn pointed_help(&self, resource: Option<&str>, words: Vec<&str>) -> Result<String> {
+        let page = self.help(resource, words.clone())?;
+        let Some(resource) = resource else {
+            return Ok(page);
+        };
+        let path = [CONFIG_TOOL_NAME, help_resource(resource)]
+            .into_iter()
+            .chain(words)
+            .collect::<Vec<_>>();
+        Ok(match self.skill_pointers.help(&path) {
+            Some(line) => format!("{page}\n{line}"),
+            None => page,
+        })
+    }
+
     fn help_index(&self, enabled: &[&str]) -> String {
         let mut out = String::from(
             "config resources. [\"help\",RESOURCE] explains one; [RESOURCE,VERB,\"--help\"] gives field shapes. Commands go in argv; IDs may follow the verb or use target_id.\n",
@@ -139,6 +151,15 @@ impl ConfigCommandTool {
         }
         out.push_str(HELP_GRAMMAR);
         out
+    }
+}
+
+/// The resource a help call or a command names, by its help page's name.
+pub(super) fn help_resource(word: &str) -> &str {
+    match word {
+        "event_source" => "event-source",
+        "ux" => "page",
+        other => other,
     }
 }
 
@@ -204,7 +225,7 @@ fn command_help(resource: &str, page: &Page, command: &[&str]) -> Option<String>
         let _ = writeln!(out, "options.mailbox policy values: {}", mailbox_values());
         let _ = writeln!(out, "{}", mailbox_identity_choice!());
     }
-    let _ = write!(out, "Page and recipe: [\"help\",\"{resource}\"]");
+    let _ = write!(out, "{}: [\"help\",\"{resource}\"]", page_label(resource));
     Some(out)
 }
 
@@ -224,6 +245,14 @@ fn agent_commands() -> &'static [&'static str] {
         ]
     });
     COMMANDS.as_slice()
+}
+
+fn page_label(resource: &str) -> &'static str {
+    if recipes(resource).is_empty() {
+        "Page"
+    } else {
+        "Page and recipe"
+    }
 }
 
 fn render_call(call: &Value) -> String {
@@ -278,8 +307,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             commands: match resource { "task" => &["task run TASK_ID  options: args (JSON object bound as args.*), session-id, continue-session; fires it once now and returns the queued request. A manual run has no doc.*: to exercise a task whose template reads doc.*, write a document its trigger's source watches"], "trigger" => &["trigger explain ID  options.source-doc (default: last attempted document); read-only trace from source document to request"], _ => &[] }, notes: match resource {
                 "task" => "Create uses options.agent (default: you); agent_did is protected. Updates resolve the saved owner; agent_did cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
                 "trigger" => "Create the source and Task first. The Task determines who handles the event. Updating a Trigger cannot change its Task’s agent; create a separate Trigger for another owner. concurrency controls overlap; session_id_template controls the destination independently. An existing destination session must use the Task’s agent. To continue a known session, set its ID as session_id_template. Omit it for a new session per fire. For one session per key, render the key in session_id_template and set create_session: the first fire creates it. A Trigger disables itself after max_fires_per_hour admitted fires (default 1000) and records why in last_status and last_error. See help automation for the full workflow.",
-                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow. A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
-                _ => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow.",
+                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
+                _ => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. Retries deduplicate by due occurrence.",
             }, next: "get the saved document and verify its references.",
         },
         "batch" => Page { what: "run ordered config calls in one tool call.", commands: &["batch  options.operations: [{argv, target_id?, set?, clear?, options?}, ...]"], notes: "1–64 calls, at most 128 KiB; no nested batches. Each call uses its usual grants and validation and commits separately. Stops at the first failure, returns each attempted result, and leaves earlier changes committed. Fix the failed call and resume there; do not repeat successful creates. Use cleanup for atomic multi-document deletion.", next: "inspect each result; references must exist when its call runs." },
@@ -321,13 +350,13 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 mailbox_identity_choice!(),
                 " A monitor uses condition identity: {\"argv\":[\"datastore\",\"create\"],\"target_id\":\"monitor-mailbox\",\"options\":{\"mailbox\":{\"identity\":{\"mode\":\"condition\",\"key\":\"host-health\"},\"kind\":\"flag\",\"action\":\"ack\"}}}"
             ),
-            next: "call the tool in the next request; the current request keeps its existing tools.",
+            next: "call the tool in your next turn; another agent gets it from its next request.",
         },
         "agent-target" => Page {
             what: "a named route to an agent for agent_new (tools grant). TARGET_ID goes in target_id or argv.",
             commands: &["agent-target list", "agent-target get TARGET_ID", "agent-target [preview] create|edit TARGET_ID  set: target fields"],
             notes: "Choose an existing agent or create a helper. A new session does not require cloning the role: to delegate to your own role, set agent_did to your own Agent DID (agent get). name is passed to agent_new; agent_did selects the helper. Use the exact Agent DID from its creation receipt or agent list. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Dispatch acceptance does not prove the helper started or replied.",
-            next: "read tools get, then tools update: preserve set.agents, set enabled true and add this ID to target_ids. Selecting targets alone leaves delegation disabled. Use options.agent to grant another caller; tools apply next request.",
+            next: "read tools get, then tools update: preserve set.agents, set enabled true and add this ID to target_ids. Selecting targets alone leaves delegation disabled. Use options.agent to grant another caller (from its next request).",
         },
         "execution" => Page {
             what: "an InferenceExecution: the run limits (turns, deadline, tokens, stream timeouts) a profile selects (profile grant). EXECUTION_ID goes in target_id.",
@@ -380,7 +409,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "automation" => Page {
             what: "documents that start work without a user: event-source or schedule, trigger, task (automation grant).",
             commands: &["task|trigger|schedule|event-source [preview] create|update|delete ID", "task|trigger|schedule|event-source list|get ID"],
-            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group (help event-source). Missing values fail the fire. Keep needed source data apart from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome, readable only by its Agent and outcome_readers. Sources then need a nonempty String handoff_id: declare it before schema installation and populate it in writers (schema tool and help datastore).\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only. Schedule retries deduplicate by due occurrence.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
+            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group (help event-source). Unset fields render empty: test {% if doc.field %}. Keep needed source data apart from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome, readable only by its Agent and outcome_readers. Sources then need a nonempty String handoff_id: declare it in the schema and set it in writers (help datastore). Chain on FireOutcome.source_handoff_id.\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
             next: "create one source document, inspect the request with sessions, and query the output through its datastore tool.",
         },
         "cleanup" => Page {
@@ -393,14 +422,15 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
-            what: "node permissions and document relationships and permissions granted to or held by an identity, acting as this agent.",
+            what: "node permissions, document relationships and permissions, and document access policies, acting as this agent.",
             commands: &[
                 "policy get  options: subject (self or an agent DID), collection and doc to list a document's relationships",
                 "policy check  options: subject, and permission NAME (a node permission, or a relation or permission of this Node's document such as manage_agents), or collection, doc and relation or permission",
                 "policy explain  same options as check; when denied, names the grant that would allow it",
                 "policy grant | revoke  same options as check; acts as this agent",
+                "policy create  options.definition: {name, resources: [{name, relations: [{name, types, manages}], permissions: [{name, relations, parents: [{relation, permission}]}]}]}",
             ],
-            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. A document relationship you can grant you can revoke, except on an AgentSession: no agent removes a relation of a session. Receipts give the answer first, then the subject's access after the change, the call that undoes it, and assumptions.",
+            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. You can revoke what you can grant, except a relation of an AgentSession. Receipts give the answer, the access after the change, the call that undoes it, and assumptions.\ncreate: each resource declares read, update and delete; types are actor, a resource, or RESOURCE->RELATION; a parent is an object relation and a name on its target; owner, a document's creator, is implicit.",
             next: "policy get to see what you hold; policy check --permission NAME to test one permission.",
         },
         "page" => Page {
@@ -425,7 +455,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "build a plugin from source held on this node, then inspect and try installed plugins; installation and model tool selection are separate steps.",
             commands: &["plugin build NAME  set: the plugin-source fields (language, source, input_schema, data, tests, description); saves them as the PluginSource document NAME, compiles in the command sandbox, runs the cases and installs node/NAME. Omit set to rebuild the saved document. Needs the pack and pack authority grants", "plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME", "plugin run NAMESPACE/NAME  options.input: the plugin's JSON input; runs it once as your tool call does, serving its data and granted host requests, and returns its output"],
             notes: "get returns the exact artifact digest and pinned selection. Read the target Tools document, preserve its other fields and existing integration/plugin entries, then explicitly select integrations.plugins through tools update. Operator authority is enforced by the plugin store; model input cannot grant it.",
-            next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
+            next: "Read tools get and effective config get to verify resolved selection. Call the selected plugin in your next turn.",
         },
         "pack" => Page {
             what: "inspect verified local plugin artifacts and discover registry packs; install document, plugins and assets packs (pack grant).",
@@ -445,8 +475,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack test [DIR]  compiles plugin source and runs its tests/*.json cases in the command sandbox; options.case: one case file name, for that case's whole returned output and expect",
                 "pack verify PACK  verify a built .pack file in place",
             ],
-            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local paths require the held file read grant and the explicit tool root; symlinks and request workspace paths use the file owner. A pack directory must be spelled ./DIR, or the name is looked up as a pack. Local pack authoring runs inside the effective tool root: scaffold, add, build and test need readwrite file tools, check and verify only read, and all take the pack grant. Compiling plugin source also needs the pack authority grant (self_config.enable_pack_authority): it runs in the command sandbox, writes confined to the tool root and no network, so dependencies must already be in the toolchain's cache. A directory install refuses plugin source: build first, then preview the .pack. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. With the pack authority grant an install grants what each plugin asks for (file, network, environment); preview lists it as would_grant and the install receipt as granted_authority. Without that grant plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Installing does not select model tools: pack wire PACKAGE writes integrations.plugins; start a fresh request. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it and starting a fresh request exposes it as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs; the operator CLI `gents automation job list` does. Remove deletes the package's documents and retires its plugins once no Tools selects them; its collections stay unless --with-collections, which empties and removes each one nothing else uses (schema tool grant).",
-            next: "Inspect plugin selection with plugin get, or call an installed workflow plugin by its tool name in a fresh request and list its runs with gents automation job list.",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local paths require the held file read grant and the explicit tool root; symlinks and request workspace paths use the file owner. A pack directory must be spelled ./DIR, or the name is looked up as a pack. Local pack authoring runs inside the effective tool root: scaffold, add, build and test need readwrite file tools, check and verify only read, and all take the pack grant. Compiling plugin source also needs the pack authority grant (self_config.enable_pack_authority): it runs in the command sandbox, writes confined to the tool root and no network, so dependencies must already be in the toolchain's cache. A directory install refuses plugin source: build first, then preview the .pack. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. With the pack authority grant an install grants what each plugin asks for (file, network, environment); preview lists it as would_grant and the install receipt as granted_authority. Without that grant plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Installing does not select model tools: pack wire PACKAGE writes integrations.plugins for your next turn. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it exposes it from your next turn as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs; the operator CLI `gents automation job list` does. Remove deletes the package's documents and retires its plugins once no Tools selects them; its collections stay unless --with-collections, which empties and removes each one nothing else uses (schema tool grant).",
+            next: "Inspect plugin selection with plugin get, or call an installed workflow plugin by its tool name in your next turn and list its runs with gents automation job list.",
         },
         _ => return None,
     })
@@ -682,7 +712,7 @@ fn crud_help(
             writeln!(out, "{rule}")?;
         }
     }
-    write!(out, "Page and recipe: [\"help\",\"{resource}\"]")?;
+    write!(out, "{}: [\"help\",\"{resource}\"]", page_label(resource))?;
     Ok(out)
 }
 
@@ -809,12 +839,12 @@ fn field_shapes(
 /// The one rule a create or update of this resource most often breaks.
 fn verb_rule(resource: &str) -> &'static str {
     match resource {
-        "tools" => "A group in set replaces that whole group: read it with tools get and send back what you keep. Tools apply from the next request.",
+        "tools" => "A group in set replaces that whole group: read it with tools get and send back what you keep. Tools apply from your next turn.",
         "task" => "options.agent chooses the owner on create (default: you); it cannot change later.",
         "trigger" => "Create the source and the Task first; the Task decides who handles the event.",
-        "event-source" | "schedule" => "A source alone starts no work: add a Task, then a Trigger linking them.",
+        "event-source" | "schedule" => "A source alone starts no work: add a Task and a Trigger linking them.",
         "agent" => "set.system_prompt replaces the selected Context's prompt; set.enabled false disables the agent. The default agent stays enabled and an agent cannot disable itself.",
-        "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from the next request.",
+        "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from your next turn.",
         _ => "",
     }
 }

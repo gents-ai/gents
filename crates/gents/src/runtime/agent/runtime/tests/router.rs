@@ -56,7 +56,10 @@ fn routed_snapshot(
             active_event_triggers: RapidHashMap::new(),
             unavailable_event_triggers: rapidhash::RapidHashSet::default(),
             active_tasks: RapidHashMap::new(),
-            dispatchers: RapidHashMap::from_iter([(agent_did.to_owned(), dispatcher)]),
+            dispatchers: RapidHashMap::from_iter([(
+                agent_did.to_owned(),
+                gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(dispatcher),
+            )]),
             agent_executor_capacities: RapidHashMap::new(),
             agent_executor_queue_capacities: RapidHashMap::new(),
         },

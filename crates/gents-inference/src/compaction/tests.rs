@@ -69,6 +69,7 @@ fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

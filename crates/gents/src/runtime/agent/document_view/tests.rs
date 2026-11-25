@@ -299,7 +299,8 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
                 "skill_id": "skill-research", "node_did": identity.did(),
                 "name": "Research", "description": "Find and cite sources",
                 "instructions": "Always cite your sources.",
-                "tool_refs": ["read_file", "definitely_not_a_tool"], "enabled": true,
+                "tool_refs": ["read_file", "definitely_not_a_tool"],
+                "covers": ["config trigger"], "enabled": true,
             }),
         )],
     )
@@ -335,6 +336,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         "explicitly selected skill must be available to the agent"
     );
     assert_eq!(agent_config.skills[0].skill_id, "skill-research");
+    assert_eq!(agent_config.skills[0].covers, ["config trigger"]);
 
     let tool_surface = snapshot
         .tool_surfaces

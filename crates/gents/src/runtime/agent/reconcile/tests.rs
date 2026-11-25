@@ -1,5 +1,4 @@
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -421,261 +420,6 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn agent_slot_fans_out_background_children_to_backend_capacity() {
-    let db = test_node().await;
-    let node = db.node.clone();
-
-    let mut agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("background-fanout"));
-    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-wide".to_string());
-    let agent_did = agent_config.agent.agent_did.clone();
-    let snapshot = snapshot_for_agents_with_admission(
-        &node,
-        &agent_did,
-        vec![agent_config],
-        RapidHashMap::from_iter([(
-            "backend-wide".to_string(),
-            backend_admission_config("backend-wide", 3, 100),
-        )]),
-    )
-    .await;
-
-    let (started_tx, mut started_rx) = mpsc::channel::<String>(8);
-    let (dequeued_tx, mut dequeued_rx) = mpsc::channel::<String>(8);
-    let release = Arc::new(Semaphore::new(0));
-    let runner = {
-        let release = release.clone();
-        move |_agent: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              _generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let started_tx = started_tx.clone();
-            let dequeued_tx = dequeued_tx.clone();
-            let release = release.clone();
-            async move {
-                loop {
-                    let message = tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => message,
-                    };
-                    let Some(request) = message else {
-                        return Ok(());
-                    };
-                    dequeued_tx.send(request.request_id.clone()).await.unwrap();
-                    let cancellation = tokio_util::sync::CancellationToken::new();
-                    let unbound = tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        guard = capacity.acquire_unbound(&cancellation) => guard.unwrap(),
-                    };
-                    let _active = unbound
-                        .bind(crate::runtime::agent::worker_capacity::WorkerTicket::new(
-                            request.doc_id,
-                            format!("fixture-generation-{_generation}"),
-                        ))
-                        .unwrap_or_else(|_| panic!("bind exact fixture request ticket"));
-                    started_tx
-                        .send(request.request_id)
-                        .await
-                        .expect("test receiver should stay open");
-                    tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        permit = release.acquire() => permit.expect("release semaphore open").forget(),
-                    }
-                }
-            }
-        }
-    };
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let slots = spawn_slots(
-        &snapshot,
-        1,
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 1,
-        },
-        runner,
-        shutdown_rx,
-        None,
-    );
-    let dispatcher = slots
-        .get(&agent_did)
-        .expect("general slot")
-        .dispatcher
-        .clone();
-
-    for index in 0..4 {
-        dispatcher
-            .send(background_child_request(index, &agent_did))
-            .await
-            .unwrap();
-    }
-
-    let started = tokio::time::timeout(Duration::from_secs(1), async {
-        let mut request_ids = BTreeSet::new();
-        while request_ids.len() < 3 {
-            let request_id = started_rx
-                .recv()
-                .await
-                .expect("runner should report started requests");
-            request_ids.insert(request_id);
-        }
-        request_ids
-    })
-    .await
-    .expect("executor should start all same-agent background children concurrently");
-    assert_eq!(
-        started.len(),
-        3,
-        "logical active work is bounded by backend capacity"
-    );
-    let mut dequeued = BTreeSet::new();
-    while let Ok(request_id) = dequeued_rx.try_recv() {
-        dequeued.insert(request_id);
-    }
-    assert_eq!(dequeued, started, "only the three workers dequeued");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), started_rx.recv())
-            .await
-            .is_err(),
-        "fourth request must wait for an active worker"
-    );
-
-    release.add_permits(3);
-    let fourth = tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
-        .await
-        .expect("freed worker admits queued child")
-        .expect("fourth child is reported");
-    assert!(!started.contains(&fourth));
-    let _ = shutdown_tx.send(true);
-    for slot in slots.into_values() {
-        retire_slot(slot);
-    }
-}
-
-#[tokio::test]
-async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
-    let db = test_node().await;
-    let node = db.node.clone();
-    let node_did = node
-        .node_identity_did()
-        .expect("fixture node has an identity");
-    let runtime_status = runtime_status_handle(&node, node_did);
-
-    let mut agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("capacity-general"));
-    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-general".to_string());
-    let agent_did = agent_config.agent.agent_did.clone();
-    let initial_snapshot = snapshot_for_agents_with_admission(
-        &node,
-        &agent_did,
-        vec![agent_config.clone()],
-        RapidHashMap::from_iter([(
-            "backend-general".to_string(),
-            backend_admission_config("backend-general", 1, 100),
-        )]),
-    )
-    .await;
-    let updated_snapshot = snapshot_for_agents_with_admission(
-        &node,
-        &agent_did,
-        vec![agent_config],
-        RapidHashMap::from_iter([(
-            "backend-general".to_string(),
-            backend_admission_config("backend-general", 3, 100),
-        )]),
-    )
-    .await;
-
-    let runner = move |_agent: AgentWithTools,
-                       _tool_surface: Arc<ToolSurface>,
-                       request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-                       _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-                       _generation: u64,
-                       mut shutdown: watch::Receiver<bool>| async move {
-        loop {
-            tokio::select! {
-                _ = shutdown.changed() => return Ok(()),
-                message = async {
-                    let mut receiver = request_rx.lock().await;
-                    receiver.recv().await
-                } => {
-                    if message.is_none() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    };
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let supervisor = GenerationSupervisor::bootstrap(
-        initial_snapshot,
-        gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 3,
-            base_delay_ms: 5,
-            max_delay_ms: 25,
-        },
-        runner,
-        runtime_status,
-        shutdown_rx.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-    let active_snapshot = supervisor.current_snapshot();
-    let initial_dispatcher = active_snapshot
-        .dispatchers
-        .get(&agent_did)
-        .expect("initial general dispatcher")
-        .clone();
-    assert_eq!(
-        active_snapshot
-            .agent_executor_capacities
-            .get(&agent_did)
-            .copied(),
-        Some(1)
-    );
-    let (active_tx, mut active_rx) = watch::channel(active_snapshot);
-    let (proposal_tx, proposal_rx) = mpsc::channel(4);
-
-    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
-
-    proposal_tx.send(updated_snapshot).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
-        .await
-        .expect("capacity update should publish")
-        .unwrap();
-    let updated_active = active_rx.borrow().clone();
-    let updated_dispatcher = updated_active
-        .dispatchers
-        .get(&agent_did)
-        .expect("updated general dispatcher");
-    assert!(!initial_dispatcher.same_channel(updated_dispatcher));
-    assert_eq!(
-        updated_active
-            .agent_executor_capacities
-            .get(&agent_did)
-            .copied(),
-        Some(3)
-    );
-
-    let _ = shutdown_tx.send(true);
-    tokio::time::timeout(Duration::from_secs(1), task)
-        .await
-        .expect("supervisor should stop on shutdown")
-        .unwrap()
-        .unwrap();
-}
-
 /// Admission persists InferenceCall rows through the calling Agent's signed access, so the
 /// fixture Agent gets the same node grants the admission fixtures give a managed Agent.
 async fn grant_fixture_agent_call_access(
@@ -1020,7 +764,11 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let initial = supervisor.current_snapshot();
     let mut held = background_child_request(0, &agent_did);
     held.request_id = "held".to_string();
-    initial.dispatchers[&agent_did].send(held).await.unwrap();
+    initial.dispatchers[&agent_did]
+        .for_request(&held)
+        .send(held)
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
         .await
         .expect("the old slot claims the first request")
@@ -1043,7 +791,11 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
 
     let mut queued = background_child_request(1, &agent_did);
     queued.request_id = "queued".to_string();
-    updated.dispatchers[&agent_did].send(queued).await.unwrap();
+    updated.dispatchers[&agent_did]
+        .for_request(&queued)
+        .send(queued)
+        .await
+        .unwrap();
     let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
         .await
         .expect("the queued request runs on the new slot")
@@ -1210,7 +962,11 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
         let initial = supervisor.current_snapshot();
         let mut held = background_child_request(0, &agent_did);
         held.request_id = "held".to_string();
-        initial.dispatchers[&agent_did].send(held).await.unwrap();
+        initial.dispatchers[&agent_did]
+            .for_request(&held)
+            .send(held)
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
             .await
             .expect("the old slot claims the first request")
@@ -1229,7 +985,11 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
 
         let mut queued = background_child_request(1, &agent_did);
         queued.request_id = "queued".to_string();
-        updated.dispatchers[&agent_did].send(queued).await.unwrap();
+        updated.dispatchers[&agent_did]
+            .for_request(&queued)
+            .send(queued)
+            .await
+            .unwrap();
         let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
             .await
             .expect("the queued request runs on the new slot")
@@ -2824,11 +2584,11 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         shutdown_rx,
     );
     assert!(
-        slot.matches(&agent_config, &absent_surface, 1),
+        slot.matches(&agent_config, &absent_surface),
         "the slot keeps its own surface"
     );
     assert!(
-        !slot.matches(&agent_config, &installed_surface, 1),
+        !slot.matches(&agent_config, &installed_surface),
         "a changed plugin resolution must recreate the slot so the Agent \
          re-admits with a fresh build budget"
     );
@@ -2862,348 +2622,4 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         installed_snapshot.configuration_fingerprint(),
         "a same-artifact reinstall that changes the declaration must refresh the slot"
     );
-}
-
-enum SlotEvent {
-    Started(u64),
-    Held,
-    Done(String, u64),
-    Exited(u64),
-}
-
-/// What a supervisor fixture observes of its slots: the generations whose
-/// runner is running, the generations whose runner returned, and the requests
-/// each generation finished.
-struct SlotEvents {
-    rx: mpsc::UnboundedReceiver<SlotEvent>,
-    live: BTreeSet<u64>,
-    exited: BTreeSet<u64>,
-    done: Vec<(String, u64)>,
-    held: bool,
-}
-
-impl SlotEvents {
-    fn record(&mut self, event: SlotEvent) {
-        match event {
-            SlotEvent::Started(generation) => {
-                self.live.insert(generation);
-            }
-            SlotEvent::Held => self.held = true,
-            SlotEvent::Done(request, generation) => self.done.push((request, generation)),
-            SlotEvent::Exited(generation) => {
-                self.live.remove(&generation);
-                self.exited.insert(generation);
-            }
-        }
-    }
-
-    fn drain_arrived(&mut self) {
-        while let Ok(event) = self.rx.try_recv() {
-            self.record(event);
-        }
-    }
-
-    async fn until(&mut self, what: &str, reached: impl Fn(&Self) -> bool) {
-        while !reached(self) {
-            match tokio::time::timeout(gents_store::test_support::STALL_CEILING, self.rx.recv())
-                .await
-            {
-                Ok(Some(event)) => self.record(event),
-                _ => panic!(
-                    "{what}: no slot event; live {:?}, exited {:?}, done {:?}, held {}",
-                    self.live, self.exited, self.done, self.held
-                ),
-            }
-        }
-    }
-}
-
-struct RetiredSlotObservation {
-    retired_generation: u64,
-    while_held: Option<(BTreeSet<u64>, usize)>,
-    live_after: BTreeSet<u64>,
-    running_after: usize,
-    finished: bool,
-}
-
-async fn inference_calls_holding_a_backend_slot(
-    node: &Arc<defra_node::Node>,
-    signer: &gents_store::identity::ManagedAgentSigner,
-) -> usize {
-    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
-        node.clone(),
-        identity::Did::new(signer.did()).unwrap(),
-        signer.clone(),
-    )
-    .unwrap();
-    let response = access
-        .execute("{ InferenceCall { call_state } }")
-        .await
-        .unwrap();
-    response["data"]["InferenceCall"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| {
-            gents_inference::admission::call_state_holds_backend_slot(
-                row["call_state"].as_str().unwrap_or_default(),
-            )
-        })
-        .count()
-}
-
-/// A generation-1 slot, optionally running a call that holds an admitted
-/// backend slot, is retired by a key rotation that publishes generation 2. The
-/// fixture holds the only other reference to generation 1's dispatcher, as the
-/// router does until it observes the published generation, and drops it once
-/// generation 2 is active. With a call held it records the slots running and
-/// the calls holding a backend slot while generation 2 serves a request, then
-/// finishes the call; either way it waits for generation 1's runner to return.
-async fn retire_slot_with_call(call_in_flight: bool) -> RetiredSlotObservation {
-    let signed_home = gents_documents::test_support::SignedHome::enroll(
-        crate::support::trial_store("reconcile-retired-slot").await,
-        "reconcile-retired-slot",
-    )
-    .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, _user, _access) = signed_home.into_parts();
-    let node = db.node.clone();
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = db.node_identity.did().to_string();
-    let runtime_status = runtime_status_handle(&node, &node_did);
-
-    let mut agent_config = PendingAgent::new("general")
-        .with_identity_binding_for_test(binding)
-        .build_with_identity_arc_for_test(db.node_identity.clone());
-    let agent_did = agent_config.agent.agent_did.clone();
-    let signer = agent_config
-        .agent
-        .agent_identity
-        .managed_agent_signer()
-        .unwrap();
-    grant_fixture_agent_call_access(&node, &signer).await;
-    seed_fixture_agent_session(&node, &signer, "session-test").await;
-    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-general".to_string());
-    Arc::make_mut(&mut agent_config.agent).backend_auth = gents_documents::BackendAuth::ApiKey {
-        key: "fixture-old-key".into(),
-    };
-    let mut rotated = agent_config.clone();
-    Arc::make_mut(&mut rotated.agent).backend_auth = gents_documents::BackendAuth::ApiKey {
-        key: "fixture-new-key".into(),
-    };
-    let snapshot = |agent: AgentWithTools| {
-        let mut config = backend_admission_config("backend-general", 1, 100);
-        config.config_fingerprint =
-            gents_inference::connection_fingerprint::agent_connection_fingerprint(&agent.agent);
-        let node = node.clone();
-        let agent_did = agent_did.clone();
-        async move {
-            snapshot_for_agents_with_admission(
-                &node,
-                &agent_did,
-                vec![agent.clone()],
-                RapidHashMap::from_iter([("backend-general".to_string(), config)]),
-            )
-            .await
-            .with_node(agent.agent.node.clone())
-        }
-    };
-    let initial_snapshot = snapshot(agent_config).await;
-    let rotated_snapshot = snapshot(rotated).await;
-
-    let registry = gents_inference::admission::AdmissionRegistry::new(node.clone());
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<SlotEvent>();
-    let release = Arc::new(Notify::new());
-    let runner = {
-        let (registry, signer, release) = (registry.clone(), signer.clone(), release.clone());
-        move |agent_config: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let (registry, signer, release, event_tx) = (
-                registry.clone(),
-                signer.clone(),
-                release.clone(),
-                event_tx.clone(),
-            );
-            async move {
-                let _ = event_tx.send(SlotEvent::Started(generation));
-                loop {
-                    let request = tokio::select! {
-                        _ = shutdown.changed() => break,
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => match message {
-                            Some(request) => request,
-                            None => break,
-                        },
-                    };
-                    if request.request_id == "held" {
-                        let connection =
-                            gents_inference::connection_fingerprint::agent_connection_fingerprint(
-                                &agent_config.agent,
-                            );
-                        let mut admitted = registry
-                            .acquire_with_connection_and_signer_for_test(
-                                "held",
-                                "backend-general",
-                                &agent_config.agent,
-                                gents_loop::provider_call::admission::CallKind::Inference,
-                                &connection,
-                                Some(signer.clone()),
-                            )
-                            .await?;
-                        let _ = event_tx.send(SlotEvent::Held);
-                        release.notified().await;
-                        admitted.finish_success(None).await?;
-                    }
-                    let _ = event_tx.send(SlotEvent::Done(request.request_id, generation));
-                }
-                let _ = event_tx.send(SlotEvent::Exited(generation));
-                Ok::<(), anyhow::Error>(())
-            }
-        }
-    };
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let supervisor = GenerationSupervisor::bootstrap(
-        initial_snapshot,
-        registry,
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 3,
-            base_delay_ms: 5,
-            max_delay_ms: 25,
-        },
-        runner,
-        runtime_status,
-        shutdown_rx.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-    let initial = supervisor.current_snapshot();
-    let retired_generation = initial.generation;
-    let mut events = SlotEvents {
-        rx: event_rx,
-        live: BTreeSet::new(),
-        exited: BTreeSet::new(),
-        done: Vec::new(),
-        held: false,
-    };
-    if call_in_flight {
-        let mut held = background_child_request(0, &agent_did);
-        held.request_id = "held".to_string();
-        initial.dispatchers[&agent_did].send(held).await.unwrap();
-        events
-            .until("generation 1 admits the held call", |events| events.held)
-            .await;
-    }
-
-    let (active_tx, mut active_rx) = watch::channel(initial.clone());
-    let (proposal_tx, proposal_rx) = mpsc::channel(4);
-    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
-    proposal_tx.send(rotated_snapshot).await.unwrap();
-    tokio::time::timeout(
-        gents_store::test_support::STALL_CEILING,
-        active_rx.changed(),
-    )
-    .await
-    .expect("a key rotation publishes a generation")
-    .unwrap();
-    let updated = active_rx.borrow().clone();
-    assert!(!initial.dispatchers[&agent_did].same_channel(&updated.dispatchers[&agent_did]));
-    drop(initial);
-
-    let while_held = if call_in_flight {
-        let mut queued = background_child_request(1, &agent_did);
-        queued.request_id = "queued".to_string();
-        updated.dispatchers[&agent_did].send(queued).await.unwrap();
-        let generation = updated.generation;
-        events
-            .until("the published generation serves a request", |events| {
-                events
-                    .done
-                    .iter()
-                    .any(|(request, served)| request == "queued" && *served == generation)
-            })
-            .await;
-        events.drain_arrived();
-        let observed = (
-            events.live.clone(),
-            inference_calls_holding_a_backend_slot(&node, &signer).await,
-        );
-        release.notify_one();
-        Some(observed)
-    } else {
-        None
-    };
-    let generation = updated.generation;
-    events
-        .until("the retired generation's runner returns", |events| {
-            events.exited.contains(&retired_generation)
-                && events.live.contains(&generation)
-                && (!call_in_flight || events.done.iter().any(|(request, _)| request == "held"))
-        })
-        .await;
-    let observation = RetiredSlotObservation {
-        retired_generation,
-        while_held,
-        live_after: events.live.clone(),
-        running_after: inference_calls_holding_a_backend_slot(&node, &signer).await,
-        finished: events
-            .done
-            .iter()
-            .any(|(request, served)| request == "held" && *served == retired_generation),
-    };
-
-    let _ = shutdown_tx.send(true);
-    tokio::time::timeout(gents_store::test_support::STALL_CEILING, task)
-        .await
-        .expect("supervisor should stop on shutdown")
-        .unwrap()
-        .unwrap();
-    observation
-}
-
-/// A retired slot keeps running its call in flight and its runner returns
-/// once that call finishes: the generation retires idle, does not retire while
-/// its call is held, and retires after the call finishes.
-#[tokio::test]
-async fn retired_slot_exits_once_its_call_in_flight_finishes() {
-    use gents_lean_vocab::families::contracts_runtime_reconcile_retire as family;
-    for case in family::cases() {
-        let call = case.input.tracked_request_id != 0;
-        let observation = retire_slot_with_call(call).await;
-        let live = if case.input.pre_in_flight_count == 0 {
-            observation.live_after
-        } else {
-            observation.while_held.expect("a held call is observed").0
-        };
-        case.check(family::ReconcileRetireOutput {
-            legal: !live.contains(&observation.retired_generation),
-            post_live_generation_count: live.len() as u64,
-        });
-    }
-}
-
-/// The call held on a retired slot finishes and releases the backend slot its
-/// admission held.
-#[tokio::test]
-async fn finished_call_on_a_retired_slot_releases_its_backend_slot() {
-    use gents_lean_vocab::families::contracts_runtime_reconcile_finish as family;
-    for case in family::cases() {
-        let observation = retire_slot_with_call(true).await;
-        let (_, running_while_held) = observation.while_held.expect("a held call is observed");
-        assert_eq!(
-            running_while_held as u64, case.input.pre_in_flight_count,
-            "the fixture holds the case's calls in flight"
-        );
-        case.check(family::ReconcileFinishOutput {
-            legal: observation.finished,
-            post_in_flight_count: observation.running_after as u64,
-        });
-    }
 }

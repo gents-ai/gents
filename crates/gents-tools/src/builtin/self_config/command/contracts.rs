@@ -41,6 +41,7 @@ pub fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "instructions":"string|null; Markdown instructions",
                 "source_directory":"string|null; resolved local SKILL.md parent; supporting-file base, never an access grant",
                 "tool_refs":"array<string>; tool dependencies, default []; never tool grants",
+                "covers":"array<string>; default []; help paths it covers, a tool then topic words (\"config trigger\"); their help and first failing call name it",
                 "display_name":"string|null; display label",
                 "interface_json":"string|null; serialized interface metadata",
                 "enabled":"boolean; default true",

@@ -8,7 +8,7 @@ pack_builder skills are in its catalog; the `four-task-skills` fixture adds
 four domain Skill documents to that catalog. No check requires a skill load:
 a case is graded on the outcome, and where only a skill states the rules (the
 four added ones), the right answer depends on reading it. A stage that needs
-a write grant the Engineer gives itself (which applies from its next request)
+a write grant the Engineer gives itself (which applies from its next turn)
 settles and may send one "OK, go ahead." turn before it is graded.
 
 ## Subject fixtures
@@ -23,11 +23,11 @@ settles and may send one "OK, go ahead." turn before it is graded.
 
 | Case | User need | Tool features | Graded by |
 | --- | --- | --- | --- |
-| plan-before-build | a plan and done-checks for a loaner laptop app, nothing built yet | `load_skill` (plan-work), `write_file` | ACCEPTANCE.md lists checks including a student must-not; no page, trigger, schedule or surface created |
+| plan-before-build | a plan and done-checks for a loaner laptop app, nothing built yet | `load_skill` (plan-app), `write_file` | ACCEPTANCE.md lists checks including a student must-not; no page, trigger, schedule or surface created |
 | courier-window-tickets | which queue each courier arrival goes to | added skill rules in order, file reads | each ticket paired with its queue in the reply; tickets unchanged |
 | archive-retention-records | how long the records office keeps each record | added skill, a legal hold | each record's months, or the hold, in the reply; records unchanged |
-| trigger-never-fires | why an expected automation never ran, then fix it and use it | diagnose-node order, read-only `config`, automation setup, a self-granted write | first stage changes nothing and says no automation exists; the slip the user then adds fires the automation, its request completes, and an inbox note names the slip |
-| courier-ticket-collection | a collection for tickets that arrive twice, then load a feed | use-database, `schema`, self-granting write access, writes | the collection with a unique ticket_number and a DateTime arrival; the feed lands as two tickets, CT-1001 once |
+| trigger-never-fires | why an expected automation never ran, then fix it and use it | troubleshoot order, read-only `config`, automation setup, a self-granted write | first stage changes nothing and says no automation exists; the slip the user then adds fires the automation, its request completes, and an inbox note names the slip |
+| courier-ticket-collection | a collection for tickets that arrive twice, then load a feed | design-data, `schema`, self-granting write access, writes | the collection with a unique ticket_number and a DateTime arrival; the feed lands as two tickets, CT-1001 once |
 | plugin-tool-missing | what to change for an agent to get a plugin tool, and when it appears | product knowledge of Tools and requests | the agent's Tools and the next request in the reply |
 | ferry-reimbursement-claims | what is payable on each claim | added skill, caps and the late-filing rule | each claim's amount; claims unchanged |
 | urgent-count-once | a one-off count, and whether an app is needed | `query` | three urgent slips; no page, trigger or schedule built |

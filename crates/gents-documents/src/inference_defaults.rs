@@ -5,7 +5,9 @@ pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 /// `Request.PinnedRetryBudget.defaultMaxRequestRetries`). Provider transport
 /// retries are `InferenceRetryPolicy`'s.
 pub const DEFAULT_REQUEST_MAX_RETRIES: u64 = 3;
-pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
+/// Unset `InferenceBackend.max_concurrent`: concurrent inference calls the
+/// backend admits (Lean `Configuration.defaultBackendControls`).
+pub const DEFAULT_MAX_CONCURRENT: i64 = 4;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
 pub const DEFAULT_DISCOVERY_TIMEOUT_SECS: i64 = 10;

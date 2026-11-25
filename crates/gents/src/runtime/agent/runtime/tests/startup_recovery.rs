@@ -189,14 +189,14 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
         "unknown",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             ..Default::default()
@@ -278,15 +278,15 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
         "http://127.0.0.1:9/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
     let context_id = format!("{default_agent_did}:context");
     // A selection edge may only name a Tools document that exists. The dangling
     // state is reached the way it can occur in a node: publish the reference
     // while the document is present, then delete the document.
     write_runtime_documents(
-        &fixture.user_access,
+        &fixture.home.user_access,
         vec![(
             gents_store::collection::Collection::Tools,
             serde_json::json!({"node_did": identity.did(), "tools_id": "missing-tools"}),
@@ -294,7 +294,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     )
     .await;
     merge_fixture_document(
-        &fixture.user_access,
+        &fixture.home.user_access,
         "test.invalid_context",
         gents_store::collection::Collection::AgentContext,
         identity.did(),
@@ -302,13 +302,13 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
         serde_json::json!({"tools_id": "missing-tools"}),
     )
     .await;
-    delete_tools_document(&fixture.user_access, "missing-tools").await;
+    delete_tools_document(&fixture.home.user_access, "missing-tools").await;
 
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -379,13 +379,13 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -447,13 +447,13 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -515,10 +515,10 @@ async fn startup_publication_follows_the_lean_persistence_model() {
         .await;
         let observer = Arc::new(RecordingObserver::default());
         let agent = crate::Gents::from_default_agent_documents(
-            fixture.db.node.clone(),
-            fixture.db.node_identity.clone(),
+            fixture.home.store.node.clone(),
+            fixture.home.store.node_identity.clone(),
             crate::runtime::agent::DocumentRuntimeOptions {
-                backend_admission: Some(fixture.admission()),
+                backend_admission: Some(fixture.home.backend_admission()),
                 tool_ceiling: ToolCeiling::meta_only(),
                 process_state_observer: Some(observer.clone()),
                 ..Default::default()
@@ -623,10 +623,10 @@ async fn startup_source_failure_returns_only_after_the_slot_exits() {
     )
     .await;
     let agent = crate::Gents::from_default_agent_documents(
-        fixture.db.node.clone(),
-        fixture.db.node_identity.clone(),
+        fixture.home.store.node.clone(),
+        fixture.home.store.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -690,7 +690,7 @@ async fn startup_source_failure_returns_only_after_the_slot_exits() {
             .is_err(),
         "run_agent returned while its generation-one slot was still gated"
     );
-    slot_exit_gate.add_permits(1);
+    slot_exit_gate.add_permits(tokio::sync::Semaphore::MAX_PERMITS);
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
             .await
@@ -720,13 +720,13 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         "unhealthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -762,7 +762,7 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
     )
     .unwrap();
     create_user_agent_session(
-        &fixture.user_access,
+        &fixture.home.user_access,
         identity.did(),
         Some(fixture.agent.did()),
         "session-unavailable-runtime",
@@ -815,13 +815,13 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         "unknown",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -876,64 +876,6 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         .expect("agent run should return ok");
 }
 
-async fn submit_capacity_request(
-    fixture: &HeldRuntimeFixture,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
-    let user_did = fixture.user.did();
-    let node_did = fixture.db.node_identity.did();
-    let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
-        &fixture.user_access,
-        RequestSpec::new(
-            RequestPurpose::Normal,
-            RequestIdentity {
-                request_id: request_id.to_owned(),
-                node_did: node_did.to_owned(),
-                requester_did: Some(user_did.to_owned()),
-                agent_did: agent_did.to_owned(),
-                session_id: session_id.to_owned(),
-                content: "hello".to_owned(),
-                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            AgentRequestAdmissionRecord::client(user_did),
-        ),
-        RequestSigner::Identity(&fixture.user),
-    )
-    .await
-    .unwrap();
-    gents_session::session::update_session_title_with_source(
-        &fixture.user_access,
-        node_did,
-        Some(user_did),
-        session_id,
-        "capacity shutdown test",
-        gents_protocol::session::SessionTitleSource::User,
-    )
-    .await
-    .unwrap();
-    gents_session::request::lifecycle::submit_client_request(&fixture.user_access, &create)
-        .await
-        .unwrap();
-    let request = escape_graphql_string(request_id);
-    let response = fixture
-        .user_access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}} }}"#
-        ))
-        .await
-        .unwrap();
-    let rows = response["data"]["AgentRequest"].as_array().unwrap();
-    let [row] = rows.as_slice() else {
-        panic!("submitted request must be unique")
-    };
-    row["_docID"].as_str().unwrap().to_owned()
-}
-
 async fn wait_for_held_inference_state(
     access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
@@ -972,13 +914,13 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let first_agent = fixture.agent.clone();
     let second_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
+        &fixture.home.user.did().parse().unwrap(),
     )
     .await
     .unwrap();
@@ -988,7 +930,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     let first_did = first_agent.did().to_owned();
     let second_did = second_agent.did().to_owned();
     write_runtime_documents(
-        &fixture.user_access,
+        &fixture.home.user_access,
         vec![(
             gents_store::collection::Collection::Agent,
             serde_json::json!({
@@ -1015,7 +957,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -1028,24 +970,36 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let first_request_doc_id = submit_capacity_request(
-        &fixture,
-        &first_did,
-        "req-shutdown-running",
-        "session-shutdown-running",
+    let first_request_doc_id = fixture
+        .submit_request(
+            &first_did,
+            "req-shutdown-running",
+            "session-shutdown-running",
+            "hello",
+        )
+        .await;
+    wait_for_held_request_state(
+        &fixture.home.user_access,
+        &first_request_doc_id,
+        "processing",
     )
     .await;
-    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "processing").await;
     wait_for_held_inference_state(&first_access, "req-shutdown-running", "running").await;
 
-    let queued_request_doc_id = submit_capacity_request(
-        &fixture,
-        &second_did,
-        "req-shutdown-waiting",
-        "session-shutdown-waiting",
+    let queued_request_doc_id = fixture
+        .submit_request(
+            &second_did,
+            "req-shutdown-waiting",
+            "session-shutdown-waiting",
+            "hello",
+        )
+        .await;
+    wait_for_held_request_state(
+        &fixture.home.user_access,
+        &queued_request_doc_id,
+        "processing",
     )
     .await;
-    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "processing").await;
     wait_for_held_inference_state(&second_access, "req-shutdown-waiting", "queued").await;
 
     let _ = shutdown_tx.send(true);
@@ -1055,10 +1009,10 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "failed").await;
-    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.home.user_access, &first_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.home.user_access, &queued_request_doc_id, "failed").await;
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
-        let response = fixture.user_access.execute(&format!(
+        let response = fixture.home.user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
             gents_store::graphql::escape_graphql_string(request_doc_id),
         )).await.unwrap();
@@ -1110,13 +1064,13 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -1227,7 +1181,7 @@ async fn write_runtime_documents(
 async fn missing_plugin_node(
     label: &str,
 ) -> (
-    HeldRuntimeFixture,
+    AgentRuntimeHome,
     String,
     gents_inference::test_support::scripted_backend::ScriptedBackend,
 ) {
@@ -1242,25 +1196,25 @@ async fn missing_plugin_node(
         endpoint.endpoint(),
     )
     .await;
-    let node_did = fixture.db.node_identity.did().to_owned();
+    let node_did = fixture.home.store.node_identity.did().to_owned();
     (fixture, node_did, endpoint)
 }
 
-async fn documents_agent(fixture: &HeldRuntimeFixture) -> (crate::Gents, tempfile::TempDir) {
+async fn documents_agent(fixture: &AgentRuntimeHome) -> (crate::Gents, tempfile::TempDir) {
     documents_agent_with_ceiling(fixture, ToolCeiling::meta_only()).await
 }
 
 /// [`documents_agent`] with a chosen tool ceiling, so a test can run host tools.
 async fn documents_agent_with_ceiling(
-    fixture: &HeldRuntimeFixture,
+    fixture: &AgentRuntimeHome,
     tool_ceiling: ToolCeiling,
 ) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
-        fixture.db.node.clone(),
-        fixture.db.node_identity.clone(),
+        fixture.home.store.node.clone(),
+        fixture.home.store.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling,
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
@@ -1311,19 +1265,19 @@ fn tools_naming_missing_plugin(
 #[tokio::test]
 async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     let (fixture, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
     let broken_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
+        &fixture.home.user.did().parse().unwrap(),
     )
     .await
     .unwrap();
     let broken = broken_binding.agent_did.as_str();
     write_runtime_documents(
-        &fixture.user_access,
+        &fixture.home.user_access,
         vec![
             agent_document(&node_did, &broken_binding, &default_agent_did),
             context_document(&node_did, broken),
@@ -1364,7 +1318,7 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     )
     .unwrap();
     create_user_agent_session(
-        &fixture.user_access,
+        &fixture.home.user_access,
         &node_did,
         Some(broken),
         "session-missing-plugin",
@@ -1450,13 +1404,13 @@ async fn publish_workspace_root(
 #[tokio::test]
 async fn an_agent_with_host_tools_under_an_unread_root_is_rejected_with_the_grant() {
     let (fixture, node_did, _endpoint) = missing_plugin_node("reader-missing").await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
     let binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
+        &fixture.home.user.did().parse().unwrap(),
     )
     .await
     .unwrap();
@@ -1464,7 +1418,7 @@ async fn an_agent_with_host_tools_under_an_unread_root_is_rejected_with_the_gran
     let root_dir = tempfile::tempdir().unwrap();
     let root_text = root_dir.path().to_string_lossy().into_owned();
     write_runtime_documents(
-        &fixture.user_access,
+        &fixture.home.user_access,
         vec![
             agent_document(&node_did, &binding, &default_agent_did),
             context_document(&node_did, &agent_did),
@@ -1504,7 +1458,7 @@ async fn an_agent_with_host_tools_under_an_unread_root_is_rejected_with_the_gran
     )
     .unwrap();
     create_user_agent_session(
-        &fixture.user_access,
+        &fixture.home.user_access,
         &node_did,
         Some(&agent_did),
         "session-reader-missing",
@@ -1569,7 +1523,7 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
     let (fixture, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
     let tools_id = format!("{}:tools", fixture.agent.did());
     write_runtime_documents(
-        &fixture.user_access,
+        &fixture.home.user_access,
         vec![tools_naming_missing_plugin(&node_did, &tools_id)],
     )
     .await;
@@ -1600,20 +1554,20 @@ async fn startup_tool_admission_cascade_follows_the_lean_model() {
         AgentReadinessUnavailableReason,
     >() {
         let (fixture, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
-        let node = fixture.db.node.clone();
-        let identity = fixture.db.node_identity.clone();
+        let node = fixture.home.store.node.clone();
+        let identity = fixture.home.store.node_identity.clone();
         let default_agent_did = fixture.agent.did().to_owned();
         let target_binding = gents_store::identity::provision_agent_identity_authorized(
             &node,
             identity.as_ref(),
-            &fixture.user.did().parse().unwrap(),
+            &fixture.home.user.did().parse().unwrap(),
         )
         .await
         .unwrap();
         let caller_binding = gents_store::identity::provision_agent_identity_authorized(
             &node,
             identity.as_ref(),
-            &fixture.user.did().parse().unwrap(),
+            &fixture.home.user.did().parse().unwrap(),
         )
         .await
         .unwrap();
@@ -1628,7 +1582,7 @@ async fn startup_tool_admission_cascade_follows_the_lean_model() {
             other => panic!("unmodeled tool admission {other}"),
         };
         write_runtime_documents(
-            &fixture.user_access,
+            &fixture.home.user_access,
             vec![
                 agent_document(&node_did, &target_binding, &default_agent_did),
                 context_document(&node_did, target),
@@ -1771,13 +1725,13 @@ async fn storage_full_readiness_writes_do_not_fail_or_stall_shutdown() {
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

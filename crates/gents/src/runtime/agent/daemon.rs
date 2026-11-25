@@ -25,6 +25,8 @@ mod run;
 mod task_hook_tests;
 mod terminal;
 mod title;
+mod tool_rebinding;
+pub(in crate::runtime::agent) use tool_rebinding::RebindingSource;
 mod wake_input;
 
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +163,7 @@ where
     request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier,
     auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks,
     root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
+    tool_rebinding: Option<RebindingSource>,
     #[cfg(test)]
     driven_deadline: Option<Arc<tokio::sync::Notify>>,
 }

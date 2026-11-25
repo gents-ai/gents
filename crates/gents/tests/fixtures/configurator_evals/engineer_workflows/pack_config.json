@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-workflows",
-      "comparability_version": 2,
+      "comparability_version": 3,
       "title": "Workflows: background jobs over worker agents",
       "subject": {
         "kind": "agent",

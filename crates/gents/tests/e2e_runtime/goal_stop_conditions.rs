@@ -237,3 +237,286 @@ async fn a_goal_that_reaches_its_budget_gets_one_wrapup_turn_then_pauses() {
     assert_eq!(backend.observed_requests(MARKER), 2);
     runtime.shutdown().await;
 }
+
+/// The same `update_goal` call with nothing to change: the Goal handler
+/// refuses it with the same answer every time, so the turn repeats its
+/// previous turn in name, arguments and result.
+fn repeated_call(marker: &str, id: &str) -> StreamResponse {
+    StreamResponse::streams(
+        marker,
+        vec![StreamChunk::tool_call(id, "update_goal", "{}".to_owned())],
+    )
+}
+
+/// One goal turn that makes the same refused `update_goal` call, then ends.
+fn repeated_turn(marker: &str, turn: usize) -> [StreamResponse; 2] {
+    [
+        repeated_call(marker, &format!("repeat-{turn}")),
+        StreamResponse::completes(marker, ["Checked the goal again."]),
+    ]
+}
+
+fn last_failure_when_paused(goal: &serde_json::Value) -> bool {
+    goal["status"] == "paused"
+}
+
+/// The Goal, with the session's goal requests and their tool calls: what a
+/// failed assertion shows.
+async fn goal_failure(actors: &RequestActors, session: &str) -> serde_json::Value {
+    let session = escape_graphql_string(session);
+    let data = actors
+        .fixture
+        .access
+        .execute(&format!(
+            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ status last_failure blocked_reason progress_record }}
+                AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id lifecycle_state failure_reason }}
+                AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id tool_name lifecycle_state terminal_output }} }}"#
+        ))
+        .await
+        .unwrap();
+    let mut goal = data["data"]["Goal"][0].clone();
+    goal["requests"] = data["data"]["AgentRequest"].clone();
+    goal["tool_calls"] = data["data"]["AgentToolCall"].clone();
+    goal
+}
+
+/// A model that never reports blocked and repeats the same tool call with the
+/// same result is paused by the harness after `NO_PROGRESS_LIMIT` turns
+/// without progress (Lean `GoalProgress.step`), whatever it says.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_goal_that_repeats_the_same_call_is_paused_for_no_progress() {
+    const MARKER: &str = "count-bins-goal";
+    let limit = usize::try_from(gents_automation::goal::progress::NO_PROGRESS_LIMIT).unwrap();
+    let plan = StreamPlan::new(
+        MARKER,
+        (0..limit + 2)
+            .flat_map(|turn| repeated_turn(MARKER, turn))
+            .collect(),
+    );
+    let Booted {
+        backend: _backend,
+        actors,
+        runtime,
+        session,
+        _db,
+    } = boot("goal-no-progress", plan).await;
+    seed_goal_from_access(
+        &actors.agent_access,
+        actors.node_did(),
+        &session,
+        Some(&format!("{MARKER}: count every bin")),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (_, continuations) = goal_when(&actors, &session, |goal, requests| {
+        last_failure_when_paused(goal) && all_terminal(requests)
+    })
+    .await;
+    let goal = goal_failure(&actors, &session).await;
+    assert_eq!(goal["last_failure"], "no_progress", "{goal:#}");
+    assert!(
+        (limit..=limit + 1).contains(&continuations.len()),
+        "paused after {} continuations, limit {limit}",
+        continuations.len()
+    );
+    runtime.shutdown().await;
+}
+
+/// The user resumes the paused Goal from the session's opening request.
+async fn resume(actors: &RequestActors, session: &str) {
+    let opening = session.replace("-session", "-opening");
+    gents_automation::goal::resume_goal_request(
+        &actors.fixture.access,
+        &actors.fixture.user,
+        actors.node_did(),
+        session,
+        &opening,
+    )
+    .await
+    .unwrap();
+}
+
+async fn set_policy(
+    access: &gents_store::config_client::ConfigAccess,
+    actors: &RequestActors,
+    session: &str,
+    on_blocked: gents_protocol::goal::OnBlocked,
+) -> Result<
+    gents_protocol::goal::GoalStopPolicy,
+    gents_protocol::operations::goal::GoalOperationError,
+> {
+    gents_automation::operations::goal::set_stop_policy(
+        access,
+        actors.node_did(),
+        session,
+        &gents_protocol::operations::goal::GoalStopPolicyInput {
+            on_blocked: Some(on_blocked),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// `confirm_once`: the first blocked report gets one confirmation turn and
+/// the Goal stays active; the report in that turn pauses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn confirm_once_pauses_on_the_second_blocked_report() {
+    const MARKER: &str = "label-crates-goal";
+    let plan = StreamPlan::new(
+        MARKER,
+        vec![
+            blocked_report(MARKER, "block-1", "I need the label printer."),
+            StreamResponse::completes(MARKER, ["Checking once more."]),
+            blocked_report(MARKER, "block-2", "The printer is still offline."),
+            StreamResponse::completes(MARKER, ["I need the printer."]),
+        ],
+    );
+    let Booted {
+        backend: _backend,
+        actors,
+        runtime,
+        session,
+        _db,
+    } = boot("goal-confirm-once", plan).await;
+    seed_goal_from_access(
+        &actors.agent_access,
+        actors.node_did(),
+        &session,
+        Some(&format!("{MARKER}: label every crate")),
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    set_policy(
+        &actors.fixture.access,
+        &actors,
+        &session,
+        gents_protocol::goal::OnBlocked::ConfirmOnce,
+    )
+    .await
+    .unwrap();
+    resume(&actors, &session).await;
+
+    let (goal, continuations) = goal_when(&actors, &session, |goal, requests| {
+        (goal["status"] == "blocked" || goal["status"] == "paused") && all_terminal(requests)
+    })
+    .await;
+    let shown = goal_failure(&actors, &session).await;
+    assert_eq!(goal["status"], "blocked", "{shown:#}");
+    assert_eq!(goal["blocked_reason"], "The printer is still offline.");
+    assert_eq!(
+        continuations.len(),
+        2,
+        "one confirmation turn, then the pause"
+    );
+    runtime.shutdown().await;
+}
+
+/// `keep_trying`: blocked reports are kept for the user and the Goal goes
+/// on; repeating them makes no progress, so the harness still pauses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
+    const MARKER: &str = "sort-mail-goal";
+    let limit = usize::try_from(gents_automation::goal::progress::NO_PROGRESS_LIMIT).unwrap();
+    let plan = StreamPlan::new(
+        MARKER,
+        (0..limit + 2)
+            .flat_map(|turn| {
+                [
+                    blocked_report(MARKER, &format!("block-{turn}"), "I need the mail key."),
+                    StreamResponse::completes(MARKER, ["Trying again."]),
+                ]
+            })
+            .collect(),
+    );
+    let Booted {
+        backend: _backend,
+        actors,
+        runtime,
+        session,
+        _db,
+    } = boot("goal-keep-trying", plan).await;
+    seed_goal_from_access(
+        &actors.agent_access,
+        actors.node_did(),
+        &session,
+        Some(&format!("{MARKER}: sort the mail")),
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    set_policy(
+        &actors.fixture.access,
+        &actors,
+        &session,
+        gents_protocol::goal::OnBlocked::KeepTrying,
+    )
+    .await
+    .unwrap();
+    resume(&actors, &session).await;
+
+    let (_, continuations) = goal_when(&actors, &session, |goal, requests| {
+        last_failure_when_paused(goal) && all_terminal(requests)
+    })
+    .await;
+    let goal = goal_failure(&actors, &session).await;
+    assert_eq!(goal["last_failure"], "no_progress", "{goal:#}");
+    assert_eq!(goal["blocked_reason"], "I need the mail key.");
+    assert!(
+        continuations.len() > 1,
+        "blocked reports did not stop the goal"
+    );
+    runtime.shutdown().await;
+}
+
+/// Who may create and then change a Goal's stop policy, replayed in the order
+/// the Lean access rule (`goal_policies`) decides it: the working Agent can
+/// neither create its Goal's policy nor change one its user set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_working_agent_cannot_loosen_its_goal_policy() {
+    const MARKER: &str = "audit-ledger-goal";
+    let plan = StreamPlan::current_authored_user(MARKER, vec![]);
+    let Booted {
+        backend: _backend,
+        actors,
+        runtime,
+        session,
+        _db,
+    } = boot("goal-policy-access", plan).await;
+    seed_goal_from_access(
+        &actors.agent_access,
+        actors.node_did(),
+        &session,
+        Some(&format!("{MARKER}: audit the ledger")),
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    for case in gents_lean_vocab::families::contracts_goal_policy_access::cases() {
+        let access = match case.input.actor.as_str() {
+            "working_agent" => &actors.agent_access,
+            "user" => &actors.fixture.access,
+            other => panic!("unknown modeled actor {other}"),
+        };
+        let allowed = set_policy(
+            access,
+            &actors,
+            &session,
+            gents_protocol::goal::OnBlocked::ConfirmOnce,
+        )
+        .await
+        .is_ok();
+        case.check(allowed);
+    }
+    runtime.shutdown().await;
+}

@@ -317,6 +317,7 @@ def networkProtocolResource : String → Option String
   | "AgentRequestRetryBudget" => some "request_retry_budgets"
   | "AgentSession" => some "sessions"
   | "AgentSessionInterrupt" => some "session_interrupts"
+  | "GoalStopPolicy" => some "goal_policies"
   | "AgentSessionGoalControl" => some "goal_controls"
   | "AgentSessionInputEdit" => some "goal_controls"
   | "AgentSessionGoalReceipt" => some "goal_receipts"

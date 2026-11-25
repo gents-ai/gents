@@ -96,9 +96,9 @@ pub use desired_state::{
     validate::validate_desired_state_plan, validate::OutcomeSourceSchemaError,
 };
 pub use eval_definition::{
-    EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
-    EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
-    EvalTier, LLM_JUDGE_CHECK,
+    eval_capture_kind_schema, eval_stage_field_schema, EvalCapture, EvalCase, EvalCheckRef,
+    EvalContinuation, EvalDefinition, EvalFixtureDocument, EvalFixtureFile, EvalFixtures,
+    EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind, EvalTier, LLM_JUDGE_CHECK,
 };
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,

@@ -28,4 +28,5 @@ type Goal @policy(id: "$household", resource: "children") {
     auto_resume_at_reset: Boolean
     created_at: String @index
     updated_at: String @index
+    progress_record: String
 }

@@ -269,4 +269,400 @@ theorem a_non_evidence_verdict_stores_a_null_score (kind : OutcomeKind)
     storedScore kind reason score = none := by
   simp [storedScore, nonEvidence]
 
+/-- A Trigger's `last_status` after a fire that wrote no request. External
+premise: `unacknowledged` is written by the trigger engine when a fire's
+result never reached its acknowledgment channel, so the runtime lost the fire;
+`error` and `budget_exhausted` are the fire's own result, decided by the
+Trigger and Task the subject configured. -/
+inductive FireFailure where
+  | error | budgetExhausted | unacknowledged
+  deriving DecidableEq, Repr
+
+/-- Failed fires observed since a stage began. A fire the configuration made
+fail is the subject's; a fire the runtime lost is not evidence, unless a fire
+the configuration made fail sits beside it. -/
+def fireFailureKind (failures : List FireFailure) : Option OutcomeKind :=
+  if failures.any (· != .unacknowledged) then some .runtime
+  else if failures.isEmpty then none
+  else some .infrastructure
+
+structure StageFailure where
+  kind : OutcomeKind
+  providerReason : Option ProviderReason
+  deriving DecidableEq, Repr
+
+namespace StageFailure
+def evidenceClass (failure : StageFailure) : EvidenceClass :=
+  classify failure.kind failure.providerReason
+end StageFailure
+
+/-- How a stage ends once its request's outcome is known: its recorded failure, or none
+when it passed. `request` is the outcome of the stage's request (for a seed stage, the
+kind `seedStep` failed it with), none when the request was accepted; `stated` is the reason
+read from the provider's wording; `endedByBackend` holds when the backend ended the
+request; `triggersRead` holds when the trial's trigger record could be read, and
+`failures` are the fires it records as failed since the stage began.
+
+The request's own outcome decides first. External premise: the backend ends a request in
+two ways. The runtime parks a request in `waiting_for_backend` only after its completion
+loop spent the transport retry budget (`LoopVerdict::BackendUnavailable`), and the runner
+interrupts a request it finds parked. Inference admission ends every call of a backend it
+no longer serves with the recorded reason `BackendGone`. Either ends the request whatever
+the subject did, so a provider failure, alone or beside a failed tool call, is the
+provider being unavailable whatever its wording. A deadline, a tool failure, a runtime
+failure and the subject's own failure keep their attribution.
+
+An accepted request still fails when a trigger fire since the stage began failed, and an
+unreadable trigger record leaves nothing known. -/
+def stageOutcome (endedByBackend : Bool) (request : Option OutcomeKind)
+    (stated : Option ProviderReason) (triggersRead : Bool) (failures : List FireFailure) :
+    Option StageFailure :=
+  match request with
+  | some kind =>
+    if endedByBackend && (kind == .provider || kind == .unknown) then
+      some ⟨.provider, some .unavailable⟩
+    else some ⟨kind, if kind == .provider then stated else none⟩
+  | none =>
+    (if triggersRead then fireFailureKind failures else some .infrastructure).map
+      fun kind => ⟨kind, none⟩
+
+theorem a_request_the_backend_ended_is_not_evidence (kind : OutcomeKind)
+    (stated : Option ProviderReason) (triggersRead : Bool) (failures : List FireFailure)
+    (provider : kind = .provider ∨ kind = .unknown) :
+    (stageOutcome true (some kind) stated triggersRead failures).map
+      StageFailure.evidenceClass = some .notEvidence := by
+  rcases provider with rfl | rfl <;> simp [stageOutcome, StageFailure.evidenceClass, classify]
+
+theorem the_backend_keeps_every_other_attribution (parked : Bool) (kind : OutcomeKind)
+    (stated : Option ProviderReason) (triggersRead : Bool) (failures : List FireFailure)
+    (other : kind ≠ .provider ∧ kind ≠ .unknown) :
+    stageOutcome parked (some kind) stated triggersRead failures = some ⟨kind, none⟩ := by
+  cases parked <;> cases kind <;> simp_all [stageOutcome]
+
+theorem an_accepted_request_records_no_failure (parked : Bool)
+    (stated : Option ProviderReason) : stageOutcome parked none stated true [] = none := by
+  simp [stageOutcome, fireFailureKind]
+
+theorem a_failed_fire_fails_an_accepted_request (parked : Bool)
+    (stated : Option ProviderReason) (failures : List FireFailure) (kind : OutcomeKind)
+    (failed : fireFailureKind failures = some kind) :
+    stageOutcome parked none stated true failures = some ⟨kind, none⟩ := by
+  simp [stageOutcome, failed]
+
+/-- One observation of a seed stage after its document was written.
+`expectFire` is the case's premise: the subject was asked to build an
+automation the seed fires (`true`), or one that must skip it (`false`).
+`observable` holds while the trial runtime runs and every read succeeds.
+`fired` holds once a request names the seed as its `caused_by_source_doc_id`.
+`failures` are the failed fires recorded for the seed since the stage began.
+`quiet` holds once every request of the home has been terminal, and no request
+was added, for the settle period. `windowEnded` holds once the stage's deadline,
+or the default fire window, has passed since the seed was written. -/
+structure SeedObservation where
+  expectFire : Bool
+  observable : Bool
+  fired : Bool
+  failures : List FireFailure
+  quiet : Bool
+  windowEnded : Bool
+  deriving DecidableEq, Repr
+
+inductive SeedAction where
+  | wait | observe | pass | fail
+  deriving DecidableEq, Repr
+
+/-- `kind` is present exactly when `action` is `fail`. -/
+structure SeedStep where
+  action : SeedAction
+  kind : Option OutcomeKind
+  deriving DecidableEq, Repr
+
+def SeedStep.failed (kind : OutcomeKind) : SeedStep := ⟨.fail, some kind⟩
+def SeedStep.just (action : SeedAction) : SeedStep := ⟨action, none⟩
+
+/-- A seed nothing fired for, in a runtime that kept running and could be
+read, is the subject's: either it built no automation the seed reaches, or the
+automation it built skipped the seed. A seed that must be skipped passes only
+once the home is quiet; a window that ends first leaves it undecided. -/
+def seedStep (o : SeedObservation) : SeedStep :=
+  if !o.observable then .failed .infrastructure
+  else if o.fired then
+    if o.expectFire then .just .observe else .failed .modelAcceptance
+  else match fireFailureKind o.failures with
+    | some kind => .failed kind
+    | none =>
+      if o.expectFire then
+        if o.windowEnded then .failed .modelAcceptance else .just .wait
+      else if o.quiet then .just .pass
+      else if o.windowEnded then .failed .inconclusive
+      else .just .wait
+
+theorem seed_step_fails_with_a_kind (o : SeedObservation) :
+    (seedStep o).action = .fail ↔ (seedStep o).kind.isSome := by
+  unfold seedStep fireFailureKind
+  repeat' split
+  all_goals simp_all [SeedStep.failed, SeedStep.just]
+
+theorem an_unfired_seed_is_the_subjects_failure (o : SeedObservation)
+    (expected : o.expectFire = true) (observable : o.observable = true)
+    (unfired : o.fired = false) (clean : o.failures = []) (ended : o.windowEnded = true) :
+    seedStep o = .failed .modelAcceptance ∧ classify .modelAcceptance none = .fail := by
+  simp [seedStep, fireFailureKind, expected, observable, unfired, clean, ended, classify]
+
+theorem an_unobservable_seed_is_not_evidence (o : SeedObservation)
+    (lost : o.observable = false) :
+    seedStep o = .failed .infrastructure ∧ classify .infrastructure none = .notEvidence := by
+  simp [seedStep, lost, classify]
+
+theorem fire_failure_kind_none_is_empty (failures : List FireFailure)
+    (clean : fireFailureKind failures = none) : failures = [] := by
+  unfold fireFailureKind at clean
+  split at clean
+  · simp at clean
+  · split at clean
+    · simp_all
+    · simp at clean
+
+theorem a_skipped_seed_passes_only_unfired_and_quiet (o : SeedObservation)
+    (passed : (seedStep o).action = .pass) :
+    o.expectFire = false ∧ o.observable = true ∧ o.fired = false ∧ o.failures = [] ∧
+      o.quiet = true := by
+  unfold seedStep at passed
+  split at passed
+  · simp [SeedStep.failed] at passed
+  · split at passed
+    · split at passed <;> simp [SeedStep.failed, SeedStep.just] at passed
+    · split at passed
+      · simp [SeedStep.failed] at passed
+      · rename_i clean
+        have empty := fire_failure_kind_none_is_empty _ clean
+        split at passed
+        · split at passed <;> simp [SeedStep.failed, SeedStep.just] at passed
+        · split at passed
+          · simp_all
+          · split at passed <;> simp [SeedStep.failed, SeedStep.just] at passed
+
+theorem a_seed_that_must_be_skipped_fails_when_it_fires (o : SeedObservation)
+    (skipped : o.expectFire = false) (observable : o.observable = true)
+    (fired : o.fired = true) :
+    seedStep o = .failed .modelAcceptance := by
+  simp [seedStep, skipped, observable, fired]
+
+theorem a_failed_fire_is_never_a_pass (failures : List FireFailure) (kind : OutcomeKind)
+    (failed : fireFailureKind failures = some kind) : classify kind none ≠ .pass := by
+  unfold fireFailureKind at failed
+  repeat' split at failed
+  all_goals simp_all [classify]
+  all_goals (subst failed; simp [classify])
+
+theorem a_runtime_lost_fire_beside_a_configured_failure_is_the_subjects
+    (rest : List FireFailure) :
+    fireFailureKind (.unacknowledged :: .error :: rest) = some .runtime := by
+  simp [fireFailureKind]
+
+/-- A request in the trial home, as a stage's `runs` capture reads it:
+`trigger` is its `caused_by_trigger_id`, `source` its `caused_by_source_doc_id`,
+`watched` the `source_collection` of the `TriggerFire` that wrote it, and
+`priorToStage` whether it existed before the capturing stage began. -/
+structure FiredRun where
+  trigger : Option String
+  watched : Option String
+  source : Option String
+  priorToStage : Bool
+  deriving DecidableEq, Repr
+
+/-- A `runs` capture's selectors; each one given narrows the runs. -/
+structure RunSelector where
+  trigger : Option String
+  collection : Option String
+  ofSeed : Bool
+  deriving DecidableEq, Repr
+
+/-- A stage's `runs` capture addresses the trigger-fired requests that came
+into being while the stage ran, whoever started them: a chain's later link, a
+grouped run, a run routed into a continuing session. `ofSeed` keeps the runs
+the stage's own seed document caused. -/
+def runAddressed (selector : RunSelector) (seed : Option String) (run : FiredRun) : Bool :=
+  run.trigger.isSome && !run.priorToStage &&
+    selector.trigger.all (fun trigger => run.trigger == some trigger) &&
+    selector.collection.all (fun collection => run.watched == some collection) &&
+    (!selector.ofSeed || (seed.isSome && run.source == seed))
+
+theorem an_addressed_run_was_fired_during_the_stage (selector : RunSelector)
+    (seed : Option String) (run : FiredRun) (addressed : runAddressed selector seed run = true) :
+    run.trigger.isSome ∧ run.priorToStage = false := by
+  simp only [runAddressed, Bool.and_eq_true, Bool.not_eq_true'] at addressed
+  exact ⟨addressed.1.1.1.1, addressed.1.1.1.2⟩
+
+theorem runs_of_no_seed_are_none (selector : RunSelector) (run : FiredRun)
+    (ofSeed : selector.ofSeed = true) : runAddressed selector none run = false := by
+  simp [runAddressed, ofSeed]
+/-- The failures that decide whether an attempt is evidence: a stage skipped because an
+earlier one failed says nothing of its own. -/
+def decidingFailures (stages : List (Option StageFailure)) : List StageFailure :=
+  stages.filterMap fun stage => stage.filter (·.kind != .skippedPrerequisite)
+
+/-- An attempt is run again only when no stage of it was accepted or failed on its own,
+or when every stage that failed on its own did so for the provider being unavailable or
+the harness failing. The report already leaves such an attempt out of the score, so
+nothing counted is replaced. One stage failing for any other reason (the subject's, the
+grader's, an unattributed one) keeps the attempt. -/
+def attemptRetryable (stages : List (Option StageFailure)) : Bool :=
+  (stages.all (·.isSome) || !(decidingFailures stages).isEmpty) &&
+    (decidingFailures stages).all (·.evidenceClass == .notEvidence)
+
+theorem a_retried_attempt_holds_no_other_failure (stages : List (Option StageFailure))
+    (failure : StageFailure) (retryable : attemptRetryable stages = true)
+    (recorded : some failure ∈ stages) (ran : failure.kind ≠ .skippedPrerequisite) :
+    failure.evidenceClass = .notEvidence := by
+  simp only [attemptRetryable, Bool.and_eq_true, List.all_eq_true] at retryable
+  have deciding : failure ∈ decidingFailures stages :=
+    List.mem_filterMap.mpr ⟨some failure, recorded, by simp [Option.filter, ran]⟩
+  simpa using retryable.2 failure deciding
+
+theorem a_subject_failure_is_never_retried (stages : List (Option StageFailure))
+    (failure : StageFailure) (recorded : some failure ∈ stages)
+    (ran : failure.kind ≠ .skippedPrerequisite)
+    (subject : subjectCausable failure.kind failure.providerReason = true) :
+    attemptRetryable stages = false := by
+  cases retryable : attemptRetryable stages with
+  | false => rfl
+  | true =>
+    have excluded := a_retried_attempt_holds_no_other_failure stages failure retryable recorded ran
+    exact (subject_causable_is_never_excluded failure.kind failure.providerReason subject
+      excluded).elim
+
+theorem a_passing_attempt_is_never_retried (stages : List (Option StageFailure))
+    (ran : stages ≠ []) (passed : ∀ stage ∈ stages, stage = none) :
+    attemptRetryable stages = false := by
+  have none : decidingFailures stages = [] := by
+    simp only [decidingFailures, List.filterMap_eq_nil_iff]
+    intro stage member
+    simp [passed stage member]
+  cases stages with
+  | nil => contradiction
+  | cons stage rest =>
+    have head : stage = Option.none := passed stage (List.mem_cons_self _ _)
+    subst head
+    simp [attemptRetryable, none]
+
+structure SlotAttempts where
+  /-- Whether the completed attempt with the highest number is retryable; absent when no
+  attempt completed. -/
+  latestRetryable : Option Bool
+  retryable : Nat
+  abandoned : Nat
+  deriving DecidableEq, Repr
+
+/-- A slot is attempted again while its latest completed attempt is not evidence, at
+most `maxInfraRetries` times after the first, and while fewer than `maxAbandoned` of its
+attempts were left without a completion. -/
+def slotOwesAttempt (maxInfraRetries maxAbandoned : Nat) (slot : SlotAttempts) : Bool :=
+  slot.latestRetryable != some false && decide (slot.retryable ≤ maxInfraRetries) &&
+    decide (slot.abandoned < maxAbandoned)
+
+theorem a_graded_slot_is_never_attempted_again (maxInfraRetries maxAbandoned : Nat)
+    (slot : SlotAttempts) (graded : slot.latestRetryable = some false) :
+    slotOwesAttempt maxInfraRetries maxAbandoned slot = false := by
+  simp [slotOwesAttempt, graded]
+
+theorem retries_are_bounded (maxInfraRetries maxAbandoned : Nat) (slot : SlotAttempts)
+    (owed : slotOwesAttempt maxInfraRetries maxAbandoned slot = true) :
+    slot.retryable ≤ maxInfraRetries ∧ slot.abandoned < maxAbandoned := by
+  simp only [slotOwesAttempt, Bool.and_eq_true, decide_eq_true_eq] at owed
+  exact ⟨owed.1.2, owed.2⟩
+
+inductive OutageStep where
+  | admit | wait | stop
+  deriving DecidableEq, Repr
+
+namespace OutageStep
+def toDefraDB : OutageStep → String
+  | .admit => "admit"
+  | .wait => "wait"
+  | .stop => "stop"
+end OutageStep
+
+/-- Before a trial is admitted after an attempt that was not evidence, the runner asks
+whether the provider answers. It admits the trial once it does, waits while the outage
+is younger than the limit, and stops the run at the limit. -/
+def outageStep (providerAnswers : Bool) (waitedSecs limitSecs : Nat) : OutageStep :=
+  if providerAnswers then .admit
+  else if waitedSecs < limitSecs then .wait
+  else .stop
+
+theorem an_answering_provider_admits (waitedSecs limitSecs : Nat) :
+    outageStep true waitedSecs limitSecs = .admit := by
+  simp [outageStep]
+
+theorem an_outage_wait_is_bounded (waitedSecs limitSecs : Nat)
+    (waiting : outageStep false waitedSecs limitSecs = .wait) : waitedSecs < limitSecs := by
+  simp only [outageStep] at waiting
+  split at waiting <;> simp_all
+
+/-- The breaker counts attempts in a row that were not evidence although the provider
+answered afterwards: a harness that cannot run trials. An attempt lost to a provider
+that does not answer is the outage's, which `outageStep` bounds, and leaves the count. -/
+def breakerCount (consecutive : Nat) (retryable providerAnswers : Bool) : Nat :=
+  if !retryable then 0
+  else if providerAnswers then consecutive + 1
+  else consecutive
+
+theorem evidence_resets_the_breaker (consecutive : Nat) (providerAnswers : Bool) :
+    breakerCount consecutive false providerAnswers = 0 := by
+  simp [breakerCount]
+
+theorem an_outage_never_advances_the_breaker (consecutive : Nat) (retryable : Bool) :
+    breakerCount consecutive retryable false ≤ consecutive := by
+  cases retryable <;> simp [breakerCount]
+
+/-- A seed nothing fired for, in a trial runtime that kept running and could be read,
+fails its stage as the subject's whatever else the stage observed, so its attempt is
+graded and never run again. -/
+theorem an_unfired_seed_is_never_retried (o : SeedObservation) (endedByBackend : Bool)
+    (stated : Option ProviderReason) (triggersRead : Bool) (failures : List FireFailure)
+    (stages : List (Option StageFailure))
+    (expected : o.expectFire = true) (observable : o.observable = true)
+    (unfired : o.fired = false) (clean : o.failures = []) (ended : o.windowEnded = true)
+    (recorded :
+      stageOutcome endedByBackend (seedStep o).kind stated triggersRead failures ∈ stages) :
+    attemptRetryable stages = false := by
+  have step := (an_unfired_seed_is_the_subjects_failure o expected observable unfired clean
+    ended).1
+  have outcome : stageOutcome endedByBackend (seedStep o).kind stated triggersRead failures =
+      some ⟨.modelAcceptance, none⟩ := by
+    rw [step]
+    cases endedByBackend <;> simp [SeedStep.failed, stageOutcome]
+  rw [outcome] at recorded
+  exact a_subject_failure_is_never_retried stages ⟨.modelAcceptance, none⟩ recorded
+    (by decide) (by decide)
+
+/-- A stage the backend ended, beside stages that passed or were skipped because of it,
+leaves its attempt out of the score, so the attempt is run again. -/
+theorem a_provider_ended_attempt_is_retried (kind : OutcomeKind)
+    (stated : Option ProviderReason) (triggersRead : Bool) (failures : List FireFailure)
+    (rest : List (Option StageFailure)) (provider : kind = .provider ∨ kind = .unknown)
+    (others : ∀ stage ∈ rest, stage.all (·.kind == .skippedPrerequisite)) :
+    attemptRetryable (stageOutcome true (some kind) stated triggersRead failures :: rest) =
+      true := by
+  have ended : stageOutcome true (some kind) stated triggersRead failures =
+      some ⟨.provider, some .unavailable⟩ := by
+    rcases provider with rfl | rfl <;> simp [stageOutcome]
+  have quiet : decidingFailures rest = [] := by
+    simp only [decidingFailures, List.filterMap_eq_nil_iff]
+    intro stage member
+    cases stage with
+    | none => rfl
+    | some failure =>
+      have skipped : failure.kind = .skippedPrerequisite := by
+        simpa using others (some failure) member
+      simp [Option.filter, skipped]
+  have deciding : decidingFailures (some ⟨.provider, some .unavailable⟩ :: rest) =
+      [⟨.provider, some .unavailable⟩] := by
+    unfold decidingFailures at quiet ⊢
+    rw [List.filterMap_cons, quiet]
+    rfl
+  rw [ended]
+  simp [attemptRetryable, deciding, StageFailure.evidenceClass, classify]
+
 end Eval

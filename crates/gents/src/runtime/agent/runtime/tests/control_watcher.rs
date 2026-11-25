@@ -175,16 +175,16 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "http://127.0.0.1:8111/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let user_access = fixture.user_access.clone();
-    let agent_access = fixture.agent_config_access().await;
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let user_access = fixture.home.user_access.clone();
+    let agent_access = agent_config_access(&fixture).await;
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -346,15 +346,15 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         "http://127.0.0.1:8111/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let agent_access = fixture.agent_config_access().await;
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let agent_access = agent_config_access(&fixture).await;
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -451,14 +451,14 @@ async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
         "http://127.0.0.1:8114/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let agent_access = fixture.agent_config_access().await;
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let agent_access = agent_config_access(&fixture).await;
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -562,14 +562,14 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -692,15 +692,15 @@ async fn control_watcher_recovers_after_resolve_error() {
         "http://127.0.0.1:8112/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let user_access = fixture.user_access.clone();
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let user_access = fixture.home.user_access.clone();
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -773,15 +773,15 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let user_access = fixture.user_access.clone();
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let user_access = fixture.home.user_access.clone();
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -883,15 +883,15 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         "http://127.0.0.1:8114/v1",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let user_access = fixture.user_access.clone();
-    assert_ne!(fixture.user.did(), identity.did());
+    let node = fixture.home.store.node.clone();
+    let identity = fixture.home.store.node_identity.clone();
+    let user_access = fixture.home.user_access.clone();
+    assert_ne!(fixture.home.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
+            backend_admission: Some(fixture.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -959,8 +959,8 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let subscription = subscribe_control_changes(&node).unwrap();
     let spare = gents_store::identity::provision_agent_identity_authorized(
         &node,
-        fixture.db.node_identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
+        fixture.home.store.node_identity.as_ref(),
+        &fixture.home.user.did().parse().unwrap(),
     )
     .await
     .unwrap();

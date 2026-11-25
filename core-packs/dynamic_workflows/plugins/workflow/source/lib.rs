@@ -13,8 +13,9 @@ use sha2::{Digest, Sha256};
 
 /// The agent budget a run pins when its call names none: a stop-loss for an unsized script.
 const DEFAULT_AGENT_BUDGET: u64 = 8;
-/// The handle a run pins when its call names none.
-const DEFAULT_HANDLE: &str = "workflow";
+/// The answer to a run whose call names no `args.handle`.
+pub const NO_HANDLE_MESSAGE: &str =
+    "args.handle names the run: call workflow again with args.handle set to the job's name";
 /// The answer to a call without a script, byte for byte what the stub said.
 pub const NO_SCRIPT_MESSAGE: &str = "pass the workflow as `script`: a JavaScript module whose `module.exports` is the step function `(input) => output`; see the tool description";
 
@@ -63,7 +64,8 @@ pub fn step_with(input: Value, eval: impl Fn(&Value) -> Result<Value, HostError>
 
 /// A run's pin names the script that ran: `script_id` and `source_digest` of
 /// any pin the output carries are set to the script's digest, and a step-0
-/// `effects` output that spawns but carries no `pin` gets this plugin's.
+/// `effects` output that spawns but carries no `pin` gets this plugin's, named
+/// by the call's `args.handle`; without one the step fails.
 fn with_pin(mut output: Value, input: &Value, script: &str) -> Value {
     let digest = format!("{:x}", Sha256::digest(script.as_bytes()));
     for pointer in ["/pin", "/effects/pin"] {
@@ -87,11 +89,13 @@ fn with_pin(mut output: Value, input: &Value, script: &str) -> Value {
         .get("agent_budget")
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_AGENT_BUDGET);
-    let handle = input
+    let Some(handle) = input
         .pointer("/args/handle")
         .and_then(Value::as_str)
-        .unwrap_or(DEFAULT_HANDLE)
-        .to_owned();
+        .filter(|handle| !handle.is_empty())
+    else {
+        return fail("workflow_invalid_input", NO_HANDLE_MESSAGE);
+    };
     if let Some(effects) = output.get_mut("effects").and_then(Value::as_object_mut) {
         effects.insert(
             "pin".into(),
@@ -126,11 +130,11 @@ mod tests {
     }
 
     #[test]
-    fn a_call_that_names_no_budget_or_handle_pins_the_small_defaults() {
+    fn a_call_that_names_no_budget_pins_the_default_and_one_without_a_handle_fails() {
         let spawn = json!({"effects": {"spawn": [{"slot": "s", "attempt": 0, "target": "t", "prompt": "p", "title": "t"}]}});
         let Stepped::Output(out) = step_with(
-            json!({"pin": null, "script": SPAWNING, "args": {}}),
-            answers(spawn),
+            json!({"pin": null, "script": SPAWNING, "args": {"handle": "rome"}}),
+            answers(spawn.clone()),
         ) else {
             panic!("a spawning step 0 is output")
         };
@@ -138,7 +142,14 @@ mod tests {
         assert_eq!(pin["script_id"], sha(SPAWNING));
         assert_eq!(pin["source_digest"], format!("sha256:{}", sha(SPAWNING)));
         assert_eq!(pin["agent_budget"], 8);
-        assert_eq!(pin["handle"], "workflow");
+        assert_eq!(pin["handle"], "rome");
+        let Stepped::Output(out) = step_with(
+            json!({"pin": null, "script": SPAWNING, "args": {}}),
+            answers(spawn),
+        ) else {
+            panic!("a spawning step 0 is output")
+        };
+        assert_eq!(out, fail("workflow_invalid_input", NO_HANDLE_MESSAGE));
     }
 
     #[test]
