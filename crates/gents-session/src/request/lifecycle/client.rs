@@ -718,7 +718,7 @@ pub async fn admit_client_request_in_txn(
 /// [`bound_published_session`] read before `txn`: only the selected Agent is
 /// read here. The session document is not, so the working Agent's
 /// observation refreshes never abort the commit; what that read would decide
-/// cannot change (Lean `TransactionFence.a_bound_session_stays_bound`).
+/// cannot change (Lean `TransactionFence.DeclaredFence.immutableBinding`).
 async fn admit_published_client_request_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     create: &AgentRequestCreate,
@@ -755,10 +755,12 @@ pub async fn submit_client_request(
             "request publication admission is not allowed"
         )));
     }
-    // A published session's binding is read once, before the transaction:
-    // its requester and Agent are immutable, its relationships only go from
-    // pending to published, and it is never deleted, so what the read decides
-    // holds at commit (Lean `TransactionFence.a_bound_session_stays_bound`).
+    // A published session's binding is read once, before the transaction,
+    // and its fence is the immutable binding (Lean
+    // `TransactionFence.DeclaredFence.immutableBinding`): its requester and
+    // Agent are immutable, its relationships only go from pending to
+    // published, and it is never deleted, so what the read decides holds at
+    // commit.
     // The transaction then never reads the session document, whose
     // observation the working Agent refreshes as it publishes each message.
     let bound = bound_published_session(access, create)

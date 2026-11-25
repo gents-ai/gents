@@ -96,7 +96,7 @@ pub(crate) const FENCES: &[(&str, usize, &str)] = &[
     (
         "crates/gents-session/src/request/lifecycle/client.rs::stage_client_request_checked_in_txn",
         1,
-        "CommonWrite(AgentRequest): a signed create's document id is derived from its signed content, so two submissions of one signed request create one document",
+        "CommonWrite(AgentRequest): a signed create's document id is derived from its signed content, so two submissions of one signed request create one document; a send into a published session reads the session's binding before the transaction, under ImmutableBinding(AgentSession(requester_did, agent_did, relationships_pending)) (`bound_published_session`)",
     ),
     (
         "crates/gents-session/src/request/lifecycle/queue/atomic_inputs.rs::background_completion_transaction_attempt",
