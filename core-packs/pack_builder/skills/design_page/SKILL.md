@@ -31,4 +31,4 @@ Theme tokens only, so light and dark both work: `var(--text)`, `var(--text-muted
 
 Run `config` with argv `["page","lint","<id>"]`, then `["ux","preview","page/<id>"]`. The preview renders light and dark with this node's data and reports problems. Fix every one and run it again. Check real data, no rows and a long list. If you can't render it, say so; don't describe how it looks.
 
-Next: load `build-automation` before any schedule or trigger, otherwise `control-access`.
+Next: load `automate` before any schedule or trigger, otherwise `control-access`.

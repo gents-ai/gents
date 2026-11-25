@@ -452,6 +452,13 @@ impl ToolSurface {
         let mut tools = self
             .host_tools
             .build_native_tools_with_writethrough(writethrough, &runtime.native_executables)?;
+        let skill_pointers = std::sync::Arc::new(crate::skill_pointer::SkillPointers::new(
+            if self.enable_skills {
+                runtime.skills.clone()
+            } else {
+                Vec::new()
+            },
+        ));
         if self.self_config.enabled {
             let agent = runtime
                 .agent_identity
@@ -525,7 +532,8 @@ impl ToolSurface {
                 )?
                 .with_tools_category(
                     self.self_config.enabled && self.self_config.categories.contains("tools"),
-                ),
+                )
+                .with_skill_pointers(skill_pointers.clone()),
             ));
         }
         if self.enable_p2p_tool {
@@ -645,6 +653,7 @@ impl ToolSurface {
                     runtime_identity: runtime.identity.clone(),
                     plugins: runtime.plugins.clone(),
                     tasks: runtime.tasks.clone(),
+                    skill_pointers,
                 },
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),

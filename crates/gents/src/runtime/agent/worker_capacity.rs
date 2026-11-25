@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -39,8 +39,8 @@ struct RegisteredTicket {
 
 pub(crate) struct WorkerCapacity {
     active: Arc<Semaphore>,
-    #[cfg(test)]
     active_limit: usize,
+    acquired: Notify,
     registered: Mutex<RapidHashMap<WorkerTicket, RegisteredTicket>>,
 }
 
@@ -80,10 +80,24 @@ impl WorkerCapacity {
     pub(crate) fn new(active_limit: usize) -> Arc<Self> {
         Arc::new(Self {
             active: Arc::new(Semaphore::new(active_limit)),
-            #[cfg(test)]
             active_limit,
+            acquired: Notify::new(),
             registered: Mutex::new(RapidHashMap::new()),
         })
+    }
+
+    /// Resolves once `workers` requests hold a permit: that many workers are
+    /// all running requests.
+    pub(crate) async fn saturated(&self, workers: usize) {
+        loop {
+            let acquired = self.acquired.notified();
+            tokio::pin!(acquired);
+            acquired.as_mut().enable();
+            if self.active_limit - self.active.available_permits() >= workers {
+                return;
+            }
+            acquired.await;
+        }
     }
 
     #[cfg(test)]
@@ -109,6 +123,7 @@ impl WorkerCapacity {
         if cancellation.is_cancelled() {
             return Err(CapacityError::Cancelled);
         }
+        self.acquired.notify_waiters();
         Ok(UnboundActiveGuard {
             capacity: self.clone(),
             permit: Some(permit),

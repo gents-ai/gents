@@ -69,6 +69,14 @@ pub struct MessageEvidence {
     pub created_at: Option<String>,
 }
 
+/// The last assistant message with text: what a request answered.
+pub(crate) fn final_assistant_message(messages: &[MessageEvidence]) -> Option<&MessageEvidence> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "assistant" && !message.content.trim().is_empty())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseEvidence {
     pub status: Option<String>,

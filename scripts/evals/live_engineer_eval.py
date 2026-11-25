@@ -26,11 +26,11 @@ every suite outside the ladder's default list and fails only when a trial
 does not finish with a grade.
 
 Scope `ladder` runs it with command execution off (no bash, no background
-processes; embedded trials) through scripts/evals/run-ladder.sh: L1-L5 and the
-factory-setup capstone, train and validation cases, over SHARDS launchers
-until the deadline. Case verdicts are a trend; the job fails when a rung L1-L5
-passes fewer than RUNG_FLOOR of its graded trials or grades fewer than
-MIN_FINISHED before the deadline. factory-setup is reported, not gated.
+processes; embedded trials) through scripts/evals/run-ladder.sh: the ladder's
+rungs, train and validation cases, over SHARDS launchers until the deadline.
+Case verdicts are a trend; the job fails when a rung passes fewer than
+RUNG_FLOOR of its graded trials or grades fewer than MIN_FINISHED before the
+deadline.
 
 Every scope runs TRIALS trials per case, CONCURRENCY at once: the ceiling is
 the isolated environments the host holds, not the model server. A case passes
@@ -65,7 +65,6 @@ SHIPPED_SUBJECT = "gents init --engineer"
 CELL = "engineer"
 TARGET = "live-ci"
 PROVIDER_KIND = "Vllm"
-GATED_RUNGS = ["l1-inference", "l2-agent", "l3-datastore", "l4-automation", "l5-agents-tools"]
 MIN_FINISHED = 6
 MAX_TRANSCRIPTS = 15
 SKIPPED = 3
@@ -527,14 +526,11 @@ def run_full_ladder(args, out, home, work, result):
             finished += entry["finished"]
             if entry["verdict"] == "fail":
                 failing_slots += [(rung, *item) for item in entry["_slots"] if item[2]["class"] == "fail"]
-        gated = rung in GATED_RUNGS
-        if not gated:
-            verdict = "reported"
-        elif finished < MIN_FINISHED:
+        if finished < MIN_FINISHED:
             verdict = "incomplete"
         else:
             verdict = "pass" if passes >= args.rung_floor * finished else "fail"
-        rung_rows.append({"rung": rung, "gated": gated, "cases": len(members),
+        rung_rows.append({"rung": rung, "cases": len(members),
                           "cases_meeting_threshold": sum(e["verdict"] == "pass" for e in members.values()),
                           "passes": passes, "finished": finished, "verdict": verdict})
     for entry in cases.values():
@@ -552,7 +548,7 @@ def run_full_ladder(args, out, home, work, result):
                            + [f"{r['rung']} finished only {r['finished']} trials before the deadline" for r in short])
         outcome = "fail"
     else:
-        reason = "every rung L1-L5 met its floor"
+        reason = "every rung met its floor"
         outcome = "pass"
     result.update(outcome=outcome, reason=reason, rungs=rung_rows, cases=cases,
                   tokens={"input": tokens.get("input_tokens"), "output": tokens.get("output_tokens")},
@@ -596,7 +592,7 @@ def base_result(args, model):
     elif args.scope == "suites":
         result.update(subject=SHIPPED_SUBJECT)
     else:
-        result.update(rung_floor=args.rung_floor, min_finished=MIN_FINISHED, gated_rungs=GATED_RUNGS,
+        result.update(rung_floor=args.rung_floor, min_finished=MIN_FINISHED,
                       shards=args.shards)
     return result
 
@@ -622,10 +618,10 @@ def render_summary(result):
                   f"{result['trials']} trial(s) each",
                   "- Rule: fails when a trial does not finish with a grade; pass rates are recorded"]
     else:
-        lines += ["- Scope: L1-L5 and factory-setup, train and validation cases",
+        lines += ["- Scope: the ladder's rungs, train and validation cases",
                   f"- Case threshold (recorded, a trend): at least {result['min_pass_rate']:.0%} of {result['trials']} trials pass the grader",
-                  f"- Job rule: fails when a rung L1-L5 passes fewer than {result['rung_floor']:.0%} of its finished trials "
-                  f"or finishes fewer than {result['min_finished']}; factory-setup is reported, not gated"]
+                  f"- Job rule: fails when a rung passes fewer than {result['rung_floor']:.0%} of its finished trials "
+                  f"or finishes fewer than {result['min_finished']}"]
     lines += [f"- Model: `{result.get('model') or 'unset'}`, Gents `{result.get('gents_revision')}`, "
               f"sampling: {result.get('sampling')}",
               f"- Command execution: {result.get('command_execution')}, isolation: {result.get('isolation')}"

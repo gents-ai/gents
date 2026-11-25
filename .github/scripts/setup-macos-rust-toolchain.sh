@@ -20,8 +20,7 @@ set -euo pipefail
 # resolve the same readable SDK.
 #
 # A job that needs a different toolchain (xcodebuild) must select it in that
-# step. The iOS simulator check keeps this selection: the developer directory
-# chosen here is the Xcode one, and that Xcode ships the iOS SDKs.
+# step.
 
 developer_dir="${GENTS_DEVELOPER_DIR:-}"
 if [[ -z "${developer_dir}" ]]; then

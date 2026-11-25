@@ -68,7 +68,12 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
                 active_event_triggers: RapidHashMap::new(),
                 unavailable_event_triggers: RapidHashSet::new(),
                 active_tasks: RapidHashMap::new(),
-                dispatchers: RapidHashMap::from_iter([("general".into(), dispatcher)]),
+                dispatchers: RapidHashMap::from_iter([(
+                    "general".into(),
+                    gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(
+                        dispatcher,
+                    ),
+                )]),
                 agent_executor_capacities: RapidHashMap::new(),
                 agent_executor_queue_capacities: RapidHashMap::new(),
             })

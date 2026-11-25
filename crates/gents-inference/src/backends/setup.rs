@@ -645,7 +645,7 @@ pub fn recommendation_for_model(
         reasoning_effort,
         max_concurrent: RecommendedIntegerControl {
             recommended: if provider == InferenceProviderId::Local {
-                1
+                gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT
             } else {
                 8
             },
@@ -724,23 +724,25 @@ mod tests {
     }
 
     #[test]
-    fn hosted_providers_default_to_eight_concurrent_requests() {
-        for provider in inference_setup_catalog().providers {
-            let recommendation = recommendation_for_model(
+    fn recommended_concurrency_follows_the_lean_model() {
+        use gents_lean_vocab::families::inference_setup_recommended_max_concurrent as family;
+        let catalog = inference_setup_catalog();
+        family::replay(|input: &family::Input<InferenceProviderId>| {
+            let provider = catalog
+                .providers
+                .iter()
+                .find(|provider| provider.id == input.provider)
+                .expect("the catalog offers every modelled provider");
+            let recommended = recommendation_for_model(
                 provider.id,
                 provider.default_auth_method,
                 &advertised("test-model"),
             )
-            .unwrap();
-            assert_eq!(
-                recommendation.max_concurrent.recommended,
-                if provider.id == InferenceProviderId::Local {
-                    1
-                } else {
-                    8
-                }
-            );
-        }
+            .unwrap()
+            .max_concurrent
+            .recommended;
+            u64::try_from(recommended).expect("a recommendation is positive")
+        });
     }
 
     #[test]

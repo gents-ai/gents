@@ -20,19 +20,31 @@ pub(super) fn remaining_of(deadline: Option<Duration>, started: Instant) -> Opti
     deadline.map(|deadline| deadline.saturating_sub(started.elapsed()))
 }
 
-/// Absent `budget` waits until the home is quiet.
-pub(super) async fn settle_home(access: &ConfigAccess, budget: Option<Duration>) -> Result<bool> {
-    let started = Instant::now();
-    let mut quiet: Option<(Instant, usize)> = None;
-    loop {
-        let (total, running) = request_counts(access).await?;
-        let now = Instant::now();
-        quiet = match quiet {
+/// Whether the trial home has been quiet for [`SETTLE_QUIET`]: every request
+/// terminal, and no request added, across consecutive observations.
+#[derive(Debug, Default)]
+pub(super) struct Quiet {
+    since: Option<(Instant, usize)>,
+}
+
+impl Quiet {
+    pub(super) fn observe(&mut self, (total, running): (usize, usize), now: Instant) -> bool {
+        self.since = match self.since {
             Some((since, seen)) if running == 0 && seen == total => Some((since, seen)),
             _ if running == 0 => Some((now, total)),
             _ => None,
         };
-        if quiet.is_some_and(|(since, _)| now.duration_since(since) >= SETTLE_QUIET) {
+        self.since
+            .is_some_and(|(since, _)| now.duration_since(since) >= SETTLE_QUIET)
+    }
+}
+
+/// Absent `budget` waits until the home is quiet.
+pub(super) async fn settle_home(access: &ConfigAccess, budget: Option<Duration>) -> Result<bool> {
+    let started = Instant::now();
+    let mut quiet = Quiet::default();
+    loop {
+        if quiet.observe(request_counts(access).await?, Instant::now()) {
             return Ok(true);
         }
         let left = remaining_of(budget, started);
@@ -42,7 +54,10 @@ pub(super) async fn settle_home(access: &ConfigAccess, budget: Option<Duration>)
         tokio::time::sleep(left.map_or(SETTLE_POLL, |left| SETTLE_POLL.min(left))).await;
     }
 }
-async fn request_counts(access: &ConfigAccess) -> Result<(usize, usize)> {
+
+/// Every request of the home the evaluator reads, and how many of them are
+/// not terminal.
+pub(super) async fn request_counts(access: &ConfigAccess) -> Result<(usize, usize)> {
     let response = access
         .execute("{ AgentRequest { lifecycle_state } }")
         .await?;

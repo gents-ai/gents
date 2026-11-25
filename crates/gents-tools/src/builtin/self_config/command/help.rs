@@ -26,12 +26,7 @@ impl ConfigCommandTool {
         let Some(requested) = resource else {
             return Ok(self.help_index(&enabled));
         };
-        let resource = match requested {
-            "agent" => "agent",
-            "event_source" => "event-source",
-            "ux" => "page",
-            other => other,
-        };
+        let resource = help_resource(requested);
         let granted = resource == "get"
             || enabled
                 .iter()
@@ -125,6 +120,23 @@ impl ConfigCommandTool {
         Ok(out)
     }
 
+    /// A resource's help page ends with the line naming the caller's skill
+    /// that covers it; the index names none.
+    pub(super) fn pointed_help(&self, resource: Option<&str>, words: Vec<&str>) -> Result<String> {
+        let page = self.help(resource, words.clone())?;
+        let Some(resource) = resource else {
+            return Ok(page);
+        };
+        let path = [CONFIG_TOOL_NAME, help_resource(resource)]
+            .into_iter()
+            .chain(words)
+            .collect::<Vec<_>>();
+        Ok(match self.skill_pointers.help(&path) {
+            Some(line) => format!("{page}\n{line}"),
+            None => page,
+        })
+    }
+
     fn help_index(&self, enabled: &[&str]) -> String {
         let mut out = String::from(
             "config resources. [\"help\",RESOURCE] explains one; [RESOURCE,VERB,\"--help\"] gives field shapes. Commands go in argv; IDs may follow the verb or use target_id.\n",
@@ -139,6 +151,15 @@ impl ConfigCommandTool {
         }
         out.push_str(HELP_GRAMMAR);
         out
+    }
+}
+
+/// The resource a help call or a command names, by its help page's name.
+pub(super) fn help_resource(word: &str) -> &str {
+    match word {
+        "event_source" => "event-source",
+        "ux" => "page",
+        other => other,
     }
 }
 
@@ -204,7 +225,7 @@ fn command_help(resource: &str, page: &Page, command: &[&str]) -> Option<String>
         let _ = writeln!(out, "options.mailbox policy values: {}", mailbox_values());
         let _ = writeln!(out, "{}", mailbox_identity_choice!());
     }
-    let _ = write!(out, "Page and recipe: [\"help\",\"{resource}\"]");
+    let _ = write!(out, "{}: [\"help\",\"{resource}\"]", page_label(resource));
     Some(out)
 }
 
@@ -224,6 +245,14 @@ fn agent_commands() -> &'static [&'static str] {
         ]
     });
     COMMANDS.as_slice()
+}
+
+fn page_label(resource: &str) -> &'static str {
+    if recipes(resource).is_empty() {
+        "Page"
+    } else {
+        "Page and recipe"
+    }
 }
 
 fn render_call(call: &Value) -> String {
@@ -278,8 +307,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             commands: match resource { "task" => &["task run TASK_ID  options: args (JSON object bound as args.*), session-id, continue-session; fires it once now and returns the queued request. A manual run has no doc.*: to exercise a task whose template reads doc.*, write a document its trigger's source watches"], "trigger" => &["trigger explain ID  options.source-doc (default: last attempted document); read-only trace from source document to request"], _ => &[] }, notes: match resource {
                 "task" => "Create uses options.agent (default: you); agent_did is protected. Updates resolve the saved owner; agent_did cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
                 "trigger" => "Create the source and Task first. The Task determines who handles the event. Updating a Trigger cannot change its Task’s agent; create a separate Trigger for another owner. concurrency controls overlap; session_id_template controls the destination independently. An existing destination session must use the Task’s agent. To continue a known session, set its ID as session_id_template. Omit it for a new session per fire. For one session per key, render the key in session_id_template and set create_session: the first fire creates it. A Trigger disables itself after max_fires_per_hour admitted fires (default 1000) and records why in last_status and last_error. See help automation for the full workflow.",
-                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow. A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
-                _ => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow.",
+                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
+                _ => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. Retries deduplicate by due occurrence.",
             }, next: "get the saved document and verify its references.",
         },
         "batch" => Page { what: "run ordered config calls in one tool call.", commands: &["batch  options.operations: [{argv, target_id?, set?, clear?, options?}, ...]"], notes: "1–64 calls, at most 128 KiB; no nested batches. Each call uses its usual grants and validation and commits separately. Stops at the first failure, returns each attempted result, and leaves earlier changes committed. Fix the failed call and resume there; do not repeat successful creates. Use cleanup for atomic multi-document deletion.", next: "inspect each result; references must exist when its call runs." },
@@ -380,7 +409,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "automation" => Page {
             what: "documents that start work without a user: event-source or schedule, trigger, task (automation grant).",
             commands: &["task|trigger|schedule|event-source [preview] create|update|delete ID", "task|trigger|schedule|event-source list|get ID"],
-            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group (help event-source). Unset fields render empty: test {% if doc.field %}. Keep needed source data apart from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome, readable only by its Agent and outcome_readers. Sources then need a nonempty String handoff_id: declare it in the schema first and set it in writers (schema tool, help datastore). Chain on FireOutcome.source_handoff_id; its handoff_id is its own.\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only. Schedule retries deduplicate by due occurrence.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
+            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group (help event-source). Unset fields render empty: test {% if doc.field %}. Keep needed source data apart from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome, readable only by its Agent and outcome_readers. Sources then need a nonempty String handoff_id: declare it in the schema first and set it in writers (schema tool, help datastore). Chain on FireOutcome.source_handoff_id; its handoff_id is its own.\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
             next: "create one source document, inspect the request with sessions, and query the output through its datastore tool.",
         },
         "cleanup" => Page {
@@ -683,7 +712,7 @@ fn crud_help(
             writeln!(out, "{rule}")?;
         }
     }
-    write!(out, "Page and recipe: [\"help\",\"{resource}\"]")?;
+    write!(out, "{}: [\"help\",\"{resource}\"]", page_label(resource))?;
     Ok(out)
 }
 
@@ -813,7 +842,7 @@ fn verb_rule(resource: &str) -> &'static str {
         "tools" => "A group in set replaces that whole group: read it with tools get and send back what you keep. Tools apply from your next turn.",
         "task" => "options.agent chooses the owner on create (default: you); it cannot change later.",
         "trigger" => "Create the source and the Task first; the Task decides who handles the event.",
-        "event-source" | "schedule" => "A source alone starts no work: add a Task, then a Trigger linking them.",
+        "event-source" | "schedule" => "A source alone starts no work: add a Task and a Trigger linking them.",
         "agent" => "set.system_prompt replaces the selected Context's prompt; set.enabled false disables the agent. The default agent stays enabled and an agent cannot disable itself.",
         "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from your next turn.",
         _ => "",

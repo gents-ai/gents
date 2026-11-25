@@ -7,7 +7,9 @@ use axum::response::{IntoResponse, Response};
 use futures::StreamExt as _;
 use serde_json::{json, Value};
 
-use super::{json_response, Release, StreamChunk, StreamScript, StreamingState, DEFAULT_REPLY};
+use super::{
+    json_response, InFlight, Release, StreamChunk, StreamScript, StreamingState, DEFAULT_REPLY,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum Wire {
@@ -54,7 +56,12 @@ pub(super) fn reasoning_tool_turn(body: &Value, ordinal: usize) -> Option<Stream
     ))
 }
 
-pub(super) fn stream(script: StreamScript, state: Arc<StreamingState>, reply: Reply) -> Response {
+pub(super) fn stream(
+    script: StreamScript,
+    state: Arc<StreamingState>,
+    reply: Reply,
+    in_flight: InFlight,
+) -> Response {
     if !reply.streaming {
         return json_response(StatusCode::OK, complete_reply(&state, reply, &script));
     }
@@ -72,6 +79,7 @@ pub(super) fn stream(script: StreamScript, state: Arc<StreamingState>, reply: Re
         script: StreamScript,
         state: Arc<StreamingState>,
         sequence: usize,
+        in_flight: InFlight,
     }
 
     let init = Cursor {
@@ -79,6 +87,7 @@ pub(super) fn stream(script: StreamScript, state: Arc<StreamingState>, reply: Re
         script,
         state,
         sequence: 0,
+        in_flight,
     };
     let stream = futures::stream::unfold(init, move |mut cursor| async move {
         loop {
@@ -102,6 +111,7 @@ pub(super) fn stream(script: StreamScript, state: Arc<StreamingState>, reply: Re
                             }
                             Some(Release::Fail { message, .. }) => {
                                 cursor.phase = Phase::Finished;
+                                cursor.in_flight.end();
                                 error_events(reply.wire, &message)
                             }
                             Some(Release::Close) | None => return None,
@@ -122,6 +132,7 @@ pub(super) fn stream(script: StreamScript, state: Arc<StreamingState>, reply: Re
                 }
                 Phase::Finish => {
                     cursor.phase = Phase::Finished;
+                    cursor.in_flight.end();
                     finish_events(&cursor.state, reply, &cursor.script)
                 }
                 Phase::Finished => return None,
