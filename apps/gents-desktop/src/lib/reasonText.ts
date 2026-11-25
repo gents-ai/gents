@@ -52,6 +52,10 @@ export function reasonText(raw: string | null | undefined): string {
 }
 
 const FAILURES: [RegExp, string][] = [
+  [
+    /^no_progress$/,
+    "Its last turns repeated the same actions without progress. Say what to try next, or press Resume.",
+  ],
   [/overloaded|\b529\b/i, "The provider was overloaded. Try again in a moment."],
   [/usage limit/i, "The account reached its usage limit."],
   [

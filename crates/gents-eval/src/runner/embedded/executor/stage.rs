@@ -7,11 +7,14 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use super::capture::runs::prior_runs;
 use super::capture::{capture_documents_with_access, run_captures_with_access, CaptureBindings};
 use super::evidence::usage_of;
-use super::outcome::{stage_failure_kind, stage_outcome, stated_provider_reason, trigger_failure};
+use super::outcome::{
+    failed_fires, stage_failure_kind, stage_outcome, stated_provider_reason, FireFailure,
+};
 use super::settle::{extend_with_later_requests, remaining_of, settle_home};
-use super::submit::{seed_and_await_fire, submit_stage, StageSubmission};
+use super::submit::{seed_and_await_fire, submit_stage, Seeded, StageSubmission};
 use super::{Reconciled, POLL};
 use crate::runner::embedded::home::{EmbeddedHome, RunningRuntime};
 use crate::runner::embedded::observe::{
@@ -55,6 +58,7 @@ pub(super) async fn run_stages(spec: &TrialSpec, env: &StageEnv<'_>) -> Vec<Stag
                         request_id: None,
                         terminal_state: None,
                         failure_kind: Some(OutcomeKind::Grader),
+                        failure_detail: None,
                         provider_reason: None,
                         messages: Vec::new(),
                         tool_calls: Vec::new(),
@@ -107,6 +111,7 @@ async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> S
         observed.parked_for_backend || stated.is_some_and(|stated| stated.ended_by_backend),
         observed.failure_kind,
         stated.map(|stated| stated.reason),
+        observed.failed_fires.as_deref(),
     );
     StageEvidence {
         subject_agent: Some(super::super::super::subject_binding::SubjectAgent {
@@ -118,6 +123,7 @@ async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> S
         terminal_state: observed.terminal_state,
         provider_reason: outcome.and_then(|(_, reason)| reason),
         failure_kind: outcome.map(|(kind, _)| kind),
+        failure_detail: observed.failure_detail,
         messages: observed.evidence.messages,
         tool_calls: observed.evidence.tool_calls,
         inference_calls: observed.evidence.inference_calls,
@@ -136,6 +142,8 @@ async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> S
                         }),
                         evaluator_did: Some(&spec.evaluator_did),
                         request_id: observed.request_id.as_deref(),
+                        seed_doc_id: observed.seed_doc_id.as_deref(),
+                        prior_runs: observed.prior_runs.as_ref(),
                     },
                 )
                 .await
@@ -151,10 +159,16 @@ async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> S
 
 struct ObservedStage {
     request_id: Option<String>,
+    seed_doc_id: Option<String>,
+    prior_runs: Option<std::collections::BTreeSet<String>>,
     prods: u32,
     terminal_state: Option<RequestLifecycleState>,
     failure_kind: Option<OutcomeKind>,
+    failure_detail: Option<String>,
     parked_for_backend: bool,
+    /// The fires recorded as failed since the stage began; `None` when the
+    /// trigger record could not be read.
+    failed_fires: Option<Vec<FireFailure>>,
     evidence: RequestEvidence,
 }
 
@@ -162,10 +176,14 @@ impl ObservedStage {
     fn unsubmitted() -> Self {
         Self {
             request_id: None,
+            seed_doc_id: None,
+            prior_runs: None,
             prods: 0,
             terminal_state: None,
             failure_kind: Some(OutcomeKind::Infrastructure),
+            failure_detail: None,
             parked_for_backend: false,
+            failed_fires: Some(Vec::new()),
             evidence: RequestEvidence::default(),
         }
     }
@@ -244,6 +262,26 @@ async fn submit_and_observe(
     let stage_started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let deadline = stage.deadline_secs.map(Duration::from_secs);
     let started = Instant::now();
+    let prior_runs = if stage
+        .captures
+        .iter()
+        .any(|capture| matches!(capture, Capture::Runs { .. }))
+    {
+        match prior_runs(&access).await {
+            Ok(prior) => Some(prior),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    trial_id = %spec.trial_id,
+                    stage_id = %stage.stage_id,
+                    "eval stage could not read the runs fired before it"
+                );
+                return ObservedStage::unsubmitted();
+            }
+        }
+    } else {
+        None
+    };
     let submit = async {
         match &stage.seed {
             Some(seed) => {
@@ -252,11 +290,12 @@ async fn submit_and_observe(
                     home,
                     &spec.evaluator_did,
                     ready,
+                    runtime,
                     stage,
                     Some(&schema),
-                    &spec.trial_id,
                 )
                 .await
+                .map(|Seeded { doc_id, submission }| (Some(doc_id), submission))
             }
             None => {
                 let request_id = uuid::Uuid::new_v4().to_string();
@@ -269,9 +308,14 @@ async fn submit_and_observe(
                     &request_id,
                 )
                 .await
-                .map(|()| StageSubmission::Submitted {
-                    request_id,
-                    remaining: deadline,
+                .map(|()| {
+                    (
+                        None,
+                        StageSubmission::Submitted {
+                            request_id,
+                            remaining: deadline,
+                        },
+                    )
                 })
             }
         }
@@ -283,14 +327,39 @@ async fn submit_and_observe(
         () = cancel.cancelled() => return ObservedStage::cancelled(),
         submitted = submit => submitted,
     };
-    let (request_id, remaining) = match submitted {
-        Ok(StageSubmission::Submitted {
-            request_id,
-            remaining,
-        }) => (request_id, remaining),
-        Ok(StageSubmission::Failed(kind)) => {
+    let (seed_doc_id, request_id, remaining) = match submitted {
+        Ok((
+            seed_doc_id,
+            StageSubmission::Submitted {
+                request_id,
+                remaining,
+            },
+        )) => (seed_doc_id, request_id, remaining),
+        Ok((seed_doc_id, StageSubmission::Skipped)) => {
+            let (failed_fires, failure_detail) =
+                fires_since(spec, home, locator, stage, &stage_started, None).await;
             return ObservedStage {
+                seed_doc_id,
+                prior_runs,
+                failure_kind: None,
+                failure_detail,
+                failed_fires,
+                ..ObservedStage::unsubmitted()
+            };
+        }
+        Ok((seed_doc_id, StageSubmission::Failed { kind, detail })) => {
+            tracing::warn!(
+                trial_id = %spec.trial_id,
+                stage_id = %stage.stage_id,
+                outcome = kind.as_str(),
+                detail = detail.as_deref().unwrap_or_default(),
+                "eval seed stage failed"
+            );
+            return ObservedStage {
+                seed_doc_id,
+                prior_runs,
                 failure_kind: Some(kind),
+                failure_detail: detail,
                 ..ObservedStage::unsubmitted()
             };
         }
@@ -301,7 +370,10 @@ async fn submit_and_observe(
                 stage_id = %stage.stage_id,
                 "eval stage could not be submitted"
             );
-            return ObservedStage::unsubmitted();
+            return ObservedStage {
+                failure_detail: Some(format!("the stage could not be submitted: {error:#}")),
+                ..ObservedStage::unsubmitted()
+            };
         }
     };
 
@@ -382,41 +454,79 @@ async fn submit_and_observe(
             );
             return ObservedStage {
                 request_id: Some(request_id),
+                seed_doc_id,
+                prior_runs,
                 prods,
                 terminal_state: observed
                     .as_ref()
                     .and_then(|observed| observed.terminal_state),
                 failure_kind: Some(OutcomeKind::Infrastructure),
+                failure_detail: None,
                 parked_for_backend: false,
+                failed_fires: Some(Vec::new()),
                 evidence,
             };
         }
     }
 
+    let (failed_fires, failure_detail) =
+        fires_since(spec, home, locator, stage, &stage_started, failure_kind).await;
     ObservedStage {
         request_id: Some(request_id),
+        seed_doc_id,
+        prior_runs,
         prods,
         terminal_state: observed
             .as_ref()
             .and_then(|observed| observed.terminal_state),
-        failure_kind: match failure_kind {
-            None => {
-                trigger_failure(
-                    &home.node,
-                    &locator.trial_node_did,
-                    &stage_started,
-                    None,
-                    &spec.trial_id,
-                    &stage.stage_id,
-                )
-                .await
-            }
-            failed => failed,
-        },
+        failure_kind,
+        failure_detail,
         parked_for_backend: observed
             .as_ref()
             .is_some_and(|observed| observed.parked_for_backend),
+        failed_fires,
         evidence,
+    }
+}
+
+/// The trigger fires that failed since the stage began, with each Trigger's
+/// recorded error, read only when the stage's own request did not fail; `None`
+/// when the trigger record could not be read.
+async fn fires_since(
+    spec: &TrialSpec,
+    home: &EmbeddedHome,
+    locator: &TrialLocator,
+    stage: &StageSpec,
+    stage_started: &str,
+    request: Option<OutcomeKind>,
+) -> (Option<Vec<FireFailure>>, Option<String>) {
+    if request.is_some() {
+        return (Some(Vec::new()), None);
+    }
+    match failed_fires(&home.node, &locator.trial_node_did, stage_started, None).await {
+        Ok(fires) => {
+            if let Some(detail) = &fires.detail {
+                tracing::warn!(
+                    trial_id = %spec.trial_id,
+                    stage_id = %stage.stage_id,
+                    detail = %detail,
+                    "an eval trial trigger recorded a failed fire"
+                );
+            }
+            (Some(fires.failures), fires.detail)
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                trial_id = %spec.trial_id,
+                stage_id = %stage.stage_id,
+                "eval trial trigger status could not be read"
+            );
+            (
+                None,
+                Some(format!("the trigger status could not be read: {error:#}")),
+            )
+        }
     }
 }
 

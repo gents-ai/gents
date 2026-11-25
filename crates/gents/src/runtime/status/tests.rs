@@ -417,7 +417,10 @@ fn status_test_snapshot(
         active_event_triggers: RapidHashMap::new(),
         unavailable_event_triggers: RapidHashSet::new(),
         active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+        dispatchers: RapidHashMap::from_iter([(
+            "general".to_string(),
+            gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(dispatcher),
+        )]),
         agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
         agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
     }
@@ -536,7 +539,10 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
             active_event_triggers: RapidHashMap::new(),
             unavailable_event_triggers: RapidHashSet::new(),
             active_tasks: RapidHashMap::new(),
-            dispatchers: RapidHashMap::from_iter([("general".to_string(), tx)]),
+            dispatchers: RapidHashMap::from_iter([(
+                "general".to_string(),
+                gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(tx),
+            )]),
             agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 3)]),
             agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 4)]),
         })
@@ -582,7 +588,10 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
         active_event_triggers: RapidHashMap::new(),
         unavailable_event_triggers: RapidHashSet::new(),
         active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::from_iter([("general".to_string(), tx.clone())]),
+        dispatchers: RapidHashMap::from_iter([(
+            "general".to_string(),
+            gents_automation::triggers::runtime_snapshot::AgentDispatcher::single(tx.clone()),
+        )]),
         agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
         agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 2)]),
     };

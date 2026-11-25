@@ -18,7 +18,7 @@ DefraDB is what you build apps from. Reach for it before writing code. Most apps
 | A record of every change | `@branchable` | `collections branchable` |
 | Who can see what | `@policy` | `collections policy` |
 
-A page's `useQuery` refreshes when documents change, so live pages need no extra work. A new document can start work through an event source (`build-automation`). Selected collections can sync to another node.
+A page's `useQuery` refreshes when documents change, so live pages need no extra work. A new document can start work through an event source (`automate`). Selected collections can sync to another node.
 
 ## Shape each collection
 

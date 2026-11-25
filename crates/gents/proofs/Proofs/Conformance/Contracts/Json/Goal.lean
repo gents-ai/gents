@@ -1,4 +1,7 @@
 import Proofs.Automation.Goals
+import Proofs.Automation.GoalProgress
+import Proofs.Automation.GoalStopPolicy
+import Proofs.Store.Identity.Household
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
@@ -365,6 +368,159 @@ def goalBudget : Family GoalBudgetInput GoalBudgetOutput where
     , { name := "unset_budget_unspent", tokenBudget := none, tokensUsed := 0 }
     , { name := "unset_budget_heavily_spent", tokenBudget := none, tokensUsed := 5000000 } ]
   model := fun i => { reached := Goals.budgetReached i.tokenBudget i.tokensUsed }
+
+structure CallPrintWire where
+  tool : String
+  arguments : String
+  result : String
+  deriving Lean.ToJson
+
+def CallPrintWire.model (call : CallPrintWire) : GoalProgress.CallPrint :=
+  ⟨call.tool, call.arguments, call.result⟩
+
+structure GoalProgressInput where
+  name : String
+  streak : Nat
+  previous : List CallPrintWire
+  calls : List CallPrintWire
+  goal_state_changed : Bool
+  live_deadline : Option Nat
+  now : Nat
+  deriving Lean.ToJson
+
+/-- `GoalProgress.step`: the no-progress record a finished goal turn leaves
+and whether the Goal pauses. -/
+structure GoalProgressOutput where
+  streak : Nat
+  pause : Bool
+  deriving Lean.ToJson
+
+private def call (tool arguments result : String) : CallPrintWire := ⟨tool, arguments, result⟩
+
+@[conformance_family]
+def goalProgress : Family GoalProgressInput GoalProgressOutput where
+  inputs :=
+    let read := call "read_file" "{\"path\":\"a\"}" "d1"
+    let reread := call "read_file" "{\"path\":\"a\"}" "d2"
+    let other := call "read_file" "{\"path\":\"b\"}" "d1"
+    [ { name := "first_turn_with_a_call", streak := 0, previous := [], calls := [read],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "repeated_call", streak := 0, previous := [read], calls := [read],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "third_repeat_pauses", streak := 2, previous := [read], calls := [read],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "no_calls", streak := 1, previous := [read], calls := [],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "same_call_new_result", streak := 2, previous := [read], calls := [reread],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "new_arguments", streak := 2, previous := [read], calls := [read, other],
+        goal_state_changed := false, live_deadline := none, now := 10 }
+    , { name := "goal_state_changed", streak := 2, previous := [read], calls := [read],
+        goal_state_changed := true, live_deadline := none, now := 10 }
+    , { name := "verified_wait", streak := 2, previous := [read], calls := [read],
+        goal_state_changed := false, live_deadline := some 20, now := 10 }
+    , { name := "expired_wait", streak := 2, previous := [read], calls := [read],
+        goal_state_changed := false, live_deadline := some 10, now := 10 } ]
+  model := fun i =>
+    let (record, pause) := GoalProgress.step ⟨i.streak, i.previous.map (·.model)⟩
+      ⟨i.calls.map (·.model), i.goal_state_changed⟩ i.live_deadline i.now
+    { streak := record.streak, pause }
+
+def onBlockedName : GoalStopPolicy.OnBlocked → String
+  | .stopFirst => "stop_first"
+  | .confirmOnce => "confirm_once"
+  | .keepTrying => "keep_trying"
+
+def outcomeName : GoalStopPolicy.Outcome → String
+  | .pause => "pause"
+  | .confirm => "confirm"
+  | .continue => "continue"
+
+structure GoalOnBlockedInput where
+  name : String
+  on_blocked : String
+  confirming : Bool
+  deriving Lean.ToJson
+
+/-- `GoalStopPolicy.onBlockedReport` over every setting. -/
+structure GoalOnBlockedOutput where
+  outcome : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalOnBlocked : Family GoalOnBlockedInput GoalOnBlockedOutput where
+  inputs := ([GoalStopPolicy.OnBlocked.stopFirst, .confirmOnce, .keepTrying].flatMap fun policy =>
+    [false, true].map fun confirming =>
+      { name := onBlockedName policy ++ (if confirming then "_confirming" else "_first"),
+        on_blocked := onBlockedName policy, confirming })
+  model := fun i =>
+    let policy := if i.on_blocked = "confirm_once" then GoalStopPolicy.OnBlocked.confirmOnce
+      else if i.on_blocked = "keep_trying" then .keepTrying else .stopFirst
+    { outcome := outcomeName (GoalStopPolicy.onBlockedReport policy i.confirming) }
+
+structure GoalEffectiveBudgetInput where
+  name : String
+  goal_budget : Option Nat
+  token_ceiling : Option Nat
+  turn_ceiling : Option Nat
+  lifted : Bool
+  tokens_used : Nat
+  turns : Nat
+  deriving Lean.ToJson
+
+/-- `GoalStopPolicy.effectiveBudget` and `limitReached`: the budget the
+harness enforces and whether the Goal reached its limit. -/
+structure GoalEffectiveBudgetOutput where
+  budget : Option Nat
+  limit_reached : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalEffectiveBudget : Family GoalEffectiveBudgetInput GoalEffectiveBudgetOutput where
+  inputs :=
+    let case (name : String) (goal ceiling turnCeiling : Option Nat) (lifted : Bool)
+        (used turns : Nat) : GoalEffectiveBudgetInput :=
+      { name, goal_budget := goal, token_ceiling := ceiling, turn_ceiling := turnCeiling,
+        lifted, tokens_used := used, turns }
+    [ case "neither" none none none false 5000000 40
+    , case "goal_only_under" (some 500) none none false 499 1
+    , case "goal_only_reached" (some 500) none none false 500 1
+    , case "ceiling_only_reached" none (some 800) none false 800 1
+    , case "goal_below_ceiling" (some 500) (some 800) none false 600 1
+    , case "goal_above_ceiling" (some 900) (some 800) none false 850 1
+    , case "lifted_ceiling" (some 900) (some 800) none true 850 1
+    , case "lifted_without_goal_budget" none (some 800) none true 5000 1
+    , case "turn_ceiling_under" none none (some 5) false 0 4
+    , case "turn_ceiling_reached" none none (some 5) false 0 5
+    , case "lifted_turn_ceiling" none none (some 5) true 0 9 ]
+  model := fun i =>
+    let policy : GoalStopPolicy.Policy := ⟨.stopFirst, i.token_ceiling, i.turn_ceiling, i.lifted⟩
+    { budget := GoalStopPolicy.effectiveBudget policy i.goal_budget
+    , limit_reached := GoalStopPolicy.limitReached policy i.goal_budget i.tokens_used i.turns }
+
+structure GoalPolicyAccessInput where
+  name : String
+  actor : String
+  operation : String
+  deriving Lean.ToJson
+
+/-- `Identity.Household` over `goal_policies`, in order: who may create and
+then update a Goal's stop policy, the working Agent or its user. -/
+@[conformance_family]
+def goalPolicyAccess : Family GoalPolicyAccessInput Bool where
+  inputs :=
+    [ { name := "working_agent_creates", actor := "working_agent", operation := "create" }
+    , { name := "user_creates", actor := "user", operation := "create" }
+    , { name := "working_agent_updates", actor := "working_agent", operation := "update" }
+    , { name := "user_updates", actor := "user", operation := "update" } ]
+  model := fun i =>
+    let actor := if i.actor = "user" then "user" else "worker"
+    if i.operation = "create" then
+      Identity.Household.gatedCreateAllowed Identity.Household.policy
+        Identity.Household.goalPolicyFixture actor "goal_policies" "agents" "worker"
+    else
+      Identity.Household.allowed 5 Identity.Household.goalPolicyFixture actor "goal_policies"
+        "policy" "update"
 
 structure GoalCreateCase where
   name : String

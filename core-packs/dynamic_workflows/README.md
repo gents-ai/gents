@@ -62,8 +62,9 @@ gents config pack test ./packs/gents/dynamic_workflows
 ```
 
 The fixtures run the artifact through the host import: a call without
-`script` fails with the tool description, step 0 pins the script's digest with
-the default budget and handle, a later step passes the script's output
-through, and a pin the script returns is re-stamped with the digest. The
-plugin's own unit tests (`cargo test` in `plugins/workflow`) cover the trap
-path for a script that does not load or throws.
+`script` fails with the tool description, a run without `args.handle` fails,
+step 0 pins the script's digest with the default budget and the call's
+handle, a later step passes the script's output through, and a pin the script
+returns is re-stamped with the digest. The plugin's own unit tests (`cargo
+test` in `plugins/workflow`) cover the trap path for a script that does not
+load or throws.

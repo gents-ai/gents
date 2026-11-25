@@ -86,7 +86,9 @@ pub(crate) async fn run_linter_diagnostics(
         return Some(super::super::ARTIFACT_SCOPE_DENIAL.into());
     }
     let workspace = super::super::overlay_workspace_or(call, &config.workspace);
-    let constraints = super::super::overlay_lsp_constraints(call, &config.constraints);
+    let Some(constraints) = super::super::overlay_lsp_constraints(call, &config.constraints) else {
+        return Some(super::super::READ_ONLY_DENIAL.into());
+    };
     let linter = servers.iter().find(|server| {
         server.is_linter
             && marker_matches(&workspace, &server.root_markers)

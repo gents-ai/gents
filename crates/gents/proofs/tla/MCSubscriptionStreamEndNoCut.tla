@@ -1,0 +1,4 @@
+---- MODULE MCSubscriptionStreamEndNoCut ----
+EXTENDS SubscriptionStreamEnd
+
+====

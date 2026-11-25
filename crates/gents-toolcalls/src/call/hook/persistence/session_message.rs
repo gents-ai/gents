@@ -18,13 +18,15 @@ fn unavailable_agent_payload(tool_name: &str) -> String {
 
 /// An agent_message refusal for a session_id this caller cannot reach. Models
 /// often pass an agent name or Agent DID there; the refusal then names the exact
-/// agent_new call that starts that agent with the same body.
+/// agent_new call that starts that agent with the same body. A triggered run
+/// is told the route its Trigger offers instead.
 fn unreachable_session_payload(
     tool_name: &str,
     requested: &str,
     args: &AgentMessageArgs,
     tools: &gents_documents::AgentToolConfig,
     starter: bool,
+    triggered: bool,
 ) -> String {
     if starter {
         return json_string(json!({
@@ -77,6 +79,13 @@ fn unreachable_session_payload(
             ),
             json!({"tool": AGENT_SESSION_LIST_TOOL_NAME, "arguments": {}}),
         ),
+    };
+    let message = if triggered && named.is_none() {
+        format!(
+            "{message} To post into it, set the Trigger's session_id_template to '{requested}'."
+        )
+    } else {
+        message
     };
     json_string(json!({
         "ok": false,
@@ -351,7 +360,8 @@ impl DefraSessionHook {
                         &target_session,
                         &parsed,
                         tools,
-                        starter
+                        starter,
+                        caller.has_automated_trigger_lineage()
                     )
                 );
             };
@@ -961,6 +971,14 @@ mod unreachable_session_tests {
     }
 
     fn refusal(session_id: &str, tools: &gents_documents::AgentToolConfig) -> serde_json::Value {
+        refusal_as(session_id, tools, false)
+    }
+
+    fn refusal_as(
+        session_id: &str,
+        tools: &gents_documents::AgentToolConfig,
+        triggered: bool,
+    ) -> serde_json::Value {
         let args: AgentMessageArgs = serde_json::from_value(
             json!({"session_id": session_id, "message": "Reply with exactly TRAIN-111"}),
         )
@@ -971,6 +989,7 @@ mod unreachable_session_tests {
             &args,
             tools,
             false,
+            triggered,
         ))
         .unwrap()
     }
@@ -1012,5 +1031,9 @@ mod unreachable_session_tests {
             .as_str()
             .unwrap()
             .contains("agent_new is unavailable"));
+        assert!(refusal_as("user-chat", &tools(&[]), true)["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("set the Trigger's session_id_template to 'user-chat'."));
     }
 }

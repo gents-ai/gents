@@ -59,14 +59,22 @@ fn bind(
             .context("unterminated policy directive")?
             + start
             + 1;
-        let previous = &source[start..end];
+        let written = &source[start..end];
+        // A gated resource names the parent its create is checked against.
+        let parent_field = written
+            .find(", parentField: \"")
+            .map(|at| &written[at..written.len() - 1]);
+        let previous = parent_field.map_or(written.to_owned(), |field| written.replace(field, ""));
         ensure!(
             previous == directive
                 || old_ids.iter().any(
                     |id| previous == format!("@policy(id: \"{id}\", resource: \"{resource}\")")
                 ),
-            "unexpected existing policy: {previous}"
+            "unexpected existing policy: {written}"
         );
+        let directive = parent_field.map_or(directive.clone(), |field| {
+            format!("{}{field})", &directive[..directive.len() - 1])
+        });
         result.replace_range(start..end, &directive);
     } else {
         result.insert_str(pos, &format!(" {directive}"));

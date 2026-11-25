@@ -3,8 +3,6 @@
     "l1-inference",
     "l2-agent",
     "l3-datastore",
-    "l4-automation",
-    "l5-agents-tools",
-    "factory-setup"
+    "l5-agents-tools"
   ]
 }

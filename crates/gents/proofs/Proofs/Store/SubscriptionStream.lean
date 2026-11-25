@@ -7,8 +7,11 @@ namespace SubscriptionStream
 data that arrives after the renewal deadline, `silence` is nothing at all, and
 `malformed` is a response that closes on bytes that are not UTF-8.
 External premise: the pinned DefraDB sends `next` envelopes and `complete`
-over SSE and authenticates a subscription only at its handshake, so a stream
-kept past its bearer's life keeps delivering. -/
+over SSE and authenticates a subscription only at its handshake. The Gents
+runtime bounds that: it ends the stream at its bearer's expiry, and at the
+first event its subscriber may no longer read (it lost node read
+permission), and names why in a last `gents-end` event: `expiredEnd` ("expired,
+renew") or `revokedEnd` ("revoked, stop"). -/
 inductive Arrival where
   | data
   | denial
@@ -21,6 +24,8 @@ inductive Arrival where
   | malformed
   | lateData
   | silence
+  | expiredEnd
+  | revokedEnd
   deriving DecidableEq, Repr
 
 inductive Received where
@@ -69,6 +74,8 @@ def step (minted taken : Bool) (arrival : Arrival) : Step :=
   | .malformed => closes .streamError none
   | .lateData => if due then closes .nothing (some .renewalDue) else stays false .data
   | .silence => if due then closes .nothing (some .renewalDue) else stays false .pending
+  | .expiredEnd => closes .nothing (some .renewalDue)
+  | .revokedEnd => closes .denied none
 
 /-- The period a caller may keep the stream after taking its renewal: offered
 once, and only for a minted bearer. -/
@@ -103,9 +110,11 @@ theorem completion_is_not_a_renewal (minted taken : Bool) :
 theorem a_due_renewal_does_not_wait_for_data :
     step true false .silence = closes .nothing (some .renewalDue) := rfl
 
+/-- The client's own deadline renews only a minted stream whose cadence it
+kept; otherwise only the runtime's expiry cut renews a stream. -/
 theorem renewal_ends_only_an_untaken_minted_stream (minted taken : Bool) (arrival : Arrival)
     (h : (step minted taken arrival).ended = some .renewalDue) :
-    minted = true ∧ taken = false := by
+    (minted = true ∧ taken = false) ∨ arrival = .expiredEnd := by
   cases minted <;> cases taken <;> cases arrival <;> simp_all [step, closes, stays]
 
 theorem a_taken_renewal_delivers_past_the_deadline (minted : Bool) :
@@ -114,5 +123,95 @@ theorem a_taken_renewal_delivers_past_the_deadline (minted : Bool) :
 
 theorem renewal_is_offered_once (minted : Bool) : takeRenewal minted true = none := by
   cases minted <;> rfl
+
+/-- The runtime ending a stream at its bearer's expiry is a renewal, whoever
+holds the renewal cadence: never a failure, never a refusal. -/
+theorem an_expired_end_is_a_renewal (minted taken : Bool) :
+    step minted taken .expiredEnd = closes .nothing (some .renewalDue) := rfl
+
+/-- The runtime ending a stream because its subscriber lost node read
+permission is a refusal, like a denied handshake, and is not renewed. -/
+theorem a_revoked_end_is_a_refusal (minted taken : Bool) :
+    step minted taken .revokedEnd = step minted taken .denial := rfl
+
+/-! When a renewal falls against its bearer's expiry. A subscription's
+handshake mints its own bearer, so the bearer's age at the handshake is zero;
+the arm completes `armSeconds` later, and the observer renews
+`renewalPeriodSeconds` after that (`ObservationOrdering.renewalStartMs`). The
+runtime ends the stream `bearerLifetimeSeconds` after the mint. -/
+
+/-- How long before the runtime's expiry cut the observer renews a stream
+whose bearer was `ageSeconds` old at the handshake and whose arm took
+`armSeconds` (zero when the cut comes first). -/
+def renewalMargin (ageSeconds armSeconds : Nat) : Nat :=
+  bearerLifetimeSeconds - (ageSeconds + armSeconds + renewalPeriodSeconds)
+
+/-- With a bearer minted for the handshake, the observer renews before the cut
+whenever its arm took less than half the bearer's life. -/
+theorem a_fresh_bearer_renews_before_the_cut (armSeconds : Nat)
+    (quick : armSeconds < renewalPeriodSeconds) :
+    0 < renewalMargin 0 armSeconds := by
+  simp only [renewalMargin, renewalPeriodSeconds, bearerLifetimeSeconds] at *; omega
+
+/-- A bearer reused from an earlier request shortens that margin by its age:
+reused up to half its life, it can leave no margin at all, which is why a
+subscription mints its own. -/
+theorem a_reused_bearer_can_leave_no_margin :
+    renewalMargin (renewalPeriodSeconds - 1) 1 = 0 := by decide
+
+/-- When the arm took half the bearer's life or more, the cut comes first, and
+it ends the stream as a renewal (`an_expired_end_is_a_renewal`). -/
+theorem a_slow_arm_meets_the_cut (armSeconds : Nat)
+    (slow : renewalPeriodSeconds ≤ armSeconds) :
+    renewalMargin 0 armSeconds = 0 := by
+  simp only [renewalMargin, renewalPeriodSeconds, bearerLifetimeSeconds] at *; omega
+
+/-- What the runtime's check of a subscriber's node read permission (the
+node's ACP) said before a subscription's next event. `unchecked`: the stream
+has no check, because the node had not started when it opened or its bearer
+names no issuer; the handshake's check and the expiry cut bound it. -/
+inductive PermissionRead where
+  | unchecked | held | lost | unreadable
+  deriving DecidableEq, Repr
+
+/-- What the runtime does with a subscription's next event. -/
+inductive EventGate where
+  | deliver | endExpired | endRevoked
+  deriving DecidableEq, Repr
+
+/-- Decision: the runtime delivers a subscription's next event only when the
+check says its subscriber still holds node read permission, or when the
+stream has no check. A lost permission ends the stream as revoked. A check
+that cannot be read delivers nothing either: the stream ends as expired, so
+the subscriber renews and the renewal's handshake, which the node's ACP
+authorizes, decides. -/
+def gate (read : PermissionRead) : EventGate :=
+  match read with
+  | .unchecked | .held => .deliver
+  | .lost => .endRevoked
+  | .unreadable => .endExpired
+
+/-- The last event a gate that ends the stream sends, as its subscriber
+receives it. -/
+def EventGate.arrival : EventGate → Option Arrival
+  | .deliver => none
+  | .endExpired => some .expiredEnd
+  | .endRevoked => some .revokedEnd
+
+/-- An event reaches a checked subscriber only on a read that says it holds
+node read permission. -/
+theorem only_a_held_permission_delivers (read : PermissionRead)
+    (h : gate read = .deliver) : read = .unchecked ∨ read = .held := by
+  cases read <;> simp_all [gate]
+
+/-- A check that cannot be read ends the stream as a renewal for its
+subscriber, never as a refusal: the renewal's handshake decides. -/
+theorem an_unreadable_check_renews (minted taken : Bool) :
+    (gate .unreadable).arrival.map (step minted taken) =
+      some (closes .nothing (some .renewalDue)) := rfl
+
+/-- A lost permission ends the stream as a refusal for its subscriber. -/
+theorem a_lost_permission_is_refused (minted taken : Bool) :
+    (gate .lost).arrival.map (step minted taken) = some (step minted taken .denial) := rfl
 
 end SubscriptionStream

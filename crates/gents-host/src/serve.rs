@@ -545,7 +545,7 @@ async fn serve_foreground(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
+    gents_store::local::backend_protection::refuse_other_lineage(&data_dir)?;
     let watched_home = home_dir.clone();
     let (_held_home, home_identity) =
         tokio::task::spawn_blocking(move || home_watch::hold_home(&watched_home)).await??;
@@ -784,6 +784,7 @@ async fn serve_foreground(
         .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
     let streams =
         crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let stream_members = streams.clone();
     let edge = gents_store::local::document_acp::HttpEdge::new(
         init_config
             .as_ref()
@@ -811,6 +812,25 @@ async fn serve_foreground(
     )
     .await
     .context("building protected embedded DefraDB node")?;
+    {
+        /* subscription events reach only subscribers that still hold node
+        read permission */
+        let checked = node.clone();
+        stream_members.admit_members_with(Arc::new(move |did: String| {
+            let node = checked.clone();
+            Box::pin(async move {
+                use crate::http::shutdown_streams::PermissionRead;
+                match gents_store::config_client::holds_node_read(&node, &did).await {
+                    Ok(true) => PermissionRead::Held,
+                    Ok(false) => PermissionRead::Lost,
+                    Err(error) => {
+                        tracing::warn!(%error, "a subscriber's node read permission could not be read");
+                        PermissionRead::Unreadable
+                    }
+                }
+            })
+        }));
+    }
     let store_access = match gents_store::config_client::ConfigAccess::claimed_local(
         node.clone(),
         store_lock,

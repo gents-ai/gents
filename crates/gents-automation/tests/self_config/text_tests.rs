@@ -1975,7 +1975,7 @@ async fn ux_preview_reports_text_first_through_the_config_tool() {
 
 #[tokio::test]
 async fn help_pages_stay_within_their_size_ceilings() {
-    let (_fixture, tools) = authenticated_setup(
+    let (_fixture, tools) = skilled_setup(
         "help-sizes",
         &["node", "agent", "tools", "profile", "automation"],
     )

@@ -10,6 +10,12 @@ export type EvalStage = { stage_id: string, prompt: string,
  */
 seed?: EvalFixtureDocument | null,
 /**
+ * For a seed stage: whether the automation under test must fire for the
+ * seed. `false` passes once the trial home is quiet with nothing fired
+ * for it, and fails if anything fires.
+ */
+expect_fire?: boolean | null,
+/**
  * Opt-in wall-clock bound: when it expires the runner interrupts the
  * request and the stage is graded `deadline`. Absent, the stage waits for
  * the request's own terminal state.

@@ -59,6 +59,7 @@ import Proofs.Conformance.InterruptGenerationClaim
 import Proofs.Conformance.Identity.SessionInterruptAccess
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.SkillPointer
 import Proofs.Conformance.PathNamespace
 import Proofs.Conformance.MCPHealthShutdown
 import Proofs.Conformance.DatastoreWrite
@@ -383,6 +384,7 @@ import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.SessionControl
 import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
+import Proofs.Conformance.AgentWorkers
 import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval

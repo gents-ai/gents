@@ -15,7 +15,12 @@ credential fails at the provider.
 
 Unavailability and removal close admission: queued callers fail with
 `BackendGone` and new callers are rejected, while admitted calls keep their
-permits. `held` counts real permits, not persisted InferenceCall rows. -/
+permits. `held` counts real permits, not persisted InferenceCall rows.
+
+Decision: a plugin model call is a caller of the same pool. It records no
+InferenceCall row but holds a permit for as long as it runs and waits in the
+same queue, so the backend's capacity bounds an Agent's and its plugins' calls
+together (TLA+ `AgentWorkers`, `MCAgentWorkersPluginLimiter`). -/
 namespace InferenceCall.Registry
 
 structure Config where

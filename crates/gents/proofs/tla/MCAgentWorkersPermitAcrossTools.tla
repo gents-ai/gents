@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkersPermitAcrossTools ----
+EXTENDS AgentWorkers
+
+====

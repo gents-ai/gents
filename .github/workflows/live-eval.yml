@@ -14,7 +14,7 @@ name: Live Engineer eval
 #   Engineer guests is the practical ceiling of one workstation, and two
 #   trials of the suites' cases fit the deadline beside the runner's other
 #   jobs. Raise trials by dispatch for tighter intervals.
-# - Dispatch, scope `ladder`: L1-L5 and factory-setup on the configuration-only
+# - Dispatch, scope `ladder`: the ladder's rungs on the configuration-only
 #   Engineer, command execution off, embedded trials.
 #
 # Not a pull request gate. When the endpoint is unreachable or not serving the
@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: case (one case on the shipped Engineer), suites (every shipped-Engineer suite) or ladder (L1-L5 and factory-setup)
+        description: case (one case on the shipped Engineer), suites (every shipped-Engineer suite) or ladder (the ladder's rungs)
         required: true
         type: choice
         default: case

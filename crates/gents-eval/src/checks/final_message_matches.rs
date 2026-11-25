@@ -128,11 +128,8 @@ impl Check for FinalMessageMatches {
             return grader("bad_params", "neither any nor all names a pattern");
         }
         let total = all.len().max(1);
-        let Some(message) = stage
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == "assistant" && !message.content.trim().is_empty())
+        let Some(message) =
+            crate::runner::embedded::observe::final_assistant_message(&stage.messages)
         else {
             return graded(0, total, Some("no final assistant message".into()));
         };

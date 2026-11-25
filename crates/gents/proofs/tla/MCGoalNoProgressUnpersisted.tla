@@ -1,0 +1,4 @@
+---- MODULE MCGoalNoProgressUnpersisted ----
+EXTENDS GoalNoProgress
+
+====

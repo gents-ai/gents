@@ -4,4 +4,4 @@ export type SkillDocument = { skill_id: string, node_did: string, name?: string 
 /**
  * Local supporting-file base, not portable identity or an access grant.
  */
-source_directory?: string | null, tool_refs?: Array<string> | null, display_name?: string | null, interface_json?: string | null, enabled?: boolean | null, created_at?: string | null, tags?: Array<string> | null, };
+source_directory?: string | null, tool_refs?: Array<string> | null, covers?: Array<string> | null, display_name?: string | null, interface_json?: string | null, enabled?: boolean | null, created_at?: string | null, tags?: Array<string> | null, };

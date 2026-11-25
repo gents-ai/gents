@@ -123,6 +123,18 @@
             "session_id": {
               "_like": "job-session:%"
             },
+            "caused_by_parent_tool_call_doc_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "finished",
+                  "source_match": {
+                    "field": "lifecycle_state",
+                    "matches": "^completed$"
+                  },
+                  "field": "_docID"
+                }
+              }
+            },
             "lifecycle_state": {
               "_eq": "completed"
             }

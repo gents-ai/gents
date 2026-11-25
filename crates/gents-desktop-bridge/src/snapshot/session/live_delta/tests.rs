@@ -274,11 +274,8 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         .to_string(),
     )
     .unwrap();
-    crate::client_test_support::runtime_metadata(
-        &server,
-        &crate::client_test_support::RuntimeKey::of_principal(core.node_identity()),
-    )
-    .await;
+    let runtime_key = crate::client_test_support::RuntimeKey::of_principal(core.node_identity());
+    crate::client_test_support::runtime_metadata(&server, &runtime_key).await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: node_did.to_string(),
         label: ("Live test").to_string(),
@@ -409,6 +406,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     assert_eq!(missing.outcome, "snapshotRequired");
     server.verify().await;
     server.reset().await;
+    crate::client_test_support::runtime_metadata(&server, &runtime_key).await;
     for (status, expected) in [(404, None), (500, Some("unavailable"))] {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/inference/activity"))
@@ -430,6 +428,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         assert_eq!(activity.as_deref(), expected);
         server.verify().await;
         server.reset().await;
+        crate::client_test_support::runtime_metadata(&server, &runtime_key).await;
     }
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/inference/activity"))
@@ -454,6 +453,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;
+    crate::client_test_support::runtime_metadata(&server, &runtime_key).await;
     held["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
