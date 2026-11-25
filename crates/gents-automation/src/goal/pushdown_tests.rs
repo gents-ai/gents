@@ -185,6 +185,45 @@ fn generated_goal_progress_cases_fence_the_no_progress_pause() {
 }
 
 #[test]
+fn generated_goal_progress_result_field_cases_fence_volatile_clock_fields() {
+    use crate::goal::progress::{is_volatile_result_field, result_digest};
+    use gents_lean_vocab::families::contracts_goal_progress_result_field as family;
+    family::replay(|case| family::GoalProgressResultFieldOutput {
+        volatile: is_volatile_result_field(&case.key),
+    });
+
+    let first_poll = serde_json::json!({
+        "ok": true,
+        "status": "running",
+        "available_bytes": 12,
+        "elapsed_seconds": 4,
+        "read_at": "2026-11-25T10:00:00.000000001Z",
+        "items": [{"id": "job-1", "elapsed_seconds": 4, "status": "running"}]
+    })
+    .to_string();
+    let second_poll = serde_json::json!({
+        "ok": true,
+        "status": "running",
+        "available_bytes": 12,
+        "elapsed_seconds": 19,
+        "read_at": "2026-11-25T10:00:15.123456789Z",
+        "items": [{"id": "job-1", "elapsed_seconds": 19, "status": "running"}]
+    })
+    .to_string();
+    let progressed_poll = serde_json::json!({
+        "ok": true,
+        "status": "running",
+        "available_bytes": 48,
+        "elapsed_seconds": 25,
+        "read_at": "2026-11-25T10:00:21.000000000Z",
+        "items": [{"id": "job-1", "elapsed_seconds": 25, "status": "running"}]
+    })
+    .to_string();
+    assert_eq!(result_digest(&first_poll), result_digest(&second_poll));
+    assert_ne!(result_digest(&first_poll), result_digest(&progressed_poll));
+}
+
+#[test]
 fn generated_goal_on_blocked_cases_fence_the_blocked_report() {
     use gents_lean_vocab::families::contracts_goal_on_blocked as family;
     family::replay(|case| {

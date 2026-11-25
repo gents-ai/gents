@@ -93,3 +93,114 @@ async fn help_pages_and_first_failures_name_the_callers_covering_skill() {
         case.check(observed);
     }
 }
+
+#[tokio::test]
+async fn every_engineer_help_page_names_its_covering_skill() {
+    let fixture =
+        gents_automation::test_support::self_config_fixture("skill-pointer-all-pages").await;
+    fixture.grant_selected_configuration().await;
+    let pointers = Arc::new(gents_tools::skill_pointer::SkillPointers::new(
+        gents_automation::test_support::self_config_text::pack_builder_skills(),
+    ));
+    let mut grants = config(&[
+        "node",
+        "agent",
+        "tools",
+        "profile",
+        "backend",
+        "mcp_service",
+        "automation",
+        "policy",
+    ]);
+    grants.agent_did = fixture.agent_did().to_owned();
+    grants.enable_pack_install = true;
+    let tools = fixture.tools_with_skills(&grants, pointers.clone());
+    let config_tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let schema = gents_tools::builtin::schema_help::SchemaTool::for_managed_agent(
+        fixture.db.node.clone(),
+        fixture.node_did(),
+        None,
+        fixture.agent.as_ref(),
+    )
+    .unwrap()
+    .with_skill_pointers(pointers);
+    let envelope = ToolScopeEntry::new(None, tokio_util::sync::CancellationToken::new()).call();
+
+    let index = config_tool
+        .call(json!({"argv": ["help"]}).to_string(), &envelope)
+        .await
+        .unwrap();
+    assert_eq!(named(&index), None, "config help index names no skill");
+
+    for resource in gents_tools::builtin::self_config::command::help_resources() {
+        let page = config_tool
+            .call(json!({"argv": ["help", resource]}).to_string(), &envelope)
+            .await
+            .unwrap_or_else(|error| panic!("config help {resource}: {error}"));
+        let expected = match resource {
+            "datastore" => Some("design-data"),
+            "agent-target" => Some("use-helpers"),
+            "mcp-service" => Some("import-data"),
+            "task" | "trigger" | "schedule" | "event-source" | "automation" => Some("automate"),
+            "pack" => Some("package-or-install"),
+            "page" | "ux" => Some("design-page"),
+            "plugin" | "plugin-source" => Some("exact-rules"),
+            "policy" => Some("control-access"),
+            _ => None,
+        };
+        assert_eq!(
+            named(&page).as_deref(),
+            expected,
+            "config help {resource} pointer mismatch"
+        );
+    }
+
+    for (argv, expected) in [
+        (vec!["ux", "preview", "--help"], Some("design-page")),
+        (vec!["agent", "create", "--help"], Some("use-helpers")),
+        (vec!["agent", "clone", "--help"], Some("use-helpers")),
+        (vec!["agent", "get", "--help"], None),
+        (vec!["help", "trigger", "explain"], Some("troubleshoot")),
+        (vec!["trigger", "explain", "--help"], Some("troubleshoot")),
+    ] {
+        let page = config_tool
+            .call(json!({"argv": argv}).to_string(), &envelope)
+            .await
+            .unwrap_or_else(|error| panic!("config {argv:?}: {error}"));
+        assert_eq!(
+            named(&page).as_deref(),
+            expected,
+            "config {argv:?} pointer mismatch"
+        );
+    }
+
+    let schema_index = ToolDyn::call(&schema, json!({"argv": ["help"]}).to_string(), &envelope)
+        .await
+        .unwrap();
+    assert_eq!(
+        named(&schema_index),
+        None,
+        "schema help index names no skill"
+    );
+
+    for path in gents_tools::builtin::schema_help::help_paths() {
+        let mut argv = vec!["help"];
+        argv.extend(path.split(' '));
+        let page = ToolDyn::call(&schema, json!({"argv": argv}).to_string(), &envelope)
+            .await
+            .unwrap_or_else(|error| panic!("schema help {path}: {error}"));
+        let expected = if *path == "collections policy" {
+            Some("control-access")
+        } else {
+            Some("design-data")
+        };
+        assert_eq!(
+            named(&page).as_deref(),
+            expected,
+            "schema help {path} pointer mismatch"
+        );
+    }
+}

@@ -3,7 +3,8 @@ use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::test_support::rows_when;
+use gents_store::test_support::snapshot_reader::SnapshotReader as _;
+use gents_store::test_support::STALL_CEILING;
 
 use crate::support::agent_requests::submit_user_request;
 use crate::support::agent_requests::RequestActors;
@@ -97,13 +98,39 @@ where
     let decode = |data: &serde_json::Value| {
         serde_json::from_value::<Vec<AgentRequestRow>>(data["AgentRequest"].clone()).unwrap()
     };
-    let data = rows_when(&actors.fixture.access, "Goal", &query, |data| {
-        data["Goal"]
+    let mut goal_changes = actors.fixture.access.subscribe_changes("Goal").await;
+    let mut request_changes = actors
+        .fixture
+        .access
+        .subscribe_changes("AgentRequest")
+        .await;
+    let mut last_answer = String::new();
+    let mut deadline = tokio::time::Instant::now() + STALL_CEILING;
+    let data = loop {
+        let data = actors.fixture.access.read_data(&query).await;
+        if data["Goal"]
             .as_array()
             .and_then(|goals| goals.first())
-            .is_some_and(|goal| settled(goal, &decode(data)))
-    })
-    .await;
+            .is_some_and(|goal| settled(goal, &decode(&data)))
+        {
+            break data;
+        }
+        let rendered = data.to_string();
+        if rendered != last_answer {
+            last_answer = rendered;
+            deadline = tokio::time::Instant::now() + STALL_CEILING;
+        }
+        let waited = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                () = goal_changes.recv() => {}
+                () = request_changes.recv() => {}
+            }
+        })
+        .await;
+        if waited.is_err() {
+            panic!("goal_when: Goal/AgentRequest showed no new answer for {STALL_CEILING:?}; last: {last_answer}");
+        }
+    };
     let requests = decode(&data);
     (data["Goal"][0].clone(), requests)
 }

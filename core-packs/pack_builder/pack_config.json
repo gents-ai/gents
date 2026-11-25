@@ -12,6 +12,7 @@
     {
       "covers": [
         "config datastore",
+        "schema batch",
         "schema collection",
         "schema collections",
         "schema fields",
@@ -91,6 +92,8 @@
     },
     {
       "covers": [
+        "config agent create",
+        "config agent clone",
         "config agent-target"
       ],
       "description": "Load before a big build, or before handing a part or an independent check to a helper agent.",

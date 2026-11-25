@@ -3395,13 +3395,73 @@ fn package_surface(root: &std::path::Path, bash: serde_json::Value) -> crate::su
     .resolve_with_agent_tools_for_mcp_presence(false, Default::default())
 }
 
+#[cfg(unix)]
+fn shell_hover_fixture_server(host_dir: &Path) -> CatalogServer {
+    let script = host_dir.join("hover-lsp-fixture");
+    gents_store::test_support::write_executable_script(
+        &script,
+        r#"#!/bin/sh
+send() {
+  body="$1"
+  len=$(printf '%s' "$body" | wc -c | tr -d ' ')
+  printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body"
+}
+while IFS= read -r line; do
+  line=$(printf '%s' "$line" | tr -d '\r')
+  len=0
+  while [ -n "$line" ]; do
+    case "$line" in
+      Content-Length:*) len=$(printf '%s' "${line#Content-Length:}" | tr -d ' ') ;;
+    esac
+    IFS= read -r line || exit 0
+    line=$(printf '%s' "$line" | tr -d '\r')
+  done
+  [ "$len" -gt 0 ] || continue
+  body=$(dd bs=1 count="$len" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$body" in
+    *'"method":"exit"'*) exit 0 ;;
+    *'"method":"initialize"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{\"hoverProvider\":true}}}"
+      ;;
+    *'"method":"textDocument/hover"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":\"hello hover\"}}}"
+      ;;
+    *'"method":"shutdown"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    CatalogServer {
+        name: "fixture".into(),
+        command: script.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        file_types: vec![".rs".into()],
+        root_markers: vec!["Cargo.toml".into()],
+        is_linter: false,
+        priority: 1,
+        language_id: Some("rust".into()),
+        init_options: None,
+        settings: None,
+        capabilities: None,
+        workspace_ready_timings: None,
+        warmup_timeout_ms: None,
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn read_only_package_refuses_language_servers_that_write_and_unsandboxed_packages_start() {
-    if !python3_available() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(root.path()).unwrap();
+    let host = tempfile::tempdir().unwrap();
+    let server = shell_hover_fixture_server(host.path());
     std::fs::write(root.join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
         root.join("Cargo.toml"),
@@ -3427,7 +3487,7 @@ async fn read_only_package_refuses_language_servers_that_write_and_unsandboxed_p
         assert!(surface.tool_names().iter().any(|name| name == "lsp"));
         let mut config = surface.lsp_config().expect("lsp offered").clone();
         assert_eq!(config.constraints.sandbox, sandbox);
-        config.servers = vec![fixture_server(FIXTURE_PY.into())];
+        config.servers = vec![server.clone()];
         let pool = LspPool::new();
         let tool = LspTool::new(config, pool.clone()).unwrap();
 
