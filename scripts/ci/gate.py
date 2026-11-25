@@ -693,10 +693,8 @@ def portable_shards():
 
 
 def vera_tests(packages):
-    """The packages whose `vera` tests a job runs, space-separated: none on a
-    pull request, whose runs leave the Vera node's build to the merge queue."""
-    if os.environ.get("GATE_EVENT") == "pull_request":
-        return ""
+    """The packages whose `vera` tests a job runs, space-separated: those of the
+    job's packages that have them, on a pull request as in the merge queue."""
     return " ".join(package for package in packages if package in VERA_TESTS)
 
 
@@ -755,8 +753,8 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
     # The live suites (`live-e2e`) run after merge; lint them when they or a
     # crate they use changed.
     live_e2e_lint = [package for package in ("gents", "gents-cli") if package in built]
-    # The CLI's `vera` feature check, off on a pull request like the Vera tests.
-    lint_vera = "gents-cli" in built and os.environ.get("GATE_EVENT") != "pull_request"
+    # The CLI's `vera` feature check, wherever the Vera tests run.
+    lint_vera = "gents-cli" in built
     jobs = {
         "fmt": rust,
         "lint": rust,
