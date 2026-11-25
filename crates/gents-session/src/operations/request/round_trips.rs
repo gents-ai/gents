@@ -187,9 +187,10 @@ fn counted(sent: &[Sent]) -> (usize, usize) {
     (session_reads, read_only)
 }
 
-/// A send reads its session's row once before its transactions, outside any
-/// transaction, and once in each transaction that reserves or submits; it
-/// opens one read-only transaction, for the session and Agent it signs for.
+/// A send reads its session's row once before its transactions, once before
+/// submitting to check whether its binding is already published, and once in
+/// the read-only transaction that prepares the signed targets; a published
+/// session's submit transaction never reads the session row at all.
 #[tokio::test]
 async fn a_send_reads_its_session_row_once_per_step() -> anyhow::Result<()> {
     let signed_home = gents_documents::test_support::SignedHome::start(
@@ -213,12 +214,12 @@ async fn a_send_reads_its_session_row_once_per_step() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    /* the first send makes the session in its reservation transaction */
+    /* the first send checks for a published binding before making the session */
     super::send(&access, &user, send("first")).await?;
     let first = wire.requests();
-    assert_eq!(counted(&first), (5, 1), "first send:\n{}", summary(&first));
+    assert_eq!(counted(&first), (6, 1), "first send:\n{}", summary(&first));
 
-    /* the second finds it: each step reads it once */
+    /* the second finds the published binding outside the submit transaction */
     wire.clear();
     super::send(&access, &user, send("second")).await?;
     let second = wire.requests();

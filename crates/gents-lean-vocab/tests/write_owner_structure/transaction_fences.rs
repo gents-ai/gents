@@ -16,6 +16,7 @@ const KINDS: &[&str] = &[
     "UniqueIndex",
     "SingleWriter",
     "Idempotent",
+    "ImmutableBinding",
 ];
 
 /// The production schema directories whose `@index(unique: true)` keys make
@@ -569,8 +570,53 @@ fn every_range_read_then_write_names_its_fence() {
         &units_reading_a_range_and_writing(),
         "transaction unit(s) that read by filter, list, count or order and write",
         &format!(
-            "name the fence its decision rests on as CommonWrite(..), PointRead(..), UniqueIndex(..), SingleWriter(..) or Idempotent(..) from {MODEL}, verified by reading the unit"
+            "name the fence its decision rests on as CommonWrite(..), PointRead(..), UniqueIndex(..), SingleWriter(..), Idempotent(..) or ImmutableBinding(..) from {MODEL}, verified by reading the unit"
         ),
+    );
+}
+
+/// The constructors of the Lean inductive `name` in `model`, in UpperCamel.
+fn lean_constructors(model: &str, name: &str) -> Vec<String> {
+    let start = model
+        .find(&format!("inductive {name} where"))
+        .unwrap_or_else(|| panic!("{MODEL} declares {name}"));
+    let body = &model[start..];
+    let end = body.find("deriving").unwrap_or(body.len());
+    body[..end]
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("| "))
+        .filter_map(|constructor| constructor.split_whitespace().next())
+        .map(|constructor| {
+            let mut chars = constructor.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect()
+}
+
+/// The kinds a fence entry may name are the declared fences of the Lean
+/// owner, a store fence by its `Fence` constructor.
+#[test]
+fn fence_kinds_are_the_lean_declared_fences() {
+    let model = std::fs::read_to_string(repo_root().join(MODEL)).expect("read the fence model");
+    let declared = lean_constructors(&model, "DeclaredFence")
+        .into_iter()
+        .flat_map(|kind| {
+            if kind == "Store" {
+                lean_constructors(&model, "Fence")
+            } else {
+                vec![kind]
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        KINDS
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect::<BTreeSet<_>>(),
+        declared,
+        "the fence kinds follow {MODEL}"
     );
 }
 
