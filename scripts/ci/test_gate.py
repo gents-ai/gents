@@ -105,15 +105,34 @@ class Selection(unittest.TestCase):
         self.assertNotIn("lint", selection["jobs"])
         self.assertTrue(selection["contract"]["ts_lean"])
 
-    def test_the_ios_check_runs_only_when_the_desktop_app_or_a_crate_it_uses_changed(self):
-        for path in ("apps/gents-desktop/src-tauri/src/lib.rs", "crates/gents-store/src/graphql.rs",
-                     "crates/gents-desktop-bridge/src/lib.rs", "Cargo.lock", "rust-toolchain.toml"):
+    def test_the_lint_variants_run_only_when_a_crate_they_build_or_check_changed(self):
+        # The live suites, the Vera feature, gents-loop's WASI build, or the
+        # desktop app's capabilities (its own crate alone selects only those).
+        for path in ("crates/gents-store/src/graphql.rs", "crates/gents-cli/src/lib.rs",
+                     "crates/gents-loop/src/lib.rs", "apps/gents-desktop/src-tauri/src/lib.rs", "Cargo.lock"):
             with self.subTest(path=path):
-                self.assertTrue(select(path)["ios_check"])
-        for path in ("crates/gents-media-host/src/lib.rs", "packages/gents-desktop-ui/src/index.ts",
-                     "crates/gents/proofs/Proofs/Request/CausalHop.lean", "README.md"):
+                self.assertIn("lint-variants", select(path)["jobs"])
+        tauri = select("apps/gents-desktop/src-tauri/src/lib.rs")
+        self.assertEqual((tauri["live_e2e_lint"], tauri["lint_vera"]), ([], False))
+        self.assertNotIn("gents-loop", tauri["built"])
+        # A crate none of them reaches is linted without them.
+        self.assertEqual({"lint", "lint-variants"} & set(select("crates/gents-media-host/src/lib.rs")["jobs"]),
+                         {"lint"})
+        for path in ("packages/gents-desktop-ui/src/index.ts", "crates/gents/proofs/Proofs/Request/CausalHop.lean",
+                     "README.md"):
             with self.subTest(path=path):
-                self.assertFalse(select(path)["ios_check"])
+                self.assertNotIn("lint-variants", select(path)["jobs"])
+
+    def test_the_lint_jobs_build_on_the_portable_runners_within_their_compile_budget(self):
+        selection = select(everything=True)
+        self.assertEqual(selection["build_jobs"]["portable"], str(ROLES["portable"]["jobs"]["build"]))
+        jobs = workflow_jobs(CI)
+        for job in ("lint", "lint-variants"):
+            with self.subTest(job=job):
+                self.assertEqual(gate.workflow_role(job), "portable")
+                self.assertIn("CARGO_BUILD_JOBS: ${{ fromJSON(needs.plan.outputs.plan).build_jobs.portable || "
+                              "vars.CARGO_BUILD_JOBS || '12' }}", jobs[job])
+                self.assertRegex(jobs[job], r"uses: \./\.github/actions/rust-runner\n\s+with:\n\s+role: portable\n")
 
     def test_an_archive_builds_the_helpers_its_tests_run(self):
         self.assertEqual(gate.archive_packages(["gents-tools"]), ["gents-tools", "gents-fs-runner"])
@@ -126,8 +145,8 @@ class Selection(unittest.TestCase):
 
     def test_side_lint_builds_are_incremental_in_their_own_kept_trees(self):
         with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
-            self.assertEqual(gate.side_tree_env("ios-check"), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
-                                                               "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+            self.assertEqual(gate.side_tree_env("live-e2e"), {"CARGO_TARGET_DIR": "/cache/runner-a/live-e2e",
+                                                              "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
 
     def test_the_live_suites_are_linted_only_when_they_or_their_crates_changed(self):
         self.assertEqual(select("crates/gents-store/src/graphql.rs")["live_e2e_lint"], ["gents", "gents-cli"])
@@ -974,7 +993,7 @@ class SystemPreflight(unittest.TestCase):
 
     def test_the_build_and_the_test_jobs_check_first(self):
         source = Path(gate.__file__).read_text()
-        for function in ("run_test", "build_and_run"):
+        for function in ("run_test", "build_and_run", "run_lint", "run_lint_variants"):
             body = source.split(f"def {function}(", 1)[1].split("\ndef ", 1)[0]
             self.assertIn("system_preflight()", body, function)
 
@@ -1084,8 +1103,8 @@ class Verdict(unittest.TestCase):
 
     def test_a_selected_job_that_was_skipped_fails(self):
         selection = select("crates/gents-cli/src/lib.rs")
-        for job in ("lint", "test", "fmt", "contract"):
-            problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
+        for job in ("lint", "lint-variants", "test", "fmt", "contract"):
+            problems = gate.verdict(self.needs(selection, **{job.replace("-", "_"): "skipped"}))
             self.assertEqual(len(problems), 1, job)
             self.assertIn(f"{job}: the plan selected", problems[0])
 
@@ -1590,7 +1609,7 @@ class ReuseKeys(unittest.TestCase):
     with what the plan asks of it and with its platform, and with nothing else."""
 
     SELECTION = select("crates/gents-store/src/lib.rs", "apps/gents-desktop/package.json")
-    RUST = {unit for unit in ("lint", "test:store", "test:session", "test:cli", "test:native")}
+    RUST = {unit for unit in ("lint", "lint-variants", "test:store", "test:session", "test:cli", "test:native")}
     TS = {"ts-packages", "ts-unit", "ts-fuzz", *(f"ts-browser:{index}/{gate.BROWSER_SHARDS}"
                                                 for index in range(1, gate.BROWSER_SHARDS + 1))}
 
@@ -1650,9 +1669,10 @@ class ReuseKeys(unittest.TestCase):
         self.assertEqual(keys_of(selection)["test:store"], base, "routing labels other than the platform")
         entry["vera"] = "" if entry["vera"] else "gents-store"
         self.assertNotEqual(keys_of(selection)["test:store"], base)
-        lint = keys_of(selection)["lint"]
+        lint, variants = keys_of(selection)["lint"], keys_of(selection)["lint-variants"]
         selection["lint_vera"] = not selection["lint_vera"]
-        self.assertNotEqual(keys_of(selection)["lint"], lint)
+        self.assertNotEqual(keys_of(selection)["lint-variants"], variants)
+        self.assertEqual(keys_of(selection)["lint"], lint, "a check the lint job does not run")
 
     def test_a_pull_request_and_its_queue_entry_agree_when_nothing_else_changed(self):
         with mock.patch.dict(os.environ, {"GATE_EVENT": "pull_request"}):
@@ -1661,7 +1681,7 @@ class ReuseKeys(unittest.TestCase):
             queue = keys_of(select("crates/gents-cli/src/main.rs"))
         # Only the Vera checks a pull request leaves to the queue differ.
         differ = {unit for unit in pull if pull[unit] != queue.get(unit)}
-        self.assertEqual(differ, {"lint", "test:cli"})
+        self.assertEqual(differ, {"lint-variants", "test:cli"})
         self.assertEqual(set(pull), set(queue))
 
     def test_every_selected_job_but_a_shard_is_made_of_units(self):
@@ -1673,7 +1693,8 @@ class ReuseKeys(unittest.TestCase):
 
     def test_each_unit_names_the_platform_its_job_runs_on(self):
         keys = gate.unit_keys(select(everything=True), MEMBERS, TREE)
-        self.assertEqual(keys["lint"]["platform"], "macOS/ARM64")
+        self.assertEqual(keys["lint"]["platform"], "Linux/X64")
+        self.assertEqual(keys["lint-variants"]["platform"], "Linux/X64")
         self.assertEqual(keys["fmt"]["platform"], "Linux/X64")
         self.assertEqual(keys["ts-unit"]["platform"], "Linux/X64")
         self.assertEqual(keys["test:native"]["platform"], "macOS/ARM64")
