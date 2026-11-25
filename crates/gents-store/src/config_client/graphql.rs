@@ -175,7 +175,7 @@ async fn send_query(
 ) -> Result<Value> {
     let authorization = endpoint.authorization()?;
     Ok(gents_protocol::graphql::execute_graphql_encoded(
-        &endpoint.request_encoding.0,
+        endpoint.memory.request_encoding(),
         endpoint.url(),
         authorization.as_deref(),
         query,
@@ -506,8 +506,13 @@ mod tests {
         assert_eq!(result.unwrap()["data"]["test"][0]["_docID"], "written");
     }
 
+    /// DefraDB binds a transaction to the DID, not to one token, so every
+    /// request of a transaction carries a bearer current when it is sent: a
+    /// bearer is reused only until half its lifetime has passed. With
+    /// 2-second bearers, the statement sent 1.1 s after the begin carries a
+    /// newer one.
     #[tokio::test]
-    async fn http_transaction_mints_a_bearer_per_request() {
+    async fn http_transaction_renews_a_half_spent_bearer() {
         use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
         use base64::Engine as _;
         use std::sync::{Arc, Mutex};
@@ -558,7 +563,8 @@ mod tests {
         super::super::ConfigAccess::Graphql(
             super::super::GraphqlEndpoint::as_principal(endpoint, &did)
                 .with_client_signing_capability(capability)
-                .unwrap(),
+                .unwrap()
+                .with_bearer_lifetime(std::time::Duration::from_secs(2)),
         )
         .transact_write("test.per_request_bearer", |txn| {
             Box::pin(async move {

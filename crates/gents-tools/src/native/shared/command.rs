@@ -217,18 +217,10 @@ pub fn default_lsp_network_mode() -> CommandNetworkMode {
     }
 }
 
-pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
-    lsp_server_sandbox(workspace_write_sandbox_enforced(), execution_mode)
-}
-
-pub(crate) fn lsp_server_sandbox(
-    sandbox_enforced: bool,
-    execution_mode: CommandExecutionMode,
-) -> CommandExecutionMode {
+pub fn lsp_server_sandbox(execution_mode: CommandExecutionMode) -> Option<CommandExecutionMode> {
     match execution_mode {
-        CommandExecutionMode::ReadOnly if sandbox_enforced => CommandExecutionMode::WorkspaceWrite,
-        CommandExecutionMode::ReadOnly => CommandExecutionMode::Unrestricted,
-        mode => mode,
+        CommandExecutionMode::ReadOnly => None,
+        mode => Some(mode),
     }
 }
 

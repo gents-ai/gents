@@ -6,7 +6,7 @@
     "plugins/workflow.afb",
     "plugins/workflow/TOOL.md",
     "plugins/workflow/tests/00_no_script_fails.json",
-    "plugins/workflow/tests/01_step0_pins_the_scripts_digest.json",
+    "plugins/workflow/tests/01_a_run_without_a_handle_fails.json",
     "plugins/workflow/tests/02_later_step_passes_the_output_through.json",
     "plugins/workflow/tests/03_a_guest_pin_is_restamped.json",
     "plugins/workflow/tests/04_an_unsized_call_pins_the_handle_from_args.json",
@@ -45,7 +45,7 @@
             "description": "How many child agents the run may start; pass the number of children the script spawns"
           },
           "args": {
-            "description": "Read by the step function as input.args; args.handle names the run",
+            "description": "Read by the step function as input.args; required args.handle names the run",
             "type": "object"
           },
           "script": {

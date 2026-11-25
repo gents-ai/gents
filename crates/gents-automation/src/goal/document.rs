@@ -47,6 +47,10 @@ pub struct GoalDocument {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Lean `GoalProgress.Record` as JSON: the no-progress streak and the
+    /// latest goal turn's call prints.
+    #[serde(default)]
+    pub progress_record: Option<String>,
 }
 
 impl GoalDocument {

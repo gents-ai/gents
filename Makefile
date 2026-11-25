@@ -48,7 +48,7 @@ help:
 	@echo "  make proofs                Build Lean proofs"
 	@echo "  make gate [BASE=origin/main]  Run the pull request gate for this change (what CI runs)"
 	@echo "  make gate-plan             Show the jobs the gate selects for this change"
-	@echo "  make gate-run JOB=<job>    Run one gate job (fmt, lint, contract, ts-unit, test:<group>, ...)"
+	@echo "  make gate-run JOB=<job>    Run one gate job (fmt, lint, lint-variants, contract, test:<group>, ...)"
 	@echo "  make lean-regen            Regenerate Lean decoders and family schema (FORCE=1 ignores the stamp)"
 	@echo
 	@echo "Tests:"

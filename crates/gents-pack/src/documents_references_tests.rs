@@ -21,6 +21,11 @@ const NOT_REFERENCES: &[(Collection, &str)] = &[
     (Collection::CallbackModule, "signer_did"),
     (Collection::EvalDefinition, "cases.case_id"),
     (Collection::EvalDefinition, "cases.stages.stage_id"),
+    // Selects the runs of a Trigger the trial creates; the pack carries none.
+    (
+        Collection::EvalDefinition,
+        "cases.stages.capture.trigger_id",
+    ),
 ];
 
 fn identifier_paths(

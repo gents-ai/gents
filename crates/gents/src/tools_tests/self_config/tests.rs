@@ -393,7 +393,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         .await
         .expect("new agent tool surface resolves after restart")
         .tool_names();
-    assert!(names.iter().any(|name| name == "lsp"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "lsp"), "{names:?}");
     assert!(
         !names.iter().any(|name| name == CONFIG_TOOL_NAME),
         "{names:?}"

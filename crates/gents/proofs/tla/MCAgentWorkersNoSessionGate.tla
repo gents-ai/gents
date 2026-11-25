@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkersNoSessionGate ----
+EXTENDS AgentWorkers
+
+====

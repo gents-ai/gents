@@ -27,7 +27,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::native::shared::{ToolContext, ToolError};
-use crate::native::{lsp_sandbox_for_effective, CommandConstraints, CommandNetworkMode};
+use crate::native::{lsp_server_sandbox, CommandConstraints, CommandNetworkMode};
 use crate::surface::{ToolPolicyBash, ToolPolicySurface};
 use gents_documents::FileToolMode;
 use gents_documents::{apply_overrides, builtin_catalog, CatalogServer, LspConfigDocument};
@@ -88,20 +88,20 @@ pub struct LspToolConfig {
 pub fn constraints_from_effective_policy(
     policy: &ToolPolicySurface,
     lsp_network_overlay: Option<CommandNetworkMode>,
-) -> CommandConstraints {
+) -> Option<CommandConstraints> {
     constraints_from_effective_bash(&policy.bash, lsp_network_overlay)
 }
 
 pub fn constraints_from_effective_bash(
     bash: &ToolPolicyBash,
     lsp_network_overlay: Option<CommandNetworkMode>,
-) -> CommandConstraints {
+) -> Option<CommandConstraints> {
     let (allowed, deny_all) = match &bash.allowed_argv_prefixes {
         crate::surface::EndpointScope::All => (Vec::new(), false),
         crate::surface::EndpointScope::None => (Vec::new(), true),
         crate::surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
     };
-    let sandbox = crate::native::lsp_sandbox_for_effective(bash.execution_mode);
+    let sandbox = lsp_server_sandbox(bash.execution_mode)?;
     // A macOS behavior whose effective execution mode is Unrestricted must
     // inherit network rather than construct the rejected Disabled +
     // Unrestricted combination.
@@ -113,7 +113,7 @@ pub fn constraints_from_effective_bash(
         }
     });
     let network_mode = desired.meet(bash.network_mode);
-    CommandConstraints {
+    Some(CommandConstraints {
         allowed_argv_prefixes: allowed,
         forbidden_argv_prefixes: bash.forbidden_argv_prefixes.iter().cloned().collect(),
         network_mode,
@@ -121,7 +121,7 @@ pub fn constraints_from_effective_bash(
         sandbox,
         deny_all_argv: deny_all,
         deny_git_metadata_writes: bash.deny_git_metadata_writes,
-    }
+    })
 }
 
 // Persistent clients are shared across request lifetimes. Until they support
@@ -131,6 +131,7 @@ fn artifact_scope_denied(call: &gents_loop::tool::ToolCallEnvelope) -> bool {
         .is_some_and(|scope| scope.workspace_artifact.is_some())
 }
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
+const READ_ONLY_DENIAL: &str = "lsp is unavailable under a read-only command policy: a language server writes caches and runs project code. Use grep, glob and read_file to find definitions, references and symbols.";
 
 #[derive(Clone)]
 pub(crate) struct LspTool {
@@ -297,6 +298,12 @@ impl Tool for LspTool {
                 ARTIFACT_SCOPE_DENIAL.into(),
             ));
         }
+        if overlay_lsp_constraints(call, &self.config.constraints).is_none() {
+            return Err(ToolError::reported_failure(
+                FailureClass::PolicyDenied,
+                READ_ONLY_DENIAL.into(),
+            ));
+        }
         let mut action = LspAction::parse(&args.action).ok_or_else(|| {
             ToolError::reported_failure(
                 FailureClass::ArgumentInvalid,
@@ -450,16 +457,16 @@ pub(crate) fn overlay_workspace_or(
 pub(crate) fn overlay_lsp_constraints(
     call: &gents_loop::tool::ToolCallEnvelope,
     base: &CommandConstraints,
-) -> CommandConstraints {
+) -> Option<CommandConstraints> {
     let Some(authority) = crate::runtime_context::tool_runtime_context(call)
         .and_then(|scope| scope.workspace_authority)
     else {
-        return base.clone();
+        return Some(base.clone());
     };
     let mut constraints = base.clone();
     constraints.execution_mode = constraints.execution_mode.meet(authority.command_mode());
-    constraints.sandbox = lsp_sandbox_for_effective(constraints.execution_mode);
-    constraints
+    constraints.sandbox = lsp_server_sandbox(constraints.execution_mode)?;
+    Some(constraints)
 }
 
 pub fn merge_catalog(raw_config: Option<&str>) -> Vec<CatalogServer> {

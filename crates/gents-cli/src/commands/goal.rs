@@ -7,8 +7,8 @@ use gents_protocol::operations::goal::{
 use gents_store::config_client::ConfigAccess;
 
 use crate::cli::args::{
-    GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
-    GoalStartArgs, GoalStatusArg,
+    GoalCommand, GoalPolicyArgs, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs,
+    GoalShowArgs, GoalStartArgs, GoalStatusArg,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_config_access};
@@ -19,6 +19,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
         GoalCommand::Show(args) => goal_show(args).await,
         GoalCommand::Start(args) => goal_start(args).await,
         GoalCommand::Set(args) => goal_set(args).await,
+        GoalCommand::Policy(args) => goal_policy(args).await,
         GoalCommand::ResumeRequest(args) => goal_resume(args).await,
         GoalCommand::ResumeOn(args) => goal_resume_on(args).await,
         GoalCommand::Clear(args) => goal_clear(args).await,
@@ -103,6 +104,29 @@ async fn goal_set_value(
         &goal,
         Utc::now(),
     ))?)
+}
+
+async fn goal_policy(args: GoalPolicyArgs) -> Result<()> {
+    args.output
+        .ensure_supported("automation goal policy", &[OutputFormat::Json])?;
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    let ceiling =
+        |value: Option<i64>, clear: bool| if clear { Some(None) } else { value.map(Some) };
+    let input = gents_protocol::operations::goal::GoalStopPolicyInput {
+        on_blocked: args.on_blocked.map(Into::into),
+        token_ceiling: ceiling(args.token_ceiling, args.clear_token_ceiling),
+        turn_ceiling: ceiling(args.turn_ceiling, args.clear_turn_ceiling),
+        lifted: args.lifted,
+    };
+    let policy = gents_automation::operations::goal::set_stop_policy(
+        &access,
+        &node_did,
+        &args.scope.session,
+        &input,
+    )
+    .await
+    .map_err(|error| failure(error, &args.scope.session))?;
+    print_json(&serde_json::to_value(policy)?)
 }
 
 async fn goal_start(args: GoalStartArgs) -> Result<()> {

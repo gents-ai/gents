@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde_json::Value;
 
 use crate::runner::embedded::observe::{
@@ -110,26 +111,76 @@ pub(super) fn stated_provider_reason(evidence: &RequestEvidence) -> Option<State
     })
 }
 
+/// A Trigger's recorded failure of a fire that wrote no request, as Lean
+/// `Eval.FireFailure` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FireFailure {
+    Error,
+    BudgetExhausted,
+    Unacknowledged,
+}
+
+impl FireFailure {
+    fn parse(status: &str) -> Option<Self> {
+        match status {
+            "error" => Some(Self::Error),
+            gents_documents::BUDGET_EXHAUSTED_STATUS => Some(Self::BudgetExhausted),
+            gents_automation::triggers::UNACKNOWLEDGED_STATUS => Some(Self::Unacknowledged),
+            _ => None,
+        }
+    }
+}
+
+/// Lean `Eval.fireFailureKind`.
+pub(crate) fn fire_failure_kind(failures: &[FireFailure]) -> Option<OutcomeKind> {
+    if failures
+        .iter()
+        .any(|failure| *failure != FireFailure::Unacknowledged)
+    {
+        Some(OutcomeKind::Runtime)
+    } else if failures.is_empty() {
+        None
+    } else {
+        Some(OutcomeKind::Infrastructure)
+    }
+}
+
+/// Lean `Eval.stageOutcome`; `fires` is `None` when the trigger record could
+/// not be read.
 pub(super) fn stage_outcome(
     ended_by_backend: bool,
     request: Option<OutcomeKind>,
     stated: Option<ProviderReason>,
+    fires: Option<&[FireFailure]>,
 ) -> Option<(OutcomeKind, Option<ProviderReason>)> {
-    let kind = request?;
-    if ended_by_backend && matches!(kind, OutcomeKind::Provider | OutcomeKind::Unknown) {
-        return Some((OutcomeKind::Provider, Some(ProviderReason::Unavailable)));
+    match request {
+        Some(kind)
+            if ended_by_backend && matches!(kind, OutcomeKind::Provider | OutcomeKind::Unknown) =>
+        {
+            Some((OutcomeKind::Provider, Some(ProviderReason::Unavailable)))
+        }
+        Some(kind) => Some((kind, stated.filter(|_| kind == OutcomeKind::Provider))),
+        None => fires
+            .map_or(Some(OutcomeKind::Infrastructure), fire_failure_kind)
+            .map(|kind| (kind, None)),
     }
-    Some((kind, stated.filter(|_| kind == OutcomeKind::Provider)))
 }
 
-pub(super) async fn trigger_failure(
+/// The fires recorded as failed since a stage began, with each Trigger's
+/// recorded error for the verdict to carry.
+#[derive(Debug, Default)]
+pub(super) struct FailedFires {
+    pub(super) failures: Vec<FireFailure>,
+    pub(super) detail: Option<String>,
+}
+
+pub(super) async fn failed_fires(
     node: &EmbeddedNode,
     node_did: &str,
     since: &str,
     source_doc_id: Option<&str>,
-    trial_id: &str,
-    stage_id: &str,
-) -> Option<OutcomeKind> {
+) -> anyhow::Result<FailedFires> {
     let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
     let unacknowledged = gents_automation::triggers::UNACKNOWLEDGED_STATUS;
@@ -143,48 +194,35 @@ pub(super) async fn trigger_failure(
     let query = format!(
         r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}", "{budget_exhausted}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
     );
-    let failing = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
-        .await
-    {
-        Ok(response) => match errored_triggers(response.data.as_ref()) {
-            Some(errored) => errored,
-            None => {
-                tracing::warn!(
-                    trial_id = %trial_id,
-                    stage_id = %stage_id,
-                    "eval trial trigger status read had no Trigger list or a row that did not parse"
-                );
-                return Some(OutcomeKind::Infrastructure);
-            }
-        },
-        Err(error) => {
-            tracing::warn!(
-                error = %format!("{error:#}"),
-                trial_id = %trial_id,
-                stage_id = %stage_id,
-                "eval trial trigger status could not be read"
-            );
-            return Some(OutcomeKind::Infrastructure);
-        }
-    };
-    if failing.is_empty() {
-        return None;
-    }
-    let kind = if failing.iter().any(|trigger| {
-        [Some("error"), Some(budget_exhausted)].contains(&trigger.last_status.as_deref())
-    }) {
-        OutcomeKind::Runtime
-    } else {
-        OutcomeKind::Infrastructure
-    };
-    tracing::warn!(
-        triggers = ?failing,
-        outcome = kind.as_str(),
-        trial_id = %trial_id,
-        stage_id = %stage_id,
-        "an eval trial trigger recorded a failed fire; the stage fails"
-    );
-    Some(kind)
+    let response =
+        graphql_with_transaction_retry(node, &query, "eval trial trigger status").await?;
+    let failing = errored_triggers(response.data.as_ref())
+        .context("the trigger status read had no Trigger list or a row that did not parse")?;
+    let failures = failing
+        .iter()
+        .map(|trigger| {
+            trigger
+                .last_status
+                .as_deref()
+                .and_then(FireFailure::parse)
+                .with_context(|| format!("trigger {} has no failed status", trigger.trigger_id))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let detail = (!failing.is_empty()).then(|| {
+        failing
+            .iter()
+            .map(|trigger| {
+                format!(
+                    "trigger {} {}: {}",
+                    trigger.trigger_id,
+                    trigger.last_status.as_deref().unwrap_or_default(),
+                    trigger.last_error.as_deref().unwrap_or("no error recorded")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    });
+    Ok(FailedFires { failures, detail })
 }
 
 fn errored_triggers(data: Option<&Value>) -> Option<Vec<TriggerObservation>> {

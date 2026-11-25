@@ -211,11 +211,12 @@ async fn publish_child(
 }
 
 /// The pending children of `collection` matching `filter`, a page of 64 at a
-/// time by plain `_docID > last` queries. External premise: a cursor query
-/// skips the planner's index estimates (its seek key is bound to one index)
-/// and takes the first declared index, `node_did`, which every document on
-/// the node shares, so it walks the whole collection; a plain query is
-/// estimated and takes the selective index.
+/// time in `_docID` order by plain queries that leave out the rows already
+/// read (`_docID _nin`). External premise: a cursor query skips the planner's
+/// index estimates (its seek key is bound to one index) and takes the first
+/// declared index, `node_did`, which every document on the node shares, so it
+/// walks the whole collection; a plain query is estimated and takes the
+/// selective index. `_docID` filters take equality and membership only.
 async fn keyset_rows(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
@@ -223,13 +224,18 @@ async fn keyset_rows(
     filter: &str,
 ) -> Result<Vec<serde_json::Value>> {
     const PAGE: usize = 64;
-    let mut rows = Vec::new();
-    let mut after: Option<String> = None;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
     loop {
-        let seek = after
-            .as_deref()
-            .map(|id| format!(r#", _docID: {{ _gt: "{}" }}"#, escape_graphql_string(id)))
-            .unwrap_or_default();
+        let read = rows
+            .iter()
+            .filter_map(|row| row.get("_docID").and_then(serde_json::Value::as_str))
+            .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+            .collect::<Vec<_>>();
+        let seek = if read.is_empty() {
+            String::new()
+        } else {
+            format!(r#", _docID: {{ _nin: [{}] }}"#, read.join(", "))
+        };
         let response = txn
             .execute(&format!(
                 r#"{{ {collection}(filter: {{ {filter}{seek} }}, order: [{{ _docID: ASC }}], limit: {limit}) {{ {fields} }} }}"#,
@@ -244,13 +250,12 @@ async fn keyset_rows(
             .with_context(|| format!("{collection} recovery page omitted its rows"))?;
         let more = page.len() > PAGE;
         page.truncate(PAGE);
-        after = page
+        let advanced = page
             .last()
             .and_then(|row| row.get("_docID"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
+            .is_some_and(serde_json::Value::is_string);
         rows.extend(page);
-        if !more || after.is_none() {
+        if !more || !advanced {
             return Ok(rows);
         }
     }

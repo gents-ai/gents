@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
 use sha2::{Digest as _, Sha256};
 
-use crate::local::backend_protection::{BackendProtectionError, PROVENANCE_MARKER};
+use crate::local::backend_protection::{refuse_lineage, BackendProtectionError};
 use crate::local::home::{default_data_dir, keys_dir, read_init_config, HomeError};
 use crate::local::storage_backend::{incompatible_store, incompatible_store_kind};
 use crate::local::store_key::{home_key_file, StoreKeyError};
@@ -133,9 +133,17 @@ pub async fn check_home_store(home: &Path) -> Result<StoreCompatibility, StoreCo
     if !data.join("MANIFEST").is_file() {
         return Ok(StoreCompatibility::Absent);
     }
-    let marker = data.join(PROVENANCE_MARKER);
-    if !marker.try_exists().map_err(io(&marker))? {
-        return Ok(refused(IncompatibleStoreKind::UnknownLineage, data));
+    match refuse_lineage(&data, false) {
+        Ok(()) => {}
+        Err(BackendProtectionError::Io(source)) => return Err(io(&data)(source)),
+        Err(refusal) => {
+            return incompatible_store(&refusal, &data)
+                .map(StoreCompatibility::Refused)
+                .ok_or_else(|| StoreCompatibilityError::Check {
+                    path: data,
+                    source: Box::new(refusal),
+                })
+        }
     }
     let ids = crate::local::document_acp::recorded_policy_ids(&data).map_err(|error| {
         StoreCompatibilityError::Check {

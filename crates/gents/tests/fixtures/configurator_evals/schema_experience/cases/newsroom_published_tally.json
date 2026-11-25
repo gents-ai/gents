@@ -1,0 +1,535 @@
+{
+  "case_id": "newsroom-published-tally",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "newsroom.json",
+        "contents": "{\n  \"writers\": [\n    {\n      \"name\": \"Ada Okafor\"\n    },\n    {\n      \"name\": \"Ben Ruiz\"\n    },\n    {\n      \"name\": \"Chloe Varga\"\n    },\n    {\n      \"name\": \"Dev Patel\"\n    },\n    {\n      \"name\": \"Elif Sahin\"\n    },\n    {\n      \"name\": \"Fatima Noor\"\n    }\n  ],\n  \"stories\": [\n    {\n      \"headline\": \"Harbor dredging delayed again\",\n      \"writer\": \"Ada Okafor\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Council approves harbor budget\",\n      \"writer\": \"Ada Okafor\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Ferry fares rise in spring\",\n      \"writer\": \"Ada Okafor\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Pier lights to be replaced\",\n      \"writer\": \"Ada Okafor\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"School lunch prices rise\",\n      \"writer\": \"Ben Ruiz\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"New bus route to the hospital\",\n      \"writer\": \"Ben Ruiz\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Library hours cut on Sundays\",\n      \"writer\": \"Ben Ruiz\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"Bridge repairs slip to autumn\",\n      \"writer\": \"Ben Ruiz\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"Market square gets new benches\",\n      \"writer\": \"Ben Ruiz\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"Mayor opens flood barrier\",\n      \"writer\": \"Chloe Varga\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Fishing quota talks stall\",\n      \"writer\": \"Chloe Varga\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Lifeboat crew rescues kayaker\",\n      \"writer\": \"Chloe Varga\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Old cannery sold to developer\",\n      \"writer\": \"Chloe Varga\",\n      \"published\": true\n    },\n    {\n      \"headline\": \"Tide gauge readings questioned\",\n      \"writer\": \"Dev Patel\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"Seawall survey begins\",\n      \"writer\": \"Dev Patel\",\n      \"published\": false\n    },\n    {\n      \"headline\": \"Choir wins regional prize\",\n      \"writer\": \"Elif Sahin\",\n      \"published\": true\n    }\n  ]\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Set up a newsroom database: Writer { name, stories } and Story { headline, published, writer }. Name and headline are text, published is true/false. A writer has many stories and each story has one writer, linked both ways.",
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Writer { name: String stories: [Story] } type Story { headline: String published: Boolean writer: Writer }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Writer",
+            "Story"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "load",
+      "prompt": "Load the writers and stories in newsroom.json. Each story names its writer.",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "writers",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "stories",
+                "min": 16,
+                "max": 16
+              }
+            ],
+            "rows": [
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Harbor dredging delayed again",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Council approves harbor budget",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Ferry fares rise in spring",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Pier lights to be replaced",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "School lunch prices rise",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "New bus route to the hospital",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Library hours cut on Sundays",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Bridge repairs slip to autumn",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Market square gets new benches",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Mayor opens flood barrier",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Fishing quota talks stall",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Lifeboat crew rescues kayaker",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Old cannery sold to developer",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Tide gauge readings questioned",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Seawall survey begins",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Choir wins regional prize",
+                "expect": [
+                  {
+                    "field": "published",
+                    "equals": true
+                  }
+                ]
+              }
+            ],
+            "links": [
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Harbor dredging delayed again",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Council approves harbor budget",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Ferry fares rise in spring",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Pier lights to be replaced",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ada Okafor"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "School lunch prices rise",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "New bus route to the hospital",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Library hours cut on Sundays",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Bridge repairs slip to autumn",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Market square gets new benches",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Ben Ruiz"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Mayor opens flood barrier",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Chloe Varga"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Fishing quota talks stall",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Chloe Varga"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Lifeboat crew rescues kayaker",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Chloe Varga"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Old cannery sold to developer",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Chloe Varga"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Tide gauge readings questioned",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Dev Patel"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Seawall survey begins",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Dev Patel"
+                  }
+                ]
+              },
+              {
+                "capture": "stories",
+                "key": "headline",
+                "id": "Choir wins regional prize",
+                "field": "_writerID",
+                "target_capture": "writers",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "name",
+                    "equals": "Elif Sahin"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "writers",
+          "collection": "Writer",
+          "filter": {},
+          "fields": [
+            "_docID",
+            "name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "stories",
+          "collection": "Story",
+          "filter": {},
+          "fields": [
+            "headline",
+            "published",
+            "_writerID"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Story",
+          "filter": {
+            "headline": {
+              "_eq": "Choir wins regional prize"
+            }
+          },
+          "fields": [
+            "headline"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "ask",
+      "prompt": "Which writer has the most published stories, and which writers have nothing published yet?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bChloe\\b|\\bVarga\\b"
+              },
+              {
+                "matches": "(?i)\\bDev\\b|\\bPatel\\b"
+              },
+              {
+                "matches": "(?i)\\bFatima\\b|\\bNoor\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

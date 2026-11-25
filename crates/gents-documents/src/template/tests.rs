@@ -51,6 +51,13 @@ fn task_template_renders_per_invocation() {
     )
     .expect("re-rendering is deterministic");
     assert_eq!(replay, first);
+
+    let unset = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({"target": null})),
+    )
+    .expect("an unset field renders");
+    assert_eq!(unset, "Review  at T1 on fence.");
 }
 
 #[test]

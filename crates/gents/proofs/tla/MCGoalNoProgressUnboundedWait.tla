@@ -1,0 +1,4 @@
+---- MODULE MCGoalNoProgressUnboundedWait ----
+EXTENDS GoalNoProgress
+
+====

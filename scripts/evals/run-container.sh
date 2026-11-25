@@ -6,7 +6,7 @@
 #       [--suite SUITE|all]... [--splits "train validation"] [--trials N]
 #       [--per-replica N] [--max-running N] [--seed-base N] [--command-execution off|unrestricted]
 #       [--subject DIR] [--definition DIR] [--trial-timeout SECS] [--disk SIZE]
-#       [--cpus N] [--memory SIZE] [--pids N]
+#       [--cpus N] [--memory SIZE] [--pids N] [--per-trial N] [--cpuset-pool LIST|auto|off]
 #   scripts/evals/run-container.sh resume|status|stop --name RUN
 #
 # image builds gents-eval:<commit> on the docker host from `git archive COMMIT`
@@ -25,6 +25,12 @@
 # Each --target is a target file whose endpoint is http://127.0.0.1:<port> on
 # the docker host; slots run --per-replica (default 2) at a time on each and
 # --max-running (default no cap beyond that) in all.
+# --per-trial is how many model calls each trial makes at once (default 1, as
+# in run-ladder.sh). Each running trial's container gets its own
+# --cpuset-cpus slice of --cpus CPUs (rounded up) from --cpuset-pool, a CPU
+# list like 4-47 (default auto: every docker host CPU from 4 up; off: none),
+# so concurrent trials do not pin gents' database threads to the same cores;
+# no more trials run at once than the pool has slices.
 # Every trial runs the Engineer the image's `gents init --engineer` makes
 # (`gents utils eval subject`), with its suite's fixtures; --subject replaces
 # it with a subject directory.
@@ -68,7 +74,7 @@ COMMAND=$1; shift
 NAME='' IMAGE='' TAG='' COMMIT='' SUBJECT='' DEFINITION=''
 TARGETS=() SUITES=()
 SPLITS="train validation" TRIALS=1 PER_REPLICA=2 MAX_RUNNING=0 SEED_BASE=1000 COMMAND_EXECUTION=off
-CPUS=4 MEMORY=8g PIDS=4096 DISK=2g TRIAL_SECS=3600
+CPUS=4 MEMORY=8g PIDS=4096 DISK=2g TRIAL_SECS=3600 PER_TRIAL=1 CPUSET_POOL=auto
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME=$2; shift 2 ;;
@@ -89,6 +95,8 @@ while [ $# -gt 0 ]; do
     --cpus) CPUS=$2; shift 2 ;;
     --memory) MEMORY=$2; shift 2 ;;
     --pids) PIDS=$2; shift 2 ;;
+    --per-trial) PER_TRIAL=$2; shift 2 ;;
+    --cpuset-pool) CPUSET_POOL=$2; shift 2 ;;
     -h|--help) usage 0 ;;
     --*) usage ;;
     *) [ -z "$COMMIT" ] || usage; COMMIT=$1; shift ;;
@@ -135,7 +143,8 @@ start() {
   [ ${#SUITES[@]} -gt 0 ] || SUITES=(all)
   [[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$PER_REPLICA" =~ ^[1-9][0-9]*$ && "$MAX_RUNNING" =~ ^[0-9]+$ &&
      "$SEED_BASE" =~ ^[0-9]+$ && "$TRIAL_SECS" =~ ^[1-9][0-9]*$ && "$DISK" =~ ^[1-9][0-9]*[kmgt]?$ &&
-     "$COMMAND_EXECUTION" =~ ^(off|unrestricted)$ ]] || usage
+     "$COMMAND_EXECUTION" =~ ^(off|unrestricted)$ && "$PER_TRIAL" =~ ^[1-9][0-9]*$ &&
+     "$CPUSET_POOL" =~ ^(auto|off|[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*)$ ]] || usage
   local suite
   for suite in "${SUITES[@]}"; do
     [[ "$suite" =~ $ID ]] || { echo "--suite $suite is not a suite id" >&2; exit 2; }
@@ -163,10 +172,10 @@ start() {
   [ -z "$DEFINITION" ] || cp -R "$DEFINITION" "$stage/overrides/definition"
   python3 - "$stage" "$NAME" "$IMAGE" "$commit" "$(revision scripts/evals/container scripts/evals/run-container.sh scripts/evals/suites.py)" \
     "$SPLITS" "$TRIALS" "$PER_REPLICA" "$MAX_RUNNING" "$SEED_BASE" "$COMMAND_EXECUTION" "$CPUS" "$MEMORY" "$PIDS" "$DISK" \
-    "$TRIAL_SECS" "${#SUITES[@]}" "${SUITES[@]}" "${names[@]}" <<'PY'
+    "$TRIAL_SECS" "$PER_TRIAL" "$CPUSET_POOL" "${#SUITES[@]}" "${SUITES[@]}" "${names[@]}" <<'PY'
 import hashlib, json, pathlib, sys
 (stage, name, image, commit, launcher, splits, trials, per_replica, max_running, seed_base, command_execution, cpus, memory,
- pids, disk, trial_secs, suite_count, *rest) = sys.argv[1:]
+ pids, disk, trial_secs, per_trial, cpuset_pool, suite_count, *rest) = sys.argv[1:]
 stage = pathlib.Path(stage)
 suites, replicas = rest[:int(suite_count)], rest[int(suite_count):]
 valid = {"train", "validation", "held_out"}
@@ -177,6 +186,7 @@ launcher_files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
 json.dump({"name": name, "image": image, "image_commit": commit, "launcher_commit": launcher,
            "launcher_sha256": launcher_files,
            "suites": suites, "splits": splits.split(), "trials": int(trials), "per_replica": int(per_replica),
+           "per_trial": int(per_trial), "cpuset_pool": cpuset_pool,
            "max_running": int(max_running) or None,
            "seed_base": int(seed_base), "command_execution": command_execution, "replicas": replicas,
            "limits": {"cpus": cpus, "memory": memory, "pids": int(pids), "disk": disk,

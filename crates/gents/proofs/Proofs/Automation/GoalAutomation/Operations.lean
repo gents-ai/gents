@@ -214,7 +214,12 @@ def legal (actor : Actor) (status : Goals.Status) (target : Target) : Bool :=
 /-- Admission of a set, the one decision every client and the working Agent's
 `update_goal` reach. A person's edit follows the client edit rule (active or
 paused); the working Agent's follows the agent rule (active only). The
-transition itself is then `Goals.step?` on the stored state. -/
+transition itself is then `Goals.step?` on the stored state. The working Agent
+may change or clear its own Goal's budget: the user's ceiling lives in the
+Goal's stop policy, which the Agent cannot write
+(`Identity.Household.the_working_agent_reads_but_cannot_change_its_goal_policy`),
+and the enforced budget never exceeds it
+(`GoalStopPolicy.the_ceiling_bounds_every_goal_budget`). -/
 def setDecision (actor : Actor) (status : Goals.Status) (target : Target)
     (fields : FieldChange) (reason : Reason) (autoResume : Bool) (obligationsMet : Bool) :
     SetDecision :=
@@ -223,7 +228,7 @@ def setDecision (actor : Actor) (status : Goals.Status) (target : Target)
   else if reason ≠ .absent ∧ takesReason target = false then .reasonNotAccepted
   else if target = .keep ∧ fields = .none ∧ autoResume = false then .nothingToChange
   else if actor = .workingAgent ∧
-      (autoResume = true ∨ fields = .clearBudget ∨ agentTarget target = false) then .personOnly
+      (autoResume = true ∨ agentTarget target = false) then .personOnly
   else if actor = .workingAgent ∧ fields ≠ .none ∧ changesStatus target = true then
     .fieldsNeedKeep
   else if fields ≠ .none ∧ Edit.editable (origin actor) status = false then .notEditable
@@ -249,13 +254,6 @@ theorem working_agent_cannot_pause_or_stop (status : Goals.Status) (fields : Fie
     setDecision .workingAgent status .pause fields reason autoResume obligationsMet ≠ .apply ∧
       setDecision .workingAgent status .stop fields reason autoResume obligationsMet ≠ .apply := by
   cases status <;> cases fields <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
-    simp [setDecision, agentTarget, changesStatus, runtimeTarget, takesReason]
-
-theorem working_agent_never_clears_the_budget (status : Goals.Status) (target : Target)
-    (reason : Reason) (autoResume obligationsMet : Bool) :
-    setDecision .workingAgent status target .clearBudget reason autoResume obligationsMet ≠
-      .apply := by
-  cases status <;> cases target <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
     simp [setDecision, agentTarget, changesStatus, runtimeTarget, takesReason]
 
 theorem applied_edit_is_editable (actor : Actor) (status : Goals.Status) (target : Target)

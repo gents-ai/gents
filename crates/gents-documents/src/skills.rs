@@ -12,6 +12,7 @@ pub struct Skill {
     pub instructions: String,
     pub source_directory: Option<String>,
     pub tool_refs: Vec<String>,
+    pub covers: Vec<String>,
     pub display_name: Option<String>,
     pub enabled: bool,
 }
@@ -356,6 +357,7 @@ mod tests {
             instructions: format!("{id}-instructions"),
             source_directory: None,
             tool_refs: tool_refs.iter().map(|s| s.to_string()).collect(),
+            covers: Vec::new(),
             display_name: None,
             enabled: true,
         }

@@ -8,7 +8,7 @@ pack_builder skills are in its catalog; the `four-task-skills` fixture adds
 four domain Skill documents to that catalog. No check requires a skill load:
 a case is graded on the outcome, and where only a skill states the rules (the
 four added ones), the right answer depends on reading it. A stage that needs
-a write grant the Engineer gives itself (which applies from its next request)
+a write grant the Engineer gives itself (which applies from its next turn)
 settles and may send one "OK, go ahead." turn before it is graded.
 
 ## Subject fixtures

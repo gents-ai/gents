@@ -154,9 +154,10 @@ fn tool_surface_includes_lsp_when_policy_allows() {
         enable_lsp: true,
         file_tools: FileToolMode::ReadOnly,
         file_tool_root: Some(root.path().to_path_buf()),
+        bash: gents_documents::BashMode::Unrestricted,
         ..Default::default()
     };
-    let ceiling = ToolCeiling::readonly_at(root.path());
+    let ceiling = ToolCeiling::readwrite(root.path());
     let config =
         AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
     let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
@@ -889,7 +890,7 @@ fn tighter_ceiling_changes_digest() {
 }
 
 #[test]
-fn readonly_surface_uses_file_tool_root_not_cwd() {
+fn read_only_file_surface_uses_file_tool_root_not_cwd() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("Cargo.toml"),
@@ -900,9 +901,10 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
         enable_lsp: true,
         file_tools: FileToolMode::ReadOnly,
         file_tool_root: Some(root.path().to_path_buf()),
+        bash: gents_documents::BashMode::Unrestricted,
         ..Default::default()
     };
-    let ceiling = ToolCeiling::readonly_at(root.path());
+    let ceiling = ToolCeiling::readwrite(root.path());
     let config =
         AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
     let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
@@ -2785,7 +2787,7 @@ fn sandbox_change_flips_digest() {
         allowed_argv_prefixes: Vec::new(),
         forbidden_argv_prefixes: Vec::new(),
         network_mode: CommandNetworkMode::Disabled,
-        execution_mode: CommandExecutionMode::ReadOnly,
+        execution_mode: CommandExecutionMode::WorkspaceWrite,
         sandbox: CommandExecutionMode::Unrestricted,
         deny_all_argv: false,
         deny_git_metadata_writes: false,
@@ -3016,15 +3018,16 @@ while True:
 #[test]
 fn effective_disabled_network_is_not_replaced_by_lsp_default() {
     let mut bash = crate::surface::ToolPolicyBash::off();
+    bash.execution_mode = CommandExecutionMode::WorkspaceWrite;
     bash.network_mode = CommandNetworkMode::Disabled;
-    let omitted = constraints_from_effective_bash(&bash, None);
-    assert_eq!(omitted.network_mode, CommandNetworkMode::Disabled);
-    let explicit_enabled =
-        constraints_from_effective_bash(&bash, Some(CommandNetworkMode::Enabled));
-    assert_eq!(explicit_enabled.network_mode, CommandNetworkMode::Disabled);
-    let explicit_inherit =
-        constraints_from_effective_bash(&bash, Some(CommandNetworkMode::Inherit));
-    assert_eq!(explicit_inherit.network_mode, CommandNetworkMode::Disabled);
+    for overlay in [
+        None,
+        Some(CommandNetworkMode::Enabled),
+        Some(CommandNetworkMode::Inherit),
+    ] {
+        let constraints = constraints_from_effective_bash(&bash, overlay).unwrap();
+        assert_eq!(constraints.network_mode, CommandNetworkMode::Disabled);
+    }
 }
 
 #[test]
@@ -3032,7 +3035,7 @@ fn unrestricted_lsp_defaults_to_inherited_network() {
     let mut bash = crate::surface::ToolPolicyBash::off();
     bash.execution_mode = CommandExecutionMode::Unrestricted;
     bash.network_mode = CommandNetworkMode::Inherit;
-    let constraints = constraints_from_effective_bash(&bash, None);
+    let constraints = constraints_from_effective_bash(&bash, None).unwrap();
     assert_eq!(constraints.sandbox, CommandExecutionMode::Unrestricted);
     assert_eq!(constraints.network_mode, CommandNetworkMode::Inherit);
 }
@@ -3165,12 +3168,11 @@ async fn reload_retires_current_snapshot_clients() {
 }
 
 #[test]
-fn readonly_bash_off_uses_platform_sandbox() {
-    let constraints = constraints_from_effective_bash(&crate::surface::ToolPolicyBash::off(), None);
-    assert_eq!(
-        constraints.sandbox,
-        crate::native::lsp_sandbox_for_effective(CommandExecutionMode::ReadOnly)
-    );
+fn workspace_write_lsp_defaults_to_the_platform_network() {
+    let mut bash = crate::surface::ToolPolicyBash::off();
+    bash.execution_mode = CommandExecutionMode::WorkspaceWrite;
+    let constraints = constraints_from_effective_bash(&bash, None).unwrap();
+    assert_eq!(constraints.sandbox, CommandExecutionMode::WorkspaceWrite);
     assert_eq!(
         constraints.network_mode,
         crate::native::default_lsp_network_mode()
@@ -3202,7 +3204,9 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
             tokio_util::sync::CancellationToken::new(),
         ),
     );
-    let met = async { super::overlay_lsp_constraints(&scope_call, &constraints) }.await;
+    let met = async { super::overlay_lsp_constraints(&scope_call, &constraints) }
+        .await
+        .unwrap();
     assert_eq!(met.execution_mode, CommandExecutionMode::WorkspaceWrite);
     assert_eq!(met.sandbox, CommandExecutionMode::WorkspaceWrite);
 }
@@ -3274,9 +3278,8 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
         "artifact-denial",
         vec![server.clone()],
     );
-    config.constraints.execution_mode = CommandExecutionMode::ReadOnly;
-    config.constraints.sandbox =
-        crate::native::lsp_sandbox_for_effective(CommandExecutionMode::ReadOnly);
+    config.constraints.execution_mode = CommandExecutionMode::WorkspaceWrite;
+    config.constraints.sandbox = CommandExecutionMode::WorkspaceWrite;
     let pool = LspPool::new();
     let tool = LspTool::new(config.clone(), pool.clone()).unwrap();
     let key = PoolKey {
@@ -3358,4 +3361,114 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
     .await;
     assert_eq!(pool.live_count().await, 0);
     spawned
+}
+
+fn hover_args() -> LspArgs {
+    LspArgs {
+        action: "hover".into(),
+        file: Some("lib.rs".into()),
+        line: Some(1),
+        symbol: Some("x".into()),
+        query: None,
+        new_name: None,
+        apply: None,
+        payload: None,
+        timeout: Some(10),
+        limit: None,
+    }
+}
+
+fn package_surface(root: &std::path::Path, bash: serde_json::Value) -> crate::surface::ToolSurface {
+    let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "lsp-package", "node_did": "did:test:test",
+        "host": {"root": root, "files": {"mode": "ReadOnly"}, "bash": bash},
+        "integrations": {"lsp": {}}
+    }))
+    .unwrap();
+    AgentToolSurfaceConfig::from_tools_document(
+        "lsp-package",
+        &tools,
+        &ToolCeiling::readwrite(root),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve_with_agent_tools_for_mcp_presence(false, Default::default())
+}
+
+#[tokio::test]
+async fn read_only_package_refuses_language_servers_that_write_and_unsandboxed_packages_start() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(root.path()).unwrap();
+    std::fs::write(root.join("lib.rs"), "fn x() {}\n").unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"t\"\nversion=\"0.0.1\"\n",
+    )
+    .unwrap();
+
+    let read_only = package_surface(&root, serde_json::json!({"mode": "ReadOnly"}));
+    assert!(!read_only.tool_names().iter().any(|name| name == "lsp"));
+    assert!(read_only.lsp_config().is_none());
+
+    for (bash, sandbox) in [
+        (
+            serde_json::json!({"mode": "Unrestricted", "execution_mode": "workspace_write"}),
+            CommandExecutionMode::WorkspaceWrite,
+        ),
+        (
+            serde_json::json!({"mode": "Unrestricted"}),
+            CommandExecutionMode::Unrestricted,
+        ),
+    ] {
+        let surface = package_surface(&root, bash);
+        assert!(surface.tool_names().iter().any(|name| name == "lsp"));
+        let mut config = surface.lsp_config().expect("lsp offered").clone();
+        assert_eq!(config.constraints.sandbox, sandbox);
+        config.servers = vec![fixture_server(FIXTURE_PY.into())];
+        let pool = LspPool::new();
+        let tool = LspTool::new(config, pool.clone()).unwrap();
+
+        let read_only_request = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            crate::runtime_context::ToolWorkspaceScope {
+                runtime_home: None,
+                workspace_cwd: None,
+                workspace_root: Some(root.clone()),
+                workspace_authority: Some(crate::native::WorkspaceAuthority::ReadOnly),
+                workspace_artifact: None,
+            },
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let refused = tool.call(hover_args(), &read_only_request).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ToolError::ReportedFailure { class: FailureClass::PolicyDenied, text })
+                    if text == super::READ_ONLY_DENIAL
+            ),
+            "{sandbox:?}: {:?}",
+            refused.err()
+        );
+        assert_eq!(pool.live_count().await, 0);
+
+        let started = tool
+            .call(hover_args(), &gents_loop::tool::ToolCallEnvelope::default())
+            .await;
+        if sandbox == CommandExecutionMode::WorkspaceWrite
+            && !gents_session::workspace::sandbox::workspace_write_sandbox_enforced()
+        {
+            assert!(started.is_err(), "{started:?}");
+            assert_eq!(pool.live_count().await, 0);
+        } else {
+            let hover = started.unwrap_or_else(|error| panic!("{sandbox:?}: {error}"));
+            assert!(hover.contains("hello hover"), "{sandbox:?}: {hover}");
+            assert_eq!(pool.live_count().await, 1);
+        }
+    }
 }

@@ -24,6 +24,7 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
         stage_id: "stage".into(),
         prompt: String::new(),
         seed: Some(seed),
+        expect_fire: true,
         deadline_secs: Some(2),
         settle: false,
         continuation: None,
@@ -31,8 +32,9 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
         captures: Vec::new(),
     };
     let error = {
+        let runtime = running_runtime();
         let waiting =
-            seed_and_await_fire(&home, "did:test:unselected", &ready, &stage, None, "trial");
+            seed_and_await_fire(&home, "did:test:unselected", &ready, &runtime, &stage, None);
         tokio::pin!(waiting);
         assert!(futures::poll!(waiting.as_mut()).is_pending());
         observer.on_event_sources_reconciled(1, "fixture", Err("missing seed collection"));
@@ -49,7 +51,7 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
 }
 
 #[tokio::test]
-async fn a_request_published_between_seed_observations_takes_precedence() {
+async fn a_seed_observation_reads_its_fired_request_beside_a_failed_fire() {
     let home = EmbeddedHome::create_temp("seed-observation-race")
         .await
         .unwrap();
@@ -66,10 +68,12 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        fired_request(&access, home.did(), &doc_id).await.unwrap(),
-        None
-    );
+    let since = "2026-06-01T00:00:00Z";
+    let mut quiet = Quiet::default();
+    let unfired = observe_seed(&access, &home, since, &doc_id, false, &mut quiet)
+        .await
+        .unwrap();
+    assert_eq!((unfired.fired, unfired.fires.failures), (None, vec![]));
 
     create_document(
         &access,
@@ -85,13 +89,13 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
             "execution_origin": "event",
             "lifecycle_state": "completed",
             "created_at": "2026-01-01T00:00:00Z",
+            "caused_by_trigger_id": "seed-trigger",
             "caused_by_source_doc_id": doc_id,
         }),
         None,
     )
     .await
     .unwrap();
-    let since = "2026-06-01T00:00:00Z";
     seed_trigger(
         &home,
         "seed-trigger",
@@ -111,27 +115,56 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    let failure = trigger_failure(&home.node, home.did(), since, Some(&doc_id), "t1", "seed")
+    let seen = observe_seed(&access, &home, since, &doc_id, true, &mut quiet)
         .await
-        .expect("the second observation sees the delayed trigger failure");
-    let resolved = resolve_seed_failure(
-        &access,
-        home.did(),
-        &doc_id,
-        failure,
-        Some(Duration::from_secs(600)),
-        Instant::now(),
-    )
-    .await
-    .unwrap();
+        .unwrap();
     home.node.shutdown().await.expect("shutdown node");
-    let StageSubmission::Submitted {
-        request_id,
-        remaining,
-    } = resolved
-    else {
-        panic!("the committed request must take precedence: {resolved:?}");
-    };
-    assert_eq!(request_id, "fired");
-    assert!(remaining.is_some_and(|remaining| !remaining.is_zero()));
+    assert_eq!(
+        seen.fired,
+        Some(("fired".to_owned(), Some("seed-trigger".to_owned())))
+    );
+    assert_eq!(seen.fires.failures, [FireFailure::Error]);
+    assert_eq!(
+        seen.fires.detail.as_deref(),
+        Some("trigger seed-trigger error: earlier attempt")
+    );
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SeedAction {
+    Wait,
+    Observe,
+    Pass,
+    Fail,
+}
+
+#[test]
+fn generated_seed_steps_match_lean() {
+    gents_lean_vocab::families::eval_seed_steps::replay::<FireFailure, OutcomeKind, SeedAction>(
+        |input| {
+            let (action, kind) = match seed_step(&SeedObservation {
+                expect_fire: input.expect_fire,
+                observable: input.observable,
+                fired: input.fired,
+                failures: input.failures.clone(),
+                quiet: input.quiet,
+                window_ended: input.window_ended,
+            }) {
+                SeedStep::Wait => (SeedAction::Wait, None),
+                SeedStep::Observe => (SeedAction::Observe, None),
+                SeedStep::Pass => (SeedAction::Pass, None),
+                SeedStep::Fail(kind) => (SeedAction::Fail, Some(kind)),
+            };
+            gents_lean_vocab::families::eval_seed_steps::SeedStep { action, kind }
+        },
+    );
+}
+
+fn running_runtime() -> RunningRuntime {
+    RunningRuntime {
+        shutdown: watch::channel(false).0,
+        handle: tokio::spawn(std::future::pending::<anyhow::Result<()>>()),
+        node_did: String::new(),
+    }
 }

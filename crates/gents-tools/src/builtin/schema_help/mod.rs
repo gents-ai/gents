@@ -161,6 +161,7 @@ pub struct SchemaTool {
     /// `config`: what a create receipt needs to say how the new collection
     /// becomes writable.
     caller: Option<(String, bool)>,
+    skill_pointers: Arc<crate::skill_pointer::SkillPointers>,
 }
 
 impl SchemaTool {
@@ -175,6 +176,7 @@ impl SchemaTool {
             node_did,
             home: None,
             caller: None,
+            skill_pointers: Arc::default(),
         }
     }
 
@@ -195,6 +197,7 @@ impl SchemaTool {
             node_did: node_did.to_owned(),
             home: home.map(ToOwned::to_owned),
             caller: Some((agent.did().to_owned(), false)),
+            skill_pointers: Arc::default(),
         })
     }
 
@@ -203,6 +206,15 @@ impl SchemaTool {
         if let Some((_, holds_tools)) = &mut self.caller {
             *holds_tools = held;
         }
+        self
+    }
+
+    /// The skills in the caller's catalog its help pages and failures name.
+    pub fn with_skill_pointers(
+        mut self,
+        skill_pointers: Arc<crate::skill_pointer::SkillPointers>,
+    ) -> Self {
+        self.skill_pointers = skill_pointers;
         self
     }
 
@@ -674,8 +686,37 @@ impl Tool for SchemaTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> std::result::Result<String, Self::Error> {
+        let request = context
+            .runtime()
+            .and_then(|runtime| runtime.request_id)
+            .unwrap_or_default();
+        let words = args
+            .argv
+            .iter()
+            .filter(|word| !word.starts_with('-') && *word != "preview")
+            .cloned()
+            .collect::<Vec<_>>();
+        let help = words.first().is_some_and(|word| word == "help")
+            || args.argv.iter().any(|word| word == "--help");
+        self.call_unpointed(args).await.map_err(|error| {
+            let path = std::iter::once(SCHEMA_TOOL_NAME)
+                .chain(words.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            match (!help)
+                .then(|| self.skill_pointers.failure(&request, &path))
+                .flatten()
+            {
+                Some(line) => error.with_skill(line),
+                None => error,
+            }
+        })
+    }
+}
+
+impl SchemaTool {
+    async fn call_unpointed(&self, args: SchemaParams) -> std::result::Result<String, SchemaError> {
         if serde_json::to_vec(&args).map_or(true, |v| v.len() > 32 * 1024 * 1024) {
             return Err(SchemaError(
                 "schema call exceeds 32 MiB; submit smaller schemas or modules".into(),
@@ -734,7 +775,7 @@ impl SchemaTool {
                 ));
             }
             return help::page(&args.argv[1..])
-                .map(str::to_owned)
+                .map(|page| self.pointed_page(page, &args.argv[1..]))
                 .map_err(|error| {
                     let mut argv = vec!["help".to_owned()];
                     argv.extend(help::recovery_path(&args.argv[1..]));
@@ -936,6 +977,43 @@ fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
     let mut argv = vec!["help"];
     argv.extend(path.split_whitespace());
     json!({"tool":"schema","args":{"argv":argv}})
+}
+
+impl SchemaTool {
+    /// A help page ends with the line naming the caller's skill that covers
+    /// its topic; the index names none.
+    fn pointed_page(&self, page: &str, words: &[String]) -> String {
+        let topic = help::resolve(words).unwrap_or_default();
+        let path = std::iter::once(SCHEMA_TOOL_NAME)
+            .chain(topic.iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        match self
+            .skill_pointers
+            .help(&path)
+            .filter(|_| !topic.is_empty())
+        {
+            Some(line) => format!("{page}\n{line}"),
+            None => page.to_owned(),
+        }
+    }
+}
+
+impl SchemaError {
+    fn with_skill(self, line: String) -> Self {
+        let Ok(mut failure) = serde_json::from_str::<Value>(&self.0) else {
+            return self;
+        };
+        failure["skill"] = Value::String(line);
+        match serde_json::to_string(
+            &gents_session::session::output_render::Ordered::reading_order(
+                failure,
+                &["error", "skill"],
+            ),
+        ) {
+            Ok(text) => Self(text),
+            Err(_) => self,
+        }
+    }
 }
 
 fn schema_error(error: anyhow::Error, recovery: Value) -> SchemaError {

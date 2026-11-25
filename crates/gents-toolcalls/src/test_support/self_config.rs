@@ -592,6 +592,25 @@ impl SelfConfigFixture {
         grants: &SelfConfigToolConfig,
         plugins: Arc<crate::plugin::executor::PluginExecutor>,
     ) -> Vec<Box<dyn ToolDyn>> {
+        self.built(grants, plugins, Arc::default())
+    }
+
+    /// The config tool as a surface builds it for a caller whose catalog
+    /// `skill_pointers` holds.
+    pub fn tools_with_skills(
+        &self,
+        grants: &SelfConfigToolConfig,
+        skill_pointers: Arc<gents_tools::skill_pointer::SkillPointers>,
+    ) -> Vec<Box<dyn ToolDyn>> {
+        self.built(grants, test_plugins(), skill_pointers)
+    }
+
+    fn built(
+        &self,
+        grants: &SelfConfigToolConfig,
+        plugins: Arc<crate::plugin::executor::PluginExecutor>,
+        skill_pointers: Arc<gents_tools::skill_pointer::SkillPointers>,
+    ) -> Vec<Box<dyn ToolDyn>> {
         assert_eq!(grants.agent_did, self.agent_did);
         build_self_config_tools_with_runtime(
             SelfConfigRuntime {
@@ -602,6 +621,7 @@ impl SelfConfigFixture {
                 runtime_identity: Some(self.db.node_identity.clone()),
                 plugins,
                 tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+                skill_pointers,
             },
             grants,
             Some(self.node_binding.clone()),

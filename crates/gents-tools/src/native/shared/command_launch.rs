@@ -20,24 +20,14 @@ use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
 #[cfg(target_os = "macos")]
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
-/// Seatbelt cannot run these host programs: `ps` and `sudo` are setuid root,
-/// which the kernel refuses to execute inside a sandbox, and launchd answers
-/// `launchctl list` with an error to a sandboxed caller.
-pub(crate) const SEATBELT_REFUSED_PROGRAMS: &[&str] =
-    &["/bin/ps", "/usr/bin/sudo", "/bin/launchctl"];
-
 pub(crate) const READ_ONLY_SEATBELT: &str = "macos_seatbelt_read_only";
 
 pub(crate) fn select_sandbox(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
-    program: &str,
 ) -> std::result::Result<&'static str, DenialReason> {
     match mode {
-        CommandExecutionMode::ReadOnly
-            if workspace_write_sandbox_enforced
-                && !SEATBELT_REFUSED_PROGRAMS.contains(&program) =>
-        {
+        CommandExecutionMode::ReadOnly if workspace_write_sandbox_enforced => {
             Ok(READ_ONLY_SEATBELT)
         }
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
@@ -139,7 +129,7 @@ fn read_only_launch(
         .ok()
         .map(|path| path.to_string_lossy().into_owned());
     let program = resolved.as_deref().unwrap_or(command);
-    let sandbox = select_sandbox(policy.mode, workspace_write_sandbox_enforced(), program)
+    let sandbox = select_sandbox(policy.mode, workspace_write_sandbox_enforced())
         .map_err(|reason| policy_denial(policy, reason))?;
     let key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_owned());
     let contained = sandbox == READ_ONLY_SEATBELT;
@@ -475,7 +465,7 @@ fn sandboxed_command_for_policy(
 fn select_sandbox_for_execution(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<&'static str, ToolError> {
-    select_sandbox(policy.mode, workspace_write_sandbox_enforced(), "")
+    select_sandbox(policy.mode, workspace_write_sandbox_enforced())
         .map_err(|reason| policy_denial(policy, reason))
 }
 

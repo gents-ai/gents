@@ -70,6 +70,8 @@ import Proofs.Documents.Operations
 import Proofs.Documents.ScopeTemplates
 import Proofs.Automation.Triggers
 import Proofs.Automation.Goals
+import Proofs.Automation.GoalProgress
+import Proofs.Automation.GoalStopPolicy
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Automation.GoalAutomation.Operations
@@ -95,6 +97,7 @@ import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Tools.SchemaCollections
+import Proofs.Tools.SkillPointer
 import Proofs.P2P.Operations
 import Proofs.P2P.Enrollment.RouteFence
 import Proofs.Clients.ServiceLifecycle

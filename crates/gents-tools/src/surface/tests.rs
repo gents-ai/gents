@@ -189,6 +189,7 @@ fn fingerprint_test_config(root: PathBuf, lsp_config: Option<String>) -> AgentTo
         "fingerprint",
         ResolvedToolSelection {
             file_tools,
+            bash: gents_documents::BashMode::Unrestricted,
             enable_lsp,
             lsp_config,
             ..ResolvedToolSelection::default()

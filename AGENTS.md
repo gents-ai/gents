@@ -185,8 +185,10 @@ are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
 
 **The gate** (`scripts/ci/gate.py`, run by `.github/workflows/ci.yml`) maps a
 change to its crates and their reverse dependents and selects `fmt`, `lint`
-(clippy `-D warnings`, live suites compiled), `contract` (no `sorry`, Lean
-layers and build, generated files current, the consumer scan, the structure rules),
+(the product build and clippy `-D warnings`), `lint-variants` (the live suites,
+the Vera and WASI builds, the desktop capabilities), `contract` (no `sorry`,
+Lean layers and build, generated files current, the consumer scan, the
+structure rules),
 the TypeScript jobs, and the test groups `foundation`, `store`, `session`,
 `runtime`, `cli` and `desktop`, each crate built and tested alone.
 
