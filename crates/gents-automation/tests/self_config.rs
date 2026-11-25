@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 #[path = "self_config/agent_operation_text_tests.rs"]
 mod agent_operation_text_tests;
+#[path = "self_config/skill_pointer_tests.rs"]
+mod skill_pointer_tests;
 #[path = "self_config/tests.rs"]
 mod tests;
 #[path = "self_config/text_tests.rs"]

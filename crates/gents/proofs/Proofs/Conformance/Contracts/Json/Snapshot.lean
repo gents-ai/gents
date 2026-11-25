@@ -59,6 +59,7 @@ import Proofs.Conformance.InterruptGenerationClaim
 import Proofs.Conformance.Identity.SessionInterruptAccess
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.SkillPointer
 import Proofs.Conformance.PathNamespace
 import Proofs.Conformance.MCPHealthShutdown
 import Proofs.Conformance.DatastoreWrite
