@@ -26,7 +26,9 @@ Return exactly one of:
   `job_results`; it exists only on the step after a read, so use it then or
   carry what you need in `effects.state`. That round must return `effects`, `result`, `suspend` or
   `fail`, not another read request.
-- `{result: <any JSON>}` to finish.
+- `{result: <any JSON>}` to finish. `slots[slot].text` is always a string, so
+  parse numeric or structured values (`Number(...)` / `JSON.parse(...)`) before
+  returning them in `{result}`.
 - `{suspend: {kind: "pause", message}}` to pause.
 - `{fail: {code, message}}` to fail.
 

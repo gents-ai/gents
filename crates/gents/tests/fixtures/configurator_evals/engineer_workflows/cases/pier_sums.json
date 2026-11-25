@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run one background job called pier-sums with two helpers, one per file: each totals the numbers in north.json or south.json. Return north and south with the totals, and tell me both when it's done. Only read the files.",
+      "prompt": "Run one background job called pier-sums with two helpers, one per file: each totals the numbers in north.json or south.json. Return north and south with their numeric totals, and tell me both when it's done. Only read the files.",
       "settle": true,
       "checks": [
         {

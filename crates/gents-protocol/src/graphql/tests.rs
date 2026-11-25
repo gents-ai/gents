@@ -3,10 +3,17 @@ use super::*;
 #[test]
 fn validate_graphql_filter_fragment_accepts_real_filters() {
     for filter in [
+        "{}",
         r#"{ kind: { _eq: "signup" } }"#,
         r#"{ status: { _in: ["a", "b"] } }"#,
         r#"{ _and: [ { a: { _eq: 1 } }, { b: { _gt: -2.5 } } ] }"#,
         r#"{ name: { _like: "%needs \"quotes\"%" } }"#,
+        r#"{ source_handoff_id: { _like: "redline-%" } }"#,
+        r#"{ _and: [{ terminal_state: { _eq: "completed" } }, { source_handoff_id: { _like: "redline-%" } }] }"#,
+        r#"{ _docID: { _nin: ["bae-1", "bae-2"] } }"#,
+        r#"{ carrier: { name: { _eq: "Ada" } } }"#,
+        r#"{ payload: { _eq: { _custom: 1 } } }"#,
+        r#"{ tags: { _any: { _like: "A%" } } }"#,
         "{ enabled: { _eq: true } }",
     ] {
         assert!(
@@ -14,6 +21,37 @@ fn validate_graphql_filter_fragment_accepts_real_filters() {
             "{filter:?} is a legitimate filter and must pass"
         );
     }
+}
+
+#[test]
+fn validate_graphql_filter_fragment_rejects_unknown_operators() {
+    for filter in [
+        r#"{ source_handoff_id: { _starts_with: "redline-" } }"#,
+        r#"{ _and: [{ terminal_state: { _eq: "completed" } }, { source_handoff_id: { _starts_with: "redline-" } }] }"#,
+        r#"{ _starts_with: "redline-" }"#,
+        r#"{ tags: { _any: { _starts_with: "A" } } }"#,
+        r#"{ carrier: { name: { _regex: "^A" } } }"#,
+    ] {
+        let error = validate_graphql_filter_fragment(filter).expect_err(&format!(
+            "{filter:?} uses an unknown operator and must fail"
+        ));
+        assert!(
+            error.to_string().contains("_like"),
+            "error should guide callers to _like: {error}"
+        );
+    }
+}
+
+#[test]
+fn graphql_filter_top_level_fields_collects_fields_through_logical_combinators() {
+    let fields = graphql_filter_top_level_fields(
+        r#"{ _and: [{ terminal_state: { _eq: "completed" } }, { _not: { source_handoff_id: { _like: "redline-%" } } }], carrier: { name: { _eq: "Ada" } } }"#,
+    )
+    .expect("valid filter");
+    assert_eq!(
+        fields,
+        vec!["terminal_state", "source_handoff_id", "carrier"]
+    );
 }
 
 #[test]

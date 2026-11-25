@@ -49,11 +49,22 @@ fn obligation_count_fields(candidate: &Value) -> Result<Vec<(String, String, Str
         .collect())
 }
 
+fn event_source_filter(source: &crate::EventSource) -> Option<&str> {
+    source
+        .filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+}
+
 fn schema_targets(collection: Collection, candidate: &Value) -> Vec<String> {
     match collection {
         Collection::EventSource => serde_json::from_value::<crate::EventSource>(candidate.clone())
             .ok()
-            .filter(|source| event_source_schema_fields(source) != (None, None))
+            .filter(|source| {
+                event_source_schema_fields(source) != (None, None)
+                    || event_source_filter(source).is_some()
+            })
             .map(|source| source.source_collection)
             .into_iter()
             .collect(),
@@ -182,12 +193,35 @@ pub(super) async fn validate_event_source_live_fields(
     let source: crate::EventSource = serde_json::from_value(candidate.clone())
         .context("decoding EventSource for live-field validation")?;
     let (correlation, count_field) = event_source_schema_fields(&source);
-    if correlation.is_none() && count_field.is_none() {
+    let filter = event_source_filter(&source);
+    if correlation.is_none() && count_field.is_none() && filter.is_none() {
         return Ok(());
     }
     let Some(fields) = declared_fields(txn, &source.source_collection, introspected).await? else {
         return Ok(());
     };
+    if let Some(filter) = filter {
+        for field in gents_store::graphql::graphql_filter_top_level_fields(filter)? {
+            if field != "_docID" && !fields.contains_key(&field) {
+                let available = fields
+                    .keys()
+                    .filter(|name| {
+                        !schema_introspection::is_aggregate_pseudo_field(name)
+                            && (!name.starts_with('_') || name.as_str() == "_docID")
+                    })
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "EventSource {} filter references unknown field {:?} on {}; available fields: [{}]",
+                    source.event_source_id,
+                    field,
+                    source.source_collection,
+                    available
+                );
+            }
+        }
+    }
     if let Some(field) = correlation {
         match fields.get(field) {
             Some(declared) if declared.named_type() == "String" => {}
@@ -227,4 +261,60 @@ pub(super) async fn validate_event_source_live_fields(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gents_store::config_client::ConfigAccess;
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn event_source_live_validation_rejects_unknown_filter_fields() {
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+        node.add_collection(
+            "type MeterOutcome { terminal_state: String source_handoff_id: String }",
+        )
+        .await
+        .unwrap();
+        let bad = json!({
+            "node_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            "event_source_id": "bad-field",
+            "source_collection": "MeterOutcome",
+            "filter": r#"{status: {_eq: "completed"}}"#
+        });
+        let good = json!({
+            "node_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            "event_source_id": "good-field",
+            "source_collection": "MeterOutcome",
+            "filter": r#"{_and: [{terminal_state: {_eq: "completed"}}, {source_handoff_id: {_like: "redline-%"}}]}"#
+        });
+        let error = ConfigAccess::transact_local_readonly(&node, None, "test.bad_filter", |txn| {
+            let bad = bad.clone();
+            Box::pin(async move {
+                validate_event_source_live_fields(txn, &bad, &mut IntrospectedFields::new()).await
+            })
+        })
+        .await
+        .expect_err("unknown filter field must fail live schema validation");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("\"status\"")
+                && message.contains("terminal_state")
+                && message.contains("source_handoff_id"),
+            "error should name the unknown field and available fields: {message}"
+        );
+        ConfigAccess::transact_local_readonly(&node, None, "test.good_filter", |txn| {
+            let good = good.clone();
+            Box::pin(async move {
+                validate_event_source_live_fields(txn, &good, &mut IntrospectedFields::new()).await
+            })
+        })
+        .await
+        .expect("declared filter fields should pass live schema validation");
+        node.shutdown().await.expect("shut down test node");
+    }
 }

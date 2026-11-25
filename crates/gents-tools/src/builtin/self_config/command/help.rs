@@ -316,7 +316,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             commands: match resource { "task" => &["task run TASK_ID  options: args (JSON object bound as args.*), session-id, continue-session; fires it once now and returns the queued request. A manual run has no doc.*: to exercise a task whose template reads doc.*, write a document its trigger's source watches"], "trigger" => &["trigger explain ID  options.source-doc (default: last attempted document); read-only trace from source document to request"], _ => &[] }, notes: match resource {
                 "task" => "Create uses options.agent (default: you); agent_did is protected. Updates resolve the saved owner; agent_did cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
                 "trigger" => "Create the source and Task first. The Task determines who handles the event. Updating a Trigger cannot change its Task’s agent; create a separate Trigger for another owner. concurrency controls overlap; session_id_template controls the destination independently. An existing destination session must use the Task’s agent. To continue a known session, set its ID as session_id_template. Omit it for a new session per fire. For one session per key, render the key in session_id_template and set create_session: the first fire creates it. A Trigger disables itself after max_fires_per_hour admitted fires (default 1000) and records why in last_status and last_error. See help automation for the full workflow.",
-                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
+                "event-source" => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. filter operators: _eq, _neq, _gt, _geq, _lt, _leq, _in, _nin, _like, _nlike, _ilike, _nilike; compose with _and, _or, _not (use _like with % wildcards for prefix/pattern matching). A group fire binds group.correlation_value|count|docs|complete, and doc is its first document.",
                 _ => "A source alone starts no work: create a Task, then a Trigger linking them. Workflow: help automation. Retries deduplicate by due occurrence.",
             }, next: "get the saved document and verify its references.",
         },
@@ -418,7 +418,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "automation" => Page {
             what: "documents that start work without a user: event-source or schedule, trigger, task (automation grant).",
             commands: &["task|trigger|schedule|event-source [preview] create|update|delete ID", "task|trigger|schedule|event-source list|get ID"],
-            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group (help event-source). Unset fields render empty: test {% if doc.field %}. Keep needed source data apart from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome, readable only by its Agent and outcome_readers. Sources then need a nonempty String handoff_id: declare it in the schema and set it in writers (help datastore). Chain on FireOutcome.source_handoff_id.\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
+            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys using DefraDB operators (_eq, _neq, _gt, _geq, _lt, _leq, _in, _nin, _like, _nlike, _ilike, _nilike; compose with _and, _or, _not; use _like with % wildcards for prefix/pattern matching). Templates: doc, event, args, session, request, group (help event-source). Unset fields render empty: test {% if doc.field %}. Keep needed source data apart from instructions.\nTask.emit_outcome=true records completion in FireOutcome, readable only by its Agent and outcome_readers. FireOutcome.terminal_state stores RequestLifecycleState values (\"completed\", \"failed\", \"superseded\", \"dead\", \"interrupted\"; never \"success\"). Sources then need a nonempty String handoff_id: declare it in the schema and set it in writers (help datastore). Chain on FireOutcome.source_handoff_id.\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. session_id_template targets an authorized open session with the Task agent; omit for a new one. emit_outcome is event-only.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
             next: "create one source document, inspect the request with sessions, and query the output through its datastore tool.",
         },
         "cleanup" => Page {
@@ -927,6 +927,48 @@ mod accepted_command_tests {
             .join("\n");
         for verbs in ["list|get", "create|update|delete", "preview|edit"] {
             assert!(commands.contains(verbs), "{verbs} missing from {commands}");
+        }
+    }
+
+    #[test]
+    fn filter_operators_and_fire_outcome_states_stay_in_sync_with_owners() {
+        for op in gents_protocol::graphql::DEFRADB_FILTER_OPERATORS {
+            assert!(
+                ::query::mapper::FilterOp::parse(op).is_some(),
+                "DEFRADB_FILTER_OPERATORS entry {op:?} is not accepted by DefraDB"
+            );
+        }
+        let operators = gents_protocol::graphql::DEFRADB_FILTER_OPERATORS_HELP;
+        let event_source_notes = page("event-source").expect("event-source page").notes;
+        let automation_notes = page("automation").expect("automation page").notes;
+        assert!(
+            event_source_notes.contains(operators),
+            "{event_source_notes}"
+        );
+        assert!(automation_notes.contains(operators), "{automation_notes}");
+        let find_help = crate::builtin::defra_query::query_help(Some("find")).expect("find help");
+        for op in [
+            "_eq", "_neq", "_gt", "_geq", "_lt", "_leq", "_in", "_nin", "_like", "_nlike",
+            "_ilike", "_nilike", "_and", "_or", "_not",
+        ] {
+            assert!(find_help.contains(op), "{op} missing from query help find");
+            assert!(
+                operators.contains(op),
+                "{op} missing from DEFRADB_FILTER_OPERATORS_HELP"
+            );
+        }
+        let contracts = super::super::contracts::help_patch_contracts(Some("automation"));
+        let contracts_text = contracts.to_string();
+        assert!(contracts_text.contains(operators), "{contracts_text}");
+        for text in [automation_notes, contracts_text.as_str()] {
+            assert!(
+                text.contains("terminal_state")
+                    && text.contains("completed")
+                    && text.contains("failed")
+                    && (text.contains("never \\\"success\\\"")
+                        || text.contains("never \"success\"")),
+                "missing FireOutcome.terminal_state guidance: {text}"
+            );
         }
     }
 }
