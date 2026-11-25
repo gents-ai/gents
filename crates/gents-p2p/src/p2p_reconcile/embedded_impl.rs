@@ -34,6 +34,11 @@ impl EmbeddedRemoteP2pAdmin {
         Self { node, timeout }
     }
 
+    #[cfg(test)]
+    pub(in crate::p2p_reconcile) fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.node
+    }
+
     async fn require_replicable_collections(
         &self,
         collections: &[String],

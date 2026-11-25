@@ -239,18 +239,24 @@ impl RunningDesktop {
     ) -> serde_json::Value {
         let access = self.runtime.user_access();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut updates = self
+            .runtime
+            .node()
+            .subscribe(&[gents::defra_node::EventName::Update]);
         loop {
             let data = access.execute(query).await.unwrap()["data"].clone();
             if ready(&data) {
                 return data;
             }
-            if tokio::time::Instant::now() >= deadline {
+            if !matches!(
+                tokio::time::timeout_at(deadline, updates.recv()).await,
+                Ok(Some(_))
+            ) {
                 let state = access
                     .execute("{ AgentRequest { request_id session_id requester_did lifecycle_state failure_reason caused_by_parent_tool_call_id } AgentToolCall { tool_call_id tool_name lifecycle_state status } AgentOutputSegment { payload } }")
                     .await;
                 panic!("timed out waiting for {what}: {data}; runtime state: {state:?}");
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 

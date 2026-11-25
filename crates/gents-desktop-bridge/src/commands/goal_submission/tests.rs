@@ -137,8 +137,15 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         }]);
         let submitted = request.clone();
         let submitting_core = core.clone();
+        let mut changes = gents_store::subscription_source::subscribe_collections(
+            core.node(),
+            ["PendingChatSubmission"],
+        )?;
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
         let submitting = tokio::spawn(async move {
-            super::super::goal::control_goal(&submitting_core, serde_json::from_value(submitted).unwrap()).await
+            let result = super::super::goal::control_goal(&submitting_core, serde_json::from_value(submitted).unwrap()).await;
+            let _ = done_tx.send(());
+            result
         });
         let access = ConfigAccess::local(core.node_arc());
         let pending = async {
@@ -148,8 +155,14 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
                     let record: Value = serde_json::from_str(row["payload"].as_str().context("retained command")?)?;
                     return Ok::<_, anyhow::Error>(record);
                 }
-                if submitting.is_finished() { anyhow::bail!("Goal call finished without retaining its preparation"); }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::select! {
+                    _ = &mut done_rx => {
+                        anyhow::bail!("Goal call finished without retaining its preparation");
+                    }
+                    changed = changes.recv() => {
+                        changed.context("PendingChatSubmission subscription closed")?;
+                    }
+                }
             }
         };
         let retained = tokio::time::timeout(Duration::from_secs(5), pending).await;
