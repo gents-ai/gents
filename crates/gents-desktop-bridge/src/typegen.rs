@@ -813,6 +813,12 @@ fn eval_capture_types_preserve_native_wire_tags() {
             name: "files".into(),
             glob: "*.json".into(),
         },
+        EvalCapture::Runs {
+            name: "runs".into(),
+            trigger_id: None,
+            source_collection: None,
+            of_seed: false,
+        },
     ] {
         let wire = serde_json::to_value(capture).unwrap();
         let tag = format!("\"kind\": \"{}\"", wire["kind"].as_str().unwrap());

@@ -207,16 +207,65 @@ pub enum EvalCapture {
         name: String,
         glob: String,
     },
+    /// One row per trigger-fired request that came into being while the
+    /// stage ran, whoever started it, with its session, state, final assistant
+    /// message and tool results. Each selector given narrows the runs.
+    Runs {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        trigger_id: Option<String>,
+        /// The collection the firing trigger watches.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        source_collection: Option<String>,
+        /// Only runs the stage's own seed document caused.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+        of_seed: bool,
+    },
 }
 
 impl EvalCapture {
     pub fn name(&self) -> &str {
         match self {
-            Self::Documents { name, .. } | Self::File { name, .. } | Self::Schema { name, .. } => {
-                name
-            }
+            Self::Documents { name, .. }
+            | Self::File { name, .. }
+            | Self::Schema { name, .. }
+            | Self::Runs { name, .. } => name,
         }
     }
+}
+
+/// The JSON Schema of one `EvalStage` field, as a case author writes it.
+pub fn eval_stage_field_schema(field: &str) -> Option<serde_json::Value> {
+    let schema = schemars::schema_for!(EvalStage).to_value();
+    schema.get("properties")?.get(field).cloned()
+}
+
+/// The JSON Schema of one `EvalCapture` kind, as a case author writes it.
+pub fn eval_capture_kind_schema(kind: &str) -> Option<serde_json::Value> {
+    let schema = schemars::schema_for!(EvalCapture).to_value();
+    schema
+        .get("oneOf")?
+        .as_array()?
+        .iter()
+        .find(|variant| {
+            variant
+                .pointer("/properties/kind/const")
+                .or_else(|| variant.pointer("/properties/kind/enum/0"))
+                .and_then(serde_json::Value::as_str)
+                == Some(kind)
+        })
+        .cloned()
+}
+
+fn expected(value: &bool) -> bool {
+    *value
+}
+
+fn fire_expected() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -230,6 +279,12 @@ pub struct EvalStage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub seed: Option<EvalFixtureDocument>,
+    /// For a seed stage: whether the automation under test must fire for the
+    /// seed. `false` passes once the trial home is quiet with nothing fired
+    /// for it, and fails if anything fires.
+    #[serde(default = "fire_expected", skip_serializing_if = "expected")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    pub expect_fire: bool,
     /// Opt-in wall-clock bound: when it expires the runner interrupts the
     /// request and the stage is graded `deadline`. Absent, the stage waits for
     /// the request's own terminal state.
@@ -429,6 +484,14 @@ impl EvalDefinition {
                         "eval definition {id} case {case_id} stage {stage_id} seed collection must be named"
                     );
                 }
+                ensure!(
+                    stage.expect_fire
+                        || (stage.seed.is_some()
+                            && !stage.settle
+                            && stage.continuation.is_none()
+                            && !stage.checks.is_empty()),
+                    "eval definition {id} case {case_id} stage {stage_id} expect_fire false needs a seed and a check, and takes no settle or continuation"
+                );
                 if let Some(continuation) = &stage.continuation {
                     ensure!(
                         stage.settle,
@@ -499,6 +562,24 @@ impl EvalDefinition {
                             !glob.trim().is_empty(),
                             "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty glob"
                         ),
+                        EvalCapture::Runs {
+                            trigger_id,
+                            source_collection,
+                            of_seed,
+                            ..
+                        } => {
+                            ensure!(
+                                trigger_id.as_deref().is_none_or(|trigger| !trigger.trim().is_empty()),
+                                "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty trigger_id"
+                            );
+                            if let Some(collection) = source_collection {
+                                gents_store::graphql::validate_collection_identifier(collection)?;
+                            }
+                            ensure!(
+                                !of_seed || stage.seed.is_some(),
+                                "eval definition {id} case {case_id} stage {stage_id} capture {name} of_seed needs a seed stage"
+                            );
+                        }
                     }
                 }
             }

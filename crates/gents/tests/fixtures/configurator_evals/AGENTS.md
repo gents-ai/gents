@@ -83,9 +83,9 @@ every case of every suite, and each finding cites its rule:
 - 4: the first stage that grades configuration it built (`schema_matches`, or
   `crew_spec_match` over configuration documents unless it only checks that
   none were made) when no later stage grades a run (a final message, a tool
-  result, a handoff, a file, or rows of a collection that is not
-  configuration) and the stage itself grades no tool result, no handoff and no
-  such rows being there.
+  result, a handoff, a file, the runs of a `runs` capture, or rows of a
+  collection that is not configuration) and the stage itself grades no tool
+  result, no handoff and no such rows being there.
 
 Rule 1 is checked here only inside cases. That every suite runs the same default
 Engineer is held elsewhere: `gents utils eval subject` writes the one subject
