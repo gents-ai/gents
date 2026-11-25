@@ -205,6 +205,8 @@ impl<'ast> Visit<'ast> for Constants {
 /// admits its removal of the session's relations and its delete of the
 /// session. No production path offers either: none names the session
 /// collection, and each that computes its collection keeps the session out.
+/// That no path deletes a session is also a premise of Lean
+/// `TransactionFence.DeclaredFence.immutableBinding`.
 #[test]
 fn agent_reachable_surfaces_never_detach_or_delete_a_session() {
     let root = repo_root();
@@ -235,7 +237,7 @@ fn agent_reachable_surfaces_never_detach_or_delete_a_session() {
         RULE,
         &session,
         "removal(s) of an AgentSession relation or delete(s) of an AgentSession",
-        "an Agent never detaches or deletes a session it published, and ACP cannot withhold that from the session's native owner, so no production path offers it; remove the path, or decide a User-signed session removal in Lean `Tools.SessionCustody` first",
+        "an Agent never detaches or deletes a session it published, and ACP cannot withhold that from the session's native owner, so no production path offers it; remove the path, or decide a User-signed session removal in Lean `Tools.SessionCustody` and `TransactionFence.DeclaredFence.immutableBinding` first",
     );
     named_exceptions(
         RULE,

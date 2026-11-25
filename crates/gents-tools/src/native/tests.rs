@@ -4,7 +4,7 @@ use gents_protocol::tool_names::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 mod workspace_artifact_admission;
@@ -476,13 +476,12 @@ fn blocker_entered_at_nanos(marker: &std::path::Path) -> Option<i64> {
 }
 
 async fn await_native_blocker_path(path: &std::path::Path) {
-    tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
-        while !path.exists() {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("native blocker never produced {path:?}"));
+    crate::test_support::wait_for_path(
+        path,
+        NATIVE_BLOCKER_HANG_BOUND,
+        "native blocker never produced expected path",
+    )
+    .await;
 }
 
 fn tool_outcome_state(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) -> &'static str {
@@ -1601,20 +1600,19 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         &envelope,
     );
     tokio::pin!(call);
-    let ready = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Some(pid) = std::fs::read_to_string(&pid_file)
+    let ready = crate::test_support::watch_path_until(
+        &pid_file,
+        Duration::from_secs(30),
+        "bash fixture must start its descendant before testing timeout",
+        |path| {
+            std::fs::read_to_string(path)
                 .ok()
                 .and_then(|value| value.trim().parse::<i32>().ok())
-            {
-                break pid;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    });
+        },
+    );
     let descendant_pid = tokio::select! {
         outcome = &mut call => panic!("bash fixture exited before its descendant was ready: {outcome:?}"),
-        ready = ready => ready.expect("bash fixture must start its descendant before testing timeout"),
+        ready = ready => ready,
     };
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(60)).await;
@@ -1707,22 +1705,84 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     assert_unix_process_exited(shell_pid).await;
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn assert_unix_process_exited(pid: i32) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let result = unsafe { libc::kill(pid, 0) };
-        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            return;
-        }
-        if Instant::now() >= deadline {
+    if unsafe { libc::kill(pid, 0) } == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        let kq = unsafe { libc::kqueue() };
+        assert!(
+            kq >= 0,
+            "kqueue failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let change = libc::kevent {
+            ident: pid as usize,
+            filter: libc::EVFILT_PROC,
+            flags: libc::EV_ADD | libc::EV_ONESHOT,
+            fflags: libc::NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        let mut event = unsafe { std::mem::zeroed::<libc::kevent>() };
+        let timeout = libc::timespec {
+            tv_sec: 2,
+            tv_nsec: 0,
+        };
+        let rc = unsafe { libc::kevent(kq, &change, 1, &mut event, 1, &timeout) };
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(kq) };
+        let exited = (rc == -1 && err.raw_os_error() == Some(libc::ESRCH))
+            || (rc > 0
+                && ((event.flags & libc::EV_ERROR != 0 && event.data as i32 == libc::ESRCH)
+                    || (event.fflags & libc::NOTE_EXIT != 0)));
+        if !exited {
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }
-            panic!("managed bash descendant process {pid} survived timeout");
+            panic!("managed bash descendant process {pid} survived timeout (rc={rc}, err={err})");
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+    })
+    .await
+    .expect("kqueue wait task");
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_unix_process_exited(pid: i32) {
+    if unsafe { libc::kill(pid, 0) } == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        return;
     }
+    tokio::task::spawn_blocking(move || {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
+        if fd < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            panic!("pidfd_open({pid}) failed: {err}");
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pfd, 1, 2000) };
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        if rc <= 0 {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            panic!("managed bash descendant process {pid} survived timeout (rc={rc}, err={err})");
+        }
+    })
+    .await
+    .expect("pidfd wait task");
 }
 
 #[cfg(target_os = "macos")]
@@ -2977,23 +3037,30 @@ async fn bash_tool_liveness_follows_the_lean_composed_model() {
             CommandExecutionPolicy::write_capable(),
         ));
         let token = tokio_util::sync::CancellationToken::new();
-        let (command, deadline) = match case.input.trigger.as_str() {
-            "deadline_elapsed" => (
-                "printf partial; sleep 30",
-                Some(chrono::Utc::now() + chrono::Duration::milliseconds(300)),
-            ),
-            "cancel_requested" => {
-                let cancel = token.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                    cancel.cancel();
-                });
-                ("sleep 30", None)
-            }
-            "observe_exit_success" => ("true", None),
-            "observe_exit_failure" => ("false", None),
-            other => panic!("no bash scenario for trigger {other}"),
-        };
+        let (command, deadline): (String, Option<chrono::DateTime<chrono::Utc>>) =
+            match case.input.trigger.as_str() {
+                "deadline_elapsed" => (
+                    "printf partial; sleep 30".into(),
+                    Some(chrono::Utc::now() + chrono::Duration::milliseconds(300)),
+                ),
+                "cancel_requested" => {
+                    let cancel = token.clone();
+                    let ready = root.join("running");
+                    tokio::spawn(async move {
+                        crate::test_support::wait_for_path(
+                            &ready,
+                            Duration::from_secs(10),
+                            "bash liveness fixture must start before cancellation",
+                        )
+                        .await;
+                        cancel.cancel();
+                    });
+                    (": > running; sleep 30".into(), None)
+                }
+                "observe_exit_success" => ("true".into(), None),
+                "observe_exit_failure" => ("false".into(), None),
+                other => panic!("no bash scenario for trigger {other}"),
+            };
         let scope_call =
             gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(deadline, token).call();
         let outcome = tokio::time::timeout(
@@ -3032,12 +3099,13 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
         let root = temp_root(&format!("gents-tool-route-{tool_name}"));
         std::fs::write(root.join("first.txt"), "first request\n").unwrap();
         let gate = root.join("gate");
+        let entered = root.join("entered");
         let context = ToolContext::new(root.clone(), false).unwrap();
         let context = context
             .clone()
             .with_runner_blocker(gents_fs_runner::TraversalBlocker {
                 dir: context.root(),
-                entered: Some(root.join("entered")),
+                entered: Some(entered.clone()),
                 gate: Some(gate.clone()),
                 pause: Duration::ZERO,
                 released: Some(root.join("released")),
@@ -3074,7 +3142,7 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
                     DEFAULT_MAX_COMMAND_CHARS,
                     CommandExecutionPolicy::write_capable(),
                 )),
-                serde_json::json!({ "command": "sleep 30" }).to_string(),
+                serde_json::json!({ "command": ": > entered; sleep 30" }).to_string(),
             ),
             other => panic!("no native tool scenario for {other}"),
         };
@@ -3084,24 +3152,41 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
                 .call();
         let call = crate::runtime_context::call_tool_managed(tool.as_ref(), args, &envelope);
         let observe = async {
-            let observed = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
-                loop {
-                    let registered = gents_session::exec::status::active_native_executors()
-                        .into_iter()
-                        .find(|executor| executor.tool_name.as_deref() == Some(tool_name.as_str()));
-                    if let Some(executor) = registered {
-                        break if executor.argv0 == runner {
+            let observed = if tool_name != "bash" {
+                await_native_blocker_path(&entered).await;
+                gents_session::exec::status::active_native_executors()
+                    .into_iter()
+                    .find(|executor| executor.tool_name.as_deref() == Some(tool_name.as_str()))
+                    .map(|executor| {
+                        if executor.argv0 == runner {
                             "filesystem_traversal"
                         } else {
                             "shell_command"
                         }
-                        .to_string();
+                        .to_string()
+                    })
+            } else {
+                tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+                    loop {
+                        let registered = gents_session::exec::status::active_native_executors()
+                            .into_iter()
+                            .find(|executor| {
+                                executor.tool_name.as_deref() == Some(tool_name.as_str())
+                            });
+                        if let Some(executor) = registered {
+                            break if executor.argv0 == runner {
+                                "filesystem_traversal"
+                            } else {
+                                "shell_command"
+                            }
+                            .to_string();
+                        }
+                        tokio::time::sleep(Duration::from_millis(2)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(2)).await;
-                }
-            })
-            .await
-            .ok();
+                })
+                .await
+                .ok()
+            };
             std::fs::write(&gate, b"open").expect("opening the blocker gate");
             token.cancel();
             observed

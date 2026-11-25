@@ -41,11 +41,14 @@ async fn observe_finalization(case: &family::FinalizationInput) -> family::Final
     } else {
         Box::pin(async move { finalizer.finish_stream().await.unwrap() })
     };
-    tokio::select! {
-        result = &mut entered_rx => result.expect("finalizer entered"),
-        () = &mut owner => panic!("{}: finalizer completed before storage return", case.name),
-        () = tokio::time::sleep(Duration::from_secs(5)) => panic!("{}: finalizer never started", case.name),
-    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut entered_rx => result.expect("finalizer entered"),
+            () = &mut owner => panic!("{}: finalizer completed before storage return", case.name),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{}: finalizer never started", case.name));
     let pending_return = if case.storage_returns {
         return_tx.send(()).unwrap();
         None
@@ -96,11 +99,14 @@ async fn native_gate_held_after_independent_completion() -> bool {
             storage_return: storage_return.clone(),
         },
     );
-    tokio::select! {
-        () = entered.notified() => {},
-        result = guarded.next() => panic!("terminal published before native finalizer was released: {result:?}"),
-        () = tokio::time::sleep(Duration::from_secs(10)) => panic!("native finalizer never entered"),
-    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            () = entered.notified() => {},
+            result = guarded.next() => panic!("terminal published before native finalizer was released: {result:?}"),
+        }
+    })
+    .await
+    .expect("native finalizer never entered");
     storage_return.notify_one();
     let sibling = tokio::time::timeout(
         Duration::from_secs(10),

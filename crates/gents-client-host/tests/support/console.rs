@@ -2,19 +2,23 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
+use portable_pty::{ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// A private console delivers Ctrl-C without signalling the runner's console.
 /// ConPTY output must remain drained while the console is being closed.
 /// portable-pty enables cursor inheritance, which requires replying to position
 /// queries before the child can start: https://learn.microsoft.com/windows/console/createpseudoconsole
 pub struct ConsoleChild {
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    exited: Arc<AtomicBool>,
+    exit_status: Option<ExitStatus>,
     output: Option<ConsoleOutput>,
 }
 
@@ -63,16 +67,35 @@ impl ConsoleChild {
             master: Some(pair.master),
             drain: Some(drain),
         };
-        let child = pair.slave.spawn_command(builder);
+        let child = pair
+            .slave
+            .spawn_command(builder)
+            .context("starting fixture console")?;
         drop(pair.slave);
+        let killer = child.clone_killer();
         Ok(Self {
-            child: child.context("starting fixture console")?,
+            child: Some(child),
+            killer,
+            exited: Arc::new(AtomicBool::new(false)),
+            exit_status: None,
             output: Some(output),
         })
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
+        if let Some(status) = &self.exit_status {
+            return Ok(Some(status.clone()));
+        }
+        let status = self
+            .child
+            .as_mut()
+            .expect("console child already waited")
+            .try_wait()?;
+        if let Some(status) = &status {
+            self.exited.store(true, Ordering::Release);
+            self.exit_status = Some(status.clone());
+        }
+        Ok(status)
     }
 
     pub fn interrupt(&mut self) -> Result<()> {
@@ -90,12 +113,21 @@ impl ConsoleChild {
     }
 
     pub async fn wait_for_exit(&mut self) -> Result<ExitStatus> {
-        let status = loop {
-            if let Some(status) = self.try_wait()? {
-                break status;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        };
+        if let Some(status) = &self.exit_status {
+            return Ok(status.clone());
+        }
+        let mut child = self.child.take().context("console child already waited")?;
+        let exited = Arc::clone(&self.exited);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("gents-fixture-console-wait".into())
+            .spawn(move || {
+                let result = child.wait();
+                exited.store(true, Ordering::Release);
+                let _ = tx.send(result);
+            })?;
+        let status = rx.await.context("console waiter thread stopped")??;
+        self.exit_status = Some(status.clone());
         Ok(status)
     }
 
@@ -115,8 +147,13 @@ impl ConsoleChild {
 
 impl Drop for ConsoleChild {
     fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
-            let _ = self.child.kill();
+        if !self.exited.load(Ordering::Acquire)
+            && !matches!(
+                self.child.as_mut().and_then(|child| child.try_wait().ok()),
+                Some(Some(_))
+            )
+        {
+            let _ = self.killer.kill();
         }
     }
 }
@@ -174,19 +211,13 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
         .arg(paths.root());
     let log = temp.path().join("console.log");
     let mut child = ConsoleChild::spawn(&command, &log)?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if gents_desktop_bridge::host::local::connect(&paths)
-                .await
-                .is_ok()
-            {
-                break;
-            }
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        super::support::wait_for_listener(&paths, || {
             anyhow::ensure!(child.try_wait()?.is_none(), "console fixture exited");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        Ok::<_, anyhow::Error>(())
-    })
+            Ok(())
+        }),
+    )
     .await??;
     let mut attachment = super::support::Attachment::start(&paths).await;
     anyhow::ensure!(attachment.snapshot(1).await["client"]["clientDid"] == seed_did);

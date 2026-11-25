@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::request::hooks::claim::{combine, ClaimVerdict, Successor};
 use crate::request::hooks::delivery::DeliveryRecord;
@@ -6,14 +6,16 @@ use crate::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Grant, Grantable, Manifest, Named, OwnedCollection,
     Row, Subject, SubjectKind, Write,
 };
-use crate::request::hooks::hook::{Hook, Outcome, Query};
 use crate::request::hooks::owed;
 use crate::request::hooks::prepared::{admit, prepare, Binding, Stale, Verdict};
 use crate::request::hooks::queue_scope::{
     partition, Partition, ScopeAnswer, ScopeAnswers, ScopeFailure, ScopeRefused,
 };
 use crate::request::hooks::stage::{
-    gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
+    gate, owed, stage, stage_dropping, HookError, Host, Plugin, Staged,
+};
+use crate::test_support::doubles::{
+    ScriptedDecision as Scripted, ScriptedHook, Snapshot, StoreDouble,
 };
 use gents_lean_vocab::families::hooks_contracts_claim_gate::{self as claim_gate};
 use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
@@ -29,9 +31,28 @@ use gents_lean_vocab::families::hooks_contracts_refusable_staging::{self as stag
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use serde_json::Value;
 
-/// The filter field naming the plugin a declared read belongs to, so the
-/// store double can fail exactly the reads the model marks as failed.
-const PLUGIN_FIELD: &str = "plugin";
+/// Lean `Hooks.State` refusal encoding for `StoreDouble`.
+fn refusal_wire(host: &StoreDouble, error: &HookError) -> staging::RefusalWire {
+    let (kind, plugin, reason) = match error {
+        HookError::Refused { plugin, reason } => ("refused", *plugin, Some(reason.clone())),
+        HookError::Invalid { plugin, .. } | HookError::GateEffects { plugin } => {
+            ("invalid", *plugin, None)
+        }
+        HookError::Conflict { plugin, .. } => ("conflict", *plugin, None),
+        HookError::Operation(_) => (
+            "conflict",
+            host.failed_operation()
+                .expect("a failed core operation records its plugin"),
+            None,
+        ),
+        other => panic!("the model has no refusal for {other:?}"),
+    };
+    staging::RefusalWire {
+        kind: kind.to_owned(),
+        plugin: Some(plugin.to_owned()),
+        reason,
+    }
+}
 
 /// `Manifest` holds `&'static str` names because the composition root
 /// registers plugins at build time; generated cases name them at run time.
@@ -52,258 +73,6 @@ fn manifest(name: &str, owns: &[String], bound: usize) -> Manifest {
             .collect(),
         bound,
         history: Vec::new(),
-    }
-}
-
-/// Lean `Hooks.State` as the store double holds it.
-#[derive(Debug, Clone, PartialEq)]
-struct Snapshot {
-    core: Vec<String>,
-    rows: Vec<Row>,
-}
-
-/// An in-memory lifecycle transaction. Row order follows Lean `Store`: a
-/// create prepends, an update rewrites in place and a delete filters.
-struct StoreDouble {
-    state: Mutex<Snapshot>,
-    denied: Vec<(Access, DocRef)>,
-    failing_ops: Vec<String>,
-    unreadable: Vec<String>,
-    failed_operation: Mutex<Option<&'static str>>,
-}
-
-impl StoreDouble {
-    fn of_wire(world: &effect_commit::WorldWire, core: Vec<String>, unreadable: &[String]) -> Self {
-        Self {
-            state: Mutex::new(Snapshot {
-                core,
-                rows: world.rows.iter().map(row_of).collect(),
-            }),
-            denied: world
-                .denied
-                .iter()
-                .map(|denial| {
-                    (
-                        access_of(&denial.access),
-                        DocRef::new(&denial.collection, &denial.doc),
-                    )
-                })
-                .collect(),
-            failing_ops: world.failing_ops.clone(),
-            unreadable: unreadable.to_vec(),
-            failed_operation: Mutex::new(None),
-        }
-    }
-
-    fn snapshot(&self) -> Snapshot {
-        self.state.lock().unwrap().clone()
-    }
-
-    fn permits(&self, access: Access, doc: &DocRef) -> bool {
-        !self
-            .denied
-            .iter()
-            .any(|(denied_access, denied_doc)| *denied_access == access && denied_doc == doc)
-    }
-
-    /// Lean `Hooks.applyWrite`.
-    fn write(rows: &mut Vec<Row>, write: &Write) -> bool {
-        match write {
-            Write::Create { doc, value, .. } => {
-                if rows.iter().any(|row| &row.doc == doc) {
-                    return false;
-                }
-                rows.insert(
-                    0,
-                    Row {
-                        doc: doc.clone(),
-                        revision: 0,
-                        value: value.clone(),
-                    },
-                );
-                true
-            }
-            Write::Update {
-                doc,
-                expected,
-                value,
-                ..
-            } => {
-                let mut held = false;
-                for row in rows.iter_mut() {
-                    if &row.doc == doc && row.revision == *expected {
-                        row.revision = expected + 1;
-                        row.value = value.clone();
-                        held = true;
-                    }
-                }
-                held
-            }
-            Write::Delete { doc, expected, .. } => {
-                if !rows
-                    .iter()
-                    .any(|row| &row.doc == doc && row.revision == *expected)
-                {
-                    return false;
-                }
-                rows.retain(|row| &row.doc != doc);
-                true
-            }
-        }
-    }
-
-    /// Lean `Hooks.applyEffects` with `World.perform`: all or none.
-    fn applied(&self, plugin: &'static str, effects: &[Effect]) -> Result<Snapshot, HookError> {
-        let mut next = self.snapshot();
-        for effect in effects {
-            match effect {
-                Effect::Write(write) => {
-                    if !Self::write(&mut next.rows, write) {
-                        return Err(HookError::Conflict {
-                            plugin,
-                            message: write.conflict().map(str::to_owned),
-                        });
-                    }
-                }
-                Effect::Core(operation) => {
-                    if self.failing_ops.contains(&operation.name) {
-                        *self.failed_operation.lock().unwrap() = Some(plugin);
-                        return Err(HookError::Operation(anyhow::anyhow!(
-                            "core refused {}",
-                            operation.name
-                        )));
-                    }
-                    next.core.push(operation.name.clone());
-                }
-            }
-        }
-        Ok(next)
-    }
-
-    fn refusal_wire(&self, error: &HookError) -> staging::RefusalWire {
-        let (kind, plugin, reason) = match error {
-            HookError::Refused { plugin, reason } => ("refused", *plugin, Some(reason.clone())),
-            HookError::Invalid { plugin, .. } | HookError::GateEffects { plugin } => {
-                ("invalid", *plugin, None)
-            }
-            HookError::Conflict { plugin, .. } => ("conflict", *plugin, None),
-            HookError::Operation(_) => (
-                "conflict",
-                self.failed_operation
-                    .lock()
-                    .unwrap()
-                    .expect("a failed core operation records its plugin"),
-                None,
-            ),
-            other => panic!("the model has no refusal for {other:?}"),
-        };
-        staging::RefusalWire {
-            kind: kind.to_owned(),
-            plugin: Some(plugin.to_owned()),
-            reason,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl Host for StoreDouble {
-    fn actor(&self) -> Option<String> {
-        None
-    }
-
-    async fn select(
-        &self,
-        _manifest: &Manifest,
-        _named: &[DocRef],
-        query: &Query,
-    ) -> Result<Vec<Row>, HookError> {
-        let unreadable = query.filter.iter().any(|(field, value)| {
-            field == PLUGIN_FIELD
-                && value
-                    .as_str()
-                    .is_some_and(|plugin| self.unreadable.iter().any(|name| name == plugin))
-        });
-        if unreadable {
-            return Err(HookError::Query(format!(
-                "{} rows are unavailable",
-                query.collection
-            )));
-        }
-        Ok(self
-            .snapshot()
-            .rows
-            .into_iter()
-            .filter(|row| row.doc.collection == query.collection)
-            .collect())
-    }
-
-    async fn allowed(&self, access: Access, doc: &DocRef) -> Result<bool, HookError> {
-        Ok(self.permits(access, doc))
-    }
-
-    async fn apply(&self, manifest: &Manifest, effects: &[Effect]) -> Result<(), ApplyFailure> {
-        let next = self
-            .applied(manifest.name, effects)
-            .map_err(|error| ApplyFailure { clean: true, error })?;
-        *self.state.lock().unwrap() = next;
-        Ok(())
-    }
-}
-
-/// Lean `Conformance.HooksContracts.Decision` rebuilt over production values.
-enum Scripted<V> {
-    Refuse(String),
-    Proceed(V, Vec<Effect>),
-    ByShown {
-        count: usize,
-        matching: (V, Vec<Effect>),
-        otherwise: (V, Vec<Effect>),
-    },
-}
-
-struct ScriptedHook<V> {
-    manifest: Manifest,
-    reads: Vec<String>,
-    decision: Scripted<V>,
-}
-
-impl<V> Hook<()> for ScriptedHook<V>
-where
-    V: Clone + Send + Sync,
-{
-    type Value = V;
-
-    fn manifest(&self) -> &Manifest {
-        &self.manifest
-    }
-
-    fn reads(&self, _event: &()) -> Vec<Query> {
-        self.reads
-            .iter()
-            .map(|collection| {
-                Query::select(collection.clone(), "value").eq(PLUGIN_FIELD, self.manifest.name)
-            })
-            .collect()
-    }
-
-    fn decide(&self, _event: &(), rows: &[Vec<Row>]) -> Outcome<V> {
-        let (value, effects) = match &self.decision {
-            Scripted::Refuse(reason) => return Outcome::Refuse(reason.clone()),
-            Scripted::Proceed(value, effects) => (value, effects),
-            Scripted::ByShown {
-                count,
-                matching,
-                otherwise,
-            } => {
-                let shown: usize = rows.iter().map(Vec::len).sum();
-                let chosen = if shown == *count { matching } else { otherwise };
-                (&chosen.0, &chosen.1)
-            }
-        };
-        Outcome::Proceed {
-            value: value.clone(),
-            effects: effects.clone(),
-        }
     }
 }
 
@@ -393,7 +162,7 @@ fn bound_of(bound: u64) -> usize {
 async fn effect_validation_and_application_follow_the_lean_model() {
     for case in gents_lean_vocab::families::hooks_contracts_effect_commit::cases() {
         let input = &case.input;
-        let host = StoreDouble::of_wire(&input.world, input.world.core.clone(), &[]);
+        let host = host_of(&input.world, Some(input.world.core.clone()), &[]);
         let manifest = manifest(
             &input.manifest.name,
             &input.manifest.owns,
@@ -597,7 +366,22 @@ where
 {
     let world: effect_commit::WorldWire = gents_lean_vocab::family::recode(world);
     let core = core.unwrap_or_else(|| world.core.clone());
-    StoreDouble::of_wire(&world, core, unreadable)
+    StoreDouble::new(
+        core,
+        world.rows.iter().map(row_of).collect(),
+        world
+            .denied
+            .iter()
+            .map(|denial| {
+                (
+                    access_of(&denial.access),
+                    DocRef::new(&denial.collection, &denial.doc),
+                )
+            })
+            .collect(),
+        world.failing_ops,
+        unreadable.to_vec(),
+    )
 }
 
 fn state_of<T>(snapshot: &Snapshot) -> T
@@ -629,7 +413,7 @@ async fn refusable_staging_follows_the_lean_model() {
                     kind: "error".to_owned(),
                     state: None,
                     values: Vec::new(),
-                    refusal: Some(host.refusal_wire(&error)),
+                    refusal: Some(refusal_wire(&host, &error)),
                 },
                 initial,
             ),
@@ -766,7 +550,9 @@ async fn claim_gate_follows_the_lean_model() {
                 kind: "error".to_owned(),
                 verdicts: Vec::new(),
                 combined: None,
-                refusal: Some(gents_lean_vocab::family::recode(&host.refusal_wire(&error))),
+                refusal: Some(gents_lean_vocab::family::recode(&refusal_wire(
+                    &host, &error,
+                ))),
             },
         };
         assert_eq!(
@@ -884,7 +670,9 @@ async fn queue_partition_follows_the_lean_model() {
             Err(error) => queue_partition::QueueScopeResultWire {
                 kind: "error".to_owned(),
                 scopes: Vec::new(),
-                refusal: Some(gents_lean_vocab::family::recode(&host.refusal_wire(&error))),
+                refusal: Some(gents_lean_vocab::family::recode(&refusal_wire(
+                    &host, &error,
+                ))),
             },
         };
         assert_eq!(

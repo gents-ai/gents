@@ -276,7 +276,7 @@ fn internal_refusal(host: Option<&str>, ip: &IpAddr) -> String {
     }
 }
 
-pub(super) trait Lookup: Send + Sync {
+pub(crate) trait Lookup: Send + Sync {
     fn lookup(&self, host: String) -> BoxFuture<'static, std::io::Result<Vec<IpAddr>>>;
 }
 

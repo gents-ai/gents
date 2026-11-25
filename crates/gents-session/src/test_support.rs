@@ -1,5 +1,7 @@
 mod agent_home;
 mod claimed_request;
+#[cfg(test)]
+pub(crate) mod doubles;
 pub mod lineage_fixtures;
 
 pub use agent_home::AgentHome;
@@ -347,20 +349,16 @@ pub async fn admitted_client_lifecycle(
     request: &gents_protocol::row::AgentRequest,
     agent: &dyn gents_store::identity::NodeIdentity,
 ) -> anyhow::Result<crate::request::lifecycle::RequestLifecycle> {
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        node.clone(),
+    ClaimedRequest::admit_request(
+        node,
         runtime,
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(request, agent)
-        .await?;
-    let mut lifecycle =
-        crate::request::lifecycle::RequestLifecycle::new_with_node_did(node, request, 60);
-    lifecycle.bind_managed_agent(agent)?;
-    lifecycle.set_client_claim_admission(admission);
-    Ok(lifecycle)
+        request,
+        agent,
+        60,
+        crate::request::lifecycle::ExecutionOrigin::Interactive,
+        "",
+    )
+    .await
 }
 
 /// Create an Agent-owned session as that Agent and publish its Agent

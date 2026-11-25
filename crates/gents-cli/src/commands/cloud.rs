@@ -140,7 +140,7 @@ impl std::fmt::Debug for DeviceStart {
 }
 
 #[derive(Deserialize)]
-struct SignedIn {
+pub(crate) struct SignedIn {
     email: String,
     workspace_id: String,
     token: String,
@@ -159,13 +159,13 @@ impl std::fmt::Debug for SignedIn {
 }
 
 #[derive(Debug)]
-enum PollStep {
+pub(crate) enum PollStep {
     Pending,
     SignedIn(SignedIn),
     Refused(String),
 }
 
-trait DevicePolls {
+pub(crate) trait DevicePolls {
     async fn poll_once(&self, device_code: &str) -> Result<PollStep>;
 }
 
@@ -402,8 +402,6 @@ fn message_sentence(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
 
     fn signed_in() -> SignedIn {
         SignedIn {
@@ -423,45 +421,7 @@ mod tests {
         }
     }
 
-    struct ScriptedPolls {
-        steps: Mutex<VecDeque<PollStep>>,
-        asked_at: Mutex<Vec<Duration>>,
-        started: Instant,
-    }
-
-    impl ScriptedPolls {
-        fn new(steps: impl IntoIterator<Item = PollStep>) -> Self {
-            Self {
-                steps: Mutex::new(steps.into_iter().collect()),
-                asked_at: Mutex::new(Vec::new()),
-                started: Instant::now(),
-            }
-        }
-
-        fn asked_at_secs(&self) -> Vec<u64> {
-            self.asked_at
-                .lock()
-                .expect("poll times")
-                .iter()
-                .map(Duration::as_secs)
-                .collect()
-        }
-    }
-
-    impl DevicePolls for ScriptedPolls {
-        async fn poll_once(&self, _device_code: &str) -> Result<PollStep> {
-            self.asked_at
-                .lock()
-                .expect("poll times")
-                .push(self.started.elapsed());
-            Ok(self
-                .steps
-                .lock()
-                .expect("script")
-                .pop_front()
-                .unwrap_or(PollStep::Pending))
-        }
-    }
+    use crate::test_support::ScriptedPolls;
 
     #[tokio::test(start_paused = true)]
     async fn the_poll_loop_waits_the_interval_the_server_asked_for() {

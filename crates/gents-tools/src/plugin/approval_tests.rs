@@ -109,9 +109,13 @@ async fn an_allow_reaches_the_waiting_call_and_clears_the_question() {
         let request = request.clone();
         tokio::spawn(async move { ask(None, &home, &request, Duration::from_secs(10)).await })
     };
-    while pending(home.path()).unwrap().is_empty() {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    testing::wait_for_question(
+        home.path(),
+        true,
+        Duration::from_secs(10),
+        "approval question never arrived",
+    )
+    .await;
     let mut expected = request.clone();
     let listed = pending(home.path()).unwrap();
     assert_eq!(listed.len(), 1);
@@ -136,9 +140,13 @@ async fn a_deny_reaches_the_waiting_call() {
         let request = request.clone();
         tokio::spawn(async move { ask(None, &home, &request, Duration::from_secs(10)).await })
     };
-    while pending(home.path()).unwrap().is_empty() {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    testing::wait_for_question(
+        home.path(),
+        true,
+        Duration::from_secs(10),
+        "approval question never arrived",
+    )
+    .await;
     decide(home.path(), &request.id, Answer::Deny).unwrap();
     assert!(!waiting.await.unwrap().unwrap());
     assert!(
@@ -247,13 +255,13 @@ async fn a_cancelled_waiter_cannot_leave_a_grantable_question() {
         let request = request.clone();
         tokio::spawn(async move { ask(None, &home, &request, WAIT).await })
     };
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while pending(home.path()).unwrap().is_empty() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+    testing::wait_for_question(
+        home.path(),
+        true,
+        Duration::from_secs(2),
+        "approval question never arrived",
+    )
+    .await;
     waiting.abort();
     assert!(waiting.await.unwrap_err().is_cancelled());
     assert!(decide(home.path(), &request.id, Answer::AlwaysFolder).is_err());

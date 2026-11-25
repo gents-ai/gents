@@ -1,0 +1,4 @@
+---- MODULE MCPluginJobCrashObservationStaleSnapshot ----
+EXTENDS PluginJobCrashObservation
+
+====

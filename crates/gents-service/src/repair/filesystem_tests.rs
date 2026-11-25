@@ -120,19 +120,6 @@ fn checksum(root: &Path) -> Vec<String> {
     entries
 }
 
-struct Silent;
-
-impl super::Progress for Silent {
-    fn finding(&mut self, _: &gents_protocol::operations::install_repair::Finding) {}
-    fn step(
-        &mut self,
-        _: usize,
-        _: usize,
-        _: gents_protocol::operations::install_repair::RepairStep,
-    ) {
-    }
-}
-
 async fn prepare_staged(home: &Path, lock: &Path) -> super::RepairReceipt {
     use gents_protocol::operations::install_repair::{
         HomeChoice, RepairAnswer, RepairOperation, ServiceMove,
@@ -164,7 +151,7 @@ async fn prepare_staged(home: &Path, lock: &Path) -> super::RepairReceipt {
                 answer: RepairAnswer::SetAside,
             },
         },
-        &mut Silent,
+        &mut Steps::default(),
     )
     .await
     .unwrap()
@@ -244,7 +231,7 @@ async fn a_readable_key_names_the_chmod_and_moves_nothing() {
     }
 }
 
-use super::conformance::Steps;
+use crate::test_support::Steps;
 
 /// The service's facts when its definition names `served`, whose node runs.
 fn serving(

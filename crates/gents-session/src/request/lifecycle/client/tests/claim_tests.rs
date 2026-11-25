@@ -808,44 +808,56 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
 
 #[tokio::test]
 async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
-    let home = tempfile::tempdir().unwrap();
-    let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let collaborator =
-        KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
-    let (db, runtime) = serve_client_node(
+        KeyIdentity::load_or_create(dir.path().join("collaborator.key"), None).unwrap();
+    let home = gents_documents::test_support::SignedHome::start(
         "active-client-steer-rechecks-its-own-aut",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
-    let node = db.node.clone();
-    grant_operator_user(&node, runtime.as_ref(), &user).await;
-    let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [collaborator.did(), agent.did()] {
-        for permission in [
-            NodePermission::CollectionGet,
-            NodePermission::DocumentRead,
-            NodePermission::CollectionGet,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&did.parse().unwrap(), permission)
-                .await
-                .unwrap();
-        }
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let runtime = home.store.node_identity.clone();
+    let node = home.store.node.clone();
+    let admin = home.node_access();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&collaborator.did().parse().unwrap(), permission)
+            .await
+            .unwrap();
     }
-    let client = |identity: &KeyIdentity| db.client_access(identity);
-    let owner = client(&user);
-    seed_owned_agent(&owner, runtime.did(), &binding).await;
-    let agent_doc = owner.execute("{ Agent { _docID } }").await.unwrap()["data"]["Agent"][0]
-        ["_docID"]
+    let claimed = crate::test_support::ClaimedRequest::client_signed_reserved(&home, &binding)
+        .ids("steer-head", "steer-session")
+        .content("head")
+        .created_at("2026-11-04T00:00:00Z")
+        .steering_admission()
+        .batch_interval(std::time::Duration::ZERO)
+        .drive(crate::test_support::Stage::Executing)
+        .await;
+    let agent = claimed.agent.clone();
+    let agent_access = claimed.agent_access.clone();
+    let agent_doc = home
+        .user_access
+        .execute("{ Agent { _docID } }")
+        .await
+        .unwrap()["data"]["Agent"][0]["_docID"]
         .as_str()
         .unwrap()
         .to_owned();
-    owner
+    let session_doc = home
+        .user_access
+        .execute(r#"{ AgentSession(filter: { session_id: { _eq: "steer-session" } }) { _docID } }"#)
+        .await
+        .unwrap()["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    home.user_access
         .add_actor_relationship(
             "Agent",
             &agent_doc,
@@ -854,87 +866,31 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         )
         .await
         .unwrap();
-    let user_access = client(&user);
-    let collaborator_access = client(&collaborator);
-    let mut head = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "steer-head",
-        RequestScope::new(runtime.did(), user.did(), agent.did(), "steer-session"),
-        "head",
-        "interactive",
-        "2026-11-04T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    head.session_doc_id = Some(reserve_goal_session(&user_access, &head).await.unwrap());
     // A steering author holds update on the session it steers, as the modeled
     // committed claim requires of the immediate signer.
-    owner
+    home.user_access
         .add_actor_relationship(
             "AgentSession",
-            head.session_doc_id.as_deref().unwrap(),
+            &session_doc,
             "working_agent",
             &collaborator.did().parse().unwrap(),
         )
         .await
         .unwrap();
-    head.agent_doc_id = Some(agent_doc);
-    crate::request::admission::sign_agent_request_create(&user, &mut head)
-        .await
-        .unwrap();
-    submit_client_request(&user_access, &head).await.unwrap();
-    let agent_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let query = format!(
-        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"steer-head\" }} }}) {{ {} }} }}",
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-    );
-    let response = agent_access.execute(&query).await.unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = AgentRequest::try_from(row).unwrap();
+    let collaborator_access = home.store.client_access(&collaborator);
     let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-        .await
-        .unwrap();
-    assert!(admission.is_some());
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    lifecycle.set_steering_admission(verifier.clone(), agent.clone());
-    assert!(matches!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    ));
-    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        agent.as_ref(),
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
     let mut steer = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "steer-input",
-        RequestScope::new(runtime.did(), user.did(), agent.did(), "steer-session"),
+        RequestScope::new(runtime.did(), home.user.did(), agent.did(), "steer-session"),
         "new signed input",
         "interactive",
         "2026-11-04T00:00:01Z",
         AgentRequestAdmissionRecord::client(collaborator.did()),
     );
-    steer.session_doc_id = head.session_doc_id.clone();
-    steer.agent_doc_id = head.agent_doc_id.clone();
+    steer.session_doc_id = Some(session_doc);
+    steer.agent_doc_id = Some(agent_doc);
     steer.input.queue = Some(gents_protocol::request_input::RequestQueue {
         source: gents_protocol::request_input::QueueSource::User,
         delivery: gents_protocol::request_input::QueueDelivery::Steer,
@@ -953,7 +909,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         .unwrap();
     let snapshot = crate::request::lifecycle::queue::steering_snapshot(
         &node,
-        lifecycle.request(),
+        claimed.lifecycle.request(),
         &verifier,
         Some(agent.as_ref()),
     )
@@ -974,7 +930,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         .unwrap();
     let blocked = crate::request::lifecycle::queue::steering_snapshot(
         &node,
-        lifecycle.request(),
+        claimed.lifecycle.request(),
         &verifier,
         Some(agent.as_ref()),
     )
@@ -984,8 +940,9 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         blocked.inputs.is_empty(),
         "a revoked author is not repeatedly selected"
     );
-    assert!(writer
-        .publish_authored_message(&lifecycle, &input.key, &input.message)
+    assert!(claimed
+        .writer()
+        .publish_authored_message(&claimed.lifecycle, &input.key, &input.message)
         .await
         .is_err());
     let after = agent_access
@@ -1009,11 +966,15 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         .await
         .unwrap();
     admin
-        .revoke_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentUpdate)
+        .revoke_node_permission(
+            &home.user.did().parse().unwrap(),
+            NodePermission::DocumentUpdate,
+        )
         .await
         .unwrap();
-    writer
-        .publish_authored_message(&lifecycle, &input.key, &input.message)
+    claimed
+        .writer()
+        .publish_authored_message(&claimed.lifecycle, &input.key, &input.message)
         .await
         .unwrap();
     let result = agent_access.execute("{ AgentRequest(filter: { request_id: { _eq: \"steer-input\" } }) { lifecycle_state superseded_by_request_doc_id } }").await.unwrap();
@@ -1023,7 +984,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     );
     assert_eq!(
         result["data"]["AgentRequest"][0]["superseded_by_request_doc_id"],
-        lifecycle.request().doc_id
+        claimed.lifecycle.request().doc_id
     );
     admin
         .revoke_node_permission(
@@ -1032,10 +993,11 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         )
         .await
         .unwrap();
-    writer
-        .publish_authored_message(&lifecycle, &input.key, &input.message)
+    claimed
+        .writer()
+        .publish_authored_message(&claimed.lifecycle, &input.key, &input.message)
         .await
         .unwrap();
-    drop(lifecycle);
+    drop(claimed);
     node.shutdown().await.unwrap();
 }

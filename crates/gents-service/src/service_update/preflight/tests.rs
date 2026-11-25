@@ -1,5 +1,5 @@
 use super::*;
-use crate::native_service::CommandOutput;
+use crate::test_support::PreflightCandidate as Candidate;
 use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
 use gents_store::local::store_key::STORE_ENCRYPTION_VERSION;
 
@@ -57,48 +57,6 @@ fn read_or_deny(
     move |_, _, data| match readable {
         true => StoreKey::from_host(&[7; 32]),
         false => Err(denied(data)),
-    }
-}
-
-/// The candidate side of the probe: the production store-key check of the
-/// candidate's `update-check --home`, with the Keychain read injected.
-struct Candidate {
-    home: PathBuf,
-    verified: bool,
-    readable: bool,
-}
-
-impl CommandRunner for Candidate {
-    fn run(&self, program: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Result<CommandOutput> {
-        assert!(Path::new(program).is_file());
-        assert_eq!(
-            args,
-            [
-                "service".into(),
-                "update-check".into(),
-                "--home".into(),
-                self.home.as_os_str().to_owned()
-            ]
-        );
-        let config = read_init_config(&self.home)?.unwrap();
-        Ok(
-            match check_store_key_with(
-                &self.home,
-                config.store_encryption.as_ref(),
-                read_or_deny(self.readable),
-            ) {
-                Ok(()) => CommandOutput {
-                    success: true,
-                    stdout: super::super::metadata(self.verified).to_string(),
-                    stderr: String::new(),
-                },
-                Err(error) => CommandOutput {
-                    success: false,
-                    stdout: String::new(),
-                    stderr: format!("{:#}", anyhow::Error::from(error)),
-                },
-            },
-        )
     }
 }
 

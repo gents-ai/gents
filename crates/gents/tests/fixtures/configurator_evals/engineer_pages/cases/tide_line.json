@@ -20,7 +20,8 @@
           "params": {
             "required": [
               "charts"
-            ]
+            ],
+            "route_reason": "The prompt explicitly asks to draw a line chart of each day's high water."
           },
           "tier": "acceptance",
           "weight": 1

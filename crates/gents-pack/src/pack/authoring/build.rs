@@ -398,33 +398,7 @@ fn write_if_changed(dir: &RootDir, name: impl AsRef<Path>, bytes: &[u8]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Clone)]
-    struct RefusingCompiler {
-        called: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl RefusingCompiler {
-        fn new() -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
-            let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            (
-                Self {
-                    called: called.clone(),
-                },
-                called,
-            )
-        }
-    }
-
-    impl PluginCompiler for RefusingCompiler {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
-            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("no compiler in this test")
-        }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
-            unreachable!("load_and_validate refuses first")
-        }
-    }
+    use crate::test_support::RefusingCompiler;
 
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();

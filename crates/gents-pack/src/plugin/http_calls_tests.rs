@@ -7,16 +7,6 @@ use crate::plugin::http_test_server::Server;
 
 const PLUGIN: &str = "team/plugin";
 
-struct Static(Vec<IpAddr>, Arc<AtomicUsize>);
-
-impl Lookup for Static {
-    fn lookup(&self, _: String) -> BoxFuture<'static, std::io::Result<Vec<IpAddr>>> {
-        self.1.fetch_add(1, Ordering::SeqCst);
-        let addrs = self.0.clone();
-        Box::pin(async move { Ok(addrs) })
-    }
-}
-
 fn http_manifold(hosts: Option<Vec<String>>) -> Manifold {
     Manifold {
         net: NetAccess::OutboundHttp(hosts),
@@ -35,7 +25,7 @@ fn session_resolving(hosts: &[String], addrs: Vec<IpAddr>) -> (Session, Arc<Atom
     let session = Session::with_lookup(
         PLUGIN,
         &http_manifold(Some(hosts.to_vec())),
-        Arc::new(Static(addrs, lookups.clone())),
+        Arc::new(crate::test_support::StaticLookup(addrs, lookups.clone())),
     )
     .unwrap()
     .unwrap();

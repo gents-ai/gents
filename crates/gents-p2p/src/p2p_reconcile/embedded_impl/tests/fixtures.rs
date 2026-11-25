@@ -21,7 +21,7 @@ async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
 
 async fn p2p_node_with_options(
     node_identity_did: Option<&str>,
-    http_address: Option<std::net::SocketAddr>,
+    http_config: Option<defra_node::HttpConfig>,
     signing_key: Option<defra_node::SigningKey>,
     projector: Option<std::sync::Arc<dyn NodeIdentity>>,
 ) -> TestNode {
@@ -47,8 +47,8 @@ async fn p2p_node_with_options(
     if let Some(key) = signing_key {
         builder = builder.with_signing_key(key).with_node_acp_enabled();
     }
-    if let Some(address) = http_address {
-        builder = builder.with_http(defra_node::HttpConfig::with_addr(address));
+    if let Some(http) = http_config {
+        builder = builder.with_http(http);
     }
     if let Some(identity) = projector {
         builder = builder.with_document_projector(
@@ -77,21 +77,10 @@ pub(super) async fn test_node() -> TestNode {
         .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(TEST_SCHEMA))
         .await
         .expect("test schema");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if test
-                .node
-                .get_collection("P2pReconcileThing")
-                .expect("collection lookup")
-                .is_some()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("committed schema reaches the collection observation");
+    test.node
+        .get_collection("P2pReconcileThing")
+        .expect("collection lookup")
+        .expect("committed schema reaches the collection observation");
     test
 }
 
@@ -133,7 +122,7 @@ pub(super) async fn signed_p2p_node_without_schemas(
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(address),
+        Some(defra_node::HttpConfig::with_addr(address)),
         Some(defra_node::SigningKey::Ed25519(key)),
         None,
     )
@@ -147,7 +136,7 @@ pub(super) async fn signed_p2p_node_with_projector(
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(address),
+        Some(defra_node::HttpConfig::with_addr(address)),
         Some(defra_node::SigningKey::Ed25519(key)),
         Some(identity.clone()),
     )
@@ -164,11 +153,10 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
     identity: &dyn NodeIdentity,
     initial_schema: Option<&str>,
 ) -> (TestNode, String) {
-    let address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let test = p2p_node_with_options(Some(identity.did()), Some(address), None, None).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let http = defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap();
+    let test = p2p_node_with_options(Some(identity.did()), Some(http), None, None).await;
     if let Some(schema) = initial_schema {
         test.node
             .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
@@ -178,33 +166,19 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
     ensure_runtime_schemas(&test.node).await.unwrap();
     let endpoint = format!("http://{address}/api/v0/graphql");
     let access = gents_store::config_client::ConfigAccess::graphql(&endpoint);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if access.execute("{ AgentRequest { _docID } }").await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("native HTTP endpoint becomes ready");
+    access
+        .execute("{ AgentRequest { _docID } }")
+        .await
+        .expect("native HTTP endpoint becomes ready");
     (test, endpoint)
 }
 
 pub(in crate::p2p_reconcile) async fn wait_for_peer_info(
     admin: &EmbeddedRemoteP2pAdmin,
 ) -> Vec<String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let addresses = admin.peer_info().await.expect("peer info");
-        if !addresses.is_empty() {
-            return addresses;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("node never exposed a P2P address");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let addresses = admin.peer_info().await.expect("peer info");
+    assert!(!addresses.is_empty(), "node never exposed a P2P address");
+    addresses
 }
 
 pub(super) fn collection_id(node: &EmbeddedNode, name: &str) -> String {
@@ -216,15 +190,18 @@ pub(super) fn collection_id(node: &EmbeddedNode, name: &str) -> String {
 
 pub(in crate::p2p_reconcile) async fn wait_for_active_peer(admin: &EmbeddedRemoteP2pAdmin) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut changes = admin
+        .node()
+        .subscribe(&[defra_node::EventName::PeerConnection]);
     loop {
         let peers = admin.active_peers().await.expect("active peers");
         if !peers.is_empty() {
             return;
         }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("node never reported an active P2P peer");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("node never reported an active P2P peer")
+            .expect("peer connection subscription closed");
     }
 }
 

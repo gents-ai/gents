@@ -144,12 +144,13 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
     let node = db.node.clone();
     let snapshot = ping_snapshot(&node, 1, emit_outcome).await;
     let (snapshot_tx, rx) = watch::channel(snapshot.clone());
-    let mut source = EventSource::new(rx.clone(), node.clone(), CancellationToken::new())
-        .with_rescan_interval(RESCAN);
+    let (mut source, mut listen_rx) =
+        super::event_source_with_listen_signal(rx.clone(), node.clone(), CancellationToken::new());
+    source = source.with_rescan_interval(RESCAN);
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     let writer = node.clone();
     let created = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let response = gents_store::config_client::ConfigAccess::local(writer)
             .write(
                 "test.outcome_ping",
@@ -247,19 +248,13 @@ impl Delivery {
     }
 
     async fn trigger_status(&self, status: &str) -> serde_json::Value {
-        for _ in 0..100 {
-            let trigger = observed_trigger(
-                self.node.as_ref(),
-                self.db.node_identity.did(),
-                "ping-trigger",
-            )
-            .await;
-            if trigger["last_status"].as_str() == Some(status) {
-                return trigger;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("the fire never became visible as {status} on its Trigger");
+        super::wait_for_trigger_status(
+            self.node.as_ref(),
+            self.db.node_identity.did(),
+            "ping-trigger",
+            status,
+        )
+        .await
     }
 
     async fn trigger_error(&self) -> serde_json::Value {
@@ -428,7 +423,7 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
         error: "acknowledged transient failure".into(),
     });
     let trigger = delivery.trigger_status("error").await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    delivery.source.unacknowledged_cleanup().idle().await;
     let settled = observed_trigger(
         delivery.node.as_ref(),
         delivery.db.node_identity.did(),

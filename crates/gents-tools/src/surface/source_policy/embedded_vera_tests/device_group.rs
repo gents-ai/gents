@@ -175,6 +175,8 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
     source
         .settled(&source.node_did, "origin registration")
         .await?;
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&receiver.node, [collection])?;
     let policy = node_policy_ids(&receiver.node).id(BuiltInPolicy::Household);
     let provider = receiver.node.document_acp();
     tokio::time::timeout(SETTLE_CEILING, async {
@@ -190,7 +192,9 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
             {
                 return Ok::<_, anyhow::Error>(());
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            if changes.recv().await.is_none() {
+                anyhow::bail!("PeerRegistry subscription closed before replica grants arrived");
+            }
         }
     })
     .await
@@ -223,21 +227,32 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
             == Some("updated"),
         "origin did not apply the update: {origin}"
     );
-    tokio::time::timeout(SETTLE_CEILING, async {
-        loop {
-            let row = receiver.as_node().execute(&query).await?;
-            if gents_protocol::graphql::graphql_rows_from_response(&row, collection)
-                .first()
-                .and_then(|row| row["status"].as_str())
-                == Some("updated")
-            {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
+    let receiver_access = receiver.as_node();
+    tokio::time::timeout(
+        SETTLE_CEILING,
+        gents_store::test_support::read_when_changed(
+            &receiver_access,
+            collection,
+            "foreign creator update on receiver",
+            async || {
+                let row = receiver_access
+                    .execute(&query)
+                    .await
+                    .map_err(|err| format!("{err:#}"))?;
+                if gents_protocol::graphql::graphql_rows_from_response(&row, collection)
+                    .first()
+                    .and_then(|row| row["status"].as_str())
+                    == Some("updated")
+                {
+                    Ok(())
+                } else {
+                    Err(row.to_string())
+                }
+            },
+        ),
+    )
     .await
-    .map_err(|_| anyhow::anyhow!("foreign creator's update did not reach receiver, origin {origin}, receiver before update {receiver_before}"))??;
+    .map_err(|_| anyhow::anyhow!("foreign creator's update did not reach receiver, origin {origin}, receiver before update {receiver_before}"))?;
     let deletion = source
         .as_node()
         .write(
@@ -253,18 +268,29 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
     );
     let tombstone =
         format!(r#"{{ PeerRegistry(docID:"{id}",showDeleted:true) {{_docID _deleted}} }}"#);
-    tokio::time::timeout(SETTLE_CEILING, async {
-        loop {
-            let response = receiver.as_node().execute(&tombstone).await?;
-            let rows = gents_protocol::graphql::graphql_rows_from_response(&response, collection);
-            if rows.len() == 1 && rows[0]["_docID"] == id && rows[0]["_deleted"] == true {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
+    tokio::time::timeout(
+        SETTLE_CEILING,
+        gents_store::test_support::read_when_changed(
+            &receiver_access,
+            collection,
+            "foreign creator tombstone on receiver",
+            async || {
+                let response = receiver_access
+                    .execute(&tombstone)
+                    .await
+                    .map_err(|err| format!("{err:#}"))?;
+                let rows =
+                    gents_protocol::graphql::graphql_rows_from_response(&response, collection);
+                if rows.len() == 1 && rows[0]["_docID"] == id && rows[0]["_deleted"] == true {
+                    Ok(())
+                } else {
+                    Err(response.to_string())
+                }
+            },
+        ),
+    )
     .await
-    .context("foreign creator's tombstone did not reach the receiver")??;
+    .context("foreign creator's tombstone did not reach the receiver")?;
     assert_eq!(
         provider
             .get_doc_owner(policy, "discovery", &id)

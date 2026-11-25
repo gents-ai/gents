@@ -1020,28 +1020,14 @@ mod tests {
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        // The child is client-admitted by the job's Agent; its claim carries
-        // the verified admission, as the request watcher's does.
-        let (_authority_owner, authority) =
-            gents_p2p::p2p_reconcile::enrollment_authority_channel();
-        let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+        let mut lifecycle = gents_session::test_support::admitted_client_lifecycle(
             harness.node.clone(),
             harness.runtime.clone(),
-            authority,
-        );
-        let (request, admission) = verifier
-            .verify_fresh_for_claim_with_identity(&row.try_into().unwrap(), harness.agent.as_ref())
-            .await
-            .unwrap();
-        let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
-            harness.node.clone(),
-            request,
-            60,
-        );
-        lifecycle
-            .bind_managed_agent(harness.agent.as_ref())
-            .unwrap();
-        lifecycle.set_client_claim_admission(admission);
+            &row.try_into().unwrap(),
+            harness.agent.as_ref(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             gents_session::request::lifecycle::ClaimOutcome::Claimed

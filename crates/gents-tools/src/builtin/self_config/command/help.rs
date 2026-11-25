@@ -127,14 +127,23 @@ impl ConfigCommandTool {
         let Some(resource) = resource else {
             return Ok(page);
         };
+        Ok(self.append_skill_pointer(page, resource, &words))
+    }
+
+    pub(super) fn append_skill_pointer(
+        &self,
+        page: String,
+        resource: &str,
+        words: &[&str],
+    ) -> String {
         let path = [CONFIG_TOOL_NAME, help_resource(resource)]
             .into_iter()
-            .chain(words)
+            .chain(words.iter().copied())
             .collect::<Vec<_>>();
-        Ok(match self.skill_pointers.help(&path) {
+        match self.skill_pointers.help(&path) {
             Some(line) => format!("{page}\n{line}"),
             None => page,
-        })
+        }
     }
 
     fn help_index(&self, enabled: &[&str]) -> String {
@@ -722,7 +731,7 @@ fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<St
     let mut out = format!("{resource}: {}\n", page.what);
     writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
     if resource == "agent" {
-        out = out.replace("create ID", "create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools)");
+        out = out.replace("create ID", "create (options.display-name, profile, plus system-prompt/preset or context-id; allocates ID)");
         out = out.replace(
             "agent preview create|update|delete ID",
             "agent preview create (same options) | update|delete ID",

@@ -6,8 +6,7 @@ use gents_session::request::watcher::{DefraWatcher, Watcher as _};
 use gents_store::local::document_acp::DocumentAcp;
 use gents_store::test_support::{STALL_CEILING, UNREACHED_DEADLINE};
 
-use super::stored_create::ClientUser;
-use crate::test_support::vera_test_home::{Household, PROVIDERS};
+use crate::test_support::vera_test_home::{ClientUser, Household, PROVIDERS};
 
 /// A client's request reaches the runtime's request watcher on `provider`'s
 /// home, the watcher's first scan having finished before the request is

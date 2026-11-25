@@ -490,7 +490,7 @@ mod tests {
         for case in gents_lean_vocab::families::plugin_job_lineage_opening::cases() {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(
-                crate::tests::support::node_builder()
+                gents_store::test_support::node_builder()
                     .data_path(dir.path().join("node"))
                     .build()
                     .await

@@ -136,8 +136,7 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
         )
         .await;
         let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (db, user, client) = signed_home.into_parts();
-        let node_did = db.node_identity.did().to_owned();
+        let node_did = signed_home.node_did().to_owned();
         let base = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0)
             - chrono::TimeDelta::minutes(1);
         let scope = &i
@@ -157,21 +156,13 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
             );
             let created_at = (base + chrono::TimeDelta::seconds(i64::try_from(row.created_at)?))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let mut lifecycle = crate::session::signed_claimed_request(
-                &db,
-                &user,
-                &client,
-                &binding,
-                (&request_id(row.request_id), &session, &created_at),
-                None,
-            )
-            .await;
-            let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-                db.node.clone(),
-                &lifecycle,
-                std::time::Duration::ZERO,
-            )?;
-            lifecycle.begin_owned_execution(&writer).await?;
+            let mut claimed =
+                crate::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+                    .ids(&request_id(row.request_id), &session)
+                    .created_at(&created_at)
+                    .batch_interval(std::time::Duration::ZERO)
+                    .drive(crate::test_support::Stage::Executing)
+                    .await;
             let outcome = [
                 RequestTerminalOutcome::Completed,
                 RequestTerminalOutcome::Failed,
@@ -182,7 +173,8 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
             .into_iter()
             .find(|outcome| outcome.request_lifecycle_state() == row.state)
             .expect("the fixture stores terminal rows");
-            lifecycle
+            claimed
+                .lifecycle
                 .terminalize_owned(
                     outcome,
                     gents_protocol::output::TerminalOutput::NoMessage,
@@ -190,9 +182,10 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
                 )
                 .await?;
             if row.doc_id == i.parent_doc {
-                parent_doc = Some(lifecycle.request().doc_id.clone());
+                parent_doc = Some(claimed.doc_id);
             }
         }
+        let (db, user, client) = signed_home.into_parts();
         let parent = super::get(
             &client,
             &RequestRef {

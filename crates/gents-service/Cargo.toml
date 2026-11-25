@@ -10,6 +10,7 @@ description = "Home state, native service supervision and managed updates for th
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = []
 test-home-guard = ["gents-store/test-home-guard"]
+test-fixtures = ["test-home-guard"]
 
 [dependencies]
 gents = { path = "../gents" }
@@ -53,7 +54,7 @@ libc = "0.2"
 [dev-dependencies]
 axum = "0.8"
 base64.workspace = true
-gents-service = { path = ".", features = ["test-home-guard"] }
+gents-service = { path = ".", features = ["test-home-guard", "test-fixtures"] }
 gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }
 gents-lean-vocab.workspace = true

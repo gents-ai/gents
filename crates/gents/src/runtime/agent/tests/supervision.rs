@@ -6,7 +6,6 @@ use tokio::sync::watch;
 
 use super::super::supervision::supervise_behaviors_with_runner;
 use super::super::*;
-use super::support::*;
 
 #[tokio::test]
 async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
@@ -17,10 +16,12 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let agents = vec![
         PendingAgent::new("panic-profile")
-            .build_with_identity_for_test(test_identity("panic-profile"))
+            .build_with_identity_for_test(gents_store::test_support::test_identity("panic-profile"))
             .agent,
         PendingAgent::new("steady-profile")
-            .build_with_identity_for_test(test_identity("steady-profile"))
+            .build_with_identity_for_test(gents_store::test_support::test_identity(
+                "steady-profile",
+            ))
             .agent,
     ];
 

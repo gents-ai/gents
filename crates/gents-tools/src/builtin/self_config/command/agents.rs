@@ -401,6 +401,10 @@ impl ConfigCommandTool {
         Ok(AgentCreateInput {
             operation,
             clone_from: clone_from.filter(|_| operation == AgentCreateOperation::Clone),
+            context_id: options
+                .context_id
+                .is_present()
+                .then(|| options.context_id.value().unwrap_or_default().to_owned()),
             display_name: options.display_name.owned_value().unwrap_or_default(),
             description: options.description,
             system_prompt: options.system_prompt,
@@ -530,6 +534,7 @@ pub fn agent_params(
 struct AgentOptions {
     id: Option<String>,
     from: Option<String>,
+    context_id: StringUpdate,
     display_name: StringUpdate,
     description: StringUpdate,
     system_prompt: StringUpdate,
@@ -549,6 +554,7 @@ impl AgentOptions {
             system_prompt: self.system_prompt,
             agent_did: self.id,
             clone_from: self.from,
+            context_id: self.context_id,
             root: self.root,
             preset: self.preset,
             profile_id: self.profile_id,
@@ -625,6 +631,7 @@ fn agent_options(verb: &str, argv: &[String]) -> Result<AgentOptions> {
         system_prompt: update("system-prompt", "system_prompt")?,
         id: parsed.one("id")?.map(ToOwned::to_owned),
         from: parsed.one("from")?.map(ToOwned::to_owned),
+        context_id: update("context-id", "context_id")?,
         root: update("root", "root")?,
         preset: update("preset", "preset")?,
         profile_id: update("profile", "profile_id")?,

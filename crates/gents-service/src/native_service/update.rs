@@ -340,32 +340,7 @@ fn executable(platform: NativeServicePlatform, bytes: &[u8]) -> Result<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    #[derive(Default)]
-    struct Runner {
-        fail_registration: bool,
-        calls: RefCell<Vec<(OsString, Vec<OsString>)>>,
-    }
-    impl CommandRunner for Runner {
-        fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
-            self.calls.borrow_mut().push((program.into(), args.into()));
-            Ok(CommandOutput {
-                success: !args.iter().any(|a| a == "print")
-                    && !(self.fail_registration
-                        && args.iter().any(|a| a == "bootstrap" || a == "start")),
-                stdout: if program == OsStr::new("/usr/bin/id") {
-                    "501".into()
-                } else {
-                    String::new()
-                },
-                stderr: if args.iter().any(|a| a == "print") {
-                    "Could not find service".into()
-                } else {
-                    String::new()
-                },
-            })
-        }
-    }
+    use crate::test_support::UpdateRunner as Runner;
     fn config(root: &Path) -> NativeServiceConfig {
         NativeServiceConfig {
             home: root.join("node"),

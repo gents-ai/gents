@@ -251,22 +251,13 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
         unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
-                Ok(guard) => {
-                    drop(guard);
-                    break;
-                }
-                Err(error) if error.lock_held().is_some() => {
-                    tokio::time::sleep(Duration::from_millis(10)).await
-                }
-                Err(error) => panic!("unexpected client lock error: {error}"),
-            }
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()),
+    )
     .await
-    .expect("the cancelled startup retained its store lock");
+    .expect("the cancelled startup retained its store lock")
+    .unwrap();
     drop(input);
     let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
         .await
@@ -319,22 +310,13 @@ async fn closing_editor_input_releases_an_unready_installation() {
         error.contains("editor secret storage disconnected"),
         "{error}"
     );
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
-                Ok(guard) => {
-                    drop(guard);
-                    break;
-                }
-                Err(error) if error.lock_held().is_some() => {
-                    tokio::time::sleep(Duration::from_millis(10)).await
-                }
-                Err(error) => panic!("unexpected client lock error: {error}"),
-            }
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()),
+    )
     .await
-    .expect("input EOF retained the client store lock");
+    .expect("input EOF retained the client store lock")
+    .unwrap();
     assert!(!paths.identity_key_path().exists());
     assert!(!paths.node_data_dir().join("MANIFEST").exists());
 }

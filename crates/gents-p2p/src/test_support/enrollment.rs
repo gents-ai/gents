@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -170,30 +170,33 @@ fn bs58_sig(signature: &[u8]) -> String {
 }
 
 pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let p2p = crate::node_access::operations(node).expect("p2p enabled");
-        let peer_id = p2p.local_peer_id().await.ok();
-        let shareable = p2p.shareable_address().await.ok().flatten();
-        if let (Some(peer_id), Some(address)) = (peer_id, shareable) {
-            if !peer_id.trim().is_empty() && !address.trim().is_empty() {
-                return (peer_id, address);
-            }
+    let p2p = crate::node_access::operations(node).expect("p2p enabled");
+    let peer_id = tokio::time::timeout(Duration::from_secs(15), p2p.local_peer_id())
+        .await
+        .expect("P2P peer id deadline")
+        .expect("P2P peer id");
+    if let Ok(Some(address)) =
+        tokio::time::timeout(Duration::from_secs(15), p2p.shareable_address())
+            .await
+            .expect("P2P shareable address deadline")
+    {
+        if !peer_id.trim().is_empty() && !address.trim().is_empty() {
+            return (peer_id, address);
         }
-        if let Ok(addresses) = p2p.listen_addresses().await {
-            if let Some(address) = addresses.first() {
-                if let Some(peer_id) = address.rsplit("/p2p/").nth(1) {
-                    if !peer_id.is_empty() {
-                        return (peer_id.to_string(), address.clone());
-                    }
+    }
+    if let Ok(addresses) = tokio::time::timeout(Duration::from_secs(15), p2p.listen_addresses())
+        .await
+        .expect("P2P listen addresses deadline")
+    {
+        if let Some(address) = addresses.first() {
+            if let Some(peer_id) = address.rsplit("/p2p/").nth(1) {
+                if !peer_id.is_empty() {
+                    return (peer_id.to_string(), address.clone());
                 }
             }
         }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a P2P peer identity");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    panic!("node never exposed a P2P peer identity");
 }
 
 /// Upsert the admin's signed Network on `node` and sign a fresh offer from it.

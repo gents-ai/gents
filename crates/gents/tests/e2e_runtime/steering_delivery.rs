@@ -18,11 +18,9 @@ use tokio::sync::Notify;
 use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
-use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime,
-};
+use crate::support::builder_runtime::{builder_actors, fixture_agent, runtime_builder};
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::spawn_runtime;
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
@@ -133,10 +131,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .build()
         .await
         .unwrap();
-    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(&db.node, did).await;
-    let runtime = BootedAgent::new(shutdown, handle, did.into());
+    let runtime = spawn_runtime(&db, agent).await;
     backend.wait_for_chunks(name, 1).await;
     assert_eq!(
         row_as(&fixture, &active).await["lifecycle_state"],

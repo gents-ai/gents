@@ -7,7 +7,10 @@ use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
 use notify::{Event, EventKind};
 use tokio::sync::{mpsc, watch};
 
-use super::{changes_queue, watch_queue, PendingQueue, PromptSubscriptions, QueueWatch};
+use super::{
+    changes_queue, watch_queue, watch_queue_with_ticks, PendingQueue, PromptSubscriptions,
+    QueueWatch,
+};
 
 #[path = "approvals_watch_scoped_tests.rs"]
 mod scoped;
@@ -50,6 +53,36 @@ async fn signalled<T>(receive: &mut mpsc::Receiver<T>) -> T {
         .await
         .expect("native queue change was not delivered")
         .expect("watch ended")
+}
+
+fn spawn_watch_with_ticks(
+    home: PathBuf,
+    heartbeat_interval: Duration,
+    subscriptions: watch::Receiver<bool>,
+    observed: impl FnMut(bool) + Send + 'static,
+) -> (tokio::task::JoinHandle<()>, watch::Receiver<u64>) {
+    let (ticks_tx, ticks_rx) = watch::channel(0u64);
+    let task = tokio::spawn(watch_queue_with_ticks(
+        home,
+        heartbeat_interval,
+        subscriptions,
+        observed,
+        move || {
+            ticks_tx.send_modify(|count| *count += 1);
+        },
+    ));
+    (task, ticks_rx)
+}
+
+async fn await_heartbeat_ticks(ticks: &mut watch::Receiver<u64>, count: u64) {
+    let target = *ticks.borrow() + count;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        ticks.wait_for(|&seen| seen >= target),
+    )
+    .await
+    .expect("heartbeat ticks did not advance")
+    .expect("heartbeat tick channel closed");
 }
 
 #[test]
@@ -195,6 +228,19 @@ async fn native_heartbeat_keeps_listening_without_queue_reads_or_webview_command
     ));
     let mark = approval::queue_dir(home.path()).join(".listening");
     assert!(!signalled(&mut receive).await, "the startup queue is empty");
+    let (mark_tx, mut mark_changed) = mpsc::channel(8);
+    let mut mark_watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+        if event.is_ok() {
+            let _ = mark_tx.try_send(());
+        }
+    })
+    .unwrap();
+    notify::Watcher::watch(
+        &mut mark_watcher,
+        &mark,
+        notify::RecursiveMode::NonRecursive,
+    )
+    .unwrap();
     let stale = SystemTime::now() - Duration::from_secs(60);
     std::fs::OpenOptions::new()
         .write(true)
@@ -204,7 +250,7 @@ async fn native_heartbeat_keeps_listening_without_queue_reads_or_webview_command
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while mark.metadata().unwrap().modified().unwrap() <= stale {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            signalled(&mut mark_changed).await;
         }
     })
     .await
@@ -297,7 +343,7 @@ async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
     let home = tempfile::tempdir().unwrap();
     let (send, mut receive) = mpsc::channel(8);
     let (active, subscriptions) = watch::channel(false);
-    let task = tokio::spawn(watch_queue(
+    let (task, mut ticks) = spawn_watch_with_ticks(
         home.path().to_owned(),
         Duration::from_millis(20),
         subscriptions,
@@ -306,10 +352,10 @@ async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
                 let _ = send.try_send(changed);
             }
         },
-    ));
+    );
     let mark = approval::queue_dir(home.path()).join(".listening");
     file_question(home.path(), "q1");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    await_heartbeat_ticks(&mut ticks, 3).await;
     assert!(
         !mark.exists(),
         "startup without a prompt must not advertise"
@@ -328,13 +374,13 @@ async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
         .set_modified(stale)
         .unwrap();
     file_question(home.path(), "q2");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    await_heartbeat_ticks(&mut ticks, 3).await;
     assert_eq!(mark.metadata().unwrap().modified().unwrap(), stale);
     assert!(receive.try_recv().is_err());
 
     approval::mark_listening(home.path()).unwrap();
     let cli_mark = mark.metadata().unwrap().modified().unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    await_heartbeat_ticks(&mut ticks, 3).await;
     assert_eq!(
         mark.metadata().unwrap().modified().unwrap(),
         cli_mark,
@@ -350,13 +396,13 @@ async fn an_unavailable_queue_does_not_advertise_a_prompt_listener() {
     std::fs::create_dir_all(queue.parent().unwrap()).unwrap();
     std::fs::write(&queue, b"not a directory").unwrap();
     let (_active, subscriptions) = watch::channel(true);
-    let task = tokio::spawn(watch_queue(
+    let (task, mut ticks) = spawn_watch_with_ticks(
         home.path().to_owned(),
         Duration::from_millis(20),
         subscriptions,
         |_| panic!("an unavailable queue must not be announced"),
-    ));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    );
+    await_heartbeat_ticks(&mut ticks, 3).await;
     assert!(!queue.join(".listening").exists());
     assert!(!task.is_finished(), "the native watcher must stay alive");
     task.abort();
@@ -371,13 +417,13 @@ async fn an_incompatible_question_does_not_advertise_a_prompt_listener() {
     value.as_object_mut().unwrap().remove("expires_at_ms");
     std::fs::write(queue.join("q1.json"), serde_json::to_vec(&value).unwrap()).unwrap();
     let (_active, subscriptions) = watch::channel(true);
-    let task = tokio::spawn(watch_queue(
+    let (task, mut ticks) = spawn_watch_with_ticks(
         home.path().to_owned(),
         Duration::from_millis(20),
         subscriptions,
         |_| panic!("an incompatible queue must not be announced"),
-    ));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    );
+    await_heartbeat_ticks(&mut ticks, 3).await;
     assert_eq!(
         queue
             .join(".listening")
@@ -440,10 +486,15 @@ fn unrelated_home_changes_do_not_exhaust_watch_descriptors() {
                 )
                 .unwrap();
             }
-            let (send, _receive) = mpsc::channel(1);
+            let (send, mut receive) = mpsc::channel(1);
             let _watch = QueueWatch::start(home.path(), send).unwrap();
             std::fs::create_dir(home.path().join("unrelated-directory-change")).unwrap();
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(500), receive.recv())
+                    .await
+                    .is_err(),
+                "unrelated home change must not notify the approval queue watcher"
+            );
             let unrelated = unrelated.canonicalize().unwrap();
             for fd in 0..256 {
                 let mut path = [0 as libc::c_char; libc::MAXPATHLEN as usize];

@@ -515,7 +515,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         applied.get(&opening_doc).map(String::as_str),
         Some("goal-0")
     );
-    let measured = crate::tests::support::CountingRead::new(access);
+    let measured = crate::test_support::CountingRead::new(access);
     let roots = gents_automation::goal::load_applied_opening_goal_ids(
         &measured,
         &observed.iter().collect::<Vec<_>>(),

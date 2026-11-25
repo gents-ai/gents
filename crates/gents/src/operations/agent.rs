@@ -56,6 +56,11 @@ pub async fn preview_create(
         description: input.description.clone(),
         system_prompt: input.system_prompt.clone(),
         clone_from: input.clone_from.clone(),
+        context_id: input
+            .context_id
+            .clone()
+            .map(StringUpdate::Set)
+            .unwrap_or_default(),
         root: input.root.clone(),
         preset: input
             .preset
@@ -140,7 +145,7 @@ pub async fn preview_choose_default(
 /// Writes a whole Agent document, for front ends that save one: an existing
 /// Agent becomes the edit of its changed writable fields; a new one, with
 /// `identity_binding` for its DID, becomes a create that selects the
-/// document's Context and profile, whose input prompt is that Context's.
+/// document's Context and profile.
 pub async fn put(
     access: &ConfigAccess,
     owner: &str,

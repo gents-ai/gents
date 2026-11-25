@@ -52,25 +52,18 @@ pub async fn exercise(
             );
             *id += 1;
             for _ in 0..2 {
-                let settings = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-                    loop {
-                        let settings = client
-                            .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
-                            .await?;
-                        *id += 1;
-                        if settings["node"]["displayName"] == "editor-fixture"
-                            && settings["node"]["enabled"] == true
-                            && settings["node"]["defaultAgentDid"]
-                                .as_str()
-                                .is_some_and(|id| !id.is_empty())
-                        {
-                            break Ok::<_, anyhow::Error>(settings);
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    }
-                })
-                .await
-                .context("enrolled client did not receive its node configuration")??;
+                let settings = client
+                    .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
+                    .await?;
+                *id += 1;
+                ensure!(
+                    settings["node"]["displayName"] == "editor-fixture"
+                        && settings["node"]["enabled"] == true
+                        && settings["node"]["defaultAgentDid"]
+                            .as_str()
+                            .is_some_and(|id| !id.is_empty()),
+                    "enrolled client did not receive its node configuration: {settings}"
+                );
                 ensure!(
                     settings["nodeDid"] == node && settings["node"]["nodeDid"] == node,
                     "model settings crossed runtime identity"

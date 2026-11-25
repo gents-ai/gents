@@ -324,85 +324,11 @@ impl HostedPackStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_store::config_client::{
-        ClientSigningCapability, ConfigApplyTxn, PackApprovalError, PackEvidence, PackMutation,
-        PackRelationship, PackRelationshipEvidence,
-    };
+    use gents_store::config_client::{PackMutation, PackRelationship};
     use gents_store::identity::{KeyIdentity, NodeIdentity};
-    use serde_json::{json, Value};
+    use serde_json::json;
 
-    /// The held User's approver: it signs each proposed effect with its own
-    /// key and finishes only when it holds a plan for the install.
-    struct HeldUserApprover {
-        actor: ClientSigningCapability,
-        scope: PackApprovalScope,
-        plan: bool,
-    }
-
-    #[async_trait::async_trait]
-    impl PackEffectApprover for HeldUserApprover {
-        async fn approve_graph(
-            &self,
-            txn: &ConfigApplyTxn<'_>,
-            mutation: &PackMutation,
-            history: Option<Value>,
-        ) -> std::result::Result<PackEvidence, PackApprovalError> {
-            let ids = txn
-                .home_policy_ids()
-                .await
-                .map_err(|error| PackApprovalError::Refused(error.to_string()))?;
-            gents_store::config_client::prepare_pack_evidence_from_history(
-                &self.actor,
-                &self.scope,
-                mutation,
-                history,
-                ids,
-            )
-            .await
-            .map_err(|error| PackApprovalError::Refused(error.to_string()))
-        }
-        async fn approve_relationship(
-            &self,
-            _txn: &ConfigApplyTxn<'_>,
-            relationship: &PackRelationship,
-        ) -> std::result::Result<PackRelationshipEvidence, PackApprovalError> {
-            gents_store::config_client::prepare_pack_relationship(
-                &self.actor,
-                &self.scope,
-                relationship,
-            )
-            .await
-            .map_err(|error| PackApprovalError::Refused(error.to_string()))
-        }
-        async fn next_timestamp(
-            &self,
-            _txn: &ConfigApplyTxn<'_>,
-            _kind: &'static str,
-        ) -> std::result::Result<String, PackApprovalError> {
-            Ok(gents_store::config_client::mint_recreate_identity_timestamp())
-        }
-        async fn graph_applied(
-            &self,
-            _result: &Value,
-        ) -> std::result::Result<(), PackApprovalError> {
-            Ok(())
-        }
-        async fn relationship_applied(&self) -> std::result::Result<(), PackApprovalError> {
-            Ok(())
-        }
-        async fn client_finished(
-            &self,
-            _txn: &ConfigApplyTxn<'_>,
-        ) -> std::result::Result<(), PackApprovalError> {
-            if self.plan {
-                Ok(())
-            } else {
-                Err(PackApprovalError::Refused(
-                    "client aborted pack installation".into(),
-                ))
-            }
-        }
-    }
+    use crate::test_support::HeldUserApprover;
 
     /// The Node the runtime serves, created and owned by `user`, which the
     /// runtime may read; `other` holds the operator grants but no relation on

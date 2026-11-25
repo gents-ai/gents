@@ -264,6 +264,7 @@ fn agent_operation(inputs: &AgentDecisionInputs) -> AgentOperation {
                 system_prompt: input.system_prompt.clone(),
                 inference_profile_id: input.inference_profile_id.clone(),
                 clone_from: Some(input.clone_from.clone()).filter(|source| !source.is_empty()),
+                context_id: input.context_id.clone(),
             })
         }
         "edit" => AgentOperation::Edit(

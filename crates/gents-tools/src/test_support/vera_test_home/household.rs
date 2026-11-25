@@ -271,13 +271,25 @@ impl Household {
         }
         let context =
             defra_core::RequestContext::default().with_identity(Some(self.node_did.to_string()));
-        let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + SETTLE_CEILING;
         loop {
             let owed = self.node.owed_acp_as(&context, actor.as_str()).await?;
-            if done(&owed) || started.elapsed() > SETTLE_CEILING {
+            let now = tokio::time::Instant::now();
+            if done(&owed) || now >= deadline {
                 return Ok(owed);
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            if let Some(handle) = owed
+                .iter()
+                .find_map(|entry| entry.txn)
+                .and_then(|txn| txn.to_string().parse::<query::TransactionHandle>().ok())
+            {
+                let _ = self
+                    .node
+                    .await_owed_acp_as(&context, &handle, deadline - now)
+                    .await?;
+            } else {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         }
     }
 
@@ -313,14 +325,21 @@ impl Household {
         resource: &str,
         document: &str,
     ) -> anyhow::Result<Option<Duration>> {
+        let mut access = self.node.subscribe(&[
+            events::EventName::AcpCacheInvalidated,
+            events::EventName::AcpHeightAdvanced,
+        ]);
+        let deadline = tokio::time::Instant::now() + SETTLE_CEILING;
         loop {
             if self.holds(actor, permission, resource, document).await? {
                 return Ok(Some(started.elapsed()));
             }
-            if started.elapsed() > SETTLE_CEILING {
+            if tokio::time::timeout_at(deadline, access.recv())
+                .await
+                .is_err()
+            {
                 return Ok(None);
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
 

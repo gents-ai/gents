@@ -442,8 +442,8 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     let expiring =
         gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
     let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
-    while std::time::SystemTime::now() <= expired {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    while let Ok(wait) = expired.duration_since(std::time::SystemTime::now()) {
+        tokio::time::sleep(wait + std::time::Duration::from_millis(10)).await;
     }
     let stale = ConfigAccess::Graphql(GraphqlEndpoint::with_delegated_authorization(
         &url,
@@ -629,8 +629,8 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
     let expiring =
         gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
     let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
-    while std::time::SystemTime::now() <= expired {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    while let Ok(wait) = expired.duration_since(std::time::SystemTime::now()) {
+        tokio::time::sleep(wait + std::time::Duration::from_millis(10)).await;
     }
     let stale = create_task_in_process(
         &node,

@@ -38,37 +38,6 @@ where
     tauri::async_runtime::block_on(future)
 }
 
-struct ReadyReport(tokio::sync::mpsc::UnboundedSender<serde_json::Value>);
-
-#[async_trait::async_trait]
-impl gents_host::serve::ServeClient for ReadyReport {
-    fn report(&self, report: &serde_json::Value) -> anyhow::Result<()> {
-        let _ = self.0.send(report.clone());
-        Ok(())
-    }
-
-    fn start_failure_hint(&self, _home_dir: &Path) -> String {
-        String::new()
-    }
-
-    fn version(&self) -> gents_host::http::version::VersionResponse {
-        gents_host::http::version::version_response()
-    }
-
-    fn host_executable(&self) -> Option<std::path::PathBuf> {
-        None
-    }
-
-    async fn bound_root_agents(
-        &self,
-        root: &Path,
-        _home_dir: &Path,
-        _access: &gents_store::config_client::ConfigAccess,
-    ) -> anyhow::Result<gents_host::serve::BoundRootAgents> {
-        anyhow::bail!("no desired-state root is bound: {}", root.display())
-    }
-}
-
 fn free_port() -> u16 {
     std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .unwrap()
@@ -151,7 +120,7 @@ fn serve(home: &Path) -> Served {
             handle.block_on(gents_host::serve::serve(
                 args,
                 handle.clone(),
-                Arc::new(ReadyReport(ready)),
+                Arc::new(gents_host::test_support::ReportingServeClient(ready)),
             ))
         })
         .unwrap();

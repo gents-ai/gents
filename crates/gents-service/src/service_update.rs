@@ -17,7 +17,7 @@ mod backup_conformance;
 mod copy_executable_tests;
 mod execute;
 mod files;
-mod preflight;
+pub(crate) mod preflight;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -410,7 +410,7 @@ where
     Ok(metadata(true))
 }
 
-fn metadata(schema_checked: bool) -> serde_json::Value {
+pub(crate) fn metadata(schema_checked: bool) -> serde_json::Value {
     serde_json::json!({"handoff_version":1,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
         "schema_checked":schema_checked,"service_label":crate::native_service::SERVICE_LABEL,
         "systemd_unit":crate::native_service::SYSTEMD_UNIT})

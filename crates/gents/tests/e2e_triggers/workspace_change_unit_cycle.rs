@@ -123,9 +123,7 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         "unavailable agents: {:?}",
         agent.unavailable_agents()
     );
-    let (shutdown, receiver) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(receiver));
-    let runtime = BootedAgent::new(shutdown, handle, cycle.owner.clone());
+    let runtime = crate::support::interrupt::spawn_runtime(&cycle.db, agent).await;
     let query = format!(
         r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(&cycle.owner),

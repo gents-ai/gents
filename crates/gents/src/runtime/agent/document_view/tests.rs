@@ -3,13 +3,8 @@ use std::sync::Arc;
 use super::*;
 use crate::runtime::agent::DocumentResolveContext;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 use gents_tools::surface::ToolCeiling;
-
-fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
 
 #[tokio::test]
 async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::Result<()> {
@@ -24,7 +19,10 @@ async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::R
     let (db, user, owner) = signed_home.into_parts();
     let runtime = db.node_identity.clone();
     let node = db.node.clone();
-    let reader = tokio::task::spawn_blocking(|| test_identity("runtime-view-reader-actor")).await?;
+    let reader = tokio::task::spawn_blocking(|| {
+        gents_store::test_support::test_identity("runtime-view-reader-actor")
+    })
+    .await?;
     let reader_did = identity::Did::new(reader.did())?;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     admin
@@ -425,9 +423,11 @@ async fn apply_control_update_hot_reloads_skill() {
         .expect("reloaded view after skill create");
     assert!(view.skills.contains_key("s-reload"), "skill added to view");
 
-    let foreign = tokio::task::spawn_blocking(|| test_identity("document-view-foreign-node"))
-        .await
-        .unwrap();
+    let foreign = tokio::task::spawn_blocking(|| {
+        gents_store::test_support::test_identity("document-view-foreign-node")
+    })
+    .await
+    .unwrap();
     gents_documents::test_support::bootstrap_signed_test_node(&access, foreign.did()).await;
     seed_automation(
         &access,

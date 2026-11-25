@@ -1436,13 +1436,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
     .call();
     async {
         let selection_changed = async {
-            tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                while !ready.exists() {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .expect("fixture did not reach initialization");
+            crate::test_support::wait_for_path(
+                &ready,
+                std::time::Duration::from_secs(10),
+                "fixture did not reach initialization",
+            )
+            .await;
             let workspace =
                 workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                     .unwrap();
@@ -1934,11 +1933,10 @@ while True:
         )
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while first.client().is_alive() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        first.client().wait_exited(),
+    )
     .await
     .expect("fixture server should exit");
     drop(first);
@@ -2750,9 +2748,12 @@ exec sleep 30
         Err(error) => panic!("clearing the linter start marker: {error}"),
     }
     let cancel_when_running = async {
-        while !started_marker.exists() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        crate::test_support::wait_for_path(
+            &started_marker,
+            std::time::Duration::from_secs(10),
+            "linter never created its started marker",
+        )
+        .await;
         trigger.cancel();
     };
     let servers = [server];
@@ -2902,10 +2903,15 @@ while True:
     let ambient_call_2996 = gents_loop::tool::ToolCallEnvelope::default();
     let start = pool.get_or_start(&ambient_call_2996, key.clone(), &server, &config);
     tokio::select! {
-        _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
-        _ = start => {}
+        _ = pool.wait_for_live_count(1) => {}
+        _ = start => panic!("start should not complete while fixture sleeps"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        pool.wait_for_live_count(0),
+    )
+    .await
+    .expect("cancelled start cleanup should remove starting entry");
     assert_eq!(pool.live_count().await, 0);
 }
 
@@ -2916,10 +2922,12 @@ async fn dropped_hanging_request_sends_cancel_without_killing_server() {
     }
     let root = tempfile::tempdir().unwrap();
     let cancel_file = root.path().join("cancelled");
+    let received_file = root.path().join("hover-received");
     let fixture = format!(
         r#"
 import json, sys
 cancel_path = {cancel:?}
+received_path = {received:?}
 def read():
     headers = {{}}
     while True:
@@ -2948,6 +2956,7 @@ while True:
     elif method == '$/cancelRequest':
         open(cancel_path, 'w').write('cancelled')
     elif method == 'textDocument/hover':
+        open(received_path, 'w').write('received')
         continue
     elif method == 'shutdown':
         write({{"jsonrpc":"2.0","id":mid,"result":None}})
@@ -2956,7 +2965,8 @@ while True:
     elif mid is not None:
         write({{"jsonrpc":"2.0","id":mid,"result":None}})
 "#,
-        cancel = cancel_file
+        cancel = cancel_file,
+        received = received_file
     );
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
@@ -2996,19 +3006,19 @@ while True:
         None,
     );
     tokio::select! {
-        _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
-        _ = request => {}
+        () = crate::test_support::wait_for_path(
+            &received_file,
+            std::time::Duration::from_secs(5),
+            "fixture never received hover request",
+        ) => {}
+        _ = request => panic!("hanging hover request should not complete"),
     }
-    let seen = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        loop {
-            if cancel_file.exists() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
+    crate::test_support::wait_for_path(
+        &cancel_file,
+        std::time::Duration::from_secs(2),
+        "expected $/cancelRequest",
+    )
     .await;
-    assert!(seen.is_ok(), "expected $/cancelRequest");
     assert!(
         pool.has_ready(&gents_loop::tool::ToolCallEnvelope::default(), &key)
             .await
@@ -3395,13 +3405,73 @@ fn package_surface(root: &std::path::Path, bash: serde_json::Value) -> crate::su
     .resolve_with_agent_tools_for_mcp_presence(false, Default::default())
 }
 
+#[cfg(unix)]
+fn shell_hover_fixture_server(host_dir: &Path) -> CatalogServer {
+    let script = host_dir.join("hover-lsp-fixture");
+    gents_store::test_support::write_executable_script(
+        &script,
+        r#"#!/bin/sh
+send() {
+  body="$1"
+  len=$(printf '%s' "$body" | wc -c | tr -d ' ')
+  printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body"
+}
+while IFS= read -r line; do
+  line=$(printf '%s' "$line" | tr -d '\r')
+  len=0
+  while [ -n "$line" ]; do
+    case "$line" in
+      Content-Length:*) len=$(printf '%s' "${line#Content-Length:}" | tr -d ' ') ;;
+    esac
+    IFS= read -r line || exit 0
+    line=$(printf '%s' "$line" | tr -d '\r')
+  done
+  [ "$len" -gt 0 ] || continue
+  body=$(dd bs=1 count="$len" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$body" in
+    *'"method":"exit"'*) exit 0 ;;
+    *'"method":"initialize"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{\"hoverProvider\":true}}}"
+      ;;
+    *'"method":"textDocument/hover"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":\"hello hover\"}}}"
+      ;;
+    *'"method":"shutdown"'*)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *)
+      [ -n "$id" ] && send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    CatalogServer {
+        name: "fixture".into(),
+        command: script.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        file_types: vec![".rs".into()],
+        root_markers: vec!["Cargo.toml".into()],
+        is_linter: false,
+        priority: 1,
+        language_id: Some("rust".into()),
+        init_options: None,
+        settings: None,
+        capabilities: None,
+        workspace_ready_timings: None,
+        warmup_timeout_ms: None,
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn read_only_package_refuses_language_servers_that_write_and_unsandboxed_packages_start() {
-    if !python3_available() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(root.path()).unwrap();
+    let host = tempfile::tempdir().unwrap();
+    let server = shell_hover_fixture_server(host.path());
     std::fs::write(root.join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
         root.join("Cargo.toml"),
@@ -3427,7 +3497,7 @@ async fn read_only_package_refuses_language_servers_that_write_and_unsandboxed_p
         assert!(surface.tool_names().iter().any(|name| name == "lsp"));
         let mut config = surface.lsp_config().expect("lsp offered").clone();
         assert_eq!(config.constraints.sandbox, sandbox);
-        config.servers = vec![fixture_server(FIXTURE_PY.into())];
+        config.servers = vec![server.clone()];
         let pool = LspPool::new();
         let tool = LspTool::new(config, pool.clone()).unwrap();
 

@@ -145,3 +145,175 @@ pub fn as_user(
             .with_reported_delegation_audience(reported)?,
     ))
 }
+
+/// The User as its client holds it: a key in a signing capability that
+/// DefraDB never holds.
+pub struct ClientUser(pub ClientSigningCapability, pub identity::RawIdentity);
+
+#[async_trait::async_trait]
+impl NodeIdentity for ClientUser {
+    fn did(&self) -> &str {
+        self.0.did()
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents_store::identity::IdentityError> {
+        use identity::FullIdentity as _;
+        self.1
+            .sign(payload)
+            .map_err(|source| gents_store::identity::IdentityError::SignPayload {
+                did: self.did().to_owned(),
+                source,
+            })
+    }
+
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, gents_store::identity::IdentityError> {
+        gents_store::identity::verify_did_signature(did, payload, signature)
+    }
+
+    fn service_account(&self) -> Option<&gents_store::identity::ServiceAccount> {
+        None
+    }
+
+    fn client_signing_capability(
+        &self,
+    ) -> Result<ClientSigningCapability, gents_store::config_client::ConfigClientError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// The client's settlement passes, asked in this process of the store owner
+/// the runtime's route calls, each under a delegation the client's endpoint
+/// mints at its one minting point.
+pub struct InProcessPass {
+    node: Arc<defra_node::Node>,
+    endpoint: GraphqlEndpoint,
+    pub passes: std::sync::atomic::AtomicUsize,
+}
+
+impl InProcessPass {
+    pub fn new(node: Arc<defra_node::Node>, endpoint: GraphqlEndpoint) -> Self {
+        Self {
+            node,
+            endpoint,
+            passes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl gents_store::config_client::owed::OwedPass for InProcessPass {
+    async fn pass(
+        &self,
+    ) -> Result<
+        Vec<gents_store::config_client::owed::OwedStanding>,
+        gents_store::identity::RemoteAgentProvisionError,
+    > {
+        self.passes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let caller = self
+            .endpoint
+            .held_client_signing_capability()?
+            .did()
+            .to_owned();
+        let authorization = self
+            .endpoint
+            .authorization()?
+            .expect("a client endpoint authorizes its requests");
+        let token = authorization
+            .strip_prefix("Bearer ")
+            .expect("a bearer")
+            .to_owned();
+        let context = defra_core::RequestContext::default()
+            .with_identity(Some(caller.clone()))
+            .with_bearer(Some(caller.clone()), Some(token));
+        Ok(
+            gents_store::config_client::owed::settle_pass(&self.node, &context, &caller)
+                .await
+                .expect("the runtime serves a pass for its caller's own delegation"),
+        )
+    }
+}
+
+/// What the runtime's public status reports now, signed by its node key, as
+/// the desktop reads it.
+pub struct StaticStatusAudience {
+    pub node: Arc<dyn NodeIdentity>,
+    pub reports: ReportedDelegationAudience,
+}
+
+impl gents_store::config_client::ResolveAudience for StaticStatusAudience {
+    fn resolve<'a>(
+        &'a self,
+        nonce: &'a gents_protocol::home_attestation::HomeNonce,
+    ) -> futures::future::BoxFuture<'a, Option<serde_json::Value>> {
+        Box::pin(async move {
+            Some(
+                gents_store::test_support::signed_home_status(
+                    self.node.as_ref(),
+                    &self.reports,
+                    None,
+                    nonce,
+                )
+                .await,
+            )
+        })
+    }
+}
+
+/// Reads the runtime's public status over HTTP with no credential, as a
+/// client does after a refusal.
+pub struct HttpStatusAudience {
+    pub url: String,
+}
+
+impl gents_store::config_client::ResolveAudience for HttpStatusAudience {
+    fn resolve<'a>(
+        &'a self,
+        nonce: &'a gents_protocol::home_attestation::HomeNonce,
+    ) -> futures::future::BoxFuture<'a, Option<serde_json::Value>> {
+        Box::pin(async move {
+            reqwest::Client::new()
+                .get(&self.url)
+                .query(&[(
+                    gents_protocol::home_attestation::HOME_NONCE_QUERY,
+                    nonce.as_str(),
+                )])
+                .send()
+                .await
+                .ok()?
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+        })
+    }
+}
+
+/// What the runtime's public status reports of its node now, signed by its
+/// node key.
+pub struct NodeStatusAudience(pub Arc<defra_node::Node>, pub Arc<dyn NodeIdentity>);
+
+impl gents_store::config_client::ResolveAudience for NodeStatusAudience {
+    fn resolve<'a>(
+        &'a self,
+        nonce: &'a gents_protocol::home_attestation::HomeNonce,
+    ) -> futures::future::BoxFuture<'a, Option<serde_json::Value>> {
+        Box::pin(async move {
+            Some(
+                gents_store::test_support::signed_home_status(
+                    self.1.as_ref(),
+                    &ReportedDelegationAudience::Named(
+                        gents_store::local::document_acp::node_delegation_audience(&self.0)?,
+                    ),
+                    gents_store::local::document_acp::node_provider_time(&self.0),
+                    nonce,
+                )
+                .await,
+            )
+        })
+    }
+}

@@ -788,12 +788,6 @@ impl PendingAgent {
 mod tests {
     use super::*;
     use gents_inference::resolved::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
-    use gents_store::identity::KeyIdentity;
-
-    fn test_identity(name: &str) -> KeyIdentity {
-        let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-        KeyIdentity::load_or_create(path, None).unwrap()
-    }
 
     #[test]
     fn builder_max_turns_resolves_to_a_programmatic_provenance() {
@@ -801,7 +795,9 @@ mod tests {
             .agent("general")
             .max_turns(40)
             .pending_agent
-            .build_with_identity_for_test(test_identity("builder-max-turns-explicit"));
+            .build_with_identity_for_test(gents_store::test_support::test_identity(
+                "builder-max-turns-explicit",
+            ));
 
         assert_eq!(agent_config.agent.max_turns, 40);
         assert_eq!(
@@ -824,7 +820,9 @@ mod tests {
         let agent_config = GentsBuilder::default()
             .agent("general")
             .pending_agent
-            .build_with_identity_for_test(test_identity("builder-max-turns-default"));
+            .build_with_identity_for_test(gents_store::test_support::test_identity(
+                "builder-max-turns-default",
+            ));
 
         assert_eq!(agent_config.agent.max_turns, DEFAULT_MAX_TURNS);
         assert_eq!(

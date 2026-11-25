@@ -132,73 +132,7 @@ fn orchestration_state() -> (tempfile::TempDir, DesktopAppState) {
     (temp, DesktopAppState::new(policy))
 }
 
-#[derive(Default)]
-struct FakeLaunch {
-    approval: std::sync::Mutex<std::collections::VecDeque<Result<bool, BridgeError>>>,
-    approval_blocks: bool,
-    approval_gated: bool,
-    approval_release: tokio::sync::Notify,
-    starts: std::sync::Mutex<std::collections::VecDeque<Result<Launched, BridgeError>>>,
-    readiness: std::sync::Mutex<std::collections::VecDeque<Readiness>>,
-    start_calls: std::sync::atomic::AtomicUsize,
-    approval_waits: std::sync::atomic::AtomicUsize,
-    waiting: tokio::sync::Notify,
-    still_booting: bool,
-}
-
-impl ManagedLaunch for FakeLaunch {
-    async fn requires_approval(&self) -> Result<bool, BridgeError> {
-        self.approval
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(Ok(false))
-    }
-
-    async fn await_approval(&self) -> anyhow::Result<()> {
-        self.approval_waits
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.waiting.notify_one();
-        if self.approval_blocks {
-            std::future::pending::<()>().await;
-        }
-        if self.approval_gated {
-            self.approval_release.notified().await;
-        }
-        Ok(())
-    }
-
-    async fn start(&self) -> Result<Launched, BridgeError> {
-        self.start_calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.starts
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(Ok(Launched::Started))
-    }
-
-    async fn await_ready(&self) -> Result<Readiness, StartError> {
-        let next = self.readiness.lock().unwrap().pop_front();
-        match next {
-            Some(readiness) => Ok(readiness),
-            None if self.still_booting => Err(RuntimeStillBooting {
-                waited: Duration::from_secs(300),
-            }
-            .into()),
-            None => {
-                self.waiting.notify_one();
-                std::future::pending().await
-            }
-        }
-    }
-}
-
-impl FakeLaunch {
-    fn starts(&self) -> usize {
-        self.start_calls.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
+use crate::test_support::FakeLaunch;
 
 /// A restart that fails after the starter packs were enabled still says
 /// what happened to them.

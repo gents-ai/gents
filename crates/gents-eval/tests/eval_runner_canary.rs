@@ -1043,6 +1043,240 @@ async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_messa
 }
 
 #[tokio::test]
+async fn a_multiturn_tool_calling_stage_exports_reasoning_for_every_assistant_turn() {
+    const TURN_0_REASONING: &str = "first check which files exist in the canary workspace";
+    const TURN_1_REASONING: &str = "notes.txt is present, so read it before answering";
+    const TURN_1_TEXT: &str = "Reading notes.txt now.";
+    const TURN_2_REASONING: &str = "summarize the file contents for the final report";
+    const FINAL_TEXT: &str = "reported after inspecting notes.txt";
+
+    let mut plans = answering_plans();
+    plans[2] = StreamPlan::new(
+        SOLO_MARKER,
+        vec![
+            StreamResponse::streams(
+                SOLO_MARKER,
+                vec![
+                    StreamChunk::reasoning(TURN_0_REASONING),
+                    StreamChunk::tool_call("call-list-1", "list_files", r#"{"path":"."}"#),
+                ],
+            ),
+            StreamResponse::streams(
+                SOLO_MARKER,
+                vec![
+                    StreamChunk::reasoning(TURN_1_REASONING),
+                    StreamChunk::text(TURN_1_TEXT),
+                    StreamChunk::tool_call("call-read-2", "read_file", r#"{"path":"notes.txt"}"#),
+                ],
+            ),
+            StreamResponse::streams(
+                SOLO_MARKER,
+                vec![
+                    StreamChunk::reasoning(TURN_2_REASONING),
+                    StreamChunk::text(FINAL_TEXT),
+                ],
+            ),
+        ],
+    );
+    let backend = ScriptedBackend::start_with_plans(MODEL, plans).unwrap();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-export-multiturn").await;
+    request.case_ids = Some(vec!["one-stage".into()]);
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.completed, 1, "{outcome:#?}");
+
+    let trials = load_trials(&canary.access, &request.owner, &request.run_id)
+        .await
+        .unwrap();
+    let solo = trial(&trials, "one-stage");
+    let completion = solo.completion.clone().unwrap();
+    let runtime = support::runtime_handle();
+    let runs_dir = canary.runs_dir();
+    let at = locator(solo);
+    let stage_requests = completion
+        .stages
+        .iter()
+        .map(|stage| stage.request_id.clone().unwrap())
+        .collect::<Vec<_>>();
+    let export = |calls, redaction| {
+        export_retained_transcript(
+            &runtime,
+            &runs_dir,
+            &at,
+            canary.evaluator.as_ref(),
+            stage_requests.clone(),
+            TranscriptOptions { calls, redaction },
+        )
+    };
+
+    let final_only = export(TranscriptCalls::Final, ProjectionRedactionMode::Full)
+        .await
+        .unwrap();
+    let [stage] = final_only.stages.as_slice() else {
+        panic!("one stage transcript: {final_only:#?}");
+    };
+    assert_eq!(stage.model_turns, 3, "{stage:#?}");
+    assert_eq!(
+        stage.calls.len(),
+        1,
+        "final mode exports one call: {stage:#?}"
+    );
+    assert_eq!(
+        stage.outputs.len(),
+        3,
+        "every assistant turn is exported even in final-call mode: {stage:#?}"
+    );
+    assert_eq!(
+        stage
+            .outputs
+            .iter()
+            .map(|output| output.reasoning.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(TURN_0_REASONING),
+            Some(TURN_1_REASONING),
+            Some(TURN_2_REASONING),
+        ],
+        "reasoning is preserved on both intermediate tool-call turns and the final turn: {stage:#?}"
+    );
+    assert_eq!(
+        stage
+            .outputs
+            .iter()
+            .map(|output| (output.turn_index, output.attempt))
+            .collect::<Vec<_>>(),
+        vec![(Some(0), Some(0)), (Some(1), Some(0)), (Some(2), Some(0))],
+        "{stage:#?}"
+    );
+    assert!(
+        stage
+            .outputs
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence),
+        "outputs stay ordered by session sequence: {stage:#?}"
+    );
+    assert!(
+        stage
+            .outputs
+            .iter()
+            .all(|output| output.call_id.is_some() && output.call_seq.is_some()),
+        "each output carries its inference call join keys: {stage:#?}"
+    );
+    assert_eq!(
+        stage.final_output.as_ref(),
+        stage.outputs.last(),
+        "final_output stays compatible with the last exported assistant output"
+    );
+    assert_eq!(
+        stage.calls[0].output.as_ref(),
+        stage.final_output.as_ref(),
+        "the final call's output matches final_output"
+    );
+
+    let final_request_messages = stage.calls[0].request["messages"].as_array().unwrap();
+    let intermediate_wire_assistants = final_request_messages
+        .iter()
+        .filter(|message| message["role"] == "assistant")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        intermediate_wire_assistants.len(),
+        2,
+        "the final request carries both intermediate assistant turns: {final_request_messages:#?}"
+    );
+    for (turn, (expected_wire, exported_output)) in intermediate_wire_assistants
+        .iter()
+        .zip(&stage.outputs[..2])
+        .enumerate()
+    {
+        assert_eq!(
+            exported_output.wire.as_slice(),
+            std::slice::from_ref(*expected_wire),
+            "intermediate turn {turn} wire matches the final request history verbatim"
+        );
+    }
+    assert!(
+        !stage.calls[0]
+            .request
+            .to_string()
+            .contains(TURN_0_REASONING)
+            && !stage.calls[0]
+                .request
+                .to_string()
+                .contains(TURN_1_REASONING),
+        "chat-completions request history never replays prior reasoning"
+    );
+    assert!(serde_json::to_string(&stage.outputs[1].wire)
+        .unwrap()
+        .contains(TURN_1_TEXT));
+    assert!(serde_json::to_string(&stage.outputs[2].wire)
+        .unwrap()
+        .contains(FINAL_TEXT));
+
+    let all_calls = export(TranscriptCalls::All, ProjectionRedactionMode::Full)
+        .await
+        .unwrap();
+    let [all_stage] = all_calls.stages.as_slice() else {
+        panic!("one stage transcript: {all_calls:#?}");
+    };
+    let inference_calls = all_stage
+        .calls
+        .iter()
+        .filter(|call| call.capture_scope.as_deref() == Some("inference.1"))
+        .collect::<Vec<_>>();
+    assert_eq!(inference_calls.len(), 3, "{all_stage:#?}");
+    for (call, expected_output) in inference_calls.iter().zip(&stage.outputs) {
+        assert_eq!(
+            call.output.as_ref(),
+            Some(expected_output),
+            "each provider call pairs with its exact assistant output: {call:#?}"
+        );
+        assert_eq!(call.call_id, expected_output.call_id);
+        assert_eq!(call.call_seq, expected_output.call_seq);
+    }
+
+    let redacted = export(TranscriptCalls::All, ProjectionRedactionMode::TrainingSafe)
+        .await
+        .unwrap();
+    let [redacted_stage] = redacted.stages.as_slice() else {
+        panic!("one stage transcript: {redacted:#?}");
+    };
+    assert_eq!(
+        redacted_stage
+            .outputs
+            .iter()
+            .map(|output| output.reasoning.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("[training_safe_redacted]"),
+            Some("[training_safe_redacted]"),
+            Some("[training_safe_redacted]"),
+        ],
+        "training-safe redaction scrubs reasoning on every turn: {redacted_stage:#?}"
+    );
+    let redacted_json = serde_json::to_string(redacted_stage).unwrap();
+    for secret in [
+        TURN_0_REASONING,
+        TURN_1_REASONING,
+        TURN_1_TEXT,
+        TURN_2_REASONING,
+        FINAL_TEXT,
+    ] {
+        assert!(
+            !redacted_json.contains(secret),
+            "training-safe export leaked {secret:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
     let backend = ScriptedBackend::start(MODEL, Vec::new()).unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;

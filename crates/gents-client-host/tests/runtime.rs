@@ -521,6 +521,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         activity_profile,
     ));
     let provider_related = Arc::clone(&related_provider);
+    let completion_notify = Arc::new(tokio::sync::Notify::new());
+    let notify_completions = Arc::clone(&completion_notify);
     let provider = Arc::new(
         ScriptedBackend::builder("editor-fixture")
             .models(if journey.editor_scenario().is_some() {
@@ -529,7 +531,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 &[]
             })
             .respond(move |request| {
-                Some(provider_reply(
+                let reply = provider_reply(
                     request,
                     journey,
                     history,
@@ -541,7 +543,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                         history_hold: &history_provider_hold,
                         goal_hold: &goal_provider_hold,
                     },
-                ))
+                );
+                notify_completions.notify_waiters();
+                Some(reply)
             })
             .start()?,
     );
@@ -600,23 +604,25 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let port = ports::allocate_port()?;
     let runtime_command = runtime_server_command(&cli, root, &node_home, port);
     #[cfg(unix)]
-    let mut runtime_command = runtime_command;
-    #[cfg(unix)]
-    let mut runtime = runtime_command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(std::fs::File::create(
-            root.join("runtime.log"),
-        )?))
-        .stderr(Stdio::from(std::fs::File::create(
-            root.join("runtime.err"),
-        )?))
-        .kill_on_drop(true)
-        .spawn()?;
+    let (mut runtime, ready, _runtime_drain) = {
+        let mut runtime_command = runtime_command;
+        let mut runtime = runtime_command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(std::fs::File::create(
+                root.join("runtime.err"),
+            )?))
+            .kill_on_drop(true)
+            .spawn()?;
+        let (ready, drain) = wait_ready(&mut runtime, &root.join("runtime.log")).await?;
+        (runtime, ready, drain)
+    };
     #[cfg(windows)]
     let mut runtime =
         console::ConsoleChild::spawn(runtime_command.as_std(), &root.join("runtime.log"))?;
     #[cfg(unix)]
-    let ready = wait_ready(&mut runtime, &root.join("runtime.log")).await?;
+    let status = read_status(&cli, &node_home, port).await?;
+    #[cfg(windows)]
     let status = wait_for_status(&mut runtime, &cli, &node_home, port).await?;
     #[cfg(unix)]
     ensure!(
@@ -793,21 +799,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         gents_store::graphql::escape_graphql_string(request),
         gents::SIGNED_REQUEST_FIELDS,
     );
+    let rows = tokio::time::timeout(
+        Duration::from_secs(30),
+        gents_store::test_support::rows_when(&access, "AgentRequest", &signed_query, |data| {
+            data["AgentRequest"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+        }),
+    )
+    .await
+    .context("submitted request did not reach the runtime")?;
     let row: gents_protocol::row::AgentRequestRow =
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let response = access.execute(&signed_query).await?;
-                if let Some(row) = response["data"]["AgentRequest"]
-                    .as_array()
-                    .and_then(|rows| rows.first())
-                {
-                    return serde_json::from_value(row.clone()).map_err(anyhow::Error::from);
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await
-        .context("submitted request did not reach the runtime")??;
+        serde_json::from_value(rows["AgentRequest"][0].clone())?;
     gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
@@ -846,13 +849,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     })
                 })
             {
-                return;
+                return Ok::<_, anyhow::Error>(());
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            client.wait_for_update().await?;
         }
     })
     .await
-    .context("the canonical session header was not observed")?;
+    .context("the canonical session header was not observed")??;
     if !matches!(journey, Journey::Goal) {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -872,7 +875,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     );
                     return Ok::<_, anyhow::Error>(());
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                client.wait_for_update().await?;
             }
         })
         .await
@@ -883,14 +886,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let backend = Arc::clone(&provider);
         let continuation_path = root.join("finish-goal-steer-provider");
         let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            while !completion_path.is_file() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+            if support::wait_for_file(&completion_path).await.is_ok() {
+                backend.release(PROVIDER_GATE);
             }
-            backend.release(PROVIDER_GATE);
-            if journey.is_editor(scenario::GOAL_STEERING) {
-                while !continuation_path.is_file() {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
+            if journey.is_editor(scenario::GOAL_STEERING)
+                && support::wait_for_file(&continuation_path).await.is_ok()
+            {
                 backend.release(CONTINUATION_GATE);
             }
         }));
@@ -936,6 +937,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ensure!(view["goal"]["goalId"] == receipt["goalId"]);
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
+                let notified = completion_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 let captured = provider.observed_completion_bodies();
                 if captured.iter().any(|request| {
                     request["messages"].as_array().is_some_and(|messages| {
@@ -953,7 +957,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }) {
                     return;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                notified.await;
             }
         })
         .await
@@ -1046,7 +1050,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 return Ok::<_, anyhow::Error>(());
             }
             last_projection = projection;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            client.wait_for_update().await?;
         }
     })
     .await
@@ -1074,7 +1078,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     ensure!(output["output"]["content"] == expected_reply, "{output}");
                     break Ok::<_, anyhow::Error>(());
                 }
-                Some("loading") => tokio::time::sleep(Duration::from_millis(50)).await,
+                Some("loading") => client.wait_for_update().await?,
                 _ => anyhow::bail!("unexpected canonical output: {output}"),
             }
         }
@@ -1207,12 +1211,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let backend = Arc::clone(&provider);
         let _completion = options.profile.then(|| {
             tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-                loop {
-                    if completion_path.is_file() {
-                        backend.release(HISTORY_GATE);
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                if support::wait_for_file(&completion_path).await.is_ok() {
+                    backend.release(HISTORY_GATE);
                 }
             }))
         });
@@ -1326,12 +1326,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let release = root.join("finish-recovered-goal-provider");
         let held = Arc::clone(&provider);
         let _release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            loop {
-                if release.is_file() {
-                    held.release(editor_goal_recovery::GATE);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+            if support::wait_for_file(&release).await.is_ok() {
+                held.release(editor_goal_recovery::GATE);
             }
         }));
         let editor_result = run_editor_journey(
@@ -1374,12 +1370,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let finish = root.join("finish-delivery-goal");
         let held = Arc::clone(&provider);
         let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            loop {
-                if finish.is_file() {
-                    held.release(editor_goal_delivery::GATE);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+            if support::wait_for_file(&finish).await.is_ok() {
+                held.release(editor_goal_delivery::GATE);
             }
         }));
         run_editor_journey(
@@ -1468,14 +1460,14 @@ async fn wait_chat_deployment(
                         })
                 })
             {
-                return deployment.clone();
+                return Ok::<_, anyhow::Error>(deployment.clone());
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            client.wait_for_update().await?;
         }
     })
     .await;
     match observed {
-        Ok(deployment) => Ok(deployment),
+        Ok(result) => result,
         Err(error) => {
             let query = format!(
                 "{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID node_did snapshot_json updated_at}} }}",
@@ -1641,7 +1633,7 @@ async fn read_session(
                     if error.code
                         == gents_store::client_error::BridgeErrorCode::ProjectionPending =>
                 {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    client.wait_for_update().await?;
                 }
                 Err(error) => return Err(anyhow::Error::from(error)),
             }
@@ -1675,14 +1667,16 @@ async fn wait_goal(
                 && observation["sessionId"] == session
                 && observation["goal"]["status"] == status
             {
-                return observation.clone();
+                return Ok::<_, anyhow::Error>(observation.clone());
             }
             last = view;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            client.wait_for_update().await?;
         }
     })
     .await
-    .with_context(|| format!("the signed goal observation did not reach the client; last: {last}"))
+    .with_context(|| {
+        format!("the signed goal observation did not reach the client; last: {last}")
+    })?
 }
 
 async fn configure_inference(
@@ -1767,31 +1761,74 @@ async fn configure_inference(
 }
 
 #[cfg(unix)]
-async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let text = tokio::fs::read_to_string(path).await?;
-            for (index, _) in text.char_indices().filter(|(_, ch)| *ch == '{') {
-                if let Some(Ok(value)) = serde_json::Deserializer::from_str(&text[index..])
+async fn wait_ready(
+    child: &mut Child,
+    path: &Path,
+) -> Result<(Value, tokio_util::task::AbortOnDropHandle<Result<()>>)> {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    let stdout = child.stdout.take().context("runtime stdout")?;
+    let mut lines = BufReader::new(stdout).lines();
+    let mut log = tokio::fs::File::create(path).await?;
+    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut output = String::new();
+        while let Some(line) = lines.next_line().await? {
+            log.write_all(line.as_bytes()).await?;
+            log.write_all(b"\n").await?;
+            output.push_str(&line);
+            output.push('\n');
+            if let Some(start) = output.find('{') {
+                if let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[start..])
                     .into_iter::<Value>()
                     .next()
                 {
                     if value["status"] == "serving" {
-                        return Ok(value);
+                        return Ok::<_, anyhow::Error>(value);
                     }
                 }
             }
-            ensure!(
-                child.try_wait()?.is_none(),
-                "runtime exited before readiness"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        anyhow::bail!("runtime exited before readiness")
     })
     .await
-    .context("runtime readiness timed out")?
+    .context("runtime readiness timed out")??;
+    let drain = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        while let Some(line) = lines.next_line().await? {
+            log.write_all(line.as_bytes()).await?;
+            log.write_all(b"\n").await?;
+        }
+        Ok(())
+    }));
+    Ok((ready, drain))
 }
 
+#[cfg(unix)]
+async fn read_status(cli: &Path, home: &Path, port: u16) -> Result<Value> {
+    let graphql = ports::graphql_url(port);
+    let output = Command::new(cli)
+        .envs(
+            support::homes::ProcessHomes::under(home.parent().context("runtime home parent")?)
+                .env(),
+        )
+        .args(["status", "--home"])
+        .arg(home)
+        .arg("--graphql")
+        .arg(&graphql)
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    ensure!(
+        output.status.success(),
+        "runtime status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(ready["readiness_status"] == "ready", "{ready}");
+    Ok(ready)
+}
+
+/// On Windows, `ConsoleChild` owns ConPTY output, so readiness is observed
+/// across processes against the runtime's HTTP/GraphQL status endpoint.
+#[cfg(windows)]
 async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) -> Result<Value> {
     let graphql = ports::graphql_url(port);
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -1828,21 +1865,16 @@ async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) 
 }
 
 async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if gents_desktop_bridge::host::local::connect(paths)
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        support::wait_for_listener(paths, || {
             ensure!(
                 child.try_wait()?.is_none(),
                 "client host exited before readiness"
             );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+            Ok(())
+        }),
+    )
     .await
     .context("native listener readiness timed out")?
 }

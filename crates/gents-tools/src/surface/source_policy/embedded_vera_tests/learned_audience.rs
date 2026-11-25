@@ -1,41 +1,13 @@
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
-use gents_store::config_client::{
-    ClientSigningCapability, ConfigAccess, GraphqlEndpoint, ResolveAudience,
-};
+use gents_store::config_client::{ClientSigningCapability, ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use gents_store::local::backend_protection::FreshBackendStore;
 use gents_store::local::document_acp::DocumentAcp;
 
 use super::{client_key, create_task, home, owner_on_vera, serve, tasks};
-
-/// What the runtime's public status reports now, signed by its node key, as
-/// the desktop reads it.
-struct PublicStatus {
-    node: Arc<dyn NodeIdentity>,
-    reports: ReportedDelegationAudience,
-}
-
-impl ResolveAudience for PublicStatus {
-    fn resolve<'a>(
-        &'a self,
-        nonce: &'a gents_protocol::home_attestation::HomeNonce,
-    ) -> BoxFuture<'a, Option<serde_json::Value>> {
-        Box::pin(async move {
-            Some(
-                gents_store::test_support::signed_home_status(
-                    self.node.as_ref(),
-                    &self.reports,
-                    None,
-                    nonce,
-                )
-                .await,
-            )
-        })
-    }
-}
+use crate::test_support::vera_test_home::StaticStatusAudience as PublicStatus;
 
 fn desktop_client(
     url: &str,

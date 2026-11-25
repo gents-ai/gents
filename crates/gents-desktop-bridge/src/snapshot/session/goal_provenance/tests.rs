@@ -297,7 +297,7 @@ pub(crate) async fn assert_copied_opening(
                 None,
             )
             .unwrap();
-        let measured = crate::tests::support::CountingRead::new(access.clone());
+        let measured = crate::test_support::CountingRead::new(access.clone());
         attach(&measured, &[], &page, Some(&dependencies), &mut snapshot)
             .await
             .unwrap();

@@ -61,6 +61,9 @@ async fn embedded_agent_target_return_projection_is_refused_before_transport() {
         .expect("seeded return request")
         .to_owned();
     let receiver_peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+    let mut arrivals =
+        gents_store::subscription_source::subscribe_collections(&receiver, ["AgentRequest"])
+            .unwrap();
     let pushed = push_documents_to_peer(
         &sender,
         &receiver_peer,
@@ -82,7 +85,12 @@ async fn embedded_agent_target_return_projection_is_refused_before_transport() {
             .unwrap()
             .is_empty());
     }
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), arrivals.recv())
+            .await
+            .is_err(),
+        "the routed return request must not replicate"
+    );
     assert!(
         collection_values(&receiver, "AgentRequest", "request_id")
             .await

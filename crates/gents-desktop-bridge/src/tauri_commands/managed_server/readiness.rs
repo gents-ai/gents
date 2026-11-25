@@ -26,7 +26,7 @@ pub(super) const BACKGROUND_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600
 pub(super) const MANAGED_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
-pub(super) enum Readiness {
+pub(crate) enum Readiness {
     Ready(ManagedServerStatus),
     ApprovalRequired,
     Outdated { message: String, selected: bool },
@@ -236,8 +236,8 @@ where
 }
 
 #[derive(Debug)]
-pub(super) struct RuntimeStillBooting {
-    pub(super) waited: Duration,
+pub(crate) struct RuntimeStillBooting {
+    pub(crate) waited: Duration,
 }
 
 impl std::fmt::Display for RuntimeStillBooting {
@@ -255,7 +255,7 @@ impl std::error::Error for RuntimeStillBooting {}
 /// Why a managed start or adoption did not reach readiness. Its chain renders
 /// as the user-visible failure text.
 #[derive(Debug, thiserror::Error)]
-pub(super) enum StartError {
+pub(crate) enum StartError {
     #[error(transparent)]
     StillBooting(#[from] RuntimeStillBooting),
     #[error("{kind}")]
@@ -376,7 +376,7 @@ pub(super) async fn settle_adoption<'a>(
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct RefusedStoreKind(
+pub(crate) struct RefusedStoreKind(
     gents_protocol::operations::install_repair::IncompatibleStoreKind,
 );
 

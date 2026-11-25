@@ -141,6 +141,7 @@ impl Drop for StartingCleanup {
                 }
             }
             pool.inner.lock().await.remove(&key);
+            pool.notify_inner_changed();
         });
     }
 }
@@ -205,6 +206,8 @@ pub struct LspPool {
     inner: Arc<Mutex<RapidHashMap<PoolKey, Arc<Mutex<PoolEntry>>>>>,
     failed: Arc<Mutex<RapidHashMap<PoolKey, (String, Instant)>>>,
     sweep_started: Arc<AtomicBool>,
+    #[cfg(test)]
+    inner_changed: Arc<Notify>,
 }
 
 impl Default for LspPool {
@@ -213,6 +216,8 @@ impl Default for LspPool {
             inner: Arc::new(Mutex::new(RapidHashMap::new())),
             failed: Arc::new(Mutex::new(RapidHashMap::new())),
             sweep_started: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            inner_changed: Arc::new(Notify::new()),
         }
     }
 }
@@ -220,6 +225,11 @@ impl Default for LspPool {
 impl LspPool {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn notify_inner_changed(&self) {
+        #[cfg(test)]
+        self.inner_changed.notify_waiters();
     }
 
     /// Must be called from within the runtime the pool runs on.
@@ -379,6 +389,8 @@ impl LspPool {
                     start_error: None,
                 }));
                 map.insert(key.clone(), slot.clone());
+                drop(map);
+                self.notify_inner_changed();
                 (slot, true, evicted)
             }
         };
@@ -504,6 +516,7 @@ impl LspPool {
                 entry.ready.notify_waiters();
                 drop(entry);
                 self.inner.lock().await.remove(&key);
+                self.notify_inner_changed();
                 cleanup.disarm.store(true, Ordering::SeqCst);
                 if cache_failure {
                     self.failed
@@ -630,6 +643,7 @@ impl LspPool {
             map.remove(key)
         };
         if let Some(slot) = slot {
+            self.notify_inner_changed();
             retire_slot(slot, cancel).await;
         }
     }
@@ -807,6 +821,19 @@ impl LspPool {
         let map = self.inner.lock().await;
         if let Some(slot) = map.get(key) {
             slot.lock().await.idle_timeout = timeout;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_for_live_count(&self, expected: usize) {
+        loop {
+            let notified = self.inner_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.live_count().await == expected {
+                return;
+            }
+            notified.await;
         }
     }
 }

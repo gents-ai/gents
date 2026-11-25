@@ -62,6 +62,9 @@ pub struct AgentCreateInput {
     /// The enabled Agent whose Context and Tools a clone copies. Core refuses
     /// a clone without it and ignores it on create.
     pub clone_from: Option<String>,
+    /// An existing AgentContext ID on the same node to bind unchanged instead
+    /// of allocating a fresh Context and Tools.
+    pub context_id: Option<String>,
     pub display_name: String,
     /// On a clone, `Omitted` keeps the source's value and `Clear` removes it.
     pub description: StringUpdate,
@@ -268,6 +271,10 @@ pub enum AgentOperationError {
     GeneratedToolsIdExists,
     #[error("clone inherits its source tools; edit the cloned Tools to change grants")]
     ClonePresetRefused,
+    #[error("clone copies its source context into a fresh AgentContext; omit context-id, or use agent create with context-id to bind an existing Context")]
+    CloneContextIdRefused,
+    #[error("agent create with context-id binds an existing AgentContext unchanged; omit system-prompt, preset and root, or use context update after creation")]
+    CreateContextIdConflicts,
     #[error("unknown permission preset")]
     UnknownPreset,
     #[error("clone source {from:?} carries an operator grant this agent does not hold; clone a source without it or ask the operator to grant it")]
@@ -326,10 +333,11 @@ impl AgentOperationError {
             | Self::DisplayNameEmpty
             | Self::SystemPromptBlank
             | Self::ContextIdBlank
-            | Self::MissingDocument { .. }
             | Self::GeneratedContextIdExists
             | Self::GeneratedToolsIdExists
             | Self::ClonePresetRefused
+            | Self::CloneContextIdRefused
+            | Self::CreateContextIdConflicts
             | Self::UnknownPreset
             | Self::CloneSourceGrantNotHeld { .. }
             | Self::ObjectRequired(_)
@@ -340,6 +348,13 @@ impl AgentOperationError {
             | Self::AdmissionActorMismatch
             | Self::CandidateDoesNotResolve
             | Self::Passthrough(_) => operation.declaration().help,
+            Self::MissingDocument {
+                collection: "AgentContext",
+                ..
+            } => NextCall::List {
+                resource: "context",
+            },
+            Self::MissingDocument { .. } => operation.declaration().help,
             Self::CatalogNotHeld | Self::AgentNotHeld(_) | Self::SelfDisable => {
                 NextCall::Inspect { resource: "agent" }
             }
@@ -379,7 +394,9 @@ impl AgentOperationError {
             | Self::UnsupportedEditField(_)
             | Self::DisplayNameEmpty
             | Self::SystemPromptBlank
-            | Self::ContextIdBlank => Some(AgentRefusal::InvalidInput),
+            | Self::ContextIdBlank
+            | Self::CloneContextIdRefused
+            | Self::CreateContextIdConflicts => Some(AgentRefusal::InvalidInput),
             Self::DefaultAgentDisabled(_) => Some(AgentRefusal::DefaultDisabled),
             Self::SelfDisable => Some(AgentRefusal::SelfLockout),
             _ => None,
@@ -504,6 +521,12 @@ impl AgentCreateDeclaration {
     }
 }
 
+const CREATE_NOTES: &[&str] = &[
+    "ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.",
+    "Pass options.context-id to bind an existing AgentContext unchanged instead of allocating a new Context/Tools (omit system-prompt, preset and root).",
+    "A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.",
+];
+
 const CREATION_NOTES: &[&str] = &[
     "ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the new Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.",
     "A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.",
@@ -528,11 +551,12 @@ pub const AGENT_CREATE: AgentCreateDeclaration = AgentCreateDeclaration {
         option("profile", OptionRequirement::Required),
         option("description", OptionRequirement::Optional),
         option("root", OptionRequirement::Optional),
+        option("context-id", OptionRequirement::Optional),
     ],
     option_note: Some("readonly permits shell commands; to forbid shell set host.bash.mode Off"),
     switches: &["default"],
-    usage: "agent create takes options.display-name, system-prompt, preset and profile; it allocates the ID and Context/Tools. Use agent update for an existing role",
-    notes: CREATION_NOTES,
+    usage: "agent create takes options.display-name, profile, and either system-prompt (with optional preset/root) or context-id; it allocates a fresh agent_did. Use agent update for an existing role",
+    notes: CREATE_NOTES,
     help: NextCall::VerbHelp {
         resource: "agent",
         verb: "create",
@@ -568,7 +592,7 @@ mod tests {
     fn syntax_lines_render_the_declared_options() {
         assert_eq!(
             AGENT_CREATE.syntax_line(),
-            "agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root; argv switch --default"
+            "agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root, context-id; argv switch --default"
         );
         assert_eq!(
             AGENT_CLONE.syntax_line(),

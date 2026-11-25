@@ -426,6 +426,37 @@ def goalProgress : Family GoalProgressInput GoalProgressOutput where
       ⟨i.calls.map (·.model), i.goal_state_changed⟩ i.live_deadline i.now
     { streak := record.streak, pause }
 
+structure GoalProgressResultFieldInput where
+  name : String
+  key : String
+  deriving Lean.ToJson
+
+/-- `GoalProgress.isVolatileResultField`: whether a JSON key in a tool result
+varies only by read-time clock and is stripped before no-progress hashing. -/
+structure GoalProgressResultFieldOutput where
+  volatile : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalProgressResultField : Family GoalProgressResultFieldInput GoalProgressResultFieldOutput where
+  inputs :=
+    [ { name := "read_at", key := "read_at" }
+    , { name := "elapsed_seconds", key := "elapsed_seconds" }
+    , { name := "active_time_seconds", key := "active_time_seconds" }
+    , { name := "next_pending_retry_in_ms", key := "next_pending_retry_in_ms" }
+    , { name := "lease_remaining_days", key := "lease_remaining_days" }
+    , { name := "duration_ms", key := "duration_ms" }
+    , { name := "status", key := "status" }
+    , { name := "ok", key := "ok" }
+    , { name := "result", key := "result" }
+    , { name := "preview", key := "preview" }
+    , { name := "available_bytes", key := "available_bytes" }
+    , { name := "started_at", key := "started_at" }
+    , { name := "completed_at", key := "completed_at" }
+    , { name := "terminal_elapsed_seconds", key := "terminal_elapsed_seconds" }
+    , { name := "error", key := "error" } ]
+  model := fun i => { volatile := GoalProgress.isVolatileResultField i.key }
+
 def onBlockedName : GoalStopPolicy.OnBlocked → String
   | .stopFirst => "stop_first"
   | .confirmOnce => "confirm_once"

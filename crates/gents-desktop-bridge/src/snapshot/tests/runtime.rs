@@ -537,22 +537,8 @@ fn starter_receipt(
 
 #[tokio::test]
 async fn recorded_summary_starters_follow_the_starter_verification_model() {
+    use crate::test_support::SessionRead;
     use gents_store::identity::NodeIdentity;
-    struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
-    #[async_trait::async_trait]
-    impl gents_store::config_client::ConfigRead for SessionRead {
-        async fn execute_read(
-            &self,
-            query: &str,
-        ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-            assert!(
-                query.contains("AgentSession") && !query.contains("AgentRequest"),
-                "a starter is verified from its session row alone: {query}"
-            );
-            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(serde_json::json!({"data": {"AgentSession": [self.0.clone()]}}))
-        }
-    }
     let cases = gents_lean_vocab::families::contracts_starter_verification::cases();
     let dir = tempfile::tempdir().unwrap();
     let signer =
@@ -620,7 +606,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         for case in &cases {
             let name = case.input.name.as_str();
             let candidate = candidate(name);
-            let read = SessionRead(candidate.clone(), Default::default());
+            let read = SessionRead::new(candidate.clone());
             let verified = gents_session::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
@@ -642,11 +628,11 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
                 assert_eq!(view.cause_request_doc_id, "missing-request");
                 assert_eq!(link.cause_request_doc_id, "missing-request");
             }
-            let before = read.1.load(std::sync::atomic::Ordering::SeqCst);
+            let before = read.reads();
             super::super::runtime_tasks::resolve_summary_starters(&read, &cache, &mut summaries)
                 .await;
             assert_eq!(
-                read.1.load(std::sync::atomic::Ordering::SeqCst),
+                read.reads(),
                 before,
                 "{name}: a rebuild with verified evidence does not read"
             );

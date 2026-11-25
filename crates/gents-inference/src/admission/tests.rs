@@ -1712,11 +1712,19 @@ async fn park_with_assigned_permit(
         .unwrap_or_else(|_| panic!("{request_id} stalled before queueing: {rows:?}"));
     }
     // A negative check without a settled point: nothing wakes a queued call
-    // while its slot is held, so these polls can only pass, under any load.
-    for _ in 0..20 {
-        assert!(parked.as_mut().poll(&mut cx).is_pending());
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    // while its slot is held. Drain any wake left over from queueing and
+    // verify `parked` stays pending for the settling window.
+    let _ = tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            woken.0.notified().await;
+            assert!(
+                parked.as_mut().poll(&mut cx).is_pending(),
+                "a queued call must not wake to completion while its slot is held"
+            );
+        }
+    })
+    .await;
+    assert!(parked.as_mut().poll(&mut cx).is_pending());
     holder.finish_success(None).await.unwrap();
     drop(holder);
     let pool = registry.pool_for_test(backend).unwrap();

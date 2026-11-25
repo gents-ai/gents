@@ -13,6 +13,10 @@ mod help;
 #[cfg(test)]
 mod tests;
 
+pub fn help_paths() -> &'static [&'static str] {
+    help::PATHS
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaParams {

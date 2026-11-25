@@ -741,6 +741,9 @@ def freshCreate : AgentCreateInput :=
 def cloneOf (source : String) : AgentCreateInput :=
   { freshCreate with systemPrompt := "", profile := "deep", cloneFrom := source }
 
+def createWithContext (cid : String) : AgentCreateInput :=
+  { name := "reviewer", systemPrompt := "", profile := "fast", contextId := some cid }
+
 def editOf (target : String) (f : AgentEditFields) (makeDefault : Bool := false) : AgentRequest :=
   { operation := .edit f, target, makeDefault }
 
@@ -822,6 +825,14 @@ def agentDecisionScenarios : List AgentDecisionRow :=
     , request := createOf "reviewer" (cloneOf "engineer") }
   , { name := "agent_create_clone_disabled_source_rejected"
     , request := createOf "reviewer" (cloneOf "idle") }
+  , { name := "agent_create_existing_context_accepted"
+    , request := createOf "reviewer" (createWithContext "desk-live") }
+  , { name := "agent_create_blank_context_rejected"
+    , request := createOf "reviewer" (createWithContext " ") }
+  , { name := "agent_create_context_with_prompt_rejected"
+    , request := createOf "reviewer" { createWithContext "desk-live" with systemPrompt := "Override." } }
+  , { name := "agent_clone_with_context_rejected"
+    , request := createOf "reviewer" { cloneOf "worker" with contextId := some "desk-live" } }
     -- the same category rule for every actor, read from ACP
   , { name := "agent_create_by_node_administrator_accepted", actor := adminActor
     , request := createOf "reviewer" }
@@ -888,7 +899,8 @@ theorem agent_decision_cases_regressions :
        "agent_edit_name_only_without_profile_accepted", "agent_edit_name_clear_accepted",
        "agent_edit_prompt_accepted", "agent_create_fresh_id_accepted",
        "agent_create_as_default_accepted", "agent_create_clone_inherits_prompt_accepted",
-       "agent_create_clone_of_engineer_accepted", "agent_create_by_node_administrator_accepted",
+       "agent_create_clone_of_engineer_accepted", "agent_create_existing_context_accepted",
+       "agent_create_by_node_administrator_accepted",
        "agent_create_by_catalog_agent_accepted", "agent_create_by_engineer_accepted",
        "agent_clone_by_engineer_accepted", "agent_choose_default_by_engineer_accepted",
        "agent_engineer_disables_user_agent_accepted",
@@ -923,6 +935,9 @@ theorem agent_decision_refusals :
        ("agent_create_fresh_without_prompt_rejected", .invalidInput),
        ("agent_create_fresh_empty_prompt_empty_catalog_rejected", .invalidInput),
        ("agent_create_clone_disabled_source_rejected", .invalidInput),
+       ("agent_create_blank_context_rejected", .invalidInput),
+       ("agent_create_context_with_prompt_rejected", .invalidInput),
+       ("agent_clone_with_context_rejected", .invalidInput),
        ("agent_create_without_catalog_person_rejected", .catalogNotHeld),
        ("agent_create_without_catalog_agent_rejected", .catalogNotHeld),
        ("agent_clone_without_catalog_agent_rejected", .catalogNotHeld),
