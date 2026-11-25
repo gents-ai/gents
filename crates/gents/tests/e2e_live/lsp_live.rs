@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use gents_documents::{FileToolMode, FileTools, HostTools, IntegrationTools, LspTools, Tools};
+use gents_documents::{
+    BashMode, BashTools, FileToolMode, FileTools, HostTools, IntegrationTools, LspTools, Tools,
+};
 use gents_tools::surface::ToolCeiling;
 
 use crate::support::agent_requests::submit_user_request;
@@ -81,18 +83,16 @@ async fn lsp_live_model_uses_rust_analyzer() {
             tools_id: "lsp-live-tools".into(), node_did: actors.node_did().into(),
             host: Some(HostTools { root: Some(root.display().to_string()),
                 files: Some(FileTools { mode: FileToolMode::ReadOnly, ..Default::default() }),
+                bash: Some(BashTools { mode: BashMode::Unrestricted, ..Default::default() }),
                 ..Default::default() }),
             integrations: Some(IntegrationTools { lsp: Some(LspTools { config: Some(config), ..Default::default() }), ..Default::default() }),
             ..Default::default()
         }, Vec::new(),
     ).await;
-    let runtime = boot_live_agent_with_ceiling(
-        &db,
-        db.node_identity.clone(),
-        ToolCeiling::readonly_at(&root),
-    )
-    .await
-    .unwrap();
+    let runtime =
+        boot_live_agent_with_ceiling(&db, db.node_identity.clone(), ToolCeiling::readwrite(&root))
+            .await
+            .unwrap();
     const REQUEST: &str = "lsp-live-request";
     submit_user_request(actors.node_did(), &actors.fixture, "lsp-live-session", REQUEST,
         "Call lsp with action hover, file src/lib.rs, symbol berth_count, line 2. After the hover succeeds, acknowledge briefly.",

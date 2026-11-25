@@ -19,6 +19,7 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
             "fingerprint",
             ResolvedToolSelection {
                 file_tools,
+                bash: gents_documents::BashMode::Unrestricted,
                 enable_lsp,
                 lsp_config,
                 ..ResolvedToolSelection::default()

@@ -15,9 +15,9 @@ def effectiveNetworkMode (mode : ExecutionMode) (network : NetworkMode) : Networ
 and identity configuration. Every Seatbelt profile a mode selects excludes both
 its names and resolved targets, independently of optional workspace consent:
 the read-only profile reads everywhere else, so it excludes them as the
-workspace and artifact profiles do. A read-only launch no profile contains (a
-program in `seatbeltRefusedPrograms`, a host with no sandbox backend) has no
-kernel to enforce the exclusion (`contained_commands_protect_credentials`).
+workspace and artifact profiles do. A read-only launch on a host with no sandbox
+backend has no kernel to enforce the exclusion
+(`contained_commands_protect_credentials`).
 Filesystem namespace replacement by an outside host process after inspection is
 an external premise; the child may not move protected ancestors or create
 hard-link aliases. -/
@@ -58,24 +58,12 @@ theorem full_access_preserves_tool_root (mode : ExecutionMode) (configured withi
 theorem unrestricted_preserves_execution_root (configured full within : Bool) :
     useWorkspaceRoot .unrestricted configured full within = false := by simp [useWorkspaceRoot]
 
-/-- Host programs a Seatbelt profile cannot run: `ps` and `sudo` are setuid
-root, and the kernel refuses to execute a setuid program inside a sandbox; launchd
-answers `launchctl list` with an error to any sandboxed caller. A read-only
-request whose resolved program is one of them runs outside the profile, bounded
-by its argument validator: `ps` has no option that writes or starts a program,
-`sudo` accepts only `/bin/launchctl`, and `launchctl` accepts only `list`,
-`print`, `print-disabled` and `blame`, which ask launchd and start nothing.
-A process the profile contains cannot execute `ps` or `sudo` at all. -/
-def seatbeltRefusedPrograms : List String :=
-  ["/bin/ps", "/usr/bin/sudo", "/bin/launchctl"]
-
 def selectSandbox
     (support : RuntimeSupport)
-    (mode : ExecutionMode)
-    (program : String) : SandboxDecision :=
+    (mode : ExecutionMode) : SandboxDecision :=
   match mode with
   | .readOnly =>
-      if support.workspaceWriteSandboxEnforced && !seatbeltRefusedPrograms.contains program then
+      if support.workspaceWriteSandboxEnforced then
         .selected .macosSeatbeltReadOnly
       else
         .selected .policyReadOnly
@@ -128,9 +116,8 @@ its network decision, or none when no profile contains it. -/
 def commandProfile
     (support : RuntimeSupport)
     (policy : Policy)
-    (request : CommandRequest)
-    (program : String) : Option SeatbeltProfile :=
-  match selectSandbox support policy.mode program with
+    (request : CommandRequest) : Option SeatbeltProfile :=
+  match selectSandbox support policy.mode with
   | .selected sandbox =>
       seatbeltProfile sandbox
         (kernelNetwork policy.mode policy.networkMode (readOnlyReachesNetwork request))
@@ -141,9 +128,8 @@ theorem contained_commands_protect_credentials
     (support : RuntimeSupport)
     (policy : Policy)
     (request : CommandRequest)
-    (program : String)
     (profile : SeatbeltProfile)
-    (contained : commandProfile support policy request program = some profile) :
+    (contained : commandProfile support policy request = some profile) :
     protectsCredentials policy.mode = true := by
   cases h : policy.mode with
   | unrestricted => simp [commandProfile, selectSandbox, h, seatbeltProfile] at contained
