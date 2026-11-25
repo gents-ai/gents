@@ -27,10 +27,7 @@ const FIXTURE_NAMES: &[&str] = &[
 /// Names defined more than once, with the count of definitions; each only
 /// shrinks as its callers move to the standard fixture.
 #[rustfmt::skip]
-const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
-    ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
-    ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
-];
+const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[];
 
 /// `src` files that compile a `tests/` file into the library.
 #[rustfmt::skip]
@@ -39,9 +36,7 @@ const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 /// Test-only implementations of production traits outside a `src/test_support`
 /// module, per crate.
 #[rustfmt::skip]
-const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
-    ("gents", 43, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-];
+const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[];
 
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]

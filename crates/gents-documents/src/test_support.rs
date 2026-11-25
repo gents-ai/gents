@@ -192,6 +192,30 @@ pub async fn install_test_agent_as(
         .unwrap();
 }
 
+/// Provisions an Agent and installs its documents on `store` as `user`.
+pub async fn create_agent_on(
+    store: &gents_store::test_support::TestStore,
+    user: &gents_store::identity::KeyIdentity,
+    access: &gents_store::config_client::ConfigAccess,
+    display_name: &str,
+    profiles: &dyn crate::inference_backend::AdvertisedProfilePolicy,
+) -> (
+    std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    use gents_store::identity::NodeIdentity as _;
+
+    let runtime = store.node_identity.as_ref();
+    let user_did = identity::Did::new(user.did()).unwrap();
+    let binding =
+        gents_store::identity::provision_agent_identity_authorized(&store.node, runtime, &user_did)
+            .await
+            .unwrap();
+    install_test_agent_as(access, runtime.did(), display_name, &binding, profiles).await;
+    let agent = gents_store::identity::resolve_agent_identity(runtime, &binding).unwrap();
+    (agent, binding)
+}
+
 /// Desired-state fixtures shared by the documents tests and the tests of the
 /// layers above that publish documents through the apply owner.
 pub mod desired_state_fixtures {

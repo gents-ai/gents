@@ -28,164 +28,6 @@ async fn test_db(name: &str) -> TestStore {
     gents_store::test_support::TestStore::start(name, crate::lifecycle_hooks::composition()).await
 }
 
-async fn managed_agent(db: &TestStore) -> Arc<dyn NodeIdentity> {
-    managed_agent_with_binding(db).await.0
-}
-
-async fn managed_agent_with_binding(
-    db: &TestStore,
-) -> (
-    Arc<dyn NodeIdentity>,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    let fixture = managed_agent_fixture(db).await;
-    (fixture.agent, fixture.binding)
-}
-
-struct ManagedAgentFixture {
-    pub user: gents_store::identity::KeyIdentity,
-    pub agent: Arc<dyn NodeIdentity>,
-    pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
-}
-
-async fn managed_fixture_user(db: &TestStore) -> gents_store::identity::KeyIdentity {
-    let path = db.data_path().join("fixture-user.key");
-    tokio::task::spawn_blocking(move || {
-        gents_store::identity::KeyIdentity::load_or_create(path, None)
-    })
-    .await
-    .expect("join held test user setup")
-    .expect("create held test user")
-}
-
-async fn managed_agent_fixture(db: &TestStore) -> ManagedAgentFixture {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
-    let user = managed_fixture_user(db).await;
-    let user_did = identity::Did::new(user.did()).expect("valid user DID");
-    let runtime = db.node_identity.as_ref();
-    assert_ne!(user.did(), runtime.did());
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).expect("valid runtime DID"),
-    );
-    // An enrolled User's grants bound what its Agent creation may project.
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &user_did)
-        .await
-        .expect("grant test user operator access");
-    let access = db.client_access(&user);
-    let node = serde_json::json!({"node_did": runtime.did()});
-    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node.clone(),
-        update: node,
-    }])
-    .expect("render test Node");
-    access
-        .transact_write("test.managed_agent.node", |txn| {
-            let plan = &node_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install test Node as user");
-    let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
-    ManagedAgentFixture {
-        user,
-        agent,
-        binding,
-    }
-}
-
-async fn install_managed_agent(
-    db: &TestStore,
-    access: &gents_store::config_client::ConfigAccess,
-    user: &gents_store::identity::KeyIdentity,
-    display_name: &str,
-) -> (
-    Arc<dyn NodeIdentity>,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let runtime = db.node_identity.as_ref();
-    let user_did = identity::Did::new(user.did()).expect("valid user DID");
-    let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
-            .await
-            .expect("provision managed test Agent");
-    let agent = gents_store::identity::resolve_agent_identity(runtime, &binding)
-        .expect("resolve managed test Agent");
-    let document = serde_json::json!({
-        "node_did": runtime.did(),
-        "agent_did": binding.agent_did,
-        "creation_nonce": binding.creation_nonce,
-        "display_name": display_name,
-        "inference_profile_id": format!("{}:inference", binding.agent_did),
-        "enabled": true,
-    });
-    let backend_id = format!("{}:backend", binding.agent_did);
-    let profile_id = format!("{}:inference", binding.agent_did);
-    let backend = serde_json::json!({
-        "node_did": runtime.did(),
-        "backend_id": backend_id,
-        "name": "Test inference",
-        "provider_kind": "OpenAiCompatible",
-        "endpoint": "http://127.0.0.1:1/v1",
-        "auth": {"kind": "unauthenticated"},
-    });
-    let profile = serde_json::json!({
-        "node_did": runtime.did(),
-        "profile_id": profile_id,
-        "backend_id": backend_id,
-        "model_name": "test-model",
-    });
-    let agent_plan = DesiredStateApplyPlan::new(
-        [
-            (
-                gents_store::collection::Collection::InferenceBackend,
-                backend,
-            ),
-            (
-                gents_store::collection::Collection::InferenceProfile,
-                profile,
-            ),
-            (gents_store::collection::Collection::Agent, document),
-        ]
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect(),
-    )
-    .expect("render test Agent");
-    access
-        .transact_write("test.managed_agent", |txn| {
-            let plan = &agent_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install managed test Agent as user");
-    (agent, binding)
-}
-
 fn test_node_for(
     identity: Arc<dyn gents_store::identity::NodeIdentity>,
     default_agent_did: impl Into<String>,
@@ -271,9 +113,21 @@ const RESCAN: Duration = Duration::from_millis(20);
 async fn goal_creation_actors(
     db: &TestStore,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
-    let fixture = managed_agent_fixture(db).await;
+    let user = gents_store::test_support::test_identity("goal-creation-user");
+    let runtime = db.node_identity.as_ref();
+    assert_ne!(user.did(), runtime.did());
+    let access = db.client_access(&user);
+    gents_documents::test_support::enroll_test_user(&db.node, runtime, &user, &access).await;
+    let (agent, _) = gents_documents::test_support::create_agent_on(
+        db,
+        &user,
+        &access,
+        "Test agent",
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
-    for actor in [fixture.user.did(), fixture.agent.did()] {
+    for actor in [user.did(), agent.did()] {
         for permission in [
             gents_store::config_client::NodePermission::DocumentDelete,
             gents_store::config_client::NodePermission::CollectionGet,
@@ -285,8 +139,8 @@ async fn goal_creation_actors(
                 .unwrap();
         }
     }
-    reserve_goal_session(db, &fixture.user, &fixture.agent, SESSION).await;
-    (fixture.user, fixture.agent)
+    reserve_goal_session(db, &user, &agent, SESSION).await;
+    (user, agent)
 }
 
 async fn goal_fixture_request(
@@ -2675,14 +2529,19 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
 
 #[tokio::test]
 async fn goal_backed_submission_commits_goal_before_request_visibility_and_retries_idempotently() {
-    let db = test_db("goal-backed-submit").await;
-    let agent = managed_agent(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
+    let db = gents_documents::test_support::SignedHome::start(
+        "goal-backed-submit",
+        crate::lifecycle_hooks::composition(),
     )
-    .unwrap();
+    .await;
+    let binding = db
+        .create_agent(
+            "Test agent",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+    let agent = db.resolve_agent(&binding);
+    let access = db.agent_access(&binding);
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-first").await;
     let first = crate::operations::goal::start(
         &access,
@@ -2788,14 +2647,19 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
 
 #[tokio::test]
 async fn goal_backed_retry_rejects_changed_logical_request_fields() {
-    let db = test_db("goal-backed-submit-fingerprint-conflict").await;
-    let agent = managed_agent(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
+    let db = gents_documents::test_support::SignedHome::start(
+        "goal-backed-submit-fingerprint-conflict",
+        crate::lifecycle_hooks::composition(),
     )
-    .unwrap();
+    .await;
+    let binding = db
+        .create_agent(
+            "Test agent",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+    let agent = db.resolve_agent(&binding);
+    let access = db.agent_access(&binding);
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-fingerprint").await;
     crate::operations::goal::start(
         &access,
@@ -2834,14 +2698,19 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
 
 #[tokio::test]
 async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publishing() {
-    let db = test_db("goal-backed-submit-terminal-goal").await;
-    let agent = managed_agent(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
+    let db = gents_documents::test_support::SignedHome::start(
+        "goal-backed-submit-terminal-goal",
+        crate::lifecycle_hooks::composition(),
     )
-    .unwrap();
+    .await;
+    let binding = db
+        .create_agent(
+            "Test agent",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+    let agent = db.resolve_agent(&binding);
+    let access = db.agent_access(&binding);
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
     seed_goal_from_access(
         &access,
@@ -2883,14 +2752,19 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
 
 #[tokio::test]
 async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
-    let db = test_db("goal-backed-submit-rollback").await;
-    let agent = managed_agent(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
+    let db = gents_documents::test_support::SignedHome::start(
+        "goal-backed-submit-rollback",
+        crate::lifecycle_hooks::composition(),
     )
-    .unwrap();
+    .await;
+    let binding = db
+        .create_agent(
+            "Test agent",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+    let agent = db.resolve_agent(&binding);
+    let access = db.agent_access(&binding);
     let mut invalid = signed_goal_backed_request(&db, &agent, "goal-backed-invalid").await;
     invalid.initial_lifecycle_state =
         gents_protocol::client_protocol::RequestLifecycleState::Processing;

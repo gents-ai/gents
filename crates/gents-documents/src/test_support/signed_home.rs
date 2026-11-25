@@ -97,12 +97,16 @@ impl SignedHome {
         super::set_test_default_agent_as(&self.user_access, self.node_did(), agent_did).await;
     }
 
+    pub fn resolve_agent(
+        &self,
+        binding: &AgentIdentityBinding,
+    ) -> std::sync::Arc<dyn NodeIdentity> {
+        gents_store::identity::resolve_agent_identity(self.store.node_identity.as_ref(), binding)
+            .unwrap()
+    }
+
     pub fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {
-        let agent = gents_store::identity::resolve_agent_identity(
-            self.store.node_identity.as_ref(),
-            binding,
-        )
-        .unwrap();
+        let agent = self.resolve_agent(binding);
         ConfigAccess::local_managed_agent(
             self.store.node.clone(),
             identity::Did::new(agent.did()).unwrap(),

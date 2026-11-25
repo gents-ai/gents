@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use gents_store::identity::{IdentityError, NodeIdentity, ServiceAccount};
 use sha2::{Digest, Sha512};
-
-use gents_store::identity::{NodeIdentity, ServiceAccount};
 
 pub(crate) struct SigningStubNodeIdentity {
     did: String,
@@ -30,7 +29,7 @@ impl NodeIdentity for SigningStubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents_store::identity::IdentityError> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
         Ok(self.signature(payload))
     }
 
@@ -39,11 +38,39 @@ impl NodeIdentity for SigningStubNodeIdentity {
         did: &str,
         payload: &[u8],
         signature: &[u8],
-    ) -> Result<bool, gents_store::identity::IdentityError> {
+    ) -> Result<bool, IdentityError> {
         Ok(did == self.did && signature == self.signature(payload))
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
         None
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct UnmanagedSigner(pub(crate) Arc<dyn NodeIdentity>);
+
+#[cfg(test)]
+#[async_trait]
+impl NodeIdentity for UnmanagedSigner {
+    fn did(&self) -> &str {
+        self.0.did()
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
+        self.0.sign(payload).await
+    }
+
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, IdentityError> {
+        self.0.verify(did, payload, signature).await
+    }
+
+    fn service_account(&self) -> Option<&ServiceAccount> {
+        self.0.service_account()
     }
 }

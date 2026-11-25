@@ -180,6 +180,15 @@ pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+/// Provisions and resolves a managed Agent identity from `runtime` for
+/// identity-only tests that do not publish Agent documents.
+pub fn provision_test_agent(
+    runtime: &crate::identity::KeyIdentity,
+) -> std::sync::Arc<dyn crate::identity::NodeIdentity> {
+    let binding = crate::identity::provision_agent_identity(runtime).unwrap();
+    crate::identity::resolve_agent_identity(runtime, &binding).unwrap()
+}
+
 /// Grants the user the `OperatorUser` set as the runtime admin. Without it,
 /// seeding the user's client-signed Node and Agent ends in an incomplete
 /// signing conversation.

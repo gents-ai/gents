@@ -85,38 +85,6 @@ fn interruption_capture_survives_interest_rebuild_on_another_thread() {
     capture.assert_source("claimed");
 }
 
-#[derive(Clone)]
-struct PreInferenceBlockingTool {
-    entered: Arc<tokio::sync::Notify>,
-}
-
-impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "pre_inference_block".into()
-    }
-
-    fn definition<'a>(
-        &'a self,
-        _: String,
-    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
-        Box::pin(async move {
-            self.entered.notify_one();
-            std::future::pending().await
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
-        Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
-    }
-}
-
 /// A provider that ends every call it receives, so a test can count them.
 fn provider_call_counting_model() -> ScriptedProvider {
     ScriptedProvider::responding(|_| Reply::end())
@@ -179,9 +147,12 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         provider_family: None,
         model: Arc::new(provider_calls.clone()),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
-            entered: entered.clone(),
-        }) as Box<dyn gents_loop::tool::ToolDyn>]),
+        loop_tools: Arc::new(vec![Box::new(
+            crate::test_support::tools::PendingDefinitionTool::new(
+                "pre_inference_block",
+                entered.clone(),
+            ),
+        ) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,

@@ -1,93 +1,13 @@
 use super::support::*;
 use super::*;
+use crate::test_support::observers::RecordingProcessObserver;
+use crate::test_support::readiness::{
+    AcceptingReadinessWriter, RejectRouterGenerationWriter, ScriptedStartupWriter,
+    StorageFullAfterReadyWriter,
+};
 use gents_store::identity::NodeIdentity;
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
-
-struct RejectRouterGenerationRunWriter;
-
-struct AcceptReadinessWriter;
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptReadinessWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        _snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct ScriptedStartupWriter {
-    source: std::sync::Mutex<std::collections::VecDeque<String>>,
-    ready: std::sync::Mutex<std::collections::VecDeque<String>>,
-    source_attempts: std::sync::atomic::AtomicU64,
-    ready_attempts: std::sync::atomic::AtomicU64,
-    persisted: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter
-    for RejectRouterGenerationRunWriter
-{
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        if snapshot.router_generation > 0 {
-            return Err(crate::runtime::node_readiness_publisher::FatalNodeReadinessWrite.into());
-        }
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ScriptedStartupWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        let (script, attempts) = match snapshot.process_state {
-            NodeReadinessProcessState::Uninitialized | NodeReadinessProcessState::Recovering
-                if snapshot.active_generation > 0 =>
-            {
-                (&self.source, &self.source_attempts)
-            }
-            NodeReadinessProcessState::Ready => (&self.ready, &self.ready_attempts),
-            _ => {
-                self.persisted
-                    .lock()
-                    .expect("scripted writer mutex poisoned")
-                    .push(snapshot.clone());
-                return Ok(());
-            }
-        };
-        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let result = script
-            .lock()
-            .expect("scripted writer mutex poisoned")
-            .pop_front()
-            .unwrap_or_else(|| "ok".to_owned());
-        match result.as_str() {
-            "ok" => {
-                self.persisted
-                    .lock()
-                    .expect("scripted writer mutex poisoned")
-                    .push(snapshot.clone());
-                Ok(())
-            }
-            "fail" => anyhow::bail!("injected startup persistence failure"),
-            other => panic!("unmodeled write result {other}"),
-        }
-    }
-}
 
 async fn wait_for_held_request_state(
     access: &gents_store::config_client::ConfigAccess,
@@ -197,7 +117,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     .await;
     let node = fixture.home.store.node.clone();
     let identity = fixture.home.store.node_identity.clone();
-    let observer = Arc::new(RecordingObserver::default());
+    let observer = Arc::new(RecordingProcessObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
@@ -240,11 +160,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    let observed = observer
-        .states
-        .lock()
-        .expect("recording observer mutex poisoned")
-        .clone();
+    let observed = observer.states();
     assert_eq!(
         observed,
         vec![
@@ -420,7 +336,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
         super::startup::run_agent_with_readiness_writer(
             agent,
             shutdown_rx,
-            Arc::new(RejectRouterGenerationRunWriter),
+            Arc::new(RejectRouterGenerationWriter),
             Duration::from_millis(1),
         ),
     )
@@ -480,7 +396,7 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
         super::startup::run_agent_with_readiness_writer_and_slot_runner(
             agent,
             shutdown_rx,
-            Arc::new(AcceptReadinessWriter),
+            Arc::new(AcceptingReadinessWriter),
             Duration::from_millis(1),
             Some(slot_runner),
         ),
@@ -519,7 +435,7 @@ async fn startup_publication_follows_the_lean_persistence_model() {
             "healthy",
         )
         .await;
-        let observer = Arc::new(RecordingObserver::default());
+        let observer = Arc::new(RecordingProcessObserver::default());
         let agent = crate::Gents::from_default_agent_documents(
             fixture.home.store.node.clone(),
             fixture.home.store.node_identity.clone(),
@@ -546,12 +462,7 @@ async fn startup_publication_follows_the_lean_persistence_model() {
         ));
         let deadline = tokio::time::Instant::now() + STARTUP_DEADLOCK_GUARD;
         let result = loop {
-            if observer
-                .states
-                .lock()
-                .expect("recording observer mutex poisoned")
-                .contains(&crate::runtime::agent::ProcessLifecycleState::Ready)
-            {
+            if observer.contains(crate::runtime::agent::ProcessLifecycleState::Ready) {
                 shutdown_tx.send_replace(true);
             }
             match tokio::time::timeout(Duration::from_millis(50), &mut run).await {
@@ -596,11 +507,7 @@ async fn startup_publication_follows_the_lean_persistence_model() {
             .iter()
             .map(|snapshot| snapshot.process_state)
             .collect::<Vec<_>>();
-        let ready_observed = observer
-            .states
-            .lock()
-            .expect("recording observer mutex poisoned")
-            .contains(&crate::runtime::agent::ProcessLifecycleState::Ready);
+        let ready_observed = observer.contains(crate::runtime::agent::ProcessLifecycleState::Ready);
         case.check(startup_publication_startup::Output {
             failure,
             attempts,
@@ -1661,58 +1568,6 @@ async fn startup_tool_admission_cascade_follows_the_lean_model() {
             schedule_active: snapshot.active_schedules.contains_key("trigger-web"),
             schedule_unavailable: snapshot.unavailable_schedules.contains("trigger-web"),
         });
-    }
-}
-
-struct StorageFullAfterReadyWriter {
-    ready: tokio::sync::Notify,
-    ready_seen: std::sync::atomic::AtomicBool,
-}
-
-impl Default for StorageFullAfterReadyWriter {
-    fn default() -> Self {
-        Self {
-            ready: tokio::sync::Notify::new(),
-            ready_seen: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("native transaction")]
-struct NativeTransactionFailure(#[source] storage::corekv::Error);
-
-fn latched_write_ahead_log_error() -> anyhow::Error {
-    anyhow::Error::new(NativeTransactionFailure(storage::corekv::Error::from(
-        std::io::Error::new(
-            std::io::ErrorKind::StorageFull,
-            "write-ahead log left in an unknown state: No space left on device (os error 28)",
-        ),
-    )))
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullAfterReadyWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        if self.ready_seen.load(std::sync::atomic::Ordering::SeqCst)
-            && matches!(
-                snapshot.process_state,
-                NodeReadinessProcessState::ShuttingDown | NodeReadinessProcessState::Shutdown
-            )
-        {
-            return Err(latched_write_ahead_log_error());
-        }
-        if snapshot.process_state == NodeReadinessProcessState::Ready {
-            self.ready_seen
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            self.ready.notify_waiters();
-        }
-        Ok(())
     }
 }
 

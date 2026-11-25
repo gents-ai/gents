@@ -593,46 +593,6 @@ async fn graceful_shutdown_after_lease_expiry_does_not_claim_lost_output() {
     graceful_shutdown_reasoning_case(false, Some("expired")).await;
 }
 
-#[derive(Clone)]
-struct LeaseBlockingTool {
-    entered: Option<(Arc<AtomicBool>, Arc<tokio::sync::Notify>)>,
-}
-
-impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "lease_block".into()
-    }
-    fn definition<'a>(
-        &'a self,
-        _: String,
-    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
-        Box::pin(async {
-            gents_loop::tool::ToolDefinition {
-                name: "lease_block".into(),
-                description: "wait for lease replacement".into(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
-        let entered = self.entered.clone();
-        Box::pin(async move {
-            if let Some((entered, notify)) = entered {
-                entered.store(true, Ordering::SeqCst);
-                notify.notify_waiters();
-            }
-            std::future::pending().await
-        })
-    }
-}
-
 #[tokio::test]
 async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     let (db, user, access, agent_config) = held_daemon_fixture("daemon-lease").await;
@@ -654,9 +614,10 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         provider_family: None,
         model: Arc::new(lease_loss_provider()),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![
-            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn gents_loop::tool::ToolDyn>
-        ]),
+        loop_tools: Arc::new(vec![Box::new(crate::test_support::tools::PendingTool::new(
+            "lease_block",
+            "wait for lease replacement",
+        )) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
@@ -986,9 +947,11 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         provider_family: None,
         model: Arc::new(lease_loss_provider()),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
-            entered: Some((tool_entered.clone(), tool_entered_notify.clone())),
-        }) as Box<dyn gents_loop::tool::ToolDyn>]),
+        loop_tools: Arc::new(vec![Box::new(
+            crate::test_support::tools::PendingTool::new("lease_block", "wait for lease replacement")
+                .with_entered(tool_entered.clone())
+                .with_entered_notify(tool_entered_notify.clone()),
+        ) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(

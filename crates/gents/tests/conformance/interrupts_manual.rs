@@ -225,7 +225,7 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
 #[tokio::test]
 async fn manual_run_preserves_lineage_through_claim_transition() {
     let db = trial_store("manual-run-lineage-through-claim").await;
-    let agent = support::managed_agent(&db).await;
+    let agent = support::managed_agent_fixture(&db).await.agent;
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent.did().parse().unwrap(),
