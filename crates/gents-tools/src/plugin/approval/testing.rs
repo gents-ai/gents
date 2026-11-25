@@ -82,18 +82,6 @@ impl Operator {
     }
 }
 
-fn is_listener_only_event(event: &notify::Result<notify::Event>) -> bool {
-    matches!(
-        event,
-        Ok(event)
-            if !event.paths.is_empty()
-                && event
-                    .paths
-                    .iter()
-                    .all(|path| path.file_name().and_then(|n| n.to_str()) == Some(".listening"))
-    )
-}
-
 /// Wait until a pending approval request appears on `home`, waking on
 /// filesystem events in the approval queue directories.
 pub async fn wait_for_question(
@@ -106,14 +94,12 @@ pub async fn wait_for_question(
     super::prepare_listener(home).expect("prepare approval queue watch");
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |event| {
-        if !is_listener_only_event(&event) {
-            let _ = tx.send(event);
-        }
+        let _ = tx.send(event);
     })
     .expect("create approval queue watcher");
     for dir in super::queue_dirs(home) {
         watcher
-            .watch(&dir, notify::RecursiveMode::NonRecursive)
+            .watch(&dir, notify::RecursiveMode::Recursive)
             .expect("watch approval queue directory");
     }
     if advertise_listener {
@@ -149,13 +135,11 @@ fn observe(
     fs_tx: mpsc::Sender<ObserveWake>,
 ) -> Result<ObservedQuestion> {
     use notify::Watcher as _;
-    let mut watcher = notify::recommended_watcher(move |event| {
-        if !is_listener_only_event(&event) {
-            let _ = fs_tx.send(ObserveWake::Fs);
-        }
+    let mut watcher = notify::recommended_watcher(move |_event| {
+        let _ = fs_tx.send(ObserveWake::Fs);
     })?;
     for dir in super::queue_dirs(&home) {
-        watcher.watch(&dir, notify::RecursiveMode::NonRecursive)?;
+        watcher.watch(&dir, notify::RecursiveMode::Recursive)?;
     }
     super::mark_listening(&home)?;
     loop {
