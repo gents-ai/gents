@@ -8,6 +8,7 @@ import Proofs.Session.DurableLineage
 import Proofs.Session.ManagedExec.Ownership
 import Proofs.Session.Operations
 import Proofs.Session.PromptAssembly.ClaudeCache
+import Proofs.Session.Request.PreclaimBoundary
 import Proofs.Session.Request.State
 import Proofs.Session.RequestExecutionLease.State
 
@@ -16,6 +17,14 @@ deriving instance Lean.ToJson for ClientTurnState
 deriving instance Lean.ToJson for RequestState
 
 attribute [conformance_function] ClientTurnState.isTerminal
+
+namespace RequestContext
+
+deriving instance Lean.ToJson for TtlObservation, PendingDisposition
+
+attribute [conformance_function] pendingDisposition
+
+end RequestContext
 
 namespace AgentSession
 
