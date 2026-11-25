@@ -24,6 +24,7 @@
     "cases/guest_bookings.json",
     "cases/help_center_search.json",
     "cases/projects_and_tasks.json",
+    "cases/newsroom_published_tally.json",
     "cases/spanish_knowledge_base.json",
     "cases/stock_records.json",
     "cases/workshop_shift_priority.json",

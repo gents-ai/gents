@@ -2,7 +2,7 @@
   "assets": [
     "README.md",
     "pack_config.json",
-    "skills/build_automation/SKILL.md",
+    "skills/automate/SKILL.md",
     "skills/control_access/SKILL.md",
     "skills/design_data/SKILL.md",
     "skills/design_page/SKILL.md",

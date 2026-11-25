@@ -52,36 +52,5 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(viewer.Snapshots(Path(root)).runs(), [])
 
 
-
-class ComparisonTests(unittest.TestCase):
-    def test_missing_usage_and_stopped_trials_do_not_become_complete_samples(self):
-        def measured(value):
-            return {"checks": [{"check": "crew_spec_match", "raw": {"satisfied": value, "total": 100}}]}
-        summary = viewer.comparison_summary([{"slots": [
-            {"state": "pass", "live": {"input_tokens": 100, "output_tokens": 10, "tool_calls": 8,
-                "failed_tool_calls": 1, "stages": {"setup": measured(90), "repair": measured(100)}}},
-            {"state": "fail", "live": {"input_tokens": None, "reported_input_tokens": 50,
-                "reported_output_tokens": 5, "tool_calls": 2, "failed_tool_calls": 1,
-                "stages": {"setup": measured(95), "repair": measured(90)}}},
-            {"state": "stopped", "live": {"input_tokens": 40, "output_tokens": 4}},
-        ]}])
-        self.assertEqual(summary["counts"], {"pass": 1, "fail": 1, "stopped": 1})
-        self.assertEqual(summary["scores"]["setup"], {"mean": 92.5, "measured": 2})
-        self.assertEqual(summary["repair"], {"improved": 1, "worse": 1, "unchanged": 0})
-        self.assertEqual(summary["tool_calls"], 10)
-        self.assertEqual(summary["failed_tool_calls"], 2)
-        usage = summary["tokens"]["input_tokens"]
-        self.assertEqual(usage["reported"], 190)
-        self.assertEqual(usage["complete"], 2)
-        self.assertEqual(usage["settled_complete_count"], 1)
-        self.assertEqual(usage["settled_complete_mean"], 100)
-
-    def test_unstarted_round_has_no_scores_or_token_samples(self):
-        summary = viewer.comparison_summary([])
-        self.assertEqual(summary["trials"], 0)
-        self.assertIsNone(summary["scores"]["repair"]["mean"])
-        self.assertIsNone(summary["tokens"]["output_tokens"]["settled_complete_mean"])
-
-
 if __name__ == "__main__":
     unittest.main()

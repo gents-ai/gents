@@ -36,7 +36,7 @@ Build live on this node. Every piece is a document you create through your tools
 1. Data: `design-data`, and `import-data` if it comes from outside this node.
 2. Exact logic: `exact-rules`.
 3. Page: `design-page`.
-4. Running on its own: `build-automation`.
+4. Running on its own: `automate`.
 5. Who can see it: `control-access`.
 6. Clean up what you tried and dropped, then `package-or-install` exports the working app as a pack.
 
