@@ -118,11 +118,11 @@ pub(super) async fn runtime_test_node_with_signing_key(
 pub(super) async fn signed_p2p_node_without_schemas(
     identity: &dyn NodeIdentity,
     key: Vec<u8>,
-    address: std::net::SocketAddr,
+    listener: std::net::TcpListener,
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(defra_node::HttpConfig::with_addr(address)),
+        Some(defra_node::HttpConfig::with_listener(listener).expect("p2p test http listener")),
         Some(defra_node::SigningKey::Ed25519(key)),
         None,
     )
@@ -132,11 +132,11 @@ pub(super) async fn signed_p2p_node_without_schemas(
 pub(super) async fn signed_p2p_node_with_projector(
     identity: Arc<dyn NodeIdentity>,
     key: Vec<u8>,
-    address: std::net::SocketAddr,
+    listener: std::net::TcpListener,
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(defra_node::HttpConfig::with_addr(address)),
+        Some(defra_node::HttpConfig::with_listener(listener).expect("p2p test http listener")),
         Some(defra_node::SigningKey::Ed25519(key)),
         Some(identity.clone()),
     )

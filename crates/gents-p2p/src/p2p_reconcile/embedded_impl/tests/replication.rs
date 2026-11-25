@@ -43,14 +43,16 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let candidate_key =
         gents_store::identity::load_file_identity(&candidate_path)?.private_key_bytes();
     let admin_key = gents_store::identity::load_file_identity(&admin_path)?.private_key_bytes();
-    let candidate_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
-    let admin_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let candidate_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let candidate_address = candidate_listener.local_addr()?;
+    let admin_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let admin_address = admin_listener.local_addr()?;
     let candidate_test =
-        signed_p2p_node_without_schemas(&candidate, candidate_key, candidate_address).await;
+        signed_p2p_node_without_schemas(&candidate, candidate_key, candidate_listener).await;
     let admin_test = signed_p2p_node_with_projector(
         Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
         admin_key,
-        admin_address,
+        admin_listener,
     )
     .await;
     let candidate_node = &candidate_test.node;
@@ -889,7 +891,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         _tempdir: admin_directory,
     } = admin_test;
     drop(admin_handle);
-    let reopened_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let reopened_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let reopened_address = reopened_listener.local_addr()?;
     let reopened_key = gents_store::identity::load_file_identity(&admin_path)?.private_key_bytes();
     let reopened = Arc::new(
         EmbeddedNode::builder()
@@ -902,7 +905,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 super::fixtures::no_tool_sources(),
                 gents_protocol::schemas::HomePolicyIds::node_store(),
             )?)
-            .with_http(defra_node::HttpConfig::with_addr(reopened_address))
+            .with_http(defra_node::HttpConfig::with_listener(reopened_listener)?)
             .build()
             .await?,
     );
