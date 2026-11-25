@@ -65,10 +65,9 @@ describe("Windows caption controls", () => {
 
     const header = container.querySelector("header");
     expect(header).toHaveAttribute("data-tauri-drag-region");
-    expect(header?.querySelector("a[aria-label='Nodes']")).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: /Show connection details/ })[0],
-    ).toBeInTheDocument();
+    /* the test window matches no width query: a narrow window's bar holds
+       the menu, which carries the mark and the sync status */
+    expect(header?.querySelector("button[aria-label='Menu']")).toBeInTheDocument();
     expect(screen.getByTestId("window-controls")).toBeInTheDocument();
   });
 });

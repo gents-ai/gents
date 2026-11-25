@@ -8,6 +8,7 @@ import {
   openChat,
   openConfig,
   openConfigSection,
+  openNodes,
   OWN_VIEWPORT,
   test,
   type Page,
@@ -70,8 +71,8 @@ test.describe("half-screen window", { tag: OWN_VIEWPORT }, () => {
       const header = page.locator(".app-titlebar");
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
-        header.getByRole("link", { name: "Nodes" }).first(),
-        header.getByRole("button", { name: /^Connected/ }),
+        header.getByRole("button", { name: "Menu" }),
+        header.getByRole("link", { name: "Active node", exact: true }),
       );
       await expectInsideViewport(
         page,
@@ -83,7 +84,7 @@ test.describe("half-screen window", { tag: OWN_VIEWPORT }, () => {
       await expectInsideViewport(page, composer(page));
       await expectNoPageHorizontalOverflow(page);
 
-      await page.getByRole("link", { name: "Nodes" }).first().click();
+      await openNodes(page);
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add node" }));
       await expectNoPageHorizontalOverflow(page);

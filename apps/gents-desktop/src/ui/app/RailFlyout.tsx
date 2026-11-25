@@ -126,12 +126,15 @@ export function NavPanel({
   route,
   settings,
   syncRow,
+  syncInline = false,
   railAligned = false,
   morphIcons = false,
 }: {
   route: Route;
   settings: ReactNode;
   syncRow: boolean;
+  /** the sync row unfolds its details in place, as in a sheet */
+  syncInline?: boolean;
   /** its icons morph to and from the rail's as the sidebar's mode changes:
       only while it is the sidebar, never beside a rail that holds them */
   morphIcons?: boolean;
@@ -372,7 +375,7 @@ export function NavPanel({
         {footer.status &&
           (syncRow ? (
             <div className="mx-3">
-              <SyncHealth syncHealth={syncHealth} row />
+              <SyncHealth syncHealth={syncHealth} row inline={syncInline} />
             </div>
           ) : (
             /* on hover the rail's status dot grows into this row over the

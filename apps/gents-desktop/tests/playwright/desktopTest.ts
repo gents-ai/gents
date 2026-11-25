@@ -189,6 +189,24 @@ export async function openChat(page: Page) {
   await expect(composer(page)).toBeVisible();
 }
 
+/** Clicks the mark, which leads to Nodes: below 768 px it is in the menu. */
+export async function openNodes(page: Page) {
+  const menu = page.getByRole("button", { name: "Menu", exact: true });
+  const narrow = await menu.isVisible();
+  if (narrow) await menu.click();
+  await (narrow ? page.getByRole("dialog", { name: "Sidebar", exact: true }) : page)
+    .getByRole("link", { name: "Nodes", exact: true })
+    .first()
+    .click();
+}
+
+/** Clicks the window's Back: below 768 px it is in the menu. */
+export async function goBack(page: Page) {
+  const menu = page.getByRole("button", { name: "Menu", exact: true });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByTestId("history-nav").getByRole("button", { name: "Back" }).click();
+}
+
 export async function openConfig(page: Page) {
   await expect(page.getByTestId("app-shell")).toBeVisible();
   await page.getByRole("link", { name: "Active node", exact: true }).click();

@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopSessionSnapshot,
   SyncHealthView,
@@ -195,7 +195,20 @@ async function acknowledgeClose() {
 const dialogs = () => document.querySelectorAll('[role="dialog"]');
 
 describe("shell dialogs take turns (#1778)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("sync popover, then context meter, then the side panel never stack", async () => {
+    /* a window wide enough for the rail, whose sync status opens a popover,
+       and too narrow to dock the side panel, which opens as a sheet */
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) =>
+        ({
+          matches: query === "(min-width: 768px)",
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
     const user = userEvent.setup();
     render(<Harness />);
 

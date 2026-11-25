@@ -1,4 +1,4 @@
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, openNodes, test } from "./desktopTest";
 
 /* an enrolled node whose settings the app hasn't read shows them without
    anything that would change them */
@@ -6,7 +6,7 @@ test("a read-only node's pages offer nothing that would change its settings", as
   page,
 }) => {
   await gotoHarness(page, "active-nodes");
-  await page.getByRole("link", { name: "Nodes", exact: true }).first().click();
+  await openNodes(page);
   await page.getByRole("link", { name: "Amy sessions", exact: true }).click();
   /* switching may ask first, when a session would be left */
   const review = page.getByRole("alertdialog");

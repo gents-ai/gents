@@ -1,17 +1,20 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import {
   Activity,
+  Check,
   Circle,
   CircleMinus,
   CircleX,
   Clock,
   CornerDownRight,
+  ListFilter,
   Play,
   User,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
+  emptyFilter,
   hasFilter,
   isShown,
   matchesSource,
@@ -42,7 +45,14 @@ import {
   ComboboxList,
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from "@gents/ui/components/sheet";
 import { cn } from "@gents/ui/lib/utils";
+import { useMediaQuery } from "@/lib/media";
 import { AgentInitials } from "./parts";
 
 export const matchesView = (
@@ -314,8 +324,20 @@ export function SessionFilters({
   const agents = useAgentChoices(sessions, nodeDids, value.agents, (id) =>
     countFor("agents", (c) => c.agentDid === id),
   );
+  const narrow = useMediaQuery("(max-width: 767px)");
 
   if (sessions.length === 0 && !hasFilter(value)) return null;
+
+  if (narrow)
+    return (
+      <FilterSheet
+        agents={agents}
+        stateCounts={stateCounts}
+        sourceCounts={sourceCounts}
+        value={value}
+        onChange={onChange}
+      />
+    );
 
   return (
     <div
@@ -348,5 +370,202 @@ export function SessionFilters({
         onChange={(sources) => onChange({ ...value, sources })}
       />
     </div>
+  );
+}
+
+function SheetRow({
+  on,
+  count,
+  onClick,
+  children,
+}: {
+  on: boolean;
+  count: number;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-start text-sm active:bg-accent"
+    >
+      {children}
+      {count > 0 && (
+        <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+      )}
+      <Check className={cn("size-4 shrink-0 text-brand", !on && "opacity-0")} />
+    </button>
+  );
+}
+
+function SheetGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="pb-2">
+      <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function SheetAxis<V extends string>({
+  label,
+  options,
+  counts,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Option<V>[];
+  counts: Record<string, number>;
+  value: V[];
+  onChange: (next: V[]) => void;
+}) {
+  const all = options.map((o) => o.value);
+  return (
+    <SheetGroup label={label}>
+      {options.map(({ value: v, label: text, icon: Icon, tint }) => (
+        <SheetRow
+          key={v}
+          on={isShown(value, v)}
+          count={counts[v] ?? 0}
+          onClick={() => onChange(toggleShown(all, value, v))}
+        >
+          <Icon className={cn("size-4 shrink-0", tint)} />
+          <span className="min-w-0 flex-1 truncate">{text}</span>
+        </SheetRow>
+      ))}
+    </SheetGroup>
+  );
+}
+
+/* a narrow window's filters: one button, marked while any filter narrows
+   the list, opening a sheet of full-width rows for every axis */
+function FilterSheet({
+  agents,
+  stateCounts,
+  sourceCounts,
+  value,
+  onChange,
+}: {
+  agents: { id: string; name: string; count: number }[];
+  stateCounts: Record<string, number>;
+  sourceCounts: Record<string, number>;
+  value: SessionFilter;
+  onChange: (next: SessionFilter) => void;
+}) {
+  const sheet = useExclusivePopover();
+  const active = hasFilter(value);
+  const shared = sharedNames(
+    agents.map((b) => ({ agentDid: b.id, displayName: b.name })),
+  );
+  return (
+    <Sheet
+      open={sheet.open}
+      onOpenChange={sheet.onOpenChange}
+      onOpenChangeComplete={sheet.onOpenChangeComplete}
+    >
+      <SheetTrigger
+        render={
+          <Button
+            variant="quiet"
+            size="icon-sm"
+            aria-label="Filter sessions"
+            className={cn(
+              "relative shrink-0 text-muted-foreground",
+              active && "text-foreground",
+            )}
+          />
+        }
+      >
+        <ListFilter />
+        {active && (
+          <span
+            aria-hidden
+            data-testid="session-filters-active"
+            className="absolute top-1 right-1 size-2 rounded-full bg-brand"
+          />
+        )}
+      </SheetTrigger>
+      <SheetContent
+        ref={sheet.popupRef}
+        side="bottom"
+        showCloseButton={false}
+        className="max-h-[80vh] gap-1 rounded-t-2xl border border-b-0 border-border/50 px-2 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]"
+      >
+        <span aria-hidden className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" />
+        <div className="flex items-center px-3 pb-1">
+          <SheetTitle className="flex-1">Filter sessions</SheetTitle>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={!active}
+            onClick={() => onChange(emptyFilter)}
+          >
+            Reset filters
+          </Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          {agents.length > 0 && (
+            <SheetGroup label="Agent">
+              <SheetRow
+                on={value.agents.length === 0}
+                count={agents.reduce((n, b) => n + b.count, 0)}
+                onClick={() => onChange({ ...value, agents: [] })}
+              >
+                <Play className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">Any agent</span>
+              </SheetRow>
+              {agents.map((b) => {
+                const on = value.agents.includes(b.id);
+                return (
+                  <SheetRow
+                    key={b.id}
+                    on={on}
+                    count={b.count}
+                    onClick={() =>
+                      onChange({
+                        ...value,
+                        agents: on
+                          ? value.agents.filter((id) => id !== b.id)
+                          : [...value.agents, b.id],
+                      })
+                    }
+                  >
+                    <AgentInitials
+                      name={b.name}
+                      agentDid={b.id}
+                      shared={isShared(shared, b.name)}
+                      className="size-5 text-[9px]"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                    {isShared(shared, b.name) && (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {didTail(b.id)}
+                      </span>
+                    )}
+                  </SheetRow>
+                );
+              })}
+            </SheetGroup>
+          )}
+          <SheetAxis
+            label="State"
+            options={STATES}
+            counts={stateCounts}
+            value={value.states}
+            onChange={(states) => onChange({ ...value, states })}
+          />
+          <SheetAxis
+            label="Started by"
+            options={SOURCES}
+            counts={sourceCounts}
+            value={value.sources}
+            onChange={(sources) => onChange({ ...value, sources })}
+          />
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }

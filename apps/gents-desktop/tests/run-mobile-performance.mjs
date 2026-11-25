@@ -982,7 +982,9 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
-  await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
+  /* a phone's history is in its menu */
+  await page.getByRole("button", { name: "Menu", exact: true }).click();
+  await page.getByTestId("history-nav").getByRole("button", { name: "Back" }).click();
   await page
     .locator('[data-testid="session-session-large"]')
     .waitFor({ state: "visible" });

@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { describe, expect, it } from "vitest";
 
@@ -16,29 +17,28 @@ const shell = (route: Route) =>
     </TooltipProvider>,
   );
 
-/* the mark in the window bar, as wide and narrow layouts each place one */
-const marks = () => {
-  const found = screen
-    .getAllByRole("link", { name: "Nodes" })
-    .filter((a) => a.closest("header"));
-  expect(found.length).toBeGreaterThan(0);
-  return found;
+/* the test window matches no width query, so it is narrow: its bar has no
+   room for the mark, which heads the menu */
+const mark = async () => {
+  await userEvent.click(screen.getByRole("button", { name: "Menu" }));
+  const menu = await screen.findByRole("dialog", { name: "Sidebar" });
+  const [first] = within(menu).getAllByRole("link", { name: "Nodes" });
+  expect(first).toHaveClass("bg-ink");
+  return first!;
 };
 
 describe("the Gents mark", () => {
-  it("is ringed as the current page on Nodes, where it leads", () => {
+  it("is ringed as the current page on Nodes, where it leads", async () => {
     shell({ name: "agents" });
-    for (const mark of marks()) {
-      expect(mark).toHaveAttribute("aria-current", "page");
-      expect(mark).toHaveClass("ring-2");
-    }
+    const found = await mark();
+    expect(found).toHaveAttribute("aria-current", "page");
+    expect(found).toHaveClass("ring-2");
   });
 
-  it("is plain elsewhere", () => {
+  it("is plain elsewhere", async () => {
     shell({ name: "session", sessionId: null });
-    for (const mark of marks()) {
-      expect(mark).not.toHaveAttribute("aria-current");
-      expect(mark).not.toHaveClass("ring-2");
-    }
+    const found = await mark();
+    expect(found).not.toHaveAttribute("aria-current");
+    expect(found).not.toHaveClass("ring-2");
   });
 });
