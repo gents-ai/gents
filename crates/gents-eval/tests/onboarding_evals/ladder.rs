@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use gents::eval::OutcomeKind;
 use gents_documents::{EvalCapture, EvalDefinition};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::{CaptureResult, ScriptedExecutor};
