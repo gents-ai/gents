@@ -24,7 +24,7 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
     let registry = CheckRegistry::builtin();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
-    assert_eq!(definition.cases.len(), 15);
+    assert_eq!(definition.cases.len(), 16);
     for case in &definition.cases {
         assert!(case.stages[0]
             .capture

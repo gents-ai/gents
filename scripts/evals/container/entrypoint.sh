@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # One attempt at a trial slot, run through `docker exec` in the container
 # scripts/evals/container/orchestrate.py starts: reach the model through the
-# attempt's relay socket, then run the slot's one case and trial with the
-# image's scripts/evals/run-ladder.sh in a fresh eval home on /eval. Reads the
+# attempt's relay socket, then run the slot's one case and trial, making
+# GENTS_EVAL_PER_TRIAL model calls at once, with the image's
+# scripts/evals/run-ladder.sh in a fresh eval home on /eval. Reads the
 # host's read-only /slot/slot.json and /slot/target.json; writes
 # /eval/result.json. Exits 3 when the run failed before any trial started (a
 # refused freeze), which is not worth retrying.
@@ -17,6 +18,7 @@ SUITE=$(field suite)
 SPLIT=$(field split)
 CASE=$(field case_id)
 SEED_BASE=$(field seed_base)
+PER_TRIAL=$GENTS_EVAL_PER_TRIAL
 TARGET_FILE="$SLOT/target.json"
 PORT=$(python3 - "$TARGET_FILE" <<'PY'
 import json, sys, urllib.parse
@@ -46,7 +48,7 @@ export GENTS_BIN=$GENTS GENTS_EVAL_TARGET_FILE=$TARGET_FILE GENTS_EVAL_HOME=$EVA
 [ ! -d /overrides/definition ] || export GENTS_EVAL_DEFINITION_SOURCE=/overrides/definition
 
 status=0
-"$SRC/scripts/evals/run-ladder.sh" "$SUITE" 1 1 || status=$?
+"$SRC/scripts/evals/run-ladder.sh" "$SUITE" 1 "$PER_TRIAL" || status=$?
 PLAN=$(find "$EVAL/home" -maxdepth 1 -name 'batch-*.json' 2>/dev/null | sort | tail -n 1 || true)
 if [ "$status" != 0 ]; then
   for batch_log in "$EVAL"/home/batch-*.log; do

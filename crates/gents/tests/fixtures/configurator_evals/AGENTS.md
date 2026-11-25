@@ -63,9 +63,6 @@ unchanged.
 If the case is ambiguous or stricter than its prompt, fix the case.
 
 Violation: none known in the suites rewritten so far.
-`factory_setup/definition/cases/factory_setup.json` failed a setup that took
-more than 400 tool calls, a limit neither its prompt nor the file it points to
-set.
 
 ## How the rules are checked
 

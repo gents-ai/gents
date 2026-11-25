@@ -44,15 +44,6 @@ const LONG_PROMPT: &[(&str, usize)] = &[
     ("engineer_skills/cases/plan_before_build.json", 1),
     ("engineer_workflows/cases/calibration_review.json", 1),
     ("engineer_workflows/cases/west_loading_reconcile.json", 1),
-    ("ladder/l4_automation/cases/completion_record_write_contract.json", 1),
-    ("ladder/l4_automation/cases/default_filter_missing_field.json", 1),
-    ("ladder/l4_automation/cases/parallel_base.json", 1),
-    ("ladder/l4_automation/cases/parallel_two_inputs.json", 1),
-    ("ladder/l4_automation/cases/queued_serial_two_inputs.json", 1),
-    ("ladder/l4_automation/cases/serial_session_combo.json", 1),
-    ("ladder/l4_automation/cases/session_template_routing.json", 1),
-    ("ladder/l4_automation/cases/train_parallel_baseline.json", 1),
-    ("ladder/l4_automation/cases/val_stop_fern_receipt_outcomes.json", 1),
 ];
 #[rustfmt::skip]
 const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[
@@ -73,31 +64,11 @@ const ROUTE: &[(&str, usize)] = &[
     ("engineer_pages/cases/rig_flow_scatter.json", 1),
     ("engineer_pages/cases/tide_line.json", 1),
     ("engineer_workflows/cases/gate_count_recall.json", 2),
-    ("ladder/l4_automation/cases/completion_record_write_contract.json", 2),
-    ("ladder/l4_automation/cases/default_filter_missing_field.json", 2),
-    ("ladder/l4_automation/cases/emit_outcome_false.json", 2),
-    ("ladder/l4_automation/cases/held_interval_kiln_watch_pulse.json", 2),
-    ("ladder/l4_automation/cases/held_pause_sundial_weekday_checklist.json", 4),
-    ("ladder/l4_automation/cases/parallel_base.json", 2),
-    ("ladder/l4_automation/cases/parallel_two_inputs.json", 2),
-    ("ladder/l4_automation/cases/queued_serial_two_inputs.json", 2),
-    ("ladder/l4_automation/cases/serial_session_combo.json", 2),
-    ("ladder/l4_automation/cases/session_template_routing.json", 2),
-    ("ladder/l4_automation/cases/train_daily_cron_digest.json", 2),
-    ("ladder/l4_automation/cases/train_interval_heartbeat_fires.json", 2),
-    ("ladder/l4_automation/cases/train_parallel_baseline.json", 2),
-    ("ladder/l4_automation/cases/train_pause_nightly_freight_route.json", 4),
-    ("ladder/l4_automation/cases/train_resume_tide_gauge_task.json", 4),
-    ("ladder/l4_automation/cases/train_suspend_kiln_shift_task.json", 4),
-    ("ladder/l4_automation/cases/val_retime_luthier_schedule_in_place.json", 4),
-    ("ladder/l4_automation/cases/val_stop_fern_receipt_outcomes.json", 4),
 ];
 #[rustfmt::skip]
 const UNEXERCISED: &[(&str, usize)] = &[
     ("engineer_pages/cases/fix_stale_calibrations.json", 1),
     ("engineer_pages/cases/restore_my_holdings.json", 1),
-    ("ladder/l4_automation/cases/train_daily_cron_digest.json", 1),
-    ("ladder/l4_automation/cases/val_retime_luthier_schedule_in_place.json", 1),
 ];
 
 const OPEN: [(Rule, &[(&str, usize)]); 5] = [

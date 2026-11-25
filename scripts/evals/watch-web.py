@@ -98,61 +98,8 @@ class Snapshots:
             return sorted(result, key=lambda r: r["run"].get("created_at", ""), reverse=True)
 
 
-def merged_divergences(runs):
-    merged = []
-    for run in runs:
-        merged += [item for item in run.get("divergences") or [] if item not in merged]
-    return merged
-
-
-def comparison_summary(runs):
-    slots = [s for run in runs for s in run.get("slots", [])]
-    counts = {}
-    scores = {"setup": [], "repair": []}
-    tokens = {field: {"reported": 0, "reporting": 0, "complete": 0, "settled_complete": []}
-              for field in ("input_tokens", "output_tokens")}
-    calls = failures = improved = worse = unchanged = 0
-    for slot in slots:
-        state = slot["state"]
-        counts[state] = counts.get(state, 0) + 1
-        live = slot.get("live", {})
-        calls += live.get("tool_calls") or 0
-        failures += live.get("failed_tool_calls") or 0
-        pair = {}
-        for stage in scores:
-            check = next((c for c in live.get("stages", {}).get(stage, {}).get("checks", [])
-                          if c.get("check") == "crew_spec_match"), {})
-            raw = check.get("raw") or {}
-            if raw.get("total", 0) > 0:
-                pair[stage] = 100 * raw["satisfied"] / raw["total"]
-                scores[stage].append(pair[stage])
-        if len(pair) == 2:
-            improved += pair["repair"] > pair["setup"]
-            worse += pair["repair"] < pair["setup"]
-            unchanged += pair["repair"] == pair["setup"]
-        for field, result in tokens.items():
-            value = live.get(field)
-            reported = value if value is not None else live.get("reported_" + field)
-            if reported is not None:
-                result["reported"] += reported
-                result["reporting"] += 1
-            if value is not None:
-                result["complete"] += 1
-                if state in ("pass", "fail"):
-                    result["settled_complete"].append(value)
-    for result in tokens.values():
-        values = result.pop("settled_complete")
-        result["settled_complete_count"] = len(values)
-        result["settled_complete_mean"] = sum(values) / len(values) if values else None
-    return dict(trials=len(slots), counts=counts, tool_calls=calls, failed_tool_calls=failures,
-                scores={stage: {"mean": sum(values)/len(values) if values else None, "measured": len(values)}
-                        for stage, values in scores.items()}, tokens=tokens,
-                repair=dict(improved=improved, worse=worse, unchanged=unchanged))
-
-
 def serve(root, port):
     snapshots = Snapshots(root)
-    comparison_sources = {}
     page = Path(__file__).with_name("watch-web.html")
 
     class Handler(BaseHTTPRequestHandler):
@@ -166,25 +113,6 @@ def serve(root, port):
             if request.path == "/":
                 body = page.read_bytes()
                 mime = "text/html; charset=utf-8"
-            elif request.path == "/compare":
-                body = page.with_name("watch-compare.html").read_bytes()
-                mime = "text/html; charset=utf-8"
-            elif request.path == "/api/comparison":
-                rounds = []
-                for entry in snapshots.read(root / "compare.json").get("rounds", []):
-                    source_root = Path(entry["root"]).resolve()
-                    source = comparison_sources.setdefault(source_root, Snapshots(source_root))
-                    index = [r for r in source.runs()
-                             if r["run"].get("definition", {}).get("definition_id") == "factory-setup"]
-                    details = [r for item in index for r in source.runs(item["key"])]
-                    rounds.append(dict(label=entry["label"], change=entry.get("change", ""),
-                        dashboard=entry.get("dashboard"), summary=comparison_summary(details),
-                        sources=sorted({r["run"].get("source_commit", "unknown") for r in details}),
-                        versions=sorted({r["run"]["definition"]["comparability_version"] for r in details}),
-                        runs=[dict(key=r["key"], run_id=r["run"]["run_id"]) for r in details],
-                        divergences=merged_divergences(details),
-                        unrecorded=sum(r.get("divergences") is None for r in details)))
-                body = json.dumps({"rounds": rounds}).encode()
             elif request.path == "/api/health":
                 body = json.dumps({"root": str(snapshots.root)}).encode()
             elif request.path == "/api/runs":

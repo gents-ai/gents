@@ -480,7 +480,7 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
     # routed as the plan job routes this pull request.
     plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False, event="pull_request")
                         for role in GATE.WORKFLOW_ROLES},
-            "jobs": ["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
+            "jobs": ["contract", "fmt", "lint", "lint-variants", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
                      "test:runtime", "build:portable", "shard:portable"]}
     matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False, event="pull_request")}
               for group in GATE.GROUPS]
@@ -500,7 +500,7 @@ class SelfHostedRoutingTests(unittest.TestCase):
 
     HEADS = ("someone/gents", "gents-ai/gents-fork", None)
     # Jobs that build or test the change on our runners: a fork skips them.
-    BUILDS = {("ci.yml", "lint"), ("ci.yml", "contract"), ("ci.yml", "test"),
+    BUILDS = {("ci.yml", "lint"), ("ci.yml", "lint-variants"), ("ci.yml", "contract"), ("ci.yml", "test"),
               ("ci.yml", "desktop-ui-bombadil"), ("core-packs.yml", "build"),
               ("adapter-interop.yml", "adapter-interop")}
 

@@ -1,0 +1,202 @@
+{
+  "case_id": "private-notes-per-agent",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "set_up",
+      "settle": true,
+      "checks": [],
+      "prompt": "Create a Writer agent and an Editor agent. They keep notes in one shared notes table, but each may only see its own notes."
+    },
+    {
+      "stage_id": "add_notes",
+      "settle": true,
+      "checks": [],
+      "prompt": "Have the Writer add the note \"Harbor piece needs a second source\" and the Editor add \"Hold the budget story until Friday\"."
+    },
+    {
+      "stage_id": "ask",
+      "settle": true,
+      "prompt": "Ask the Writer and the Editor what notes each of them can see, and tell me.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "writer_own",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bwriter\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%second source%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "editor_own",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\beditor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%until Friday%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "writer_saw_editors",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bwriter\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%until Friday%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "editor_saw_writers",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\beditor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%second source%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "writer_own",
+                "min": 1
+              },
+              {
+                "capture": "editor_own",
+                "min": 1
+              },
+              {
+                "capture": "writer_saw_editors",
+                "max": 0
+              },
+              {
+                "capture": "editor_saw_writers",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)second source"
+              },
+              {
+                "matches": "(?i)until Friday"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

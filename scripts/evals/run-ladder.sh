@@ -4,7 +4,6 @@
 #   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
 #       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
-# `all` runs L1-L5 and the capstone.
 # Defaults: 3 trials per case; 4 trials at once (floor(4 / PER_TRIAL) when
 # GENTS_EVAL_PER_TRIAL is set); train + validation.
 # The cap covers active trials across all runs, not every provider/background call.
