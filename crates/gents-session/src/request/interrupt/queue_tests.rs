@@ -16,50 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 struct QueueFixture {
-    db: gents_store::test_support::TestStore,
-    user: gents_store::identity::KeyIdentity,
-    client: ConfigAccess,
+    home: gents_documents::test_support::SignedHome,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
     agent: Arc<dyn NodeIdentity>,
     agent_access: ConfigAccess,
     parent: AgentRequest,
     _lifecycle: crate::request::lifecycle::RequestLifecycle,
-}
-
-async fn publish_client_request(
-    client: &ConfigAccess,
-    user: &dyn NodeIdentity,
-    identity: crate::request::lifecycle::RequestIdentity,
-    input: RequestInput,
-) -> String {
-    let request_id = identity.request_id.clone();
-    let mut spec = crate::request::lifecycle::RequestSpec::new(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        identity,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-    );
-    spec.input = input;
-    let create = crate::request::lifecycle::build_signed_client_request(
-        client,
-        spec,
-        crate::request::lifecycle::RequestSigner::Identity(user),
-    )
-    .await
-    .unwrap();
-    crate::request::lifecycle::submit_client_request(client, &create)
-        .await
-        .unwrap();
-    let response = client.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
-        escape_graphql_string(&request_id),
-    )).await.unwrap();
-    let [row] = response["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .as_slice()
-    else {
-        panic!("signed fixture request must be unique");
-    };
-    row["_docID"].as_str().unwrap().to_owned()
 }
 
 async fn rows(access: &ConfigAccess, session: &str) -> Vec<Value> {
@@ -91,21 +53,20 @@ async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
 /// (`InterruptGeneration.wakeAtClaim`); with the parent still running, every
 /// other pending request stays queued.
 async fn claim_pending(fixture: &QueueFixture) {
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::lifecycle::ClaimOutcome;
     let parent = &fixture.parent;
     for row in rows(&fixture.agent_access, &parent.session_id).await {
         if row["lifecycle_state"] != "pending" {
             continue;
         }
-        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
-            &fixture.agent_access,
+        let mut lifecycle = crate::test_support::ClaimedRequest::existing(
+            &fixture.home,
+            &fixture.binding,
             row["_docID"].as_str().unwrap(),
         )
+        .drive(crate::test_support::Stage::Submitted)
         .await
-        .unwrap()
-        .unwrap();
-        let mut lifecycle =
-            RequestLifecycle::new_with_node_did(fixture.db.node.clone(), request, 60);
+        .lifecycle;
         lifecycle
             .bind_managed_agent(fixture.agent.as_ref())
             .unwrap();
@@ -119,9 +80,7 @@ async fn claim_pending(fixture: &QueueFixture) {
 }
 
 struct UnclaimedFixture {
-    db: gents_store::test_support::TestStore,
-    user: gents_store::identity::KeyIdentity,
-    client: ConfigAccess,
+    home: gents_documents::test_support::SignedHome,
     agent: Arc<dyn NodeIdentity>,
     agent_access: ConfigAccess,
     lifecycle: crate::request::lifecycle::RequestLifecycle,
@@ -129,119 +88,57 @@ struct UnclaimedFixture {
 
 /// A verified client request, pending and unclaimed, in a fresh session.
 async fn unclaimed_fixture(name: &str, request_id: String, session: String) -> UnclaimedFixture {
-    use crate::request::lifecycle::{RequestIdentity, RequestLifecycle};
-
-    let signed_home = gents_documents::test_support::SignedHome::start(
+    let home = gents_documents::test_support::SignedHome::start(
         &format!("interrupt-queue-{name}"),
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, client) = signed_home.into_parts();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let doc = publish_client_request(
-        &client,
-        &user,
-        RequestIdentity {
-            request_id,
-            node_did: db.node_identity.did().to_owned(),
-            requester_did: Some(user.did().to_owned()),
-            agent_did: binding.agent_did.clone(),
-            session_id: session,
-            content: "active".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-09-01T00:00:00Z".into(),
-        },
-        RequestInput::default(),
-    )
-    .await;
-    let response = agent_access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            escape_graphql_string(&doc),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = row.try_into().unwrap();
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-        .await
-        .unwrap();
-    assert!(
-        admission.is_some(),
-        "client request needs verified claim admission"
-    );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let claimed = crate::test_support::ClaimedRequest::client_signed(&home, &binding)
+        .ids(&request_id, &session)
+        .content("active")
+        .created_at("2026-09-01T00:00:00Z")
+        .drive(crate::test_support::Stage::Admitted)
+        .await;
     UnclaimedFixture {
-        db,
-        user,
-        client,
-        agent,
-        agent_access,
-        lifecycle,
+        home,
+        agent: claimed.agent,
+        agent_access: claimed.agent_access,
+        lifecycle: claimed.lifecycle,
     }
 }
 
 async fn fixture(case: &ModeledCase) -> QueueFixture {
-    use crate::request::lifecycle::ClaimOutcome;
-
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     assert_eq!(
         case.requester_id,
         Some(case.node_id),
         "modeled requester scope"
     );
-    let UnclaimedFixture {
-        db,
-        user,
-        client,
-        agent,
-        agent_access,
-        mut lifecycle,
-    } = unclaimed_fixture(
-        &case.name,
-        case.active_request_id.unwrap().to_string(),
-        case.session_id.to_string(),
+    let home = gents_documents::test_support::SignedHome::start(
+        &format!("interrupt-queue-{}", case.name),
+        crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-        db.node.clone(),
-        &lifecycle,
-        Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    let parent = lifecycle.request().clone();
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let claimed = crate::test_support::ClaimedRequest::client_signed(&home, &binding)
+        .ids(
+            &case.active_request_id.unwrap().to_string(),
+            &case.session_id.to_string(),
+        )
+        .content("active")
+        .created_at("2026-09-01T00:00:00Z")
+        .batch_interval(Duration::ZERO)
+        .drive(crate::test_support::Stage::Executing)
+        .await;
+    let parent = claimed.lifecycle.request().clone();
     QueueFixture {
-        db,
-        user,
-        client,
-        agent,
-        agent_access,
+        home,
+        binding,
+        agent: claimed.agent,
+        agent_access: claimed.agent_access,
         parent,
-        _lifecycle: lifecycle,
+        _lifecycle: claimed.lifecycle,
     }
 }
 
@@ -319,22 +216,15 @@ async fn insert_generated_pending(
         }),
         ..Default::default()
     };
-    publish_client_request(
-        &fixture.client,
-        &fixture.user,
-        crate::request::lifecycle::RequestIdentity {
-            request_id: entry.request_id.to_string(),
-            node_did: parent.node_did.clone(),
-            requester_did: parent.requester_did.clone(),
-            agent_did: parent.agent_did.clone(),
-            session_id: parent.session_id.clone(),
-            content: "generated pending fixture".into(),
-            execution_origin: origin,
-            created_at,
-        },
-        input,
-    )
-    .await
+    crate::test_support::ClaimedRequest::client_signed(&fixture.home, &fixture.binding)
+        .ids(&entry.request_id.to_string(), &parent.session_id)
+        .content("generated pending fixture")
+        .origin(origin)
+        .created_at(&created_at)
+        .input(input)
+        .drive(crate::test_support::Stage::Submitted)
+        .await
+        .doc_id
 }
 
 fn assert_generated_queue_row_metadata(
@@ -390,10 +280,10 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
         let mut observations = Vec::new();
         for use_http in [false, true] {
             let fixture = fixture(case).await;
-            let node = fixture.db.node.clone();
+            let node = fixture.home.store.node.clone();
             let parent = &fixture.parent;
             let access = if use_http {
-                fixture.db.client_access(fixture.agent.as_ref())
+                fixture.home.client_access(fixture.agent.as_ref())
             } else {
                 fixture.agent_access.clone()
             };
@@ -583,9 +473,9 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                 ),
             };
         let fixture = fixture(case).await;
-        let node = fixture.db.node.clone();
+        let node = fixture.home.store.node.clone();
         let parent = &fixture.parent;
-        let access = fixture.db.client_access(fixture.agent.as_ref());
+        let access = fixture.home.client_access(fixture.agent.as_ref());
         let mut bound = RapidHashMap::new();
         if let Some(entry) = before_capture {
             bound.insert(
@@ -786,7 +676,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
 
 async fn a_failed_interrupt_covers_nothing(case: &ModeledCase) {
     let fixture = fixture(case).await;
-    let node = fixture.db.node.clone();
+    let node = fixture.home.store.node.clone();
     let parent = &fixture.parent;
     let wake = persist_background_completion_with_message_waking_with_access(
         &fixture.agent_access,
@@ -862,12 +752,18 @@ async fn desktop_interrupt_observation(
         .expect("modeled pending wake");
     let fixture = fixture(case).await;
     let parent = &fixture.parent;
-    let wake =
-        enqueue_generated_wake(&fixture.agent_access, &fixture.db.node, parent, case, entry).await;
+    let wake = enqueue_generated_wake(
+        &fixture.agent_access,
+        &fixture.home.store.node,
+        parent,
+        case,
+        entry,
+    )
+    .await;
     let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel(None);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let observer = spawn_request_interrupt_observer(
-        fixture.db.node.clone(),
+        fixture.home.store.node.clone(),
         fixture.agent_access.clone(),
         parent,
         interrupt_tx,
@@ -875,7 +771,7 @@ async fn desktop_interrupt_observation(
     );
 
     interrupt_request_by_doc_id_with_access(
-        &fixture.client,
+        &fixture.home.user_access,
         &parent.doc_id,
         &parent.node_did,
         parent.requester_did.as_deref(),
@@ -885,7 +781,7 @@ async fn desktop_interrupt_observation(
     let first = latch(&fixture.agent_access, parent).await;
     assert_eq!(
         request_interrupted_at_by_doc_id_with_access(
-            &gents_store::test_support::unrelated_document_reader(&fixture.db.node).await,
+            &gents_store::test_support::unrelated_document_reader(&fixture.home.store.node).await,
             &parent.doc_id
         )
         .await
@@ -927,7 +823,7 @@ async fn desktop_interrupt_observation(
         };
 
     interrupt_request_by_doc_id_with_access(
-        &fixture.client,
+        &fixture.home.user_access,
         &parent.doc_id,
         &parent.node_did,
         parent.requester_did.as_deref(),
@@ -937,7 +833,8 @@ async fn desktop_interrupt_observation(
     assert_eq!(latch(&fixture.agent_access, parent).await, first);
     modeled.check(Some(observation));
     fixture
-        .db
+        .home
+        .store
         .node
         .shutdown()
         .await
@@ -946,7 +843,7 @@ async fn desktop_interrupt_observation(
 
 async fn signed_interrupt_rebuilds_after_an_execution_renewal_conflict(case: &ModeledCase) {
     let fixture = fixture(case).await;
-    let access = fixture.db.client_access(fixture.agent.as_ref());
+    let access = fixture.home.client_access(fixture.agent.as_ref());
     let parent = &fixture.parent;
     let reached = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -1057,7 +954,7 @@ async fn an_interrupt_drains_a_wake_committed_before_it_commits() {
         .find_map(|event| event.entry.as_ref())
         .expect("modeled wake");
     let fixture = fixture(&case).await;
-    let node = fixture.db.node.clone();
+    let node = fixture.home.store.node.clone();
     let parent = &fixture.parent;
     let wake = std::sync::Mutex::new(None);
     let (interrupted, paused) = with_write_before_commit(
@@ -1099,7 +996,7 @@ async fn a_session_interrupt_latches_a_request_claimed_before_it_commits() {
     use crate::request::lifecycle::ClaimOutcome;
 
     let UnclaimedFixture {
-        db,
+        home,
         agent_access,
         mut lifecycle,
         ..
@@ -1112,7 +1009,11 @@ async fn a_session_interrupt_latches_a_request_claimed_before_it_commits() {
     };
     let claimed = std::sync::Mutex::new(None);
     let (interrupted, paused) = with_write_before_commit(
-        crate::session::message::interrupt_session_with_access(&db.node, &agent_access, &scope),
+        crate::session::message::interrupt_session_with_access(
+            &home.store.node,
+            &agent_access,
+            &scope,
+        ),
         async {
             let outcome = lifecycle.claim_with_identity().await;
             *claimed.lock().unwrap() = Some(outcome);
@@ -1129,7 +1030,11 @@ async fn a_session_interrupt_latches_a_request_claimed_before_it_commits() {
         latch(&agent_access, &request).await.is_some(),
         "the interrupt reaches the request claimed before it committed"
     );
-    db.node.shutdown().await.expect("shut down test node");
+    home.store
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 /// The session interrupt writes only its marker (`InterruptGeneration`,
@@ -1147,7 +1052,7 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
     }))
     .unwrap();
     let mut fixture = fixture(&case).await;
-    let node = fixture.db.node.clone();
+    let node = fixture.home.store.node.clone();
     let parent = fixture.parent.clone();
     let scope = gents_protocol::session::SessionScope {
         node_did: parent.node_did.clone(),
@@ -1208,13 +1113,7 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
 #[tokio::test]
 async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
     use crate::request::lifecycle::RequestIdentity;
-    let UnclaimedFixture {
-        db,
-        user,
-        client,
-        agent,
-        ..
-    } = unclaimed_fixture(
+    let UnclaimedFixture { home, agent, .. } = unclaimed_fixture(
         "requester-mismatch",
         "1".into(),
         "requester-mismatch".into(),
@@ -1224,7 +1123,7 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
         gents_protocol::request_admission::RequestPurpose::Normal,
         RequestIdentity {
             request_id: "2".into(),
-            node_did: db.node_identity.did().to_owned(),
+            node_did: home.node_did().to_owned(),
             requester_did: Some(agent.did().to_owned()),
             agent_did: agent.did().to_owned(),
             session_id: "requester-mismatch".into(),
@@ -1232,24 +1131,24 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
             execution_origin: ExecutionOrigin::Interactive,
             created_at: "2026-09-01T00:00:01Z".into(),
         },
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(home.user.did()),
     );
     spec.input = RequestInput::default();
     let submitted = match crate::request::lifecycle::build_signed_client_request(
-        &client,
+        &home.user_access,
         spec,
-        crate::request::lifecycle::RequestSigner::Identity(&user),
+        crate::request::lifecycle::RequestSigner::Identity(&home.user),
     )
     .await
     {
-        Ok(create) => crate::request::lifecycle::submit_client_request(&client, &create)
+        Ok(create) => crate::request::lifecycle::submit_client_request(&home.user_access, &create)
             .await
             .map(|_| ())
             .map_err(anyhow::Error::from),
         Err(error) => Err(error),
     };
     assert!(submitted.is_err(), "{submitted:?}");
-    let rows = db
+    let rows = home
         .client_access(agent.as_ref())
         .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "2" } }) { _docID } }"#)
         .await
@@ -1347,7 +1246,8 @@ async fn only_another_interrupt_aborts_a_session_interrupt() {
             "concurrent write: {writer}"
         );
         fixture
-            .db
+            .home
+            .store
             .node
             .shutdown()
             .await
@@ -1363,21 +1263,21 @@ async fn only_another_interrupt_aborts_a_session_interrupt() {
 /// has landed, and it lands on its first attempt.
 #[tokio::test]
 async fn an_interrupt_lands_while_its_session_is_written_continuously() {
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
+    use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome};
     let case: ModeledCase = serde_json::from_value(json!({
         "name": "continuous", "node_id": 1, "requester_id": 1, "session_id": 905,
         "active_request_id": 105, "inputs": []
     }))
     .unwrap();
     let QueueFixture {
-        db,
+        home,
+        binding,
         agent,
         agent_access,
         parent,
         _lifecycle: first,
-        ..
     } = fixture(&case).await;
-    let node = db.node.clone();
+    let node = home.store.node.clone();
     let landed = AtomicBool::new(false);
     let first_round = Notify::new();
     let round_done = Notify::new();
@@ -1417,14 +1317,14 @@ async fn an_interrupt_lands_while_its_session_is_written_continuously() {
                 if row["lifecycle_state"] != "pending" {
                     continue;
                 }
-                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
-                    &agent_access,
+                let mut next = crate::test_support::ClaimedRequest::existing(
+                    &home,
+                    &binding,
                     row["_docID"].as_str().unwrap(),
                 )
+                .drive(crate::test_support::Stage::Submitted)
                 .await
-                .unwrap()
-                .unwrap();
-                let mut next = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+                .lifecycle;
                 next.bind_managed_agent(agent.as_ref()).unwrap();
                 if next.claim_with_identity().await.unwrap() == ClaimOutcome::Claimed {
                     running = Some(next);

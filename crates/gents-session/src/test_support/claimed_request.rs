@@ -141,6 +141,36 @@ impl ClaimedRequest {
             .as_ref()
             .expect("the request was driven to Stage::Executing")
     }
+
+    pub async fn admit_request(
+        node: Arc<defra_node::Node>,
+        runtime: Arc<dyn NodeIdentity>,
+        request: &gents_protocol::row::AgentRequest,
+        agent: &dyn NodeIdentity,
+        deadline_secs: u64,
+        origin: ExecutionOrigin,
+        backend_id: &str,
+    ) -> anyhow::Result<RequestLifecycle> {
+        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            runtime,
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(request, agent)
+            .await?;
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node,
+            request,
+            deadline_secs,
+            origin,
+            backend_id,
+        );
+        lifecycle.bind_managed_agent(agent)?;
+        lifecycle.set_client_claim_admission(admission);
+        Ok(lifecycle)
+    }
 }
 
 impl<'a> ClaimedRequestBuilder<'a> {
@@ -452,20 +482,17 @@ impl<'a> ClaimedRequestBuilder<'a> {
             );
             return (doc_id, lifecycle);
         }
-        let (request, admission) = self
-            .verifier()
-            .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-            .await
-            .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        let lifecycle = ClaimedRequest::admit_request(
             store.node.clone(),
-            request,
+            store.node_identity.clone(),
+            &request,
+            agent.as_ref(),
             self.deadline_secs,
             self.origin,
-            backend,
-        );
-        lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-        lifecycle.set_client_claim_admission(admission);
+            &backend,
+        )
+        .await
+        .unwrap();
         (doc_id, lifecycle)
     }
 }

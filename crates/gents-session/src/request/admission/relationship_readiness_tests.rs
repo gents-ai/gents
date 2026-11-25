@@ -4,12 +4,11 @@ use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurp
 
 use super::{AgentRequestAdmissionVerifier, ClientClaimAdmission, ClientClaimAuthorization};
 use crate::request::lifecycle::{
-    build_signed_client_request, submit_client_request, ClaimOutcome, ExecutionOrigin,
-    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
+    ClaimOutcome, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
 use gents_protocol::row::AgentRequest;
-use gents_store::config_client::{ConfigAccess, NodePermission};
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::NodeIdentity;
 
 async fn decision(
     access: &ConfigAccess,
@@ -125,175 +124,38 @@ async fn observe_readiness(
     }
 }
 
-/// Publishes a local-self request the managed Agent signs through the
-/// production writer, verifies it for claim and commits the claim, which holds
-/// no client admission.
-async fn claim_local_self_request(
-    node: &Arc<defra_node::Node>,
-    node_did: &str,
-    agent_did: &str,
-    agent: &dyn NodeIdentity,
-    verifier: &AgentRequestAdmissionVerifier,
-) -> Option<super::ClaimedClientProvenance> {
-    let access =
-        ConfigAccess::local_managed_agent(node.clone(), agent_did.parse().unwrap(), agent).unwrap();
-    let create = build_signed_client_request(
-        &access,
-        RequestSpec::new(
-            RequestPurpose::Normal,
-            RequestIdentity {
-                request_id: "readiness-local-self".into(),
-                node_did: node_did.into(),
-                requester_did: Some(agent_did.into()),
-                agent_did: agent_did.into(),
-                session_id: "readiness-local-self-session".into(),
-                content: "work".into(),
-                execution_origin: ExecutionOrigin::Interactive,
-                created_at: "2026-11-04T00:00:00Z".into(),
-            },
-            AgentRequestAdmissionRecord::local_self(agent_did),
-        ),
-        RequestSigner::Identity(agent),
-    )
-    .await
-    .unwrap();
-    submit_client_request(&access, &create).await.unwrap();
-    let rows = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "readiness-local-self"}}}}) {{ {} }} }}"#,
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&AgentRequest::try_from(row).unwrap(), agent_did)
-        .await
-        .unwrap();
-    assert!(
-        admission.is_none(),
-        "a local-self claim has no client admission"
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    lifecycle.bind_managed_agent(agent).unwrap();
-    assert!(matches!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    ));
-    lifecycle.claimed_client_provenance()
-}
-
 async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
     gents_lean_vocab::snapshot().await;
     let (published, partial): (Vec<_>, Vec<_>) = cases
         .into_iter()
         .partition(|case| publishes_every_relation(&case.input));
-    let home = tempfile::tempdir().unwrap();
-    let db = gents_store::test_support::TestStore::start(
+    let home = gents_documents::test_support::SignedHome::start(
         "exercise-readiness-relationship-sets",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let node = db.node.clone();
-    let runtime: Arc<dyn NodeIdentity> = Arc::new(
-        gents_store::test_support::held_runtime_identity(db.node_identity.did()),
-    );
-    let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    // The user's Node and Agent are client-signed over HTTP; embedded access
-    // refuses non-runtime writes without a managed Agent signer by design.
-    let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let node = home.store.node.clone();
+    let runtime = home.store.node_identity.clone();
     let selected_identity =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &user.did().parse().unwrap())
+    let agent_doc = home
+        .user_access
+        .execute("{ Agent { _docID } }")
         .await
-        .unwrap();
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        admin
-            .grant_node_permission(&binding.agent_did.parse().unwrap(), permission)
-            .await
-            .unwrap();
-    }
-    let user_access = db.client_access(&user);
-    let (node_doc, agent_doc) = user_access
-        .transact_write("test.readiness.owner", |txn| {
-            let (runtime_did, binding) = (runtime.did(), &binding);
-            Box::pin(async move {
-                let created = txn
-                    .execute_client_signed_create(
-                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": runtime_did}}),
-                        gents_protocol::schemas::NODE,
-                    )
-                    .await?;
-                let node_doc = gents_store::graphql::created_doc_id(&created, "Node")?;
-                let created = txn
-                    .execute_client_signed_create(
-                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {
-                            "node_did": runtime_did,
-                            "agent_did": binding.agent_did,
-                            "creation_nonce": binding.creation_nonce,
-                            "inference_profile_id": "fixture",
-                            "enabled": true,
-                        }}),
-                        gents_protocol::schemas::AGENT,
-                    )
-                    .await?;
-                let agent_doc = gents_store::graphql::created_doc_id(&created, "Agent")?;
-                Ok::<_, anyhow::Error>((node_doc, agent_doc))
-            })
-        })
-        .await
-        .unwrap();
-    user_access
-        .add_actor_relationship(
-            "Node",
-            &node_doc,
-            "runtime_reader",
-            &runtime.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
-    user_access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-        .await
-        .unwrap();
-    user_access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &binding.agent_did.parse().unwrap(),
-        )
-        .await
-        .unwrap();
+        .unwrap()["data"]["Agent"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let signer: &dyn NodeIdentity = if same_agent {
         selected_identity.as_ref()
     } else {
-        &user
+        &home.user
     };
     let author_access = if same_agent {
-        ConfigAccess::local_managed_agent(
-            node.clone(),
-            signer.did().parse().unwrap(),
-            selected_identity.as_ref(),
-        )
-        .unwrap()
+        home.agent_access(&binding)
     } else {
-        db.client_access(&user)
+        home.user_access.clone()
     };
     let create = crate::request::lifecycle::build_signed_reserved_client_request(
         &author_access,
@@ -378,13 +240,11 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
         case.check(observed.clone());
     }
     if same_agent {
-        let mut without_admission = RequestLifecycle::new_with_execution_binding(
-            node.clone(),
-            request.clone(),
-            60,
-            ExecutionOrigin::Interactive,
-            String::new(),
-        );
+        let mut without_admission =
+            crate::test_support::ClaimedRequest::existing(&home, &binding, &request_doc)
+                .drive(crate::test_support::Stage::Submitted)
+                .await
+                .lifecycle;
         without_admission
             .bind_managed_agent(selected_identity.as_ref())
             .unwrap();
@@ -393,25 +253,17 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
             ClaimOutcome::Queued
         ));
     }
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request.clone(),
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    lifecycle
-        .bind_managed_agent(selected_identity.as_ref())
-        .unwrap();
-    lifecycle.set_client_claim_admission(Some(admission.clone()));
-    let unadmitted_before = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request.clone(),
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    )
-    .claimed_client_provenance();
+    let mut lifecycle =
+        crate::test_support::ClaimedRequest::existing(&home, &binding, &request_doc)
+            .drive(crate::test_support::Stage::Admitted)
+            .await
+            .lifecycle;
+    let unadmitted_before =
+        crate::test_support::ClaimedRequest::existing(&home, &binding, &request_doc)
+            .drive(crate::test_support::Stage::Submitted)
+            .await
+            .lifecycle
+            .claimed_client_provenance();
     let admitted_before = lifecycle.claimed_client_provenance();
     assert!(matches!(
         lifecycle.claim_with_identity().await.unwrap(),
@@ -538,14 +390,11 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
         ));
     }
     let admitted_after = lifecycle.claimed_client_provenance();
-    let unattended_after = claim_local_self_request(
-        &node,
-        runtime.did(),
-        &binding.agent_did,
-        selected_identity.as_ref(),
-        &verifier,
-    )
-    .await;
+    let unattended_after = crate::test_support::ClaimedRequest::self_signed(&home, &binding)
+        .drive(crate::test_support::Stage::Claimed)
+        .await
+        .lifecycle
+        .claimed_client_provenance();
     let label = |actual: &str, fixture: &str, modeled: &str| {
         if actual == fixture {
             modeled.to_owned()
