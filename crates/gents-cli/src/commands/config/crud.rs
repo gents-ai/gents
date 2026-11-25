@@ -603,7 +603,7 @@ mod tests {
 
     #[tokio::test]
     async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
-        let node = Arc::new(gents_host::test_support::node_builder().build().await?);
+        let node = Arc::new(gents_store::test_support::node_builder().build().await?);
         gents_store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(
             node.clone(),

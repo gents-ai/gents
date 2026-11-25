@@ -18,7 +18,7 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::json;
 
-use crate::support::fixtures::{agent_target, test_identity};
+use crate::support::fixtures::agent_target;
 use crate::support::interrupt::BootedAgent;
 use crate::support::trial_store;
 use gents_store::test_support::TestStore;
@@ -302,7 +302,7 @@ async fn delegates_start_while_their_turn_holds_the_backend() {
     for case in family::cases() {
         let backend = scripted_backend(case.input.children);
         let db = trial_store("agent-workers-held-turns").await;
-        let user = test_identity("agent-workers-user");
+        let user = gents_store::test_support::test_identity("agent-workers-user");
         let agent_did =
             configure_agent(&db, &user, backend.endpoint(), case.input.backend_limit).await;
         let access = db.client_access(&user);

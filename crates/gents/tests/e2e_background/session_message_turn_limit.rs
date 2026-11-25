@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::support::accepted_turn::AcceptedTurnRuntime;
-use crate::support::fixtures::{agent_target, test_identity};
+use crate::support::fixtures::agent_target;
 use crate::support::interrupt::BootedAgent;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
@@ -424,7 +424,7 @@ async fn start_child_session(
         ],
     )
     .expect("start backend");
-    let user = test_identity("session-limit-user");
+    let user = gents_store::test_support::test_identity("session-limit-user");
     let (parent_did, child_did) =
         configure_session_chain(db, &user, backend.endpoint(), max_turns).await;
     let access = db.client_access(&user);

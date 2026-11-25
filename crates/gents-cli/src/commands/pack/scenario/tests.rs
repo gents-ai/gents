@@ -274,7 +274,7 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
     }
 
     let node = std::sync::Arc::new(
-        gents_host::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents_inference::{backends::provider::BackendProviderKind, resolved::ResolvedAgent};
-use gents_store::{identity::KeyIdentity, identity::NodeIdentity, identity::RuntimeNode};
+use gents_store::{identity::NodeIdentity, identity::RuntimeNode};
 use gents_tools::surface::AgentToolSurfaceConfig;
 
 pub fn fixture_pack_names() -> Vec<String> {
@@ -49,11 +49,6 @@ pub fn fixture_pack_names() -> Vec<String> {
     names
 }
 
-pub fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
-
 pub fn test_node_for(
     identity: Arc<dyn gents_store::identity::NodeIdentity>,
     default_agent_did: impl Into<String>,
@@ -72,7 +67,8 @@ pub fn test_agent(
     backend_id: &str,
     backend_api_key_env_var: Option<&str>,
 ) -> ResolvedAgent {
-    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(test_identity(name));
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> =
+        Arc::new(gents_store::test_support::test_identity(name));
     let principal = test_node_for(identity, name);
     let mut behavior = test_agent_for_node(name, principal);
     behavior.backend_id = Some(backend_id.to_owned());

@@ -637,7 +637,7 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
     let mut p = Processes::new("live-foreign-process-handle").await;
     let (_, job) = p.gated(&p.primary, "job", "owner-session", true).await;
     let foreign = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("foreign-process-user")
+        gents_store::test_support::test_identity("foreign-process-user")
     })
     .await
     .unwrap();

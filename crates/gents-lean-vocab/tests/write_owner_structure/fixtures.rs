@@ -29,15 +29,11 @@ const FIXTURE_NAMES: &[&str] = &[
 const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
     ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
     ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
-    ("node_builder", 3, "raw-node builders in gents-store, gents-host and gents-desktop-bridge; callers move to TestStore"),
-    ("test_identity", 7, "key-file identities written per crate; callers move to gents_store::test_support::test_identity"),
 ];
 
 /// `src` files that compile a `tests/` file into the library.
 #[rustfmt::skip]
-const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[
-    ("crates/gents-session/src/session/provider_context_reduction.rs", 1, "a durable-reduction conformance consumer kept in the root tests directory; it moves beside its owner in gents-session"),
-];
+const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 
 /// Test-only implementations of production traits outside a `src/test_support`
 /// module, per crate.
