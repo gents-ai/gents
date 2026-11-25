@@ -56,10 +56,6 @@ const FAILURES: [RegExp, string][] = [
     /^no_progress$/,
     "Its last turns repeated the same actions without progress. Say what to try next, or press Resume.",
   ],
-  [
-    /^blocked_confirmation$/,
-    "It reported being blocked and is checking once more before it pauses.",
-  ],
   [/overloaded|\b529\b/i, "The provider was overloaded. Try again in a moment."],
   [/usage limit/i, "The account reached its usage limit."],
   [

@@ -29,4 +29,5 @@ type Goal @policy(id: "$household", resource: "children") {
     created_at: String @index
     updated_at: String @index
     progress_record: String
+    blocked_confirmation: Boolean
 }

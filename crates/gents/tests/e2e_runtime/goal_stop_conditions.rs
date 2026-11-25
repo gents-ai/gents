@@ -469,9 +469,9 @@ async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
     runtime.shutdown().await;
 }
 
-/// The working Agent can neither create its Goal's stop policy nor change
-/// one its user set (Lean
-/// `Identity.Household.the_working_agent_reads_but_cannot_change_its_goal_policy`).
+/// Who may create and then change a Goal's stop policy, replayed in the order
+/// the Lean access rule (`goal_policies`) decides it: the working Agent can
+/// neither create its Goal's policy nor change one its user set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_working_agent_cannot_loosen_its_goal_policy() {
     const MARKER: &str = "audit-ledger-goal";
@@ -494,29 +494,21 @@ async fn the_working_agent_cannot_loosen_its_goal_policy() {
     )
     .await
     .unwrap();
-    set_policy(
-        &actors.agent_access,
-        &actors,
-        &session,
-        gents_protocol::goal::OnBlocked::KeepTrying,
-    )
-    .await
-    .expect_err("the working Agent cannot create its Goal's policy");
-    set_policy(
-        &actors.fixture.access,
-        &actors,
-        &session,
-        gents_protocol::goal::OnBlocked::StopFirst,
-    )
-    .await
-    .unwrap();
-    set_policy(
-        &actors.agent_access,
-        &actors,
-        &session,
-        gents_protocol::goal::OnBlocked::KeepTrying,
-    )
-    .await
-    .expect_err("the working Agent cannot change its Goal's policy");
+    for case in gents_lean_vocab::families::contracts_goal_policy_access::cases() {
+        let access = match case.input.actor.as_str() {
+            "working_agent" => &actors.agent_access,
+            "user" => &actors.fixture.access,
+            other => panic!("unknown modeled actor {other}"),
+        };
+        let allowed = set_policy(
+            access,
+            &actors,
+            &session,
+            gents_protocol::goal::OnBlocked::ConfirmOnce,
+        )
+        .await
+        .is_ok();
+        case.check(allowed);
+    }
     runtime.shutdown().await;
 }

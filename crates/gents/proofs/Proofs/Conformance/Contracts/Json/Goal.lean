@@ -1,6 +1,7 @@
 import Proofs.Automation.Goals
 import Proofs.Automation.GoalProgress
 import Proofs.Automation.GoalStopPolicy
+import Proofs.Store.Identity.Household
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
@@ -496,6 +497,30 @@ def goalEffectiveBudget : Family GoalEffectiveBudgetInput GoalEffectiveBudgetOut
     let policy : GoalStopPolicy.Policy := ⟨.stopFirst, i.token_ceiling, i.turn_ceiling, i.lifted⟩
     { budget := GoalStopPolicy.effectiveBudget policy i.goal_budget
     , limit_reached := GoalStopPolicy.limitReached policy i.goal_budget i.tokens_used i.turns }
+
+structure GoalPolicyAccessInput where
+  name : String
+  actor : String
+  operation : String
+  deriving Lean.ToJson
+
+/-- `Identity.Household` over `goal_policies`, in order: who may create and
+then update a Goal's stop policy, the working Agent or its user. -/
+@[conformance_family]
+def goalPolicyAccess : Family GoalPolicyAccessInput Bool where
+  inputs :=
+    [ { name := "working_agent_creates", actor := "working_agent", operation := "create" }
+    , { name := "user_creates", actor := "user", operation := "create" }
+    , { name := "working_agent_updates", actor := "working_agent", operation := "update" }
+    , { name := "user_updates", actor := "user", operation := "update" } ]
+  model := fun i =>
+    let actor := if i.actor = "user" then "user" else "worker"
+    if i.operation = "create" then
+      Identity.Household.gatedCreateAllowed Identity.Household.policy
+        Identity.Household.goalPolicyFixture actor "goal_policies" "agents" "worker"
+    else
+      Identity.Household.allowed 5 Identity.Household.goalPolicyFixture actor "goal_policies"
+        "policy" "update"
 
 structure GoalCreateCase where
   name : String
