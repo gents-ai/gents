@@ -4,6 +4,7 @@
   "coverage": [
     "BM25 index deployment and ranked search",
     "relational modeling and linked records",
+    "questions answered across linked records",
     "ordered, unique and vector indexes, each read back",
     "additive updates preserve records",
     "write and read configured records",

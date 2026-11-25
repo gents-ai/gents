@@ -1,0 +1,192 @@
+{
+  "case_id": "big-order-inbox-note",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type Order { order_id: String @index(unique: true) customer: String total: Float }"
+    ],
+    "documents": [
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "ORD-1040",
+          "customer": "Harbor Cafe",
+          "total": 640
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "ORD-1041",
+          "customer": "Pine Bakery",
+          "total": 85.5
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "set_up",
+      "prompt": "When a new order over $500 comes in, put a note in my inbox with its order number. Smaller orders need nothing.",
+      "settle": true,
+      "checks": []
+    },
+    {
+      "stage_id": "small_order",
+      "prompt": "Pine Bakery just phoned in another order: ORD-1043 for $120. Please add it.",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "small_order"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "small_order",
+          "collection": "Order",
+          "filter": {
+            "order_id": {
+              "_eq": "ORD-1043"
+            }
+          },
+          "fields": [
+            "_docID",
+            "order_id",
+            "customer",
+            "total"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "small_order",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "big_order",
+      "seed": {
+        "collection": "Order",
+        "document": {
+          "order_id": "ORD-1044",
+          "customer": "Harbor Cafe",
+          "total": 870
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "big_note",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "_or": [
+              {
+                "title": {
+                  "_like": "%ORD-1044%"
+                }
+              },
+              {
+                "summary": {
+                  "_like": "%ORD-1044%"
+                }
+              },
+              {
+                "payload": {
+                  "_like": "%ORD-1044%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "item_key",
+            "requester_did",
+            "kind",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "small_note",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "_or": [
+              {
+                "title": {
+                  "_like": "%ORD-1043%"
+                }
+              },
+              {
+                "summary": {
+                  "_like": "%ORD-1043%"
+                }
+              },
+              {
+                "payload": {
+                  "_like": "%ORD-1043%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "item_key",
+            "requester_did",
+            "title",
+            "summary",
+            "payload",
+            "request_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "big_note",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "small_note",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

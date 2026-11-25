@@ -81,7 +81,7 @@ jobs:
           seen="$(git show origin/ci-latency-data:latency.jsonl 2> /dev/null \
             | jq -r '.run_id + "/" + .job' | sort -u || true)"
 
-          for record in $(find "${RUNNER_TEMP}/samples" -name record.json); do
+          while IFS= read -r record; do
             pair="$(jq -r '.run_id + "/" + .unit' "${record}")"
             if grep -qxF "${pair}" <<< "${seen}"; then
               continue
@@ -97,7 +97,7 @@ jobs:
                   total_seconds: $lat[0].total_seconds}' \
               | .github/scripts/append-ci-latency.sh \
               || echo "::warning::appending $(basename "${record}") failed"
-          done
+          done < <(find "${RUNNER_TEMP}/samples" -name record.json)
 
       - name: Render the trend
         env:
@@ -128,7 +128,7 @@ jobs:
           # Same fetch-rebase-retry discipline as the samples: a concurrent
           # writer moves the branch, we rebuild on top; a lost trend is never
           # a failed run.
-          for attempt in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             if git push -q origin "${commit}:refs/heads/ci-latency-data"; then
               break
             fi

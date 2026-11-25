@@ -28,10 +28,10 @@
       "skill_id": "design-page"
     },
     {
-      "description": "Load before schedules, event sources, triggers or tasks. Routes events to one consumer and stops loops. Didn't fire: troubleshoot.",
-      "instructions": "./skills/build_automation/SKILL.md",
-      "name": "build-automation",
-      "skill_id": "build-automation"
+      "description": "Load before schedules, event sources, triggers or tasks. Routes events to one consumer and stops loops.",
+      "instructions": "./skills/automate/SKILL.md",
+      "name": "automate",
+      "skill_id": "automate"
     },
     {
       "description": "Load when some people must not see or change data, or before sharing it. What the node enforces.",
@@ -58,7 +58,7 @@
       "skill_id": "use-helpers"
     },
     {
-      "description": "Load first when something didn't happen or went wrong: never fired, fired too often, a tool missing.",
+      "description": "Load first when something didn't happen or went wrong: never fired, didn't get it, stopped working, can't find a tool.",
       "instructions": "./skills/troubleshoot/SKILL.md",
       "name": "troubleshoot",
       "skill_id": "troubleshoot"

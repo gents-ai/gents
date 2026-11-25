@@ -1,4 +1,4 @@
-# Build automation
+# Automate
 
 A source (a schedule or a new document) fires a trigger. The trigger starts a task, which runs an agent with a prompt rendered from the firing document.
 
@@ -25,4 +25,6 @@ Its Tools carry only what its task needs. A routine job is a tool call and a sho
 
 Enable one trigger, cause one event, and inspect its request and output. Count the fires. If there are more than expected, disable the trigger first, then enable the rest. A task's mailbox items reach the node's owner: send any failure someone must know about.
 
-If one never fires or fires too often, load `troubleshoot`. Next: `control-access`.
+Next: `control-access`.
+
+If it never fires, or fires too often, load `troubleshoot`.
