@@ -830,6 +830,27 @@ def observe (status : Status) (event : Event) : Status :=
 
 def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
 
+/-- Whether selecting a node reads it at once, given its observation (`none`
+before the node is observed). While the observer is still connecting, its own
+first read is what makes the node current; a second full read beside it only
+collides with that one (one is discarded or read again), doubling a launch's
+requests. In every other state, and before any observation, the selection
+reads the node. -/
+def selectionReadsNode (observed : Option Status) : Bool :=
+  decide (observed ≠ some .connecting)
+
+/-- `selectionReadsNode` over a flag for whether the node is observed and its
+status, the shape its conformance cases take. -/
+def selectionReads (observed : Bool) (status : Status) : Bool :=
+  selectionReadsNode (if observed then some status else none)
+
+theorem a_connecting_observer_defers_the_selection_read :
+    selectionReadsNode (some .connecting) = false := by decide
+
+theorem selection_reads_in_every_other_state (observed : Option Status)
+    (other : observed ≠ some .connecting) : selectionReadsNode observed = true := by
+  simp [selectionReadsNode, other]
+
 theorem empty_snapshot_is_connected (status : Status) :
     observe status .snapshotSucceeded = .connected := by rfl
 
@@ -1583,6 +1604,51 @@ def retryNow (n : Slot) : Slot :=
   if retryNowRestarts n then
     { n with waiting := false, loading := false, reloadingCollections := false, armed := false }
   else n
+
+/-- What the desktop's window and network tell the observer. -/
+inductive AppEvent where
+  /-- The window is shown again after being hidden. -/
+  | shownAgain
+  | hidden
+  /-- The window takes focus without having been hidden. -/
+  | focused
+  /-- The device comes back online (the browser's `online`). -/
+  | online
+  /-- The device's network changes, for instance between Wi-Fi and mobile
+  data, which stays online (`navigator.connection` `change`). -/
+  | networkChanged
+  deriving DecidableEq, Repr
+
+/-- Whether an app event asks every node to reconnect now. A node lost to
+the network waits out its reconnect backoff, and each of these is evidence
+the network it waited on may be back; a hide or a focus alone is not. -/
+def asksRetryNow : AppEvent → Bool
+  | .shownAgain | .online | .networkChanged => true
+  | .hidden | .focused => false
+
+/-- What an app event does to a node: a retry now when the event asks for one. -/
+def onAppEvent (event : AppEvent) (n : Slot) : Slot :=
+  if asksRetryNow event then retryNow n else n
+
+/-- No app event restarts a connected node: its subscriptions and running
+load stay as they are. -/
+theorem an_app_event_leaves_a_connected_node (event : AppEvent) (n : Slot)
+    (connected : n.status = .connected) : onAppEvent event n = n := by
+  unfold onAppEvent retryNow retryNowRestarts
+  cases asksRetryNow event <;> simp [connected]
+
+/-- A network change or a return online restarts a node lost to the network
+at once, rather than after its backoff (`retryNowCount`). -/
+theorem a_network_change_restarts_a_lost_node (n : Slot)
+    (lost : n.status = .disconnected) :
+    onAppEvent .networkChanged n = retryNow n ∧ onAppEvent .online n = retryNow n ∧
+      retryNowRestarts n = true := by
+  simp [onAppEvent, asksRetryNow, retryNowRestarts, lost]
+
+/-- A hide or a focus alone asks nothing. -/
+theorem a_hide_or_focus_asks_nothing (n : Slot) :
+    onAppEvent .hidden n = n ∧ onAppEvent .focused n = n := by
+  simp [onAppEvent, asksRetryNow]
 
 /-- What the user sees for a node, and why it is not stuck. -/
 inductive Presentation where

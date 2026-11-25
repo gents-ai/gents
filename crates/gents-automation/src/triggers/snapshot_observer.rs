@@ -18,4 +18,8 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
     /// The request router has durably acknowledged this generation; callers
     /// that submit work need the router, not merely a resolved snapshot.
     fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
+
+    /// A retired Agent slot's task has joined: the calls it ran have
+    /// finished and it holds no dispatcher, worker or backend client.
+    fn on_retired_slot_joined(&self, _agent_did: &str, _generation: u64) {}
 }

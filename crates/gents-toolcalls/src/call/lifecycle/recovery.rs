@@ -1515,73 +1515,6 @@ fn classify_registered_session_stop(
     }
 }
 
-/// A missing document may not have replicated here, so it does not imply deletion.
-async fn owner_task_deleted(
-    node: &std::sync::Arc<EmbeddedNode>,
-    node_did: &str,
-    parent: &AgentRequestRow,
-) -> Result<bool> {
-    let Some(trigger_id) = non_empty(parent.caused_by_trigger_id.as_deref()) else {
-        return Ok(false);
-    };
-    let node_did = escape_graphql_string(node_did);
-    let trigger_id = escape_graphql_string(trigger_id);
-    let response = gents_store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, trigger_id: {{ _eq: "{trigger_id}" }} }}, showDeleted: true) {{ _deleted task_id }} }}"#
-        ),
-        "tool_call.recovery.owner_trigger",
-    )
-    .await?;
-    let triggers = deletion_rows(&response, "Trigger")?;
-    if triggers.is_empty() {
-        return Ok(false);
-    }
-    let Some(task_id) = triggers
-        .iter()
-        .find(|row| !row.deleted)
-        .map(|row| row.task_id.clone())
-    else {
-        return Ok(true);
-    };
-    let Some(task_id) = non_empty(task_id.as_deref()) else {
-        return Ok(false);
-    };
-    let task_id = escape_graphql_string(task_id);
-    let response = gents_store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ Task(filter: {{ node_did: {{ _eq: "{node_did}" }}, task_id: {{ _eq: "{task_id}" }} }}, showDeleted: true) {{ _deleted }} }}"#
-        ),
-        "tool_call.recovery.owner_task",
-    )
-    .await?;
-    let tasks = deletion_rows(&response, "Task")?;
-    Ok(!tasks.is_empty() && tasks.iter().all(|row| row.deleted))
-}
-
-#[derive(Debug, Deserialize)]
-struct DeletionRow {
-    #[serde(rename = "_deleted", default)]
-    deleted: bool,
-    #[serde(default)]
-    task_id: Option<String>,
-}
-
-fn deletion_rows(
-    response: &defra_node::QueryResponse,
-    collection: &str,
-) -> Result<Vec<DeletionRow>> {
-    let value = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .cloned()
-        .unwrap_or(serde_json::Value::Array(Vec::new()));
-    serde_json::from_value(value).with_context(|| format!("decode {collection} deletion rows"))
-}
-
 fn classify_terminal_parent_tool_recovery(
     row: &RunningToolCallRow,
     parent: &AgentRequestRow,
@@ -1706,6 +1639,9 @@ impl RecoveryOutcome {
             })
     }
 }
+
+mod owner_deletion;
+use owner_deletion::owner_task_deleted;
 
 #[cfg(all(test, feature = "vera"))]
 mod vera_tests;

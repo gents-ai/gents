@@ -7,6 +7,7 @@ pub mod file_inventory;
 pub mod fleet;
 pub mod fleet_slots;
 mod goal_control;
+pub mod gzip_requests;
 pub mod healthz;
 pub mod identity_decide;
 pub mod inference;

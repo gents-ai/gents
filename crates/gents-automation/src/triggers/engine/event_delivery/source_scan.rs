@@ -3,7 +3,7 @@ use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use std::sync::Arc;
 
-use gents_store::graphql::escape_graphql_string;
+use gents_store::graphql::{cursor_after_arg, cursor_page_data};
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
 
@@ -42,44 +42,36 @@ pub(crate) async fn load_source_rows(
         .filter(|filter| !filter.is_empty())
         .unwrap_or("{}");
     gents_store::graphql::validate_graphql_filter_fragment(base)?;
-    let mut after = String::new();
+    let mut cursor: Option<String> = None;
+    let mut last_id = String::new();
     let mut documents = Vec::new();
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(actor)?,
     );
     loop {
-        let filter = if after.is_empty() {
-            base.to_owned()
-        } else {
-            format!(
-                "{{_and:[{base},{{_docID:{{_gt:\"{}\"}}}}]}}",
-                escape_graphql_string(&after)
-            )
-        };
+        let after = cursor_after_arg(cursor.as_deref());
         let response = access.execute(
             &format!(
-                "{{ {collection}(filter: {filter}, order: {{ _docID: ASC }}, limit: {SOURCE_SCAN_PAGE_SIZE}) {{ _docID {} }} }}",
+                "{{ _cursor {{ {collection}(first: {SOURCE_SCAN_PAGE_SIZE}{after}, filter: {base}, order: [{{ _docID: ASC }}]) {{ _docID {} }} _pageInfo {{ hasNext endCursor }} }} }}",
                 field.unwrap_or_default(),
             ),
         )
         .await?;
-        let page = response["data"][collection]
-            .as_array()
-            .context("event source scan omitted its result")?
-            .clone();
+        let (page, next) = cursor_page_data::<Value>(response.get("data"), collection)
+            .context("event source scan omitted its result")?;
         for row in &page {
             let id = document_id(row)?;
             anyhow::ensure!(
-                id > after.as_str(),
+                id > last_id.as_str(),
                 "event source scan did not advance its document cursor"
             );
-            after = id.to_owned();
+            last_id = id.to_owned();
         }
-        let complete = page.len() < SOURCE_SCAN_PAGE_SIZE;
         documents.extend(page);
-        if complete {
-            return Ok(documents);
+        match next {
+            None => return Ok(documents),
+            Some(next) => cursor = Some(next),
         }
     }
 }
@@ -88,6 +80,7 @@ pub(crate) async fn load_source_rows(
 pub(crate) mod tests {
     use super::*;
     use gents_store::config_client::ConfigAccess;
+    use gents_store::graphql::escape_graphql_string;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 

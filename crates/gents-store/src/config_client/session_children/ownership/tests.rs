@@ -141,3 +141,69 @@ async fn publication_matches_atomic_session_child_model() {
         node.shutdown().await.unwrap();
     }
 }
+
+/// Recovery reads its pending children a page at a time: every child of a
+/// session with more than two pages pending is linked, none twice.
+#[tokio::test]
+async fn recovery_links_every_pending_child_across_pages() {
+    const CHILDREN: usize = 130;
+    let home = tempfile::tempdir().unwrap();
+    let runtime = KeyIdentity::load_or_create(home.path().join("node"), None).unwrap();
+    let binding = crate::identity::provision_agent_identity(&runtime).unwrap();
+    let agent = crate::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    let actor = identity::Did::new(agent.did()).unwrap();
+    let access =
+        ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent.as_ref()).unwrap();
+    let session = access
+        .write_with_variables(
+            "test.child.session",
+            "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+            &json!({"input": {"node_did": runtime.did(), "session_id": "paged", "agent_did": agent.did(),
+                "created_at": "2026-11-04T00:00:00Z"}}),
+        )
+        .await
+        .unwrap();
+    let session_doc = crate::graphql::created_doc_id(&session, "AgentSession").unwrap();
+    let (runtime_did, agent_did) = (runtime.did().to_owned(), agent.did().to_owned());
+    access
+        .transact_write("test.child.create", |txn| {
+            let (session_doc, runtime_did, agent_did) = (&session_doc, &runtime_did, &agent_did);
+            Box::pin(async move {
+                for sequence in 0..CHILDREN {
+                    txn.execute_with_variables(
+                        "mutation($input: AgentMessageMutationInputArg!) { create_AgentMessage(input: $input) { _docID } }",
+                        &json!({"input": {"node_did": runtime_did, "session_id": "paged",
+                            "session_doc_id": session_doc, "agent_did": agent_did, "creator_did": agent_did,
+                            "parent_linked": false, "message_key": format!("paged-{sequence}"),
+                            "sequence": sequence, "role": "assistant", "created_at": "2026-11-04T00:00:00Z"}}),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+
+    let recovered =
+        recover_agent_session_child_relationships_with_access(&access, runtime.did(), &actor)
+            .await
+            .unwrap();
+    assert_eq!(recovered, CHILDREN);
+    let rows = access
+        .execute(r#"{ AgentMessage(filter: {session_id: {_eq: "paged"}}) { parent_linked } }"#)
+        .await
+        .unwrap();
+    let rows = rows["data"]["AgentMessage"].as_array().unwrap();
+    assert_eq!(rows.len(), CHILDREN);
+    assert!(rows.iter().all(|row| row["parent_linked"] == json!(true)));
+    node.shutdown().await.unwrap();
+}
