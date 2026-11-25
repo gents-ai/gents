@@ -39,10 +39,17 @@ pub(crate) const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_RENDERED_BYTES: usize = 1024 * 1024;
 
 /// MiniJinja's `tojson` filter escapes HTML-sensitive characters even with auto-escaping disabled.
+/// Its default formatter prints null as `none`; an unset source field renders empty instead.
 fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_auto_escape_callback(|_| AutoEscape::None);
+    env.set_formatter(|out, state, value| {
+        if value.is_none() {
+            return Ok(());
+        }
+        minijinja::escape_formatter(out, state, value)
+    });
     env
 }
 

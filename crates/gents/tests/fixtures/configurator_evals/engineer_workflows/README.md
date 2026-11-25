@@ -17,8 +17,8 @@ test, every core pack installed as init installs them (`scripts/evals/suites.py`
 Every case asks for one background job by name. Each stage settles, so the
 evidence covers the job's helpers and the completion the Engineer receives. A
 case grades the job with that name (`job_pin.handle`): it completed, and the
-result its output segment carries holds the answer; the number of helper runs
-that completed in `job-session:` sessions, as many as the user asked for; that
+result its output segment carries holds the answer; the number of that job's
+helper runs that completed, as many as the user asked for; that
 no workspace file changed when the user said to only read; and, where the user
 asked to be told, the Engineer's reply after the job finished. A draft the
 Engineer stopped or a job under another name is not graded.

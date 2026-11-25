@@ -106,6 +106,18 @@
             "session_id": {
               "_like": "job-session:%"
             },
+            "caused_by_parent_tool_call_doc_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "finished",
+                  "source_match": {
+                    "field": "lifecycle_state",
+                    "matches": "^completed$"
+                  },
+                  "field": "_docID"
+                }
+              }
+            },
             "lifecycle_state": {
               "_eq": "completed"
             }
@@ -232,7 +244,7 @@
                 "matches": "\\b4\\b"
               },
               {
-                "matches": "(?i)\\b(one|1|single)\\s+(helper|worker|child|agent|sub-?agent)"
+                "matches": "(?i)(?:\\b|_)(one|1|single)[*_]*\\s+[*_]*(helper|worker|child|agent|sub-?agent)"
               }
             ]
           },
@@ -280,6 +292,18 @@
             },
             "session_id": {
               "_like": "job-session:%"
+            },
+            "caused_by_parent_tool_call_doc_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "finished",
+                  "source_match": {
+                    "field": "lifecycle_state",
+                    "matches": "^completed$"
+                  },
+                  "field": "_docID"
+                }
+              }
             },
             "lifecycle_state": {
               "_eq": "completed"

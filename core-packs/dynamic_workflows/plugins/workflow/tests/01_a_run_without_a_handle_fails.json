@@ -1,0 +1,14 @@
+{
+  "input": {
+    "pin": null,
+    "script": "module.exports = (i) => ({effects: {spawn: [{slot: \"s\", attempt: 0, target: \"wf-read-only\", prompt: \"p\", title: \"t\"}]}})",
+    "args": {},
+    "agent_budget": null
+  },
+  "expect": {
+    "fail": {
+      "code": "workflow_invalid_input",
+      "message": "args.handle names the run: call workflow again with args.handle set to the job's name"
+    }
+  }
+}
