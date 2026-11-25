@@ -25,10 +25,9 @@ structure SeatbeltOutput where
   writes : WriteScope
   deriving ToJson
 
-/-- The sandbox each kernel-contained mode selects for a program Seatbelt can
-run on a host with a backend. -/
+/-- The sandbox each kernel-contained mode selects on a host with a backend. -/
 def containedSandbox (mode : ExecutionMode) : SandboxKind :=
-  match selectSandbox { workspaceWriteSandboxEnforced := true } mode "" with
+  match selectSandbox { workspaceWriteSandboxEnforced := true } mode with
   | .selected sandbox => sandbox
   | .denied _ => .policyReadOnly
 

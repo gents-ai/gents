@@ -68,8 +68,7 @@ private def denial (c : CommandPolicy.CommandPolicyCase) : String × Option Stri
 example : [ "read_only_git_status_allows", "read_only_git_branch_list_allows",
     "read_only_sed_print_allows", "read_only_find_type_file_allows",
     "read_only_rg_search_allows", "read_only_curl_http_get_allows",
-    "read_only_launchctl_print_allows", "read_only_tailscale_status_allows",
-    "read_only_tailscale_netcheck_allows", "read_only_sudo_launchctl_print_allows",
+    "read_only_tailscale_status_allows", "read_only_tailscale_netcheck_allows",
     "allowed_prefix_authorizes_read_only_diagnostic_command" ].all
       (fun n => (policyCase? n).map denial == some ("allow", none)) = true := by
   native_decide
@@ -91,8 +90,7 @@ example : [ ("read_only_git_global_config_denies", "-c"),
     ("read_only_curl_data_denies", "--data={}"),
     ("read_only_curl_output_denies", "-o"),
     ("read_only_curl_upload_denies", "-T"),
-    ("read_only_curl_config_denies", "-K"),
-    ("read_only_sudo_launchctl_wrong_path_denies", "/usr/bin/launchctl") ].all
+    ("read_only_curl_config_denies", "-K") ].all
       (fun (n, a) => (policyCase? n).map (fun c =>
         (denial c, c.decision.denialReason?.bind CommandPolicy.DenialReason.argument?)) ==
           some (("deny", some "readOnlyArgumentNotAllowed"), some a)) = true := by
@@ -142,18 +140,18 @@ example : [ "read_only_sed_expression_value_is_not_an_option",
   native_decide
 
 example : [ ("read_only_git_commit_subcommand_denies", "commit"),
-    ("read_only_launchctl_bootout_denies", "bootout"),
-    ("read_only_tailscale_up_denies", "up"),
-    ("read_only_sudo_rm_denies", "rm") ].all
+    ("read_only_tailscale_up_denies", "up") ].all
       (fun (n, s) => (policyCase? n).map (fun c =>
         (denial c, c.decision.denialReason?.bind CommandPolicy.DenialReason.subcommand?)) ==
           some (("deny", some "readOnlySubcommandNotAllowlisted"), some s)) = true := by
   native_decide
 
-example : [ "read_only_launchctl_missing_subcommand_denies",
-    "read_only_sudo_missing_command_denies" ].all
-      (fun n => (policyCase? n).map denial ==
-        some ("deny", some "readOnlySubcommandRequired")) = true := by
+example : [ ("read_only_ps_is_not_listed_denies", "ps"),
+    ("read_only_sudo_is_not_listed_denies", "sudo"),
+    ("read_only_launchctl_is_not_listed_denies", "launchctl") ].all
+      (fun (n, command) => (policyCase? n).map (fun c =>
+        (denial c, c.decision.denialReason?.bind CommandPolicy.DenialReason.command?)) ==
+          some (("deny", some "readOnlyCommandNotAllowlisted"), some command)) = true := by
   native_decide
 
 example : (policyCase? "read_only_curl_missing_http_url_denies").map (fun c =>
@@ -189,7 +187,6 @@ structure SandboxInput where
   category : String
   mode : CommandPolicy.ExecutionMode
   workspaceWriteSandboxEnforced : Bool
-  program : String
   lookupCommand : String
   networkMode : CommandPolicy.NetworkMode
   deriving Lean.ToJson
@@ -205,23 +202,22 @@ structure SandboxOutput where
 
 /-- The sandbox a command runs under on a host that does or does not have a
 sandbox backend, and the kernel profile that sandbox applies: production
-`select_sandbox` and `seatbelt_profile`, given the host fact and the resolved
-program their caller reads. -/
+`select_sandbox` and `seatbelt_profile`, given the host fact their caller
+reads. -/
 @[conformance_family]
 def commandSandboxSelection : Family SandboxInput SandboxOutput where
   inputs := CommandPolicy.commandSandboxCases.map fun c =>
     { name := c.name, category := c.category, mode := c.mode
       workspaceWriteSandboxEnforced := c.workspaceWriteSandboxEnforced
-      program := c.program, lookupCommand := c.lookupCommand, networkMode := c.networkMode }
+      lookupCommand := c.lookupCommand, networkMode := c.networkMode }
   model := fun i =>
     let support : CommandPolicy.RuntimeSupport :=
       { workspaceWriteSandboxEnforced := i.workspaceWriteSandboxEnforced }
-    let decision := CommandPolicy.selectSandbox support i.mode i.program
+    let decision := CommandPolicy.selectSandbox support i.mode
     let profile := CommandPolicy.commandProfile support
       { mode := i.mode, allowedArgvPrefixes := [], forbiddenArgvPrefixes := []
         networkMode := i.networkMode, readOnlyAllowlist := [] }
-      { command := i.program, lookupCommand := i.lookupCommand, args := [] }
-      i.program
+      { command := i.lookupCommand, lookupCommand := i.lookupCommand, args := [] }
     { decision := decision.toContract
       sandbox := decision.sandbox?.map CommandPolicy.SandboxKind.toContract
       denialReason := decision.denialReason?.map CommandPolicy.DenialReason.toContract
@@ -244,12 +240,8 @@ example : [ "read_only_with_backend_selects_the_read_only_profile",
       (fun n => (sandboxCase? n).map (·.decision) ==
         some (.selected .macosSeatbeltReadOnly)) = true := by native_decide
 
-example : [ "read_only_setuid_ps_runs_under_its_validator",
-    "read_only_setuid_sudo_runs_under_its_validator",
-    "read_only_launchctl_runs_under_its_validator",
-    "read_only_without_backend_selects_policy_read_only" ].all
-      (fun n => (sandboxCase? n).map (·.decision) ==
-        some (.selected .policyReadOnly)) = true := by native_decide
+example : (sandboxCase? "read_only_without_backend_selects_policy_read_only").map
+    (·.decision) = some (.selected .policyReadOnly) := by native_decide
 
 structure LaunchInput where
   name : String

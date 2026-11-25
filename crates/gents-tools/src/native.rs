@@ -122,7 +122,7 @@ pub use shared::CommandRequest;
 pub use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, current_managed_command_credential_snapshot, default_lsp_network_mode,
-    effective_command_policy, lsp_sandbox_for_effective, prepare_managed_command,
+    effective_command_policy, lsp_server_sandbox, prepare_managed_command,
 };
 pub use shared::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
@@ -749,12 +749,9 @@ fn default_read_only_commands() -> Vec<String> {
         "uptime",
         "df",
         "vm_stat",
-        "ps",
         "lsof",
         "curl",
-        "launchctl",
         "tailscale",
-        "sudo",
     ]
     .into_iter()
     .map(str::to_string)

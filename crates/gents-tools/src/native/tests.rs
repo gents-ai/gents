@@ -1960,17 +1960,48 @@ async fn read_only_bash_git_runs_under_the_read_only_profile() {
     );
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
-async fn read_only_bash_runs_setuid_ps_under_its_validator() {
-    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
-        return;
+async fn read_only_bash_refuses_ps_sudo_and_launchctl_as_unlisted() {
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(temp_root("gents-bash-read-only-unlisted"), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        default_read_only_commands(),
+    );
+    let definition = gents_loop::tool::Tool::definition(&tool, String::new()).await;
+    let command_description = definition.parameters["properties"]["command"]["description"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    for (command, args) in [
+        ("ps", vec!["-o", "pid=", "-p", "1"]),
+        ("sudo", vec!["/bin/launchctl", "print", "system"]),
+        ("/bin/launchctl", vec!["print", "system"]),
+    ] {
+        let name = command.rsplit('/').next().unwrap();
+        assert!(
+            !command_description
+                .split([' ', ',', '.'])
+                .any(|word| word == name),
+            "{command_description}"
+        );
+        let outcome = crate::runtime_context::call_tool_managed(
+            boxed.as_ref(),
+            serde_json::json!({ "command": command, "args": args }).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await;
+        let text = match outcome {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed { text, .. } => text,
+            other => panic!("{command} was not refused: {other:?}"),
+        };
+        assert!(
+            text.contains(&format!(
+                "command is not allowed by the read-only bash tool: {name}"
+            )),
+            "{text}"
+        );
     }
-    let root = temp_root("gents-bash-read-only-ps");
-    let output = read_only_bash(&root, "ps", &["-o", "pid=", "-p", "1"]).await;
-    let meta = compact_exec_meta(&output);
-    assert_eq!(meta["sandbox"], "policy_read_only", "{output}");
-    assert_eq!(meta["exit_code"].as_i64(), Some(0), "{output}");
 }
 
 fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
