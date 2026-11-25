@@ -238,24 +238,21 @@ async fn a_goal_that_reaches_its_budget_gets_one_wrapup_turn_then_pauses() {
     runtime.shutdown().await;
 }
 
+/// The same `update_goal` call with nothing to change: the Goal handler
+/// refuses it with the same answer every time, so the turn repeats its
+/// previous turn in name, arguments and result.
 fn repeated_call(marker: &str, id: &str) -> StreamResponse {
     StreamResponse::streams(
         marker,
-        vec![StreamChunk::tool_call(
-            id,
-            "list_processes",
-            "{}".to_owned(),
-        )],
+        vec![StreamChunk::tool_call(id, "update_goal", "{}".to_owned())],
     )
 }
 
-/// One goal turn that makes the same `list_processes` call, then ends. The
-/// plans below match their marker anywhere in the request: a turn's follow-up
-/// call after a tool result carries the objective only in its history.
+/// One goal turn that makes the same refused `update_goal` call, then ends.
 fn repeated_turn(marker: &str, turn: usize) -> [StreamResponse; 2] {
     [
         repeated_call(marker, &format!("repeat-{turn}")),
-        StreamResponse::completes(marker, ["Checked the processes again."]),
+        StreamResponse::completes(marker, ["Checked the goal again."]),
     ]
 }
 
@@ -297,11 +294,11 @@ async fn a_goal_that_repeats_the_same_call_is_paused_for_no_progress() {
             .collect(),
     );
     let Booted {
+        backend: _backend,
         actors,
         runtime,
         session,
         _db,
-        ..
     } = boot("goal-no-progress", plan).await;
     seed_goal_from_access(
         &actors.agent_access,
@@ -379,11 +376,11 @@ async fn confirm_once_pauses_on_the_second_blocked_report() {
         ],
     );
     let Booted {
+        backend: _backend,
         actors,
         runtime,
         session,
         _db,
-        ..
     } = boot("goal-confirm-once", plan).await;
     seed_goal_from_access(
         &actors.agent_access,
@@ -439,11 +436,11 @@ async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
             .collect(),
     );
     let Booted {
+        backend: _backend,
         actors,
         runtime,
         session,
         _db,
-        ..
     } = boot("goal-keep-trying", plan).await;
     seed_goal_from_access(
         &actors.agent_access,
@@ -488,11 +485,11 @@ async fn the_working_agent_cannot_loosen_its_goal_policy() {
     const MARKER: &str = "audit-ledger-goal";
     let plan = StreamPlan::current_authored_user(MARKER, vec![]);
     let Booted {
+        backend: _backend,
         actors,
         runtime,
         session,
         _db,
-        ..
     } = boot("goal-policy-access", plan).await;
     seed_goal_from_access(
         &actors.agent_access,
