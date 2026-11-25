@@ -8,9 +8,9 @@ use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
+    builder_actors, fixture_agent, runtime_builder, submit_request,
 };
-use crate::support::interrupt::BootedAgent;
+use crate::support::interrupt::{spawn_runtime, BootedAgent};
 use crate::support::live_inference::{request_lifecycle, request_terminal_rows};
 use crate::support::{trial_store, ManagedAgentFixture};
 use gents_inference::test_support::scripted_backend::{

@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
+    builder_actors, fixture_agent, runtime_builder, submit_request,
 };
 use crate::support::interrupt::{
-    wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
+    spawn_runtime, wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
 };
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{

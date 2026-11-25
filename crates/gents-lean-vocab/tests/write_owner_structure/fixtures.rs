@@ -30,7 +30,6 @@ const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
     ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
     ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
     ("node_builder", 3, "raw-node builders in gents-store, gents-host and gents-desktop-bridge; callers move to TestStore"),
-    ("spawn_runtime", 2, "two root copies of the runtime boot; they move to the running-runtime fixture"),
     ("test_identity", 7, "key-file identities written per crate; callers move to gents_store::test_support::test_identity"),
 ];
 

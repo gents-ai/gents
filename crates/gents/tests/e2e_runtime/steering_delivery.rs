@@ -18,11 +18,9 @@ use tokio::sync::Notify;
 use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
-use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime,
-};
+use crate::support::builder_runtime::{builder_actors, fixture_agent, runtime_builder};
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::{spawn_runtime, wait_for_runtime_ready, BootedAgent};
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,

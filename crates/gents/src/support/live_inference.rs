@@ -156,10 +156,7 @@ pub async fn boot_live_agent_with_options(
     options: DocumentRuntimeOptions,
 ) -> Result<(BootedAgent, Gents)> {
     let (running, agent) = gents::runtime::embedded::boot_runtime(db, identity, options).await?;
-    Ok((
-        BootedAgent::new(running.shutdown, running.handle, running.node_did),
-        agent,
-    ))
+    Ok((BootedAgent::from_running(running), agent))
 }
 
 fn is_terminal(state: &str) -> bool {

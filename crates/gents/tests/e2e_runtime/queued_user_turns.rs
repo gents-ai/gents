@@ -7,9 +7,8 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::submit_user_request;
-use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime,
-};
+use crate::support::builder_runtime::{builder_actors, fixture_agent, runtime_builder};
+use crate::support::interrupt::spawn_runtime;
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
