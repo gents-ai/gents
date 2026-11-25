@@ -33,6 +33,7 @@ pub struct AgentCreateRequest {
     pub system_prompt: String,
     pub inference_profile_id: String,
     pub clone_from: Option<String>,
+    pub context_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,14 +131,32 @@ pub fn decide_agent_operation(
                 AgentOperationError::ProfileNotPublished,
             )?;
             let source = input.clone_from.as_deref().unwrap_or("");
-            admit(
-                !source.is_empty() || !input.system_prompt.trim().is_empty(),
-                AgentOperationError::SystemPromptRequired,
-            )?;
-            admit(
-                source.is_empty() || view.agents.get(source) == Some(&true),
-                AgentOperationError::CloneSourceNotEnabled,
-            )?;
+            match input.context_id.as_deref() {
+                Some(context_id) => {
+                    admit(
+                        source.is_empty(),
+                        AgentOperationError::CloneContextIdRefused,
+                    )?;
+                    admit(
+                        !context_id.trim().is_empty(),
+                        AgentOperationError::ContextIdBlank,
+                    )?;
+                    admit(
+                        input.system_prompt.trim().is_empty(),
+                        AgentOperationError::CreateContextIdConflicts,
+                    )?;
+                }
+                None => {
+                    admit(
+                        !source.is_empty() || !input.system_prompt.trim().is_empty(),
+                        AgentOperationError::SystemPromptRequired,
+                    )?;
+                    admit(
+                        source.is_empty() || view.agents.get(source) == Some(&true),
+                        AgentOperationError::CloneSourceNotEnabled,
+                    )?;
+                }
+            }
         }
         (_, Some(patch)) => {
             admit(

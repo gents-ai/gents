@@ -49,15 +49,22 @@ structure AgentCreateInput where
   systemPrompt : String
   profile : String
   cloneFrom : String := ""
+  contextId : Option String := none
   deriving DecidableEq, Repr
 
 /-- No implicit profile exists: create names a nonblank published inference
-profile. A fresh agent needs a prompt; a clone needs an enabled source. -/
+profile. A fresh agent needs a prompt; a clone needs an enabled source and
+takes no existing context; creating on an existing context names a nonblank
+context ID and carries no fresh prompt (binding a Context does not mutate it). -/
 def agentCreateInputOk (profiles : List String) (c : AgentCatalog)
     (i : AgentCreateInput) : Bool :=
   i.name != "" && i.profile.trim != "" && profiles.contains i.profile
-    && (i.cloneFrom != "" || i.systemPrompt.trim != "")
-    && (i.cloneFrom == "" || c.enabled i.cloneFrom)
+    && match i.contextId with
+       | none =>
+         (i.cloneFrom != "" || i.systemPrompt.trim != "")
+           && (i.cloneFrom == "" || c.enabled i.cloneFrom)
+       | some cid =>
+         i.cloneFrom == "" && cid.trim != "" && i.systemPrompt.trim == ""
 
 theorem blank_create_profile_rejected (profiles : List String) (c : AgentCatalog)
     (i : AgentCreateInput) (h : i.profile.trim = "") :
@@ -70,15 +77,34 @@ theorem unpublished_create_profile_rejected (profiles : List String) (c : AgentC
   simp [agentCreateInputOk, h]
 
 theorem fresh_create_requires_prompt (profiles : List String) (c : AgentCatalog)
-    (i : AgentCreateInput) (hfresh : i.cloneFrom = "") (h : i.systemPrompt.trim = "") :
+    (i : AgentCreateInput) (hfresh : i.cloneFrom = "") (hctx : i.contextId = none)
+    (h : i.systemPrompt.trim = "") :
     agentCreateInputOk profiles c i = false := by
-  simp [agentCreateInputOk, hfresh, h]
+  simp [agentCreateInputOk, hfresh, hctx, h]
 
 theorem clone_requires_enabled_source (profiles : List String) (c : AgentCatalog)
     (i : AgentCreateInput) (hclone : i.cloneFrom ≠ "")
     (h : c.enabled i.cloneFrom = false) :
     agentCreateInputOk profiles c i = false := by
-  simp [agentCreateInputOk, hclone, h]
+  cases hctx : i.contextId <;> simp [agentCreateInputOk, hclone, h, hctx]
+
+theorem existing_context_requires_nonblank_id (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (cid : String) (hctx : i.contextId = some cid)
+    (hblank : cid.trim = "") :
+    agentCreateInputOk profiles c i = false := by
+  simp [agentCreateInputOk, hctx, hblank]
+
+theorem existing_context_rejects_clone (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (cid : String) (hctx : i.contextId = some cid)
+    (hclone : i.cloneFrom ≠ "") :
+    agentCreateInputOk profiles c i = false := by
+  simp [agentCreateInputOk, hctx, hclone]
+
+theorem existing_context_rejects_prompt (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (cid : String) (hctx : i.contextId = some cid)
+    (hprompt : i.systemPrompt.trim ≠ "") :
+    agentCreateInputOk profiles c i = false := by
+  simp [agentCreateInputOk, hctx, hprompt]
 
 def editNameOk : Option PatchOp → Bool
   | some (.set n) => n != ""

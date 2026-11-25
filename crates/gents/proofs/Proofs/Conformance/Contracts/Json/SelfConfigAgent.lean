@@ -33,6 +33,7 @@ structure CreateInputWire where
   systemPrompt : String
   inferenceProfileId : String
   cloneFrom : String
+  contextId : Option String := none
   deriving ToJson
 
 /-- `frontEnds` lists every front end: admission never reads it
@@ -78,7 +79,8 @@ def AgentDecisionInput.ofRow (r : AgentDecisionRow) : AgentDecisionInput :=
   , createInput := match r.request.operation with
       | .create i =>
           some { displayName := i.name, systemPrompt := i.systemPrompt
-                 inferenceProfileId := i.profile, cloneFrom := i.cloneFrom }
+                 inferenceProfileId := i.profile, cloneFrom := i.cloneFrom
+                 contextId := i.contextId }
       | _ => none
   , editPatch := match r.request.operation with
       | .edit f => some (editPatchOf f)
@@ -109,7 +111,8 @@ def AgentDecisionInput.request (i : AgentDecisionInput) : SelfConfig.AgentReques
   { operation := match i.operation, i.createInput, i.editPatch with
       | "create", some c, _ =>
           .create { name := c.displayName, systemPrompt := c.systemPrompt
-                    profile := c.inferenceProfileId, cloneFrom := c.cloneFrom }
+                    profile := c.inferenceProfileId, cloneFrom := c.cloneFrom
+                    contextId := c.contextId }
       | "edit", _, some entries => .edit (editFieldsOf entries)
       | _, _, _ => .disable
   , target := i.target
