@@ -336,11 +336,16 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
     .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let observer = Arc::new(SubscriptionObserver::default());
+    let (seed_failed_tx, mut seed_failed_rx) = watch::channel(0usize);
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
-        .with_runtime_observer(Some(observer.clone()));
+        .with_runtime_observer(Some(observer.clone()))
+        .with_seed_failure_signal(seed_failed_tx);
     let schema_node = node.clone();
     let install = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        seed_failed_rx
+            .wait_for(|&failures| failures >= 1)
+            .await
+            .unwrap();
         schema_node
             .add_collection("type DelayedSchemaInput { value: String }")
             .await
@@ -872,7 +877,8 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     assert_eq!(
         source.subscribed_collections(),
@@ -881,7 +887,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-1",
@@ -993,13 +999,14 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     });
     let snapshot = Arc::new(resolved.activate(1, RapidHashMap::new()));
     let (_tx, rx) = watch::channel(snapshot.clone());
-    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_write = node.clone();
     let owner_for_write = owner.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         for (invocation_id, binding_id) in [
             ("inv-other", "another-binding"),
             ("inv-wanted", "maintenance-execute-workspace"),
@@ -1719,12 +1726,13 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let other_mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-other",
@@ -1739,7 +1747,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             "create_WebhookEvent(other) failed: {:?}",
             resp.errors
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        listen_rx.wait_for(|&n| n >= 2).await.unwrap();
         let signup_mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-signup",
@@ -1813,12 +1821,13 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-hydrate",
@@ -1959,6 +1968,34 @@ async fn observed_trigger(node: &defra_node::Node, owner_did: &str, id: &str) ->
     rows[0].clone()
 }
 
+fn event_source_with_listen_signal(
+    rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    node: Arc<defra_node::Node>,
+    cancel: CancellationToken,
+) -> (EventSource, watch::Receiver<usize>) {
+    let (tx, listen_rx) = watch::channel(0usize);
+    let source = EventSource::new(rx, node, cancel).with_idle_listen_signal(tx);
+    (source, listen_rx)
+}
+
+async fn wait_for_trigger_status(
+    node: &defra_node::Node,
+    owner_did: &str,
+    id: &str,
+    status: &str,
+) -> serde_json::Value {
+    let what = format!("Trigger.last_status for {id} became {status}");
+    gents_store::test_support::read_when_changed(node, "Trigger", &what, async || {
+        let trigger = observed_trigger(node, owner_did, id).await;
+        if trigger["last_status"].as_str() == Some(status) {
+            Ok(trigger)
+        } else {
+            Err(trigger)
+        }
+    })
+    .await
+}
+
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let node_db = configured_event_node().await;
@@ -1990,12 +2027,13 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-fire",
@@ -2026,17 +2064,13 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         request_id: "req-0".to_string(),
     });
 
-    let mut fired_trigger = None;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig =
-            observed_trigger(node.as_ref(), node_db.node_identity.did(), "trigger-fired").await;
-        if trig["last_status"].as_str() == Some("fired") {
-            fired_trigger = Some(trig);
-            break;
-        }
-    }
-    let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
+    let fired = wait_for_trigger_status(
+        node.as_ref(),
+        node_db.node_identity.did(),
+        "trigger-fired",
+        "fired",
+    )
+    .await;
     assert_eq!(fired["last_status"].as_str(), Some("fired"));
     assert_eq!(fired["fire_count"].as_i64(), Some(1));
     assert_eq!(
@@ -2099,12 +2133,13 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-skip",
@@ -2136,21 +2171,13 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         reason: "serial: prior fire still in-flight".to_string(),
     });
 
-    let mut skipped_trigger = None;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(
-            node.as_ref(),
-            node_db.node_identity.did(),
-            "trigger-skip-err",
-        )
-        .await;
-        if trig["last_status"].as_str() == Some("skipped") {
-            skipped_trigger = Some(trig);
-            break;
-        }
-    }
-    let skipped = skipped_trigger.expect("Trigger.last_status never became \"skipped\"");
+    let skipped = wait_for_trigger_status(
+        node.as_ref(),
+        node_db.node_identity.did(),
+        "trigger-skip-err",
+        "skipped",
+    )
+    .await;
     assert_eq!(skipped["last_status"].as_str(), Some("skipped"));
     assert_eq!(skipped["fire_count"].as_i64(), Some(0));
     assert_eq!(
@@ -2176,21 +2203,13 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         },
     );
 
-    let mut errored_trigger = None;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(
-            node.as_ref(),
-            node_db.node_identity.did(),
-            "trigger-skip-err",
-        )
-        .await;
-        if trig["last_status"].as_str() == Some("error") {
-            errored_trigger = Some(trig);
-            break;
-        }
-    }
-    let errored = errored_trigger.expect("Trigger.last_status never became \"error\"");
+    let errored = wait_for_trigger_status(
+        node.as_ref(),
+        node_db.node_identity.did(),
+        "trigger-skip-err",
+        "error",
+    )
+    .await;
     assert_eq!(errored["last_status"].as_str(), Some("error"));
     assert_eq!(errored["fire_count"].as_i64(), Some(0));
     assert_eq!(
@@ -2311,11 +2330,12 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
     .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    let (mut source, mut listen_rx) =
+        event_source_with_listen_signal(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        listen_rx.wait_for(|&n| n >= 1).await.unwrap();
         let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-missfirst",

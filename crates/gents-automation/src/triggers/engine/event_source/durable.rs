@@ -388,6 +388,7 @@ impl EventSource {
                 owner.clone(),
                 trigger.trigger_id.clone(),
                 doc_id.to_string(),
+                &self.unacknowledged_cleanup,
             );
             intent.on_result = Box::new(move |result| {
                 unacknowledged.acknowledge();

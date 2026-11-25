@@ -64,7 +64,7 @@ const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents", 53, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-automation", 21, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-automation", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-client-host", 29, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-desktop-bridge", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
