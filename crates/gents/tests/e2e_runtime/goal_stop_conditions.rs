@@ -263,17 +263,24 @@ fn last_failure_when_paused(goal: &serde_json::Value) -> bool {
     goal["status"] == "paused"
 }
 
+/// The Goal, with the session's goal requests and their tool calls: what a
+/// failed assertion shows.
 async fn goal_failure(actors: &RequestActors, session: &str) -> serde_json::Value {
     let session = escape_graphql_string(session);
     let data = actors
         .fixture
         .access
         .execute(&format!(
-            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ status last_failure blocked_reason }} }}"#
+            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ status last_failure blocked_reason progress_record }}
+                AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id lifecycle_state failure_reason }}
+                AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id tool_name lifecycle_state terminal_output }} }}"#
         ))
         .await
         .unwrap();
-    data["data"]["Goal"][0].clone()
+    let mut goal = data["data"]["Goal"][0].clone();
+    goal["requests"] = data["data"]["AgentRequest"].clone();
+    goal["tool_calls"] = data["data"]["AgentToolCall"].clone();
+    goal
 }
 
 /// A model that never reports blocked and repeats the same tool call with the
@@ -313,7 +320,7 @@ async fn a_goal_that_repeats_the_same_call_is_paused_for_no_progress() {
     })
     .await;
     let goal = goal_failure(&actors, &session).await;
-    assert_eq!(goal["last_failure"], "no_progress");
+    assert_eq!(goal["last_failure"], "no_progress", "{goal:#}");
     assert!(
         (limit..=limit + 1).contains(&continuations.len()),
         "paused after {} continuations, limit {limit}",
@@ -400,9 +407,11 @@ async fn confirm_once_pauses_on_the_second_blocked_report() {
     resume(&actors, &session).await;
 
     let (goal, continuations) = goal_when(&actors, &session, |goal, requests| {
-        goal["status"] == "blocked" && all_terminal(requests)
+        (goal["status"] == "blocked" || goal["status"] == "paused") && all_terminal(requests)
     })
     .await;
+    let shown = goal_failure(&actors, &session).await;
+    assert_eq!(goal["status"], "blocked", "{shown:#}");
     assert_eq!(goal["blocked_reason"], "The printer is still offline.");
     assert_eq!(
         continuations.len(),
@@ -462,7 +471,7 @@ async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
     })
     .await;
     let goal = goal_failure(&actors, &session).await;
-    assert_eq!(goal["last_failure"], "no_progress");
+    assert_eq!(goal["last_failure"], "no_progress", "{goal:#}");
     assert_eq!(goal["blocked_reason"], "I need the mail key.");
     assert!(
         continuations.len() > 1,
