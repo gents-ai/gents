@@ -14,6 +14,7 @@ A task that writes to the collection that fires it can loop until the node goes 
 
 - **New session per fire**: the default, for fires that stand alone.
 - **One continuing session per key**, for memory: set `session_id_template` to a key such as `game:{{ doc.game_id }}:red`, with `create_session: true`. The first fire creates it.
+- To post into an existing conversation, set `session_id_template` to its session id.
 - Concurrency: `parallel` (default), `queued_serial` runs in order, `serial` skips while busy, `latest_only` supersedes. A periodic refresh wants `serial`; one session per key wants `queued_serial`.
 - A trigger disables itself at `max_fires_per_hour` and says why in its last error.
 

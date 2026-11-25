@@ -92,9 +92,9 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
         .expect("content must be present")
         .to_string();
     assert!(
-        content.starts_with("kind=manual id=none fired="),
+        content.starts_with("kind=manual id= fired="),
         "the manual event scope must expose trigger_kind=manual and a null \
-         trigger_id (rendered by minijinja as \"none\"), got: {content:?}"
+         trigger_id (rendered empty), got: {content:?}"
     );
     assert!(
         content.contains(&format!("node={}", db.node_identity.did())),
