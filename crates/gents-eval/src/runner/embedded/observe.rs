@@ -1006,26 +1006,8 @@ mod tests {
 
     #[tokio::test]
     async fn await_terminal_without_a_deadline_waits_for_the_request_change() {
-        struct SubscribedHook {
-            ready: tokio::sync::Notify,
-            notified: std::sync::atomic::AtomicBool,
-        }
-        #[async_trait::async_trait]
-        impl ObservationHook for SubscribedHook {
-            async fn on_state(&self, _state: &str, _session_id: Option<&str>) {
-                if !self
-                    .notified
-                    .swap(true, std::sync::atomic::Ordering::SeqCst)
-                {
-                    self.ready.notify_one();
-                }
-            }
-        }
         let home = EmbeddedHome::create_temp("observe-change").await.unwrap();
-        let hook = SubscribedHook {
-            ready: tokio::sync::Notify::new(),
-            notified: std::sync::atomic::AtomicBool::new(false),
-        };
+        let hook = crate::test_support::SubscribedObservationHook::new();
         let access = ConfigAccess::local(home.node.clone());
         let writer = async {
             hook.ready.notified().await;
