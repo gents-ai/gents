@@ -16,15 +16,12 @@ pub mod canonical_reads;
 pub mod commit_race_proxy;
 
 pub mod fixtures;
-pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod live_inference;
-pub mod mock_subscription;
 pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
-pub mod waits;
 
 /// A test's `#[tokio::test]` runtime is its entry point; constructors take
 /// that runtime's handle from here.
@@ -46,7 +43,7 @@ pub fn materialization_identity() -> Arc<dyn NodeIdentity> {
 }
 
 pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
-    identity_stubs::SigningStubNodeIdentity::arc(did)
+    crate::test_support::identity::SigningStubNodeIdentity::arc(did)
 }
 
 /// Installs a test-writer subscriber when `RUST_LOG` names a filter, so owner
@@ -58,20 +55,6 @@ pub fn init_test_tracing() {
             .with_test_writer()
             .try_init();
     }
-}
-
-pub async fn managed_agent(db: &TestStore) -> Arc<dyn NodeIdentity> {
-    managed_agent_with_binding(db).await.0
-}
-
-pub async fn managed_agent_with_binding(
-    db: &TestStore,
-) -> (
-    Arc<dyn NodeIdentity>,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    let fixture = managed_agent_fixture(db).await;
-    (fixture.agent, fixture.binding)
 }
 
 pub struct ManagedAgentFixture {
@@ -181,76 +164,14 @@ pub async fn install_managed_agent(
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let runtime = db.node_identity.as_ref();
-    let user_did = identity::Did::new(user.did()).expect("valid user DID");
-    let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
-            .await
-            .expect("provision managed test Agent");
-    let agent = gents_store::identity::resolve_agent_identity(runtime, &binding)
-        .expect("resolve managed test Agent");
-    let document = serde_json::json!({
-        "node_did": runtime.did(),
-        "agent_did": binding.agent_did,
-        "creation_nonce": binding.creation_nonce,
-        "display_name": display_name,
-        "inference_profile_id": format!("{}:inference", binding.agent_did),
-        "enabled": true,
-    });
-    let backend_id = format!("{}:backend", binding.agent_did);
-    let profile_id = format!("{}:inference", binding.agent_did);
-    let backend = serde_json::json!({
-        "node_did": runtime.did(),
-        "backend_id": backend_id,
-        "name": "Test inference",
-        "provider_kind": "OpenAiCompatible",
-        "endpoint": "http://127.0.0.1:1/v1",
-        "auth": {"kind": "unauthenticated"},
-    });
-    let profile = serde_json::json!({
-        "node_did": runtime.did(),
-        "profile_id": profile_id,
-        "backend_id": backend_id,
-        "model_name": "test-model",
-    });
-    let agent_plan = DesiredStateApplyPlan::new(
-        [
-            (
-                gents_store::collection::Collection::InferenceBackend,
-                backend,
-            ),
-            (
-                gents_store::collection::Collection::InferenceProfile,
-                profile,
-            ),
-            (gents_store::collection::Collection::Agent, document),
-        ]
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect(),
+    gents_documents::test_support::create_agent_on(
+        db,
+        user,
+        access,
+        display_name,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
-    .expect("render test Agent");
-    access
-        .transact_write("test.managed_agent", |txn| {
-            let plan = &agent_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install managed test Agent as user");
-    (agent, binding)
+    .await
 }
 
 /// A [`TestStore`](gents_store::test_support::TestStore) projecting what a

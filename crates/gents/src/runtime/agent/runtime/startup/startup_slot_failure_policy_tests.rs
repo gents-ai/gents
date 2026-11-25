@@ -1,28 +1,11 @@
 use super::*;
 use crate::runtime::agent::reconcile::SlotFailurePolicy as _;
 use crate::runtime::agent::ProcessLifecycleState;
-use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use crate::runtime::node_readiness_publisher::FatalNodeReadinessWrite;
+use crate::test_support::readiness::DemotionReadinessWriter;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
-
-struct DemotionWriter {
-    durable: bool,
-}
-#[async_trait::async_trait]
-impl NodeReadinessWriter for DemotionWriter {
-    async fn upsert(
-        &self,
-        _: &str,
-        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _: &str,
-    ) -> Result<()> {
-        if !self.durable && snapshot.agents.iter().any(|entry| entry.reason == Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::ExecutorStartFailed)) {
-            return Err(FatalNodeReadinessWrite.into());
-        }
-        Ok(())
-    }
-}
 
 #[tokio::test]
 async fn generated_startup_demotions_release_only_durable_current_obligations() {
@@ -36,7 +19,7 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
         let (status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
             db.node.clone(),
             "did:test:startup-demote",
-            Arc::new(DemotionWriter {
+            Arc::new(DemotionReadinessWriter {
                 durable: case.input.durable,
             }),
             std::time::Duration::from_millis(1),

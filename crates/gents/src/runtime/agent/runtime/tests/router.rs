@@ -2,38 +2,10 @@ use super::support::*;
 use super::*;
 use crate::runtime::agent::runtime::router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
-use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use crate::test_support::readiness::RejectRouterGenerationWriter;
+use crate::test_support::runtime::ScriptedWatcher;
 use gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileInput;
 use rapidhash::{HashMapExt, RapidHashMap};
-
-struct CountingWatcher {
-    rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl gents_session::request::watcher::Watcher for CountingWatcher {
-    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.rx.recv().await
-    }
-}
-
-struct RejectRouterGenerationWriter;
-
-#[async_trait::async_trait]
-impl NodeReadinessWriter for RejectRouterGenerationWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        if snapshot.router_generation > 0 {
-            return Err(FatalNodeReadinessWrite.into());
-        }
-        Ok(())
-    }
-}
 
 fn routed_snapshot(
     generation: u64,
@@ -222,7 +194,7 @@ async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
         super::super::router::run_router_with_watcher(RouterInputs {
             node: router_node,
             node_did: router_node_did,
-            watcher: ScriptedWatcher { rx: request_rx },
+            watcher: ScriptedWatcher::new(request_rx),
             active_snapshot_rx: active_rx,
             shutdown: shutdown_rx,
             admission_gate: gate,
@@ -339,7 +311,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
         super::super::router::run_router_with_watcher(RouterInputs {
             node: router_node,
             node_did: router_node_did,
-            watcher: ScriptedWatcher { rx: request_rx },
+            watcher: ScriptedWatcher::new(request_rx),
             active_snapshot_rx: active_rx,
             shutdown: shutdown_rx,
             admission_gate: gate_for_router,
@@ -439,7 +411,7 @@ async fn blocked_dispatch_follows_the_lean_model() {
             super::super::router::run_router_with_watcher(RouterInputs {
                 node: router_node,
                 node_did: router_node_did,
-                watcher: ScriptedWatcher { rx: request_rx },
+                watcher: ScriptedWatcher::new(request_rx),
                 active_snapshot_rx: active_rx,
                 shutdown: shutdown_rx,
                 admission_gate: gate_for_router,
@@ -564,10 +536,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     let error = super::super::router::run_router_with_watcher(RouterInputs {
         node: node.clone(),
         node_did: node_did.to_string(),
-        watcher: CountingWatcher {
-            rx: request_rx,
-            calls: watcher_calls.clone(),
-        },
+        watcher: ScriptedWatcher::new(request_rx).with_calls(watcher_calls.clone()),
         active_snapshot_rx: active_rx,
         shutdown: shutdown_rx,
         admission_gate: gate.clone(),
@@ -633,7 +602,7 @@ async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) 
         watch::channel(router_snapshot(input.pre_router_generation, "general"));
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (watcher_tx, watcher_rx) = mpsc::channel(1);
-    let mut watcher = ScriptedWatcher { rx: watcher_rx };
+    let mut watcher = ScriptedWatcher::new(watcher_rx);
     let mut active_snapshot = active_rx.borrow().clone();
 
     let mut routed_request = request(Some("code"), "session-router");
@@ -772,7 +741,7 @@ async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) 
         .unwrap();
 
     let (_request_tx, request_rx) = mpsc::channel(1);
-    let mut watcher = ScriptedWatcher { rx: request_rx };
+    let mut watcher = ScriptedWatcher::new(request_rx);
     let mut active_snapshot = active_rx.borrow().clone();
     let runtime_status_for_router = runtime_status.clone();
     let mut readiness_rx = runtime_status.readiness().subscribe_observation();

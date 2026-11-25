@@ -616,20 +616,6 @@ pub(super) async fn wait_for_runtime_process_state(
     }
 }
 
-#[derive(Default)]
-pub(super) struct RecordingObserver {
-    pub(super) states: std::sync::Mutex<Vec<crate::runtime::agent::ProcessLifecycleState>>,
-}
-
-impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
-    fn on_process_state_change(&self, state: crate::runtime::agent::ProcessLifecycleState) {
-        self.states
-            .lock()
-            .expect("recording observer mutex poisoned")
-            .push(state);
-    }
-}
-
 pub(super) async fn update_backend_probe_status(
     node: &Arc<defra_node::Node>,
     node_did: &str,
@@ -646,14 +632,4 @@ pub(super) async fn update_backend_probe_status(
     )
     .await
     .unwrap();
-}
-
-pub(super) struct ScriptedWatcher {
-    pub(super) rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
-}
-
-impl Watcher for ScriptedWatcher {
-    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
-        self.rx.recv().await
-    }
 }

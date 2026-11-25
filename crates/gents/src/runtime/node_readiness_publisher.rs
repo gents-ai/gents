@@ -1118,48 +1118,13 @@ mod deep_history_tests;
 #[cfg(test)]
 mod candidate_conformance {
     use super::*;
+    use crate::test_support::readiness::CandidateCommitWriter;
     use gents_lean_vocab::families::runtime_readiness_persistence_commit_candidates as family;
-    use std::collections::VecDeque;
-
-    struct Writer {
-        results: std::sync::Mutex<VecDeque<String>>,
-        persisted: std::sync::Mutex<Vec<String>>,
-    }
-    #[async_trait::async_trait]
-    impl NodeReadinessWriter for Writer {
-        async fn upsert(&self, _: &str, snapshot: &NodeReadinessSnapshot, _: &str) -> Result<()> {
-            let result = self
-                .results
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("modeled write outcome");
-            match result.as_str() {
-                "ok" => {
-                    self.persisted.lock().unwrap().push(
-                        serde_json::to_value(snapshot.process_state)
-                            .unwrap()
-                            .as_str()
-                            .unwrap()
-                            .into(),
-                    );
-                    Ok(())
-                }
-                "full" => Err(gents_protocol::database_error::StorageFull.into()),
-                "timeout" => std::future::pending().await,
-                "fail" => anyhow::bail!("injected write failure"),
-                other => panic!("unmodeled write result {other}"),
-            }
-        }
-    }
 
     #[tokio::test(start_paused = true)]
     async fn generated_readiness_commits_keep_failed_candidates_unpublished() {
         for case in family::cases() {
-            let writer = Arc::new(Writer {
-                results: Default::default(),
-                persisted: Default::default(),
-            });
+            let writer = Arc::new(CandidateCommitWriter::default());
             let erased: Arc<dyn NodeReadinessWriter> = writer.clone();
             let mut state = PublisherState {
                 node_did: "did:test:node".into(),

@@ -1,34 +1,5 @@
+use crate::test_support::tools::PendingTool;
 use gents_store::identity::NodeIdentity;
-
-struct PendingTool;
-
-impl gents_loop::tool::ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "slow_tool".into()
-    }
-    fn definition<'a>(
-        &'a self,
-        _prompt: String,
-    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
-        Box::pin(async {
-            gents_loop::tool::ToolDefinition {
-                name: "slow_tool".into(),
-                description: "test tool".into(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
 
 async fn publish_hook_action(
     hook: &gents_toolcalls::call::hook::DefraSessionHook,
@@ -166,7 +137,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     .unwrap();
     origin.begin_owned_execution(&writer).await.unwrap();
     let registry = gents_toolcalls::call::hook::BackgroundToolRegistry::from_tools(
-        vec![Box::new(PendingTool)],
+        vec![Box::new(PendingTool::new("slow_tool", "test tool"))],
         &["slow_tool".into()],
     );
     let hook = gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(

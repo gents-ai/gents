@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
-use gents_store::subscription_source::UpdateSubscriptionSource;
+use gents_store::subscription_source::{ChangeSubscription, UpdateSubscriptionSource};
 use tokio::sync::Notify;
 
 #[derive(Clone)]
@@ -70,10 +70,7 @@ impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
         subscription
     }
 
-    fn subscribe_changes(
-        &self,
-        collection_ids: Vec<String>,
-    ) -> gents_store::subscription_source::ChangeSubscription {
+    fn subscribe_changes(&self, collection_ids: Vec<String>) -> ChangeSubscription {
         let subscription = self.bus.subscribe_collection_changes(collection_ids);
         self.subscriber_count.fetch_add(1, Ordering::SeqCst);
         self.subscriber_notify.notify_waiters();

@@ -163,32 +163,6 @@ async fn pack_installation_access(
     )
 }
 
-struct UnmanagedSigner(Arc<dyn NodeIdentity>);
-
-#[async_trait::async_trait]
-impl NodeIdentity for UnmanagedSigner {
-    fn did(&self) -> &str {
-        self.0.did()
-    }
-    async fn sign(
-        &self,
-        payload: &[u8],
-    ) -> std::result::Result<Vec<u8>, gents_store::identity::IdentityError> {
-        self.0.sign(payload).await
-    }
-    async fn verify(
-        &self,
-        did: &str,
-        payload: &[u8],
-        signature: &[u8],
-    ) -> std::result::Result<bool, gents_store::identity::IdentityError> {
-        self.0.verify(did, payload, signature).await
-    }
-    fn service_account(&self) -> Option<&gents_store::identity::ServiceAccount> {
-        self.0.service_account()
-    }
-}
-
 async fn user_signed_node(
     endpoint: &GraphqlEndpoint,
     runtime_did: &str,
@@ -503,7 +477,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert_eq!(selected["is_default"], true);
     let other_runtime = KeyIdentity::load_or_create(home.path().join("other-runtime"), None)?;
     let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
-    let unmanaged = UnmanagedSigner(signer.clone());
+    let unmanaged = crate::test_support::identity::UnmanagedSigner(signer.clone());
     let cases = tokio::task::spawn_blocking(|| {
         gents_lean_vocab::families::node_provisioning_agent_creator::cases()
     })

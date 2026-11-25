@@ -674,7 +674,7 @@ mod tests {
         crate::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &step.job.node,
             node_did(),
-            &[crate::background::job::input::tests::managed_agent().clone()],
+            &[crate::background::job::input::tests::agent_identity().clone()],
             &registry,
             &gents_session::session::message::NoSessionMessageGoals,
         )
