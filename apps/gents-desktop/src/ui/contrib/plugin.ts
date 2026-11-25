@@ -92,6 +92,10 @@ export interface UxNotifyCaller extends UxCaller {
     binds, so a plugin never names its own sender */
 export type UxHostShell = Omit<UxShell, "send"> & {
   send: (content: string, caller: UxCaller) => Promise<void>;
+  /** the nodes this desktop keeps (its saved runtimes), or null before they
+      are read. A page's watches on a node no longer kept are closed even
+      while no node is selected. Absent: no node is ever taken as gone. */
+  knownNodes?: () => readonly string[] | null;
 };
 
 export interface UxHost {

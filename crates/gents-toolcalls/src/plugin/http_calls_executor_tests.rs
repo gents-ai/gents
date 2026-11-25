@@ -144,7 +144,8 @@ impl gents_pack::plugin::model_binding::ModelResolver for Endpoint {
                 api_key: None,
                 model: "m".into(),
                 max_concurrent: 1,
-                limiter: Arc::new(tokio::sync::Semaphore::new(1)),
+                admission: gents_inference::admission::BackendCallPools::default()
+                    .for_backend("node", "backend", 1, 0),
                 connect_timeout: Duration::from_secs(1),
                 request_timeout: Duration::from_secs(1),
                 max_output_tokens: None,

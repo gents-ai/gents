@@ -6,6 +6,7 @@ type Skill @policy(id: "$household", resource: "configuration") @index(fields: [
     instructions: String
     source_directory: String
     tool_refs: [String!]
+    covers: [String!]
     display_name: String
     interface_json: String
     enabled: Boolean @index

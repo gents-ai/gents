@@ -399,6 +399,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             runtime_identity: Some(runtime.clone()),
             plugins: Arc::<gents_toolcalls::plugin::executor::PluginExecutor>::default(),
             tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            skill_pointers: Arc::default(),
         },
         &tool_config,
         Some(node_binding),

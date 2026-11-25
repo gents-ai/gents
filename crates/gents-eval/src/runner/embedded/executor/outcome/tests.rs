@@ -53,7 +53,8 @@ fn an_observation_that_failed_is_infrastructure() {
         stage_outcome(
             false,
             Some(OutcomeKind::Infrastructure),
-            stated_provider_reason(&evidence).map(|stated| stated.reason)
+            stated_provider_reason(&evidence).map(|stated| stated.reason),
+            Some(&[])
         ),
         Some((OutcomeKind::Infrastructure, None))
     );
@@ -105,7 +106,8 @@ fn a_lease_failure_uses_the_existing_infrastructure_outcome() {
         stage_outcome(
             false,
             outcome,
-            stated_provider_reason(&evidence).map(|stated| stated.reason)
+            stated_provider_reason(&evidence).map(|stated| stated.reason),
+            Some(&[])
         ),
         Some((expected, None))
     );
@@ -147,20 +149,26 @@ fn a_deadline_without_terminal_evidence_keeps_its_deadline_outcome() {
     }
 }
 
+async fn fires(
+    home: &EmbeddedHome,
+    node_did: &str,
+    since: &str,
+    source: Option<&str>,
+) -> FailedFires {
+    failed_fires(&home.node, node_did, since, source)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
-async fn an_errored_trigger_fails_a_completed_stage_as_runtime() {
+async fn failed_fires_reads_this_nodes_failed_triggers_with_their_errors() {
     let home = EmbeddedHome::create_temp("trigger-error").await.unwrap();
     let since = "2026-06-01T00:00:00Z";
-    assert_eq!(
-        trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
-        None
-    );
+    assert_eq!(fires(&home, home.did(), since, None).await.failures, []);
 
     seed_trigger(&home, "healthy", "fired", None, since).await;
-    assert_eq!(
-        trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
-        None
-    );
+    let healthy = fires(&home, home.did(), since, None).await;
+    assert_eq!((healthy.failures, healthy.detail), (vec![], None));
 
     seed_trigger(
         &home,
@@ -170,21 +178,18 @@ async fn an_errored_trigger_fails_a_completed_stage_as_runtime() {
         since,
     )
     .await;
+    let broken = fires(&home, home.did(), since, None).await;
+    assert_eq!(broken.failures, [FireFailure::Error]);
     assert_eq!(
-        trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
-        Some(OutcomeKind::Runtime)
+        broken.detail.as_deref(),
+        Some("trigger broken error: template did not render"),
+        "the verdict carries the trigger's own recorded error"
     );
     assert_eq!(
-        trigger_failure(
-            &home.node,
-            "did:key:zSomeoneElse",
-            since,
-            None,
-            "t1",
-            "only"
-        )
-        .await,
-        None,
+        fires(&home, "did:key:zSomeoneElse", since, None)
+            .await
+            .failures,
+        [],
         "another node's trigger is not this trial's"
     );
     home.node.shutdown().await.expect("shutdown node");
@@ -235,8 +240,8 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         .unwrap();
     }
     assert_eq!(
-        trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
-        None,
+        fires(&home, home.did(), since, Some(source)).await.failures,
+        [],
         "another document's fire, and one attempted before the stage, is not this stage's"
     );
     gents_automation::test_support::update_trigger_runtime_fields(
@@ -250,87 +255,33 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
     )
     .await
     .unwrap();
-    assert_failure_class(
-        trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
-        OutcomeKind::Runtime,
-        crate::EvidenceClass::Fail,
+    assert_eq!(
+        fires(&home, home.did(), since, Some(source)).await.failures,
+        [FireFailure::Error]
     );
     home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
-async fn an_unreadable_seed_trigger_status_is_infrastructure() {
+async fn an_unreadable_trigger_status_is_an_error() {
     let node = EmbeddedNode::builder().build().await.unwrap();
-    let failure = trigger_failure(
-        &node,
-        "did:key:trial",
-        "2026-06-01T00:00:00Z",
-        Some("seed"),
-        "t1",
-        "seed",
-    )
-    .await;
+    let read = failed_fires(&node, "did:key:trial", "2026-06-01T00:00:00Z", Some("seed")).await;
     node.shutdown().await.expect("shutdown node");
-    assert_failure_class(
-        failure,
-        OutcomeKind::Infrastructure,
-        crate::EvidenceClass::NotEvidence,
-    );
+    assert!(read.is_err(), "{read:?}");
 }
 
 #[tokio::test]
-async fn a_seed_unacknowledged_trigger_is_infrastructure() {
+async fn an_unacknowledged_fire_reads_as_the_runtime_losing_it() {
     let home = EmbeddedHome::create_temp("seed-trigger-unacknowledged")
-        .await
-        .unwrap();
-    let since = "2026-06-01T00:00:00Z";
-    let source = "seed-current";
-    seed_trigger(
-        &home,
-        "unacknowledged",
-        gents_automation::triggers::UNACKNOWLEDGED_STATUS,
-        Some("acknowledgment channel closed"),
-        since,
-    )
-    .await;
-    gents_automation::test_support::update_trigger_runtime_fields(
-        &home.node,
-        home.did(),
-        "unacknowledged",
-        gents_automation::test_support::TriggerRuntimeUpdate {
-            last_fired_source_doc_id: Some(source.into()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_failure_class(
-        trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
-        OutcomeKind::Infrastructure,
-        crate::EvidenceClass::NotEvidence,
-    );
-    home.node.shutdown().await.expect("shutdown node");
-}
-
-#[tokio::test]
-async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
-    let home = EmbeddedHome::create_temp("seed-trigger-precedence")
         .await
         .unwrap();
     let since = "2026-06-01T00:00:00Z";
     let source = "seed-current";
     for (trigger_id, status) in [
         ("lost", gents_automation::triggers::UNACKNOWLEDGED_STATUS),
-        ("caused", "error"),
+        ("spent", gents_documents::BUDGET_EXHAUSTED_STATUS),
     ] {
-        seed_trigger(
-            &home,
-            trigger_id,
-            status,
-            Some("recorded alongside the other"),
-            since,
-        )
-        .await;
+        seed_trigger(&home, trigger_id, status, Some("recorded"), since).await;
         gents_automation::test_support::update_trigger_runtime_fields(
             &home.node,
             home.did(),
@@ -343,46 +294,46 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
         .await
         .unwrap();
     }
-    assert_failure_class(
-        trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
-        OutcomeKind::Runtime,
-        crate::EvidenceClass::Fail,
+    let mut failures = fires(&home, home.did(), since, Some(source)).await.failures;
+    failures.sort_by_key(|failure| format!("{failure:?}"));
+    assert_eq!(
+        failures,
+        [FireFailure::BudgetExhausted, FireFailure::Unacknowledged]
     );
     home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
-async fn a_trigger_error_from_before_the_stage_does_not_fail_it() {
+async fn a_trigger_error_from_before_the_stage_is_not_read() {
     let home = EmbeddedHome::create_temp("trigger-stale").await.unwrap();
     seed_trigger(&home, "stale", "error", Some("old"), "2026-01-01T00:00:00Z").await;
-
     assert_eq!(
-        trigger_failure(
-            &home.node,
-            home.did(),
-            "2026-06-01T00:00:00Z",
-            None,
-            "t1",
-            "only"
-        )
-        .await,
-        None
+        fires(&home, home.did(), "2026-06-01T00:00:00Z", None)
+            .await
+            .failures,
+        []
     );
     home.node.shutdown().await.expect("shutdown node");
 }
 
 #[test]
 fn stage_outcomes_match_the_lean_model() {
-    gents_lean_vocab::families::eval_stage_outcome::replay::<OutcomeKind, ProviderReason>(
-        |input| {
-            stage_outcome(input.ended_by_backend, input.request, input.stated).map(
-                |(kind, provider_reason)| {
-                    gents_lean_vocab::families::eval_stage_outcome::StageFailure {
-                        kind,
-                        provider_reason,
-                    }
-                },
-            )
-        },
-    );
+    gents_lean_vocab::families::eval_stage_outcome::replay::<
+        FireFailure,
+        OutcomeKind,
+        ProviderReason,
+    >(|input| {
+        stage_outcome(
+            input.ended_by_backend,
+            input.request,
+            input.stated,
+            input.triggers_read.then_some(input.failures.as_slice()),
+        )
+        .map(|(kind, provider_reason)| {
+            gents_lean_vocab::families::eval_stage_outcome::StageFailure {
+                kind,
+                provider_reason,
+            }
+        })
+    });
 }

@@ -97,6 +97,7 @@ import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Tools.SchemaCollections
+import Proofs.Tools.SkillPointer
 import Proofs.P2P.Operations
 import Proofs.P2P.Enrollment.RouteFence
 import Proofs.Clients.ServiceLifecycle

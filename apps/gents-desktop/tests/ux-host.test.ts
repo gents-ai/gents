@@ -7,7 +7,7 @@ import { createMemoryTransport } from "@source-inc/gents-desktop-client/testing"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildUxHost } from "../src/ui/hooks/useUxHost";
-import { node, testApp } from "./app-fixture";
+import { node, publishSnapshot, testApp } from "./app-fixture";
 
 /* the transport under the client's adapter: every bridge command the host
    reaches lands here with the argument object Tauri would deserialize */
@@ -241,5 +241,30 @@ describe("buildUxHost: shell reads", () => {
     app.stores.selection.setState({ nodeDid: "did:key:b", sessionId: "s-9" });
     expect(host.shell.selectedDeployment()?.nodeDid).toBe("did:key:b");
     expect(host.shell.selectedSessionId()).toBe("s-9");
+  });
+
+  it("reads the kept nodes from the saved runtimes, and the shell changes when they do", () => {
+    const app = testApp();
+    const host = buildUxHost(app, route);
+    expect(host.shell.knownNodes?.()).toBeNull();
+    const changed = vi.fn();
+    host.onShellChange!(changed);
+    const keep = (nodeDids: string[], clientDid = "test-client") =>
+      publishSnapshot(app, {
+        bootstrap: {
+          savedRuntimes: nodeDids.map((nodeDid) => ({ nodeDid, label: nodeDid })),
+        },
+        client: { clientDid, deployments: [] },
+      } as never);
+    keep(["did:key:a", "did:key:b"]);
+    expect(host.shell.knownNodes?.()).toEqual(["did:key:a", "did:key:b"]);
+    changed.mockClear();
+    /* the fleet is published first, so the removal reaches the frames
+       only when the kept nodes change */
+    keep(["did:key:a"]);
+    expect(changed).toHaveBeenCalled();
+    changed.mockClear();
+    keep(["did:key:a"], "another-client");
+    expect(changed).not.toHaveBeenCalled();
   });
 });

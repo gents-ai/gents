@@ -23,7 +23,78 @@ use gents_store::agent_identity_watch::{
 use gents_store::identity::RuntimeNode;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolSurface};
 
-pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
+pub type DispatcherMap = RapidHashMap<String, AgentDispatcher>;
+
+/// An Agent's executor queues: one per worker level, where a request waits
+/// only for the workers of its own level (Lean `WorkerLevels.lane`), and one
+/// for auxiliary requests (session-title audits, access reviews), which take
+/// no worker and so never wait for a request to end.
+#[derive(Clone, Debug)]
+pub struct AgentDispatcher {
+    levels: Arc<[mpsc::Sender<AgentRequest>]>,
+    auxiliary: mpsc::Sender<AgentRequest>,
+}
+
+impl AgentDispatcher {
+    pub fn new(
+        levels: Vec<mpsc::Sender<AgentRequest>>,
+        auxiliary: mpsc::Sender<AgentRequest>,
+    ) -> Self {
+        assert!(!levels.is_empty(), "an Agent has at least one worker level");
+        Self {
+            levels: levels.into(),
+            auxiliary,
+        }
+    }
+
+    /// One queue for every request, as a fixture's single executor reads it.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn single(queue: mpsc::Sender<AgentRequest>) -> Self {
+        Self::new(vec![queue.clone()], queue)
+    }
+
+    fn level(request_hop: u32, levels: usize) -> usize {
+        usize::try_from(request_hop)
+            .unwrap_or(usize::MAX)
+            .min(levels.saturating_sub(1))
+    }
+
+    pub fn for_request(&self, request: &AgentRequest) -> &mpsc::Sender<AgentRequest> {
+        if request.purpose.is_auxiliary() {
+            return &self.auxiliary;
+        }
+        &self.levels[Self::level(request.request_hop, self.levels.len())]
+    }
+
+    fn queues(&self) -> impl Iterator<Item = &mpsc::Sender<AgentRequest>> {
+        let auxiliary = (!self
+            .levels
+            .iter()
+            .any(|level| level.same_channel(&self.auxiliary)))
+        .then_some(&self.auxiliary);
+        self.levels.iter().chain(auxiliary)
+    }
+
+    pub fn max_capacity(&self) -> usize {
+        self.queues().map(mpsc::Sender::max_capacity).sum()
+    }
+
+    pub fn queued(&self) -> usize {
+        self.queues()
+            .map(|queue| queue.max_capacity().saturating_sub(queue.capacity()))
+            .sum()
+    }
+
+    pub fn same_channel(&self, other: &Self) -> bool {
+        self.auxiliary.same_channel(&other.auxiliary)
+            && self.levels.len() == other.levels.len()
+            && self
+                .levels
+                .iter()
+                .zip(other.levels.iter())
+                .all(|(mine, theirs)| mine.same_channel(theirs))
+    }
+}
 
 #[derive(Clone)]
 pub struct ResolvedWatcherIdentity(pub Arc<dyn gents_store::identity::NodeIdentity>);
@@ -348,7 +419,15 @@ impl ResolvedRuntimeSnapshot {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn activate(self, generation: u64, dispatchers: DispatcherMap) -> ActiveRuntimeSnapshot {
+    pub fn activate(
+        self,
+        generation: u64,
+        dispatchers: RapidHashMap<String, mpsc::Sender<AgentRequest>>,
+    ) -> ActiveRuntimeSnapshot {
+        let dispatchers: DispatcherMap = dispatchers
+            .into_iter()
+            .map(|(agent_did, sender)| (agent_did, AgentDispatcher::single(sender)))
+            .collect();
         let agent_executor_capacities = dispatchers
             .keys()
             .map(|agent_did| (agent_did.clone(), 1))
@@ -545,11 +624,9 @@ impl ActiveRuntimeSnapshot {
                     .agent_executor_queue_capacities
                     .get(&agent_did)
                     .copied()
-                    .or_else(|| dispatcher.map(mpsc::Sender::max_capacity))
+                    .or_else(|| dispatcher.map(AgentDispatcher::max_capacity))
                     .unwrap_or_default();
-                let queue_depth = dispatcher
-                    .map(|dispatcher| queue_capacity.saturating_sub(dispatcher.capacity()))
-                    .unwrap_or_default();
+                let queue_depth = dispatcher.map(AgentDispatcher::queued).unwrap_or_default();
                 let worker_capacity = self
                     .agent_executor_capacities
                     .get(&agent_did)

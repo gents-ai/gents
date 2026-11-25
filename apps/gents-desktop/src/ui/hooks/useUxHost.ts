@@ -88,6 +88,10 @@ export function buildUxHost(
      rule useSelectedNode applies */
   const selectedNode = () =>
     nodeOf(fleet(), selection().nodeDid) ?? fleetNodes(fleet())[0] ?? null;
+  const knownNodes = () =>
+    app.stores.client
+      .getState()
+      .snapshot?.bootstrap.savedRuntimes.map((runtime) => runtime.nodeDid) ?? null;
   return {
     shell: {
       route,
@@ -95,6 +99,7 @@ export function buildUxHost(
       deployments: () => fleetNodes(fleet()),
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
+      knownNodes,
       send: async (content, caller) => {
         const target = selection();
         if (target.sessionId === null) {
@@ -145,9 +150,19 @@ export function buildUxHost(
           .then((r) => r.surfaces),
     },
     onShellChange: (listener) => {
+      /* the fleet is published before the saved runtimes, so a node's
+         removal can empty the fleet while it is still listed as kept: the
+         shell changes again once the kept nodes do */
+      let known = knownNodes()?.join("\n") ?? null;
       const offs = [
         app.stores.selection.subscribe(listener),
         app.stores.fleet.subscribe(listener),
+        app.stores.client.subscribe(() => {
+          const next = knownNodes()?.join("\n") ?? null;
+          if (next === known) return;
+          known = next;
+          listener();
+        }),
       ];
       routeListeners.add(listener);
       return () => {

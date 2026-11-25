@@ -5,12 +5,12 @@ use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::Semaphore;
 
 use gents_documents::inference_defaults::{
     DEFAULT_CONNECT_TIMEOUT_SECS, DEFAULT_REQUEST_TIMEOUT_SECS,
 };
 use gents_documents::{InferenceBackend, InferenceProfile};
+use gents_inference::admission::{BackendCallAdmission, BackendCallPools};
 use gents_loop::openai_wire::OpenAiWireApi;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
@@ -27,7 +27,7 @@ pub struct ModelEndpoint {
     pub api_key: Option<String>,
     pub model: String,
     pub max_concurrent: usize,
-    pub limiter: Arc<Semaphore>,
+    pub admission: BackendCallAdmission,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
     pub max_output_tokens: Option<u64>,
@@ -53,23 +53,6 @@ impl std::fmt::Debug for ModelEndpoint {
             .field("model", &self.model)
             .field("max_concurrent", &self.max_concurrent)
             .finish_non_exhaustive()
-    }
-}
-
-/// The plugin model calls admitted at once per backend and cap, shared by
-/// every plugin call that reaches the backend through one node.
-#[derive(Default)]
-pub struct ModelCallLimiters(std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<Semaphore>>>);
-
-impl ModelCallLimiters {
-    pub fn limiter(&self, backend_key: &str, max_concurrent: usize) -> Arc<Semaphore> {
-        Arc::clone(
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .entry(format!("{backend_key}#{max_concurrent}"))
-                .or_insert_with(|| Arc::new(Semaphore::new(max_concurrent))),
-        )
     }
 }
 
@@ -151,11 +134,11 @@ where
                         })
                     })
                     .await?;
-            let limiters = profile_access.local_node().map_or_else(
-                || Arc::new(ModelCallLimiters::default()),
-                gents_store::node_extension::attached_or_default::<ModelCallLimiters>,
+            let pools = profile_access.local_node().map_or_else(
+                || Arc::new(BackendCallPools::default()),
+                BackendCallPools::of,
             );
-            let mut endpoint = endpoint_for_selected(&profile, &backend, true, &limiters)?;
+            let mut endpoint = endpoint_for_selected(&profile, &backend, true, &pools)?;
             if matches!(
                 &backend.auth,
                 gents_documents::BackendAuth::Credential { .. }
@@ -184,14 +167,14 @@ pub fn endpoint_for(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
 ) -> Result<ModelEndpoint> {
-    endpoint_for_selected(profile, backend, false, &ModelCallLimiters::default())
+    endpoint_for_selected(profile, backend, false, &BackendCallPools::default())
 }
 
 fn endpoint_for_selected(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
     allow_runtime_credential: bool,
-    limiters: &ModelCallLimiters,
+    pools: &BackendCallPools,
 ) -> Result<ModelEndpoint> {
     use gents_loop::backend_provider::BackendProviderKind::{OpenAiCompatible, OpenRouter, Vllm};
     anyhow::ensure!(
@@ -252,9 +235,11 @@ fn endpoint_for_selected(
         api_key,
         model: profile.model_name.clone(),
         max_concurrent,
-        limiter: limiters.limiter(
-            &format!("{}/{}", backend.node_did, backend.backend_id),
+        admission: pools.for_backend(
+            &backend.node_did,
+            &backend.backend_id,
             max_concurrent,
+            usize::try_from(backend.effective_max_queue_depth()).unwrap_or_default(),
         ),
         connect_timeout: Duration::from_secs(connect.unsigned_abs()),
         request_timeout: Duration::from_secs(request.unsigned_abs()),

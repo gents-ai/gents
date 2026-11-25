@@ -27,6 +27,7 @@ pub struct AdmissionRegistry {
 
 struct AdmissionRegistryInner {
     node: Arc<EmbeddedNode>,
+    pools: Arc<super::pools::BackendCallPools>,
     runtime_instance_id: String,
     backends: Mutex<RapidHashMap<String, BackendAdmission>>,
     drop_cleanup: CleanupTracker,
@@ -39,8 +40,11 @@ struct BackendAdmission {
 
 impl AdmissionRegistry {
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
+        let pools = super::pools::BackendCallPools::of(&node);
+        pools.serve_runtime();
         Self {
             inner: Arc::new(AdmissionRegistryInner {
+                pools,
                 node,
                 runtime_instance_id: uuid::Uuid::new_v4().to_string(),
                 backends: Mutex::new(RapidHashMap::new()),
@@ -70,17 +74,21 @@ impl AdmissionRegistry {
         generation: u64,
         configs: &RapidHashMap<String, BackendAdmissionConfig>,
     ) {
+        let node_did = self.inner.node.node_identity_did().unwrap_or_default();
+        let pools = &self.inner.pools;
         let mut backends = self.backends();
         for (backend_id, config) in configs {
             if !config.is_available() {
                 continue;
             }
-            let entry = backends
-                .entry(backend_id.clone())
-                .or_insert_with(|| BackendAdmission {
-                    pool: CapacityPool::open(config.max_concurrent),
+            let entry = backends.entry(backend_id.clone()).or_insert_with(|| {
+                let pool = CapacityPool::open(config.max_concurrent);
+                pools.admit(node_did, backend_id, &pool);
+                BackendAdmission {
+                    pool,
                     admitting: None,
-                });
+                }
+            });
             if entry
                 .admitting
                 .as_ref()
@@ -117,7 +125,13 @@ impl AdmissionRegistry {
                 }
             }
         }
-        backends.retain(|_, entry| entry.admitting.is_some() || !entry.pool.is_retired());
+        backends.retain(|backend_id, entry| {
+            let keep = entry.admitting.is_some() || !entry.pool.is_retired();
+            if !keep {
+                pools.retire(node_did, backend_id, &entry.pool);
+            }
+            keep
+        });
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
