@@ -16,8 +16,8 @@ use gents_store::config_client::ConfigAccess;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PartialRead {
     pub roots: BTreeSet<CollectionRoot>,
-    /// Session scopes whose requests are read again
-    /// (`ObserverResync.Delivery.reloadSessionRequests`).
+    /// Session scopes whose session row and requests are read again
+    /// (`ObserverResync.Delivery.reloadSessionScope`).
     pub scopes: BTreeSet<SessionScope>,
 }
 
@@ -32,16 +32,17 @@ impl PartialRead {
     }
 }
 
-/// The requests the node snapshot shows for `scope`, read from the scope
-/// alone (`SessionRequestReload.ShownFromScope`): its nonterminal requests,
-/// its session's head and every row those need, through the snapshot's own
-/// derivation. The Node root is read beside them, so a Node this client
-/// cannot observe is a refusal, not a session without requests.
-async fn load_scope_requests(
+/// The session row and the requests the node snapshot shows for `scope`,
+/// read from the scope alone (`SessionRequestReload.ShownFromScope`): its
+/// session, its nonterminal requests, the session's head and every row those
+/// need, through the snapshot's own derivation. The Node root is read beside
+/// them, so a Node this client cannot observe is a refusal, not a missing
+/// session.
+async fn load_scope(
     access: &ConfigAccess,
     node_did: &str,
     scope: &SessionScope,
-) -> std::result::Result<Vec<AgentRequestRow>, SnapshotReadError> {
+) -> std::result::Result<(Vec<AgentSession>, Vec<AgentRequestRow>), SnapshotReadError> {
     let (nodes, sessions, seeds) = access
         .read_views(&(
             NodeList::new(node_did),
@@ -63,7 +64,9 @@ async fn load_scope_requests(
         .map(|row| row.session)
         .filter(|session| session.requester_did == scope.requester_did)
         .collect::<Vec<_>>();
-    Ok(complete_access_snapshot_requests(access, node_did, &sessions, &[], seeds).await?)
+    let requests =
+        complete_access_snapshot_requests(access, node_did, &sessions, &[], seeds).await?;
+    Ok((sessions, requests))
 }
 
 /// The rows of `read` alone, as the node snapshot reads them.
@@ -76,24 +79,25 @@ pub async fn load_partial_read_on(
         .await?
         .to_rows();
     for scope in &read.scopes {
-        rows.requests
-            .extend(load_scope_requests(access, node_did, scope).await?);
+        let (sessions, requests) = load_scope(access, node_did, scope).await?;
+        rows.sessions.extend(sessions);
+        rows.requests.extend(requests);
     }
     Ok(ClientStore::from_rows(rows))
 }
 
-/// `current` with the rows of `read`'s roots and the requests of its scopes
-/// replaced by `incoming`'s, every other row kept.
+/// `current` with the rows of `read`'s roots and the session rows and
+/// requests of its scopes replaced by `incoming`'s, every other row kept.
 pub fn replace_partial_read(
     current: &ClientStore,
     read: &PartialRead,
     incoming: ClientStore,
 ) -> ClientStore {
-    let requests = incoming.requests.clone();
+    let (sessions, requests) = (incoming.sessions.clone(), incoming.requests.clone());
     let replaced = replace_collection_roots(current, &read.roots, incoming);
     if read.scopes.is_empty() {
         replaced
     } else {
-        replaced.replace_session_requests(&read.scopes, requests)
+        replaced.replace_session_scopes(&read.scopes, sessions, requests)
     }
 }

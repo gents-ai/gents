@@ -8,12 +8,12 @@
 \*
 \* Runtime. The node's runtime commits projected writes to three parts of the
 \* snapshot: "cfg", a collection whose snapshot root is one self-contained
-\* view (a collection reload reads exactly its rows); "ses", the requests of
-\* one session scope that no trigger caused (a read of the scope shows what a
-\* full load shows for it, Lean
+\* view (a collection reload reads exactly its rows); "ses", the session row
+\* of one session scope and its requests that no trigger caused (a read of the
+\* scope shows what a full load shows for it, Lean
 \* `SessionRequestReload.session_requests_derive_alone`); and "req", whose
-\* rows depend on other roots (a session, a trigger, the Node, a request a
-\* trigger caused). DefraDB delivers a change event for a commit only on a
+\* rows depend on other roots (a trigger, the Node, a request a trigger
+\* caused). DefraDB delivers a change event for a commit only on a
 \* subscription armed before it, after the commit is visible to a new read; a
 \* dropped stream loses every undelivered event. `Touch` is a "cfg" rewrite
 \* with no projected change (the per-minute catalog `observed_at` rewrite of
