@@ -149,6 +149,24 @@ async fn observed_trigger(
     rows[0].clone()
 }
 
+async fn wait_for_trigger_status(
+    node: &defra_node::Node,
+    owner_did: &str,
+    trigger_id: &str,
+    status: &str,
+) -> serde_json::Value {
+    let what = format!("Trigger.last_status for {trigger_id} became {status}");
+    gents_store::test_support::read_when_changed(node, "Trigger", &what, async || {
+        let trigger = observed_trigger(node, owner_did, trigger_id).await;
+        if trigger["last_status"].as_str() == Some(status) {
+            Ok(trigger)
+        } else {
+            Err(trigger)
+        }
+    })
+    .await
+}
+
 async fn observed_schedule_cadence(
     node: &defra_node::Node,
     owner_did: &str,
@@ -507,16 +525,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         .with_timezone(&Utc)
         + ChronoDuration::seconds(interval_secs))
     .to_rfc3339();
-    let mut fired_trigger = None;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let trigger = observed_trigger(node.as_ref(), &owner_did, "sched-1").await;
-        if trigger["last_status"].as_str() == Some("fired") {
-            fired_trigger = Some(trigger);
-            break;
-        }
-    }
-    let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
+    let fired = wait_for_trigger_status(node.as_ref(), &owner_did, "sched-1", "fired").await;
     assert_eq!(fired["last_status"].as_str(), Some("fired"));
     assert_eq!(fired["fire_count"].as_i64(), Some(1));
     let fired_next = fired["next_run_at"]
@@ -586,16 +595,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         .with_timezone(&Utc)
         + ChronoDuration::seconds(interval_secs))
     .to_rfc3339();
-    let mut skipped_trigger = None;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let trigger = observed_trigger(node.as_ref(), &owner_did, "sched-1").await;
-        if trigger["last_status"].as_str() == Some("skipped") {
-            skipped_trigger = Some(trigger);
-            break;
-        }
-    }
-    let skipped = skipped_trigger.expect("Trigger.last_status never became \"skipped\"");
+    let skipped = wait_for_trigger_status(node.as_ref(), &owner_did, "sched-1", "skipped").await;
     assert_eq!(skipped["last_status"].as_str(), Some("skipped"));
     assert_eq!(skipped["fire_count"].as_i64(), Some(1));
     let skipped_next = skipped["next_run_at"]
@@ -805,39 +805,32 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         engine.run(vec![source], engine_cancel).await;
     });
 
-    let mut observed = None;
-    for _ in 0..80 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let query = r#"query {
-            AgentRequest(filter: {
-                caused_by_trigger_id: { _eq: "sched-e2e" },
-                caused_by_trigger_kind: { _eq: "schedule" }
-            }) {
-                _docID
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                lifecycle_state
-                execution_origin
-                session_id
-                content
-                input
-            }
-        }"#;
-        let resp = agent_access
-            .execute(query)
-            .await
-            .expect("query AgentRequest as the selected Agent");
-        let rows = resp
-            .get("data")
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        if !rows.is_empty() {
-            observed = rows.into_iter().next();
-            break;
+    let query = r#"query {
+        AgentRequest(filter: {
+            caused_by_trigger_id: { _eq: "sched-e2e" },
+            caused_by_trigger_kind: { _eq: "schedule" }
+        }) {
+            _docID
+            caused_by_trigger_id
+            caused_by_trigger_kind
+            lifecycle_state
+            execution_origin
+            session_id
+            content
+            input
         }
-    }
+    }"#;
+    let data = gents_store::test_support::rows_when(&agent_access, "AgentRequest", query, |data| {
+        data.get("AgentRequest")
+            .and_then(|v| v.as_array())
+            .is_some_and(|rows| !rows.is_empty())
+    })
+    .await;
+    let observed = data
+        .get("AgentRequest")
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned();
 
     cancel.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), engine_handle).await;
@@ -1067,21 +1060,18 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let started_at = Utc::now();
 
     let handle = tokio::spawn(async move { source.next_fire().await });
-    let seeded = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match read_trigger_cursor(node.as_ref(), &owner_did, "sched-cron-null")
+    let seeded = gents_store::test_support::read_when_changed(
+        node.as_ref(),
+        "Trigger",
+        "cron schedule should seed the Trigger cursor",
+        async || {
+            read_trigger_cursor(node.as_ref(), &owner_did, "sched-cron-null")
                 .await
                 .unwrap()
-            {
-                Some(value) => break value,
-                None => {
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-            }
-        }
-    })
-    .await
-    .expect("cron schedule should seed the Trigger cursor within 2s");
+                .ok_or("Trigger.next_run_at is still null")
+        },
+    )
+    .await;
 
     cancel.cancel();
     assert!(
@@ -1123,20 +1113,21 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
     let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
+    let (tick_tx, tick_rx) = watch::channel(0usize);
+    let mut wait_ticks = tick_rx.clone();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
-        .with_tick_every(Duration::from_millis(50));
+        .with_tick_every(Duration::from_millis(10))
+        .with_idle_tick_signal(tick_tx);
 
     let cancel_clone = cancel.clone();
     let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        wait_ticks.wait_for(|&ticks| ticks >= 3).await.unwrap();
         cancel_clone.cancel();
     });
 
-    let started = Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(3), source.next_fire())
         .await
         .expect("next_fire did not return within 3s after cancel");
-    let elapsed_until_return = started.elapsed();
     let _ = canceller.await;
 
     assert!(
@@ -1144,9 +1135,9 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
         "idle source should only return None after cancel, got Some(intent)",
     );
     assert!(
-        elapsed_until_return >= Duration::from_millis(240),
-        "next_fire returned before cancel fired at ~250ms (elapsed={elapsed_until_return:?}); \
-         this means the source treated an idle tick as exhaustion and returned None early"
+        *tick_rx.borrow() >= 3,
+        "next_fire returned before observing 3 idle ticks (ticks={})",
+        *tick_rx.borrow()
     );
 }
 
