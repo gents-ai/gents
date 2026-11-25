@@ -57,13 +57,9 @@ const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[
 const ROUTE: &[(&str, usize)] = &[
     ("engineer_pages/cases/add_chart_keep_css.json", 1),
     ("engineer_pages/cases/clear_lint_finding.json", 1),
-    ("engineer_pages/cases/dock_totals_bar.json", 1),
     ("engineer_pages/cases/fix_stale_calibrations.json", 1),
     ("engineer_pages/cases/rename_read_tool.json", 1),
     ("engineer_pages/cases/restore_my_holdings.json", 1),
-    ("engineer_pages/cases/rig_flow_scatter.json", 1),
-    ("engineer_pages/cases/tide_line.json", 1),
-    ("engineer_workflows/cases/gate_count_recall.json", 2),
 ];
 #[rustfmt::skip]
 const UNEXERCISED: &[(&str, usize)] = &[

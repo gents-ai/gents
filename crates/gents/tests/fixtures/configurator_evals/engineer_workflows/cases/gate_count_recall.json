@@ -193,7 +193,8 @@
             "forbidden": [
               "workflow",
               "agent_new"
-            ]
+            ],
+            "route_reason": "The prompt explicitly says not to start anything new."
           },
           "tier": "acceptance",
           "weight": 1

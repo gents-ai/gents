@@ -263,7 +263,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\b(?:3|three)\\b[^.\\n]{0,60}(?:orders?|open)|(?:orders?|open)[^.\\n]{0,60}?\\b(?:3|three)\\b"
+                "matches": "(?i)\\b(?:3|three)\\b[^.]{0,60}(?:orders?|open)|(?:orders?|open)[^.]{0,60}?\\b(?:3|three)\\b"
               },
               {
                 "matches": "\\b46[,.]?500\\b"

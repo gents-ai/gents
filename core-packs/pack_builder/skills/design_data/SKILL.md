@@ -45,6 +45,6 @@ Derive what can be computed on read: an age, a count, an overdue flag. Store tim
 
 ## Check it
 
-Write two or three realistic documents, read them back with your page's query, and confirm filters and sort order.
+Write two or three realistic documents, read them back with your page's query, and confirm filters and sort order. When you are only testing a schema and the user has not asked to keep sample data, delete those test documents before finishing.
 
 Next: load `import-data` if the data comes from outside, otherwise `design-page` before the page.
