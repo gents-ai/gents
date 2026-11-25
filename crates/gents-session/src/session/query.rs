@@ -250,23 +250,48 @@ pub async fn client_requester_scope(
     session_id: &str,
     actor_did: &str,
 ) -> Result<String> {
-    access
-        .transact_readonly("session.client_requester_scope", |txn| {
-            Box::pin(async move {
-                match gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                    txn, node_did, session_id,
-                )
-                .await?
-                {
-                    Some(row) => row
-                        .session
-                        .requester_did
-                        .context("existing session has no requester provenance"),
-                    None => Ok(actor_did.to_owned()),
-                }
-            })
-        })
-        .await
+    Ok(
+        client_session_scope(access, node_did, session_id, actor_did)
+            .await?
+            .requester_did,
+    )
+}
+
+/// What a client request in a session is scoped by: whom it is for (the
+/// session's requester, or the actor for a session not yet made) and the
+/// Agent the session is bound to, if it exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientSessionScope {
+    pub requester_did: String,
+    pub agent_did: Option<String>,
+}
+
+/// [`ClientSessionScope`] from one plain read of the session row. Nothing is
+/// decided on it here that a later transaction does not check again: the
+/// submission re-reads the session in its own transaction.
+pub async fn client_session_scope(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    actor_did: &str,
+) -> Result<ClientSessionScope> {
+    let row = gents_store::config_client::agent_session::load_agent_session_owner(
+        access, node_did, session_id,
+    )
+    .await?;
+    Ok(match row {
+        Some(row) => ClientSessionScope {
+            requester_did: row
+                .session
+                .requester_did
+                .context("existing session has no requester provenance")?,
+            agent_did: Some(row.session.agent_did),
+        },
+        None => ClientSessionScope {
+            requester_did: actor_did.to_owned(),
+            agent_did: None,
+        },
+    })
 }
 
 #[cfg(test)]

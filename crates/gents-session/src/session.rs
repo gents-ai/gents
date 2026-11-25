@@ -125,7 +125,9 @@ pub use query::load_session_agent_did;
 pub use query::require_session;
 pub use query::session_is_stopped;
 pub use query::session_stopped_in_txn;
-pub use query::{client_requester_scope, public_request_filter};
+pub use query::{
+    client_requester_scope, client_session_scope, public_request_filter, ClientSessionScope,
+};
 pub use query::{load_session_agent_selection, load_session_requester_scope};
 pub use request_output::canonical_read_loading;
 pub use request_output::{
