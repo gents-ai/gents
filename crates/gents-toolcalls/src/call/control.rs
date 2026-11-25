@@ -465,7 +465,7 @@ mod tests {
     use super::*;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_session::request::lifecycle::RequestLifecycle;
-    use gents_session::request::streaming::DefraStreamWriter;
+    use gents_store::identity::NodeIdentity;
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
@@ -707,35 +707,21 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
-        use crate::call::lifecycle::admission_fixture::claimed_signed_request;
-
-        let db = gents_store::test_support::TestStore::start(
-            "agent-tool-control-cancel",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = db.node.clone();
-        let node_identity = Arc::new(gents_store::test_support::held_runtime_identity(
-            db.node_identity.did(),
-        ));
-
-        let owner = node.node_identity_did().unwrap().to_owned();
-        let node_did = owner.as_str();
-        let mut request = claimed_signed_request(
-            &node,
-            "request-cancel",
-            "session-1",
-            node_identity.as_ref(),
-            None,
-        )
-        .await;
+        let home = gents_session::test_support::AgentHome::start("agent-tool-control-cancel").await;
+        let node = home.node.clone();
+        let node_did = home.node_did().to_owned();
+        let node_did = node_did.as_str();
+        let claimed =
+            gents_session::test_support::ClaimedRequest::client_signed(&home, &home.binding)
+                .ids("request-cancel", "session-1")
+                .batch_interval(Duration::from_millis(1))
+                .drive(gents_session::test_support::Stage::Executing)
+                .await;
+        let request = claimed.lifecycle;
         let agent = identity::Did::new(request.request().agent_did.as_str()).unwrap();
-        let agent_access = request.access().unwrap();
+        let agent_access = claimed.agent_access;
         assert!(agent_access.has_managed_agent_signer());
-        let writer =
-            DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
-                .unwrap();
-        request.begin_owned_execution(&writer).await.unwrap();
+        let writer = claimed.writer.expect("executing request has its writer");
         writer
             .start_provider_attempt(
                 &request.request().doc_id,
@@ -1019,34 +1005,20 @@ mod tests {
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
-        use gents_store::identity::NodeIdentity;
-        let node_db = gents_store::test_support::TestStore::start(
+        let home = gents_session::test_support::AgentHome::start(
             "owned-cancel-persists-custom-completion-",
-            gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
-        let node = node_db.node.clone();
-        let identity = Arc::new(gents_store::test_support::held_runtime_identity(
-            node_db.node_identity.did(),
-        ));
-        let node_did = identity.did().to_string();
-        let node_scope = gents_store::graphql::escape_graphql_string(&node_did);
-        gents_store::config_client::ConfigAccess::local(node.clone()).write(
-            "test.custom_cancel.node",
-            &format!(r#"mutation {{ create_Node(input: {{node_did: "{node_scope}"}}) {{ _docID }} }}"#),
-        ).await.unwrap();
-        let mut request = crate::call::lifecycle::admission_fixture::claimed_signed_request(
-            &node,
-            "request-custom",
-            "session-custom",
-            identity.as_ref(),
-            None,
-        )
-        .await;
-        let writer =
-            DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
-                .unwrap();
-        request.begin_owned_execution(&writer).await.unwrap();
+        let node = home.node.clone();
+        let node_did = home.node_did().to_owned();
+        let claimed =
+            gents_session::test_support::ClaimedRequest::client_signed(&home, &home.binding)
+                .ids("request-custom", "session-custom")
+                .batch_interval(Duration::from_millis(1))
+                .drive(gents_session::test_support::Stage::Executing)
+                .await;
+        let request = claimed.lifecycle;
+        let writer = claimed.writer.expect("executing request has its writer");
         writer
             .start_provider_attempt(
                 &request.request().doc_id,

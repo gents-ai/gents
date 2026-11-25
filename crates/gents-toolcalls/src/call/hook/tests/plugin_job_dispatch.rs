@@ -6,7 +6,6 @@ use crate::call::lifecycle::admission_fixture::fixture_job_pin;
 use crate::plugin::executor::PluginExecutor;
 use crate::test_support::installed_plugin;
 use crate::test_support::live_settings;
-use chrono::Utc;
 use defra_node::Node as EmbeddedNode;
 use gents_pack::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use gents_pack::plugin::store;
@@ -229,6 +228,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     )
     .await;
     let caller_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (lifecycle, _) = job_chain(&signed_home, &caller_binding, options.hop).await;
     let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
@@ -312,7 +312,6 @@ async fn step0(output: Value, options: Options) -> Step0 {
         plugin: serde_json::from_value(json!({"plugin": "team/plugin"})).unwrap(),
         settings: options.settings,
     };
-    let (lifecycle, _) = job_chain(&db, &user, &owner, caller.as_ref(), options.hop).await;
     let request_id = lifecycle.request().request_id.clone();
     let session_id = lifecycle.request().session_id.clone();
     let mut hook = DefraSessionHook::resume_with_actor_policy(
@@ -410,54 +409,30 @@ async fn step0(output: Value, options: Options) -> Step0 {
 }
 
 async fn job_chain(
-    db: &gents_store::test_support::TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    owner: &gents_store::config_client::ConfigAccess,
-    agent: &dyn NodeIdentity,
+    home: &gents_documents::test_support::SignedHome,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     depth: u32,
 ) -> (
     gents_session::request::lifecycle::RequestLifecycle,
     Option<(gents_session::request::lifecycle::RequestLifecycle, String)>,
 ) {
     use crate::call::lifecycle::admission_fixture::{
-        materialize_session_message, pending_client_fixture_request,
-        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+        materialize_session_message, publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_session::request::lifecycle::ClaimOutcome;
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        &request_id,
-        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), &session_id),
-        "run",
-        "interactive",
-        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let mut current = pending_client_fixture_request(
-        &db.node,
-        owner,
-        db.node_identity.clone(),
-        user,
-        agent,
-        create,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        current.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
+    let mut current = gents_session::test_support::ClaimedRequest::client_signed(home, binding)
+        .ids(&request_id, &session_id)
+        .content("run")
+        .drive(gents_session::test_support::Stage::Claimed)
+        .await
+        .lifecycle;
     let mut parent = None;
     for level in 0..depth {
         let mut tool = publish_accepted_on_claimed_request(
-            db.node.clone(),
+            home.node.clone(),
             &mut current,
-            db.node_identity.did(),
+            home.node_did(),
             AcceptedFixtureCall {
                 turn: 0,
                 tool_name: "agent_new",
@@ -473,54 +448,18 @@ async fn job_chain(
             write_pin_for_tool(&tool, &fixture_job_pin()).await;
         }
         let tool_doc = tool.doc_id().unwrap().to_owned();
-        let receipt = materialize_session_message(
-            &db.node,
-            &current,
-            &mut tool,
-            db.node_identity.did(),
-            "run",
+        let receipt =
+            materialize_session_message(&home.node, &current, &mut tool, home.node_did(), "run")
+                .await
+                .unwrap();
+        let child = gents_session::test_support::ClaimedRequest::existing(
+            home,
+            binding,
+            &receipt.request_doc_id,
         )
+        .drive(gents_session::test_support::Stage::Claimed)
         .await
-        .unwrap();
-        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent.did().parse().unwrap(),
-            agent,
-        )
-        .unwrap();
-        let doc = gents_store::graphql::escape_graphql_string(&receipt.request_doc_id);
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ {} }} }}"#,
-                gents_protocol::row::AGENT_REQUEST_FIELDS,
-            ))
-            .await
-            .unwrap();
-        let row: gents_protocol::row::AgentRequestRow =
-            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        let request = row.try_into().unwrap();
-        let (_authority_owner, authority) =
-            gents_p2p::p2p_reconcile::enrollment_authority_channel();
-        let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
-            db.node.clone(),
-            db.node_identity.clone(),
-            authority,
-        );
-        let (request, admission) = verifier
-            .verify_fresh_for_claim_with_identity(&request, agent)
-            .await
-            .unwrap();
-        let mut child = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
-            db.node.clone(),
-            request,
-            60,
-        );
-        child.bind_managed_agent(agent).unwrap();
-        child.set_client_claim_admission(admission);
-        assert_eq!(
-            child.claim_with_identity().await.unwrap(),
-            ClaimOutcome::Claimed
-        );
+        .lifecycle;
         parent = Some((current, tool_doc));
         current = child;
     }

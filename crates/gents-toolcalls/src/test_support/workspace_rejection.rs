@@ -1,7 +1,4 @@
 use anyhow::Result;
-use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-};
 use gents_session::workspace::WorkspaceBindingDoc;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -34,23 +31,22 @@ impl Fixture {
         .await;
         let signed_home =
             gents_documents::test_support::SignedHome::enroll(db, "workspace-rejection-user").await;
-        let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (home, user, user_access) = signed_home.into_parts();
-        let node = home.node.clone();
-        let identity = home.node_identity.clone();
+        let agent_binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let node = signed_home.node.clone();
+        let identity = signed_home.node_identity.clone();
         let agent =
-            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent_binding)
+                .unwrap();
         let agent_did: identity::Did = agent.did().parse().unwrap();
-        let admin = ConfigAccess::local_as(node.clone(), identity.did().parse().unwrap());
-        admin
+        signed_home
+            .node_access()
             .grant_node_permission(
                 &agent_did,
                 gents_store::config_client::NodePermission::DocumentDelete,
             )
             .await
             .unwrap();
-        let access =
-            ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
+        let access = signed_home.agent_access(&agent_binding);
         // Claim verification of a ReadWrite request loads the complete
         // workspace and its local placement, as the workspace owner publishes them.
         let workspace_dir = tempfile::tempdir().unwrap();
@@ -146,29 +142,26 @@ impl Fixture {
             })
             .await
             .unwrap();
-        let mut create = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            "workspace-rejected-request",
-            RequestScope::new(identity.did(), user.did(), agent.did(), "session"),
-            "work",
-            "interactive",
-            "2026-09-01T00:00:00Z",
-            AgentRequestAdmissionRecord::client(user.did()),
-        );
-        create.workspace_id = Some("cleanup-workspace".to_string());
-        create.workspace_owner_node_did = Some(identity.did().to_string());
-        create.workspace_authority = Some("readWrite".to_string());
-        let lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &node,
-            &user_access,
-            identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
+        let owner_did = identity.did().to_owned();
+        let claimed = gents_session::test_support::ClaimedRequest::client_signed_reserved(
+            &signed_home,
+            &agent_binding,
         )
-        .await
-        .expect("publish an authorized User request before workspace rejection");
-        let request = lifecycle.request().clone();
+        .ids("workspace-rejected-request", "session")
+        .content("work")
+        .created_at("2026-09-01T00:00:00Z")
+        .spec(move |spec| {
+            spec.workspace = Some(gents_session::request::lifecycle::WorkspaceLineage {
+                workspace_id: Some("cleanup-workspace".to_string()),
+                workspace_owner_node_did: Some(owner_did),
+                workspace_authority: Some("readWrite".to_string()),
+                workspace_seal_hash: None,
+            });
+        })
+        .drive(gents_session::test_support::Stage::Admitted)
+        .await;
+        let (home, _, _) = signed_home.into_parts();
+        let request = claimed.lifecycle.request().clone();
         let doc_id = request.doc_id.clone();
         let binding = WorkspaceBindingDoc {
             workspace_doc_id: Some(workspace_doc),

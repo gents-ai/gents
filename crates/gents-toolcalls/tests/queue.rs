@@ -280,35 +280,20 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     assert_eq!(before.acknowledged_notifications, 0);
     assert_eq!(before.epochs[0].state, "pending");
 
-    let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &db.agent_access,
-        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let wake_doc_id = enqueued
+        .request
+        .as_ref()
+        .expect("non-Goal wake")
+        .doc_id
+        .clone();
     let mut lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            node.clone(),
-            request,
-            60,
-            ExecutionOrigin::Scheduled,
-            "backend-test",
-        );
-    lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        db.agent_identity.as_ref(),
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+        gents_session::test_support::ClaimedRequest::existing(&db, &db.binding, &wake_doc_id)
+            .origin(ExecutionOrigin::Scheduled)
+            .backend("backend-test")
+            .batch_interval(std::time::Duration::ZERO)
+            .drive(gents_session::test_support::Stage::Executing)
+            .await
+            .lifecycle;
     lifecycle
         .terminalize_owned(
             RequestTerminalOutcome::Completed,
@@ -358,35 +343,21 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
 
-    let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &db.agent_access,
-        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let mut lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            node.clone(),
-            request,
-            60,
-            ExecutionOrigin::Scheduled,
-            "backend-test",
-        );
-    lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        db.agent_identity.as_ref(),
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let wake_doc_id = enqueued
+        .request
+        .as_ref()
+        .expect("non-Goal wake")
+        .doc_id
+        .clone();
+    let claimed =
+        gents_session::test_support::ClaimedRequest::existing(&db, &db.binding, &wake_doc_id)
+            .origin(ExecutionOrigin::Scheduled)
+            .backend("backend-test")
+            .batch_interval(std::time::Duration::ZERO)
+            .drive(gents_session::test_support::Stage::Executing)
+            .await;
+    let mut lifecycle = claimed.lifecycle;
+    let writer = claimed.writer.expect("executing wake has its writer");
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,
@@ -521,37 +492,17 @@ async fn published_wake(name: &str) -> PublishedWake {
 
 impl PublishedWake {
     async fn claim_and_begin(&self) -> gents_session::request::lifecycle::RequestLifecycle {
-        let node = self.db.node.clone();
-        let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-            &self.db.agent_access,
+        gents_session::test_support::ClaimedRequest::existing(
+            &self.db,
+            &self.db.binding,
             &self.wake_doc_id,
         )
+        .origin(ExecutionOrigin::Scheduled)
+        .backend("backend-test")
+        .batch_interval(std::time::Duration::ZERO)
+        .drive(gents_session::test_support::Stage::Executing)
         .await
-        .unwrap()
-        .unwrap();
-        let mut lifecycle =
-            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-                node.clone(),
-                request,
-                60,
-                ExecutionOrigin::Scheduled,
-                "backend-test",
-            );
-        lifecycle
-            .bind_managed_agent(self.db.agent_identity.as_ref())
-            .unwrap();
-        assert_eq!(
-            lifecycle.claim_with_identity().await.unwrap(),
-            gents_session::request::lifecycle::ClaimOutcome::Claimed
-        );
-        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-            node,
-            self.db.agent_identity.as_ref(),
-            std::time::Duration::ZERO,
-        )
-        .unwrap();
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
-        lifecycle
+        .lifecycle
     }
 
     async fn restart(&self) {

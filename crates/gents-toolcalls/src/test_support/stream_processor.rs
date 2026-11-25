@@ -9,7 +9,7 @@ use gents_store::identity::NodeIdentity;
 use crate::call::hook::DefraSessionHook;
 use crate::call::hook::FailurePolicy;
 use gents_loop::loop_stream::LoopStreamItem;
-use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use gents_session::request::lifecycle::RequestLifecycle;
 use gents_session::request::streaming::DefraStreamWriter;
 
 pub fn user_text_message(text: &str) -> Message {
@@ -37,76 +37,45 @@ pub struct SignedRun {
 }
 
 pub async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-
     let signed_home = gents_documents::test_support::SignedHome::start(
         name,
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
     let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, owner) = signed_home.into_parts();
-    let node = db.node.clone();
-    let runtime_did = db.node_identity.did().to_owned();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
     let request_id = format!("request-{name}-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{name}-{}", uuid::Uuid::new_v4());
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        &request_id,
-        RequestScope::new(runtime_did.clone(), user.did(), agent.did(), &session_id),
-        "spawn",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let mut lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
-        &node,
-        &owner,
-        db.node_identity.clone(),
-        &user,
-        agent.as_ref(),
-        create,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
+    let claimed =
+        gents_session::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+            .ids(&request_id, &session_id)
+            .content("spawn")
+            .batch_interval(batch_interval)
+            .drive(gents_session::test_support::Stage::Executing)
+            .await;
+    let (db, user, _owner) = signed_home.into_parts();
+    let node = db.node.clone();
+    let runtime_did = db.node_identity.did().to_owned();
     let hook = DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &session_id,
         &runtime_did,
         Some(user.did()),
-        agent.did().parse().unwrap(),
+        claimed.agent.did().parse().unwrap(),
         FailurePolicy::default(),
     )
     .await
     .unwrap()
-    .with_managed_identity(agent.as_ref())
+    .with_managed_identity(claimed.agent.as_ref())
     .unwrap();
-    let writer =
-        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, batch_interval).unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
     SignedRun {
         db,
         user,
         node,
         runtime_did,
-        access,
+        access: claimed.agent_access,
         hook,
-        lifecycle,
-        writer,
+        lifecycle: claimed.lifecycle,
+        writer: claimed.writer.expect("executing request has its writer"),
         session_id,
         request_id,
     }

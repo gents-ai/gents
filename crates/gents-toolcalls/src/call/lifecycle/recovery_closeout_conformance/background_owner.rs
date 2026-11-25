@@ -21,33 +21,22 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         } else {
             "task-deleted"
         };
-        let db = gents_store::test_support::TestStore::start(
-            &format!("recovery-closeout-{name}"),
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = db.node.clone();
-        let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-        let node_did = db.node_identity.did().to_owned();
-        let node_scope = gents_store::graphql::escape_graphql_string(&node_did);
-        gents_store::config_client::ConfigAccess::local(node.clone())
-            .write(
-                "test.recovery_owner.node",
-                &format!(r#"mutation {{ create_Node(input: {{ node_did: "{node_scope}" }}) {{ _docID }} }}"#),
-            )
-            .await
-            .unwrap();
-        let session_id = format!("session-{name}");
+        let home =
+            gents_session::test_support::AgentHome::start(&format!("recovery-closeout-{name}"))
+                .await;
+        let node = home.node.clone();
+        let node_did = home.node_did().to_owned();
         let mut parent =
-            crate::call::lifecycle::admission_fixture::claimed_signed_request_with_trigger(
-                &node,
-                &format!("request-{name}"),
-                &session_id,
-                &identity,
-                None,
-                Some("trigger-1858"),
-            )
-            .await;
+            gents_session::test_support::ClaimedRequest::self_signed(&home, &home.binding)
+                .caused_by(gents_session::request::lifecycle::TriggerLineage {
+                    trigger_id: Some("trigger-1858".into()),
+                    trigger_kind: Some("schedule".into()),
+                    ..Default::default()
+                })
+                .drive(gents_session::test_support::Stage::Claimed)
+                .await
+                .lifecycle;
+        let session_id = parent.request().session_id.clone();
         let tool = crate::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
             node.clone(),
             &mut parent,
