@@ -1994,7 +1994,7 @@ async fn stored_capture_fixture(
         RequestSigner, RequestSpec,
     };
     let db = trial_store(name).await;
-    let agent = crate::support::managed_agent(&db).await;
+    let agent = crate::support::managed_agent_fixture(&db).await.agent;
     let root = db.node_identity.as_ref();
     let access = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),

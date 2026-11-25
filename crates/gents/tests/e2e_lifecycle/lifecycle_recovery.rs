@@ -958,7 +958,7 @@ async fn seed_open_canonical_flush(
 #[tokio::test]
 async fn recover_all_marks_requests_as_error() {
     let db = trial_store("lifecycle-recover-error").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_identity = crate::support::managed_agent_fixture(&db).await.agent;
     let request_doc_id = create_recovery_request(
         &db,
         &agent_identity,
@@ -1010,7 +1010,7 @@ async fn recover_all_marks_requests_as_error() {
 #[tokio::test]
 async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
     let db = trial_store("lifecycle-recover-complete").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_identity = crate::support::managed_agent_fixture(&db).await.agent;
     let request_doc_id = create_recovery_request(
         &db,
         &agent_identity,
@@ -1127,7 +1127,7 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
 #[tokio::test]
 async fn recover_all_leaves_live_execution_lease_untouched() {
     let db = trial_store("lifecycle-recover-live-lease").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_identity = crate::support::managed_agent_fixture(&db).await.agent;
     let request_doc_id = create_recovery_request(
         &db,
         &agent_identity,
@@ -1227,7 +1227,7 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
 #[tokio::test]
 async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
     let db = trial_store("lifecycle-recover-expired-interrupt").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
+    let agent_identity = crate::support::managed_agent_fixture(&db).await.agent;
     let request_doc_id = create_recovery_request(
         &db,
         &agent_identity,

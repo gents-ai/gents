@@ -27,10 +27,7 @@ const FIXTURE_NAMES: &[&str] = &[
 /// Names defined more than once, with the count of definitions; each only
 /// shrinks as its callers move to the standard fixture.
 #[rustfmt::skip]
-const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
-    ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
-    ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
-];
+const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[];
 
 /// `src` files that compile a `tests/` file into the library.
 #[rustfmt::skip]

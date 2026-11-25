@@ -42,13 +42,6 @@ async fn key(home: &std::path::Path, name: &str) -> gents_store::identity::KeyId
     .unwrap()
 }
 
-/// Archive writes by a non-node actor need its managed Agent signer, so the
-/// authority fixture's writers are Agents provisioned from the runtime root.
-fn managed_agent(runtime: &gents_store::identity::KeyIdentity) -> Arc<dyn NodeIdentity> {
-    let binding = gents_store::identity::provision_agent_identity(runtime).unwrap();
-    gents_store::identity::resolve_agent_identity(runtime, &binding).unwrap()
-}
-
 async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<AgentSession> {
     ConfigAccess::transact_local_readonly(
         node,
@@ -271,9 +264,9 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
 async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let home = tempfile::tempdir().unwrap();
     let owner = key(home.path(), "owner").await;
-    let writer = managed_agent(&owner);
-    let reader = managed_agent(&owner);
-    let denied = managed_agent(&owner);
+    let writer = gents_store::test_support::provision_test_agent(&owner);
+    let reader = gents_store::test_support::provision_test_agent(&owner);
+    let denied = gents_store::test_support::provision_test_agent(&owner);
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(owner.did())
