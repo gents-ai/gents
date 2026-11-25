@@ -217,7 +217,8 @@ export function GoalUnavailable({ label, text }: { label: string; text: string }
 const GOAL_RESUME: Record<string, string> = {
   blocked: "Reply in this chat, or press Resume.",
   budget_limited: "Raise or lift the budget, then press Resume.",
-  paused: "Press Resume. What a blocked report does, and the goal's ceilings, are set with `gents automation goal policy`.",
+  paused:
+    "Press Resume. What a blocked report does, and the goal's ceilings, are set with `gents automation goal policy`.",
 };
 
 /* Decimal strings carry the runtime's signed 64-bit counters; display
