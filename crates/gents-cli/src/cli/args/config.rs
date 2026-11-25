@@ -477,9 +477,14 @@ pub(crate) struct AgentCreateArgs {
     pub(crate) root: Option<String>,
     #[arg(
         long,
-        help = "agent_did of an existing enabled agent to clone the context/tools from; mutually exclusive with --preset"
+        help = "agent_did of an existing enabled agent to clone the context/tools from; mutually exclusive with --preset and --context-id"
     )]
     pub(crate) clone_from: Option<String>,
+    #[arg(
+        long,
+        help = "Existing AgentContext id on the same node to bind unchanged; mutually exclusive with --clone-from, --system-prompt, --preset, and --root"
+    )]
+    pub(crate) context_id: Option<String>,
     #[arg(
         long,
         help = "Required published InferenceProfile id under the target agent's scope"

@@ -313,6 +313,7 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
         AgentCreateInput {
             operation,
             clone_from: args.clone_from,
+            context_id: args.context_id,
             display_name: args.display_name,
             description: optional_update(args.description),
             system_prompt: optional_update(args.system_prompt),
@@ -334,6 +335,7 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
         AgentCreateInput {
             operation: AgentCreateOperation::Clone,
             clone_from: Some(args.source_agent_did),
+            context_id: None,
             display_name: args.display_name,
             description: optional_update(args.description),
             system_prompt: optional_update(args.system_prompt),
@@ -640,6 +642,7 @@ mod tests {
         let create = |operation| AgentCreateInput {
             operation,
             clone_from: None,
+            context_id: None,
             display_name: "Canonical".into(),
             description: StringUpdate::Omitted,
             system_prompt: StringUpdate::Omitted,

@@ -1,7 +1,8 @@
 //! A finished trial's provider transcripts, read from its retained home. Each
 //! stage request yields the exact bodies it sent its provider and the
-//! assistant message it ended on, rendered as that provider's history renders
-//! it, with the usage, tool calls and context reductions behind them.
+//! assistant messages it recorded, rendered as that provider's history renders
+//! them, with each turn's reasoning, usage, tool calls and context reductions
+//! behind them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -23,7 +24,7 @@ use gents_observe::observe::run_timeline::rows::{
 use gents_observe::observe::run_timeline_fetch::{
     load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
 };
-use gents_protocol::output::MessageRole;
+use gents_protocol::output::{MessageRole, OutputSource};
 use gents_protocol::rendered_request::{
     CaptureScopeKind, HistoryStubbing, ParsedProvenance, ProvenanceManifest, RenderedRequestSource,
 };
@@ -91,6 +92,8 @@ pub struct StageTranscript {
     /// continues this session, or a delegated agent's request in its own.
     pub child_requests: Vec<ChildRequest>,
     pub calls: Vec<ProviderCall>,
+    /// Every assistant message the request recorded, in session sequence order.
+    pub outputs: Vec<AssistantOutput>,
     /// The last assistant message the request recorded.
     pub final_output: Option<AssistantOutput>,
 }
@@ -153,11 +156,18 @@ pub struct ProviderCall {
     pub sampling: Value,
     /// The exact body sent to the provider.
     pub request: Value,
+    /// The assistant message this provider call produced, when it published one.
+    pub output: Option<AssistantOutput>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AssistantOutput {
     pub sequence: i64,
+    pub capture_scope: Option<String>,
+    pub turn_index: Option<i64>,
+    pub attempt: Option<i64>,
+    pub call_id: Option<String>,
+    pub call_seq: Option<i64>,
     /// The message as the provider's wire renders it in any later request's
     /// history: one chat-completions message, or the Responses items it spans.
     pub wire: Vec<Value>,
@@ -250,27 +260,21 @@ async fn stage_transcript(
     let is_kind = |event: &TimelineRenderedRequestEvent, kind: CaptureScopeKind| {
         event.scope_kind.as_deref() == Some(kind.as_str())
     };
-    let final_capture = captures
-        .iter()
-        .rev()
-        .find(|(_, event)| is_kind(event, CaptureScopeKind::Inference));
+    let final_capture = last_inference_capture(&captures);
+    let (outputs, outputs_by_coord) =
+        stage_assistant_outputs(rows, doc_id, &captures, &calls, backends, options.redaction)?;
     let selected = match options.calls {
         TranscriptCalls::Final => final_capture.into_iter().collect::<Vec<_>>(),
         TranscriptCalls::All => captures.iter().collect(),
     };
     let mut exported = Vec::with_capacity(selected.len());
     for (row, event) in selected {
-        exported.push(provider_call(access, row, event, &calls, options.redaction).await?);
+        let output = capture_coordinate(event)
+            .and_then(|coord| outputs_by_coord.get(&coord).copied())
+            .map(|index| outputs[index].clone());
+        exported.push(provider_call(access, row, event, &calls, output, options.redaction).await?);
     }
-    let final_output = match (final_message(rows, doc_id), final_capture) {
-        (Some(message), Some((row, _))) => Some(assistant_output(
-            message,
-            row,
-            wire_counter(&calls, backends, row)?,
-            options.redaction,
-        )?),
-        _ => None,
-    };
+    let final_output = outputs.last().cloned();
     Ok(StageTranscript {
         request_id: request.request_id.clone(),
         session_id: request.session_id.clone(),
@@ -335,6 +339,7 @@ async fn stage_transcript(
             })
             .collect(),
         calls: exported,
+        outputs,
         final_output,
     })
 }
@@ -344,6 +349,7 @@ async fn provider_call(
     row: &TimelineRenderedRequestRow,
     event: &TimelineRenderedRequestEvent,
     calls: &[&TimelineInferenceCallRow],
+    output: Option<AssistantOutput>,
     redaction: ProjectionRedactionMode,
 ) -> Result<ProviderCall> {
     let body = capture_body(access, row).await?;
@@ -372,6 +378,7 @@ async fn provider_call(
         usage: call.map(|call| TokenUsage::of(call)),
         sampling,
         request: redact_body(body, redaction),
+        output,
     })
 }
 
@@ -427,14 +434,111 @@ fn capture_source(row: &TimelineRenderedRequestRow) -> Result<RenderedRequestSou
     serde_json::from_value(Value::String(source)).context("capture records an unknown source")
 }
 
-fn final_message<'a>(rows: &'a RunTimelineRows, doc_id: &str) -> Option<&'a TimelineMessageRow> {
-    rows.messages
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct TurnCoordinate {
+    capture_scope: String,
+    turn_index: i64,
+    attempt: i64,
+}
+
+fn last_inference_capture<'a>(
+    captures: &'a [(&'a TimelineRenderedRequestRow, TimelineRenderedRequestEvent)],
+) -> Option<&'a (&'a TimelineRenderedRequestRow, TimelineRenderedRequestEvent)> {
+    captures.iter().rev().find(|(_, event)| {
+        event.scope_kind.as_deref() == Some(CaptureScopeKind::Inference.as_str())
+    })
+}
+
+fn capture_coordinate(event: &TimelineRenderedRequestEvent) -> Option<TurnCoordinate> {
+    Some(TurnCoordinate {
+        capture_scope: event.capture_scope.clone()?,
+        turn_index: event.turn_index?,
+        attempt: event.attempt?,
+    })
+}
+
+fn message_turn_coordinate(message: &TimelineMessageRow, doc_id: &str) -> Option<TurnCoordinate> {
+    let rest = message
+        .header
+        .message_key
+        .strip_prefix("provider:")
+        .or_else(|| message.header.message_key.strip_prefix("request-recovery:"))?;
+    let encoded_source = rest.strip_prefix(doc_id)?.strip_prefix(':')?;
+    let OutputSource::ProviderTurn {
+        scope,
+        turn_index,
+        attempt,
+    } = serde_json::from_str::<OutputSource>(encoded_source).ok()?
+    else {
+        return None;
+    };
+    Some(TurnCoordinate {
+        capture_scope: scope.to_string(),
+        turn_index: i64::from(turn_index),
+        attempt: i64::from(attempt),
+    })
+}
+
+fn assistant_messages<'a>(rows: &'a RunTimelineRows, doc_id: &str) -> Vec<&'a TimelineMessageRow> {
+    let mut messages = rows
+        .messages
         .iter()
         .filter(|message| {
             message.request_doc_id.as_deref() == Some(doc_id)
                 && message.header.role == MessageRole::Assistant
         })
-        .max_by_key(|message| message.sequence)
+        .collect::<Vec<_>>();
+    messages.sort_by(|left, right| {
+        left.sequence
+            .cmp(&right.sequence)
+            .then_with(|| left.header.message_key.cmp(&right.header.message_key))
+    });
+    messages
+}
+
+fn stage_assistant_outputs(
+    rows: &RunTimelineRows,
+    doc_id: &str,
+    captures: &[(&TimelineRenderedRequestRow, TimelineRenderedRequestEvent)],
+    calls: &[&TimelineInferenceCallRow],
+    backends: &[InferenceBackend],
+    redaction: ProjectionRedactionMode,
+) -> Result<(Vec<AssistantOutput>, BTreeMap<TurnCoordinate, usize>)> {
+    let mut captures_by_coord = BTreeMap::new();
+    for (row, event) in captures {
+        if let Some(coord) = capture_coordinate(event) {
+            captures_by_coord.insert(coord, (*row, event));
+        }
+    }
+    let final_capture = last_inference_capture(captures).map(|(row, event)| (*row, event));
+    let messages = assistant_messages(rows, doc_id);
+    let mut outputs = Vec::with_capacity(messages.len());
+    let mut outputs_by_coord = BTreeMap::new();
+    for message in messages {
+        let coord = message_turn_coordinate(message, doc_id);
+        let matched = coord
+            .as_ref()
+            .and_then(|coord| captures_by_coord.get(coord).copied());
+        let Some((capture_row, _)) = matched.or(final_capture) else {
+            continue;
+        };
+        let matched_event = matched.map(|(_, event)| event);
+        let call_id = matched_event.and_then(|event| event.call_id.as_deref());
+        let output = assistant_output(
+            message,
+            capture_row,
+            matched_event,
+            coord.as_ref(),
+            wire_counter(calls, backends, capture_row, call_id)?,
+            redaction,
+        )?;
+        let index = outputs.len();
+        outputs.push(output);
+        if let Some(coord) = coord {
+            outputs_by_coord.insert(coord, index);
+        }
+    }
+    Ok((outputs, outputs_by_coord))
 }
 
 /// The counter the request's own loop projected its history with: the
@@ -443,12 +547,22 @@ fn wire_counter(
     calls: &[&TimelineInferenceCallRow],
     backends: &[InferenceBackend],
     capture: &TimelineRenderedRequestRow,
+    call_id: Option<&str>,
 ) -> Result<ProviderInputCounter> {
-    let backend_id = calls
-        .iter()
-        .rev()
-        .filter(|call| call.call_kind == CallKind::Inference.as_str())
-        .find_map(|call| call.backend_id.as_deref())
+    let backend_id = call_id
+        .and_then(|id| {
+            calls
+                .iter()
+                .find(|call| call.call_id == id)
+                .and_then(|call| call.backend_id.as_deref())
+        })
+        .or_else(|| {
+            calls
+                .iter()
+                .rev()
+                .filter(|call| call.call_kind == CallKind::Inference.as_str())
+                .find_map(|call| call.backend_id.as_deref())
+        })
         .context("the stage's inference calls name no backend")?;
     let backend = backends
         .iter()
@@ -465,6 +579,8 @@ fn wire_counter(
 fn assistant_output(
     message: &TimelineMessageRow,
     capture: &TimelineRenderedRequestRow,
+    matched_event: Option<&TimelineRenderedRequestEvent>,
+    coord: Option<&TurnCoordinate>,
     counter: ProviderInputCounter,
     redaction: ProjectionRedactionMode,
 ) -> Result<AssistantOutput> {
@@ -476,6 +592,17 @@ fn assistant_output(
         .unwrap_or_default();
     Ok(AssistantOutput {
         sequence: message.sequence,
+        capture_scope: matched_event
+            .and_then(|event| event.capture_scope.clone())
+            .or_else(|| coord.map(|coord| coord.capture_scope.clone())),
+        turn_index: matched_event
+            .and_then(|event| event.turn_index)
+            .or_else(|| coord.map(|coord| coord.turn_index)),
+        attempt: matched_event
+            .and_then(|event| event.attempt)
+            .or_else(|| coord.map(|coord| coord.attempt)),
+        call_id: matched_event.and_then(|event| event.call_id.clone()),
+        call_seq: matched_event.and_then(|event| event.call_seq),
         wire: wire
             .into_iter()
             .map(|item| redact_conversation(item, redaction))
@@ -587,5 +714,76 @@ impl TokenUsage {
                 ),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_protocol::message::Message;
+    use gents_protocol::output::{MessagePublication, OutputOutcome, TranscriptMessage};
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    fn assistant_row(doc_id: &str, message_key: String, sequence: i64) -> TimelineMessageRow {
+        TimelineMessageRow {
+            doc_id: Some(format!("msg-{sequence}")),
+            session_id: "session-1".into(),
+            request_doc_id: Some(doc_id.into()),
+            sequence,
+            timestamp: Some("2026-01-01T00:00:00Z".into()),
+            node_did: Some("did:key:node".into()),
+            header: TranscriptMessage {
+                message_key,
+                session_id: "session-1".into(),
+                node_did: "did:key:node".into(),
+                requester_did: None,
+                request_doc_id: Some(doc_id.into()),
+                publication: MessagePublication::RequestExecution {
+                    execution_generation: "gen-1".into(),
+                },
+                outcome: OutputOutcome::Complete,
+                sequence: u32::try_from(sequence).unwrap(),
+                role: MessageRole::Assistant,
+                native_id: None,
+                native_request_id: None,
+                blocks: Vec::new(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+            message: Message::assistant("ok"),
+        }
+    }
+
+    #[test]
+    fn message_turn_coordinate_decodes_provider_and_recovery_keys() {
+        let doc_id = "bae-req-1";
+        let source = OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: 1,
+            },
+            turn_index: 2,
+            attempt: 1,
+        };
+        let encoded = serde_json::to_string(&source).unwrap();
+        let expected = TurnCoordinate {
+            capture_scope: "inference.1".into(),
+            turn_index: 2,
+            attempt: 1,
+        };
+
+        let provider = assistant_row(doc_id, format!("provider:{doc_id}:{encoded}"), 3);
+        assert_eq!(
+            message_turn_coordinate(&provider, doc_id),
+            Some(expected.clone())
+        );
+
+        let recovery = assistant_row(doc_id, format!("request-recovery:{doc_id}:{encoded}"), 4);
+        assert_eq!(message_turn_coordinate(&recovery, doc_id), Some(expected));
+
+        let other_request = assistant_row(doc_id, format!("provider:bae-other:{encoded}"), 5);
+        assert_eq!(message_turn_coordinate(&other_request, doc_id), None);
+
+        let authored = assistant_row(doc_id, format!("authored:{doc_id}:prompt"), 6);
+        assert_eq!(message_turn_coordinate(&authored, doc_id), None);
     }
 }

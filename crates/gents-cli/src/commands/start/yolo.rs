@@ -79,6 +79,7 @@ pub(super) async fn ensure_agent(
         &AgentCreateInput {
             operation: AgentCreateOperation::Clone,
             clone_from: Some(source.clone()),
+            context_id: None,
             display_name: DISPLAY_NAME.into(),
             description: StringUpdate::Set(DESCRIPTION.into()),
             system_prompt: StringUpdate::Set(SYSTEM_PROMPT.into()),

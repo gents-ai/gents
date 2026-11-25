@@ -41,6 +41,180 @@ async fn agent_selection_requires_exact_did_and_suggests_display_name() {
 }
 
 #[tokio::test]
+async fn agent_create_with_context_id_reuses_existing_context_without_mutating_it() {
+    let fixture =
+        gents_automation::test_support::self_config_fixture("agent-create-context-id").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_node_administration().await;
+    let tools = fixture.tools(&["node", "tools", "profile"]);
+    let profile = format!("{}:inference", fixture.agent_did());
+
+    ok(
+        &tools,
+        json!({"argv":["tools","create"],"target_id":"desk-tools","set":{"display_name":"Desk tools"}}),
+    )
+    .await;
+    ok(
+        &tools,
+        json!({
+            "argv":["context","create"],
+            "target_id":"desk-live",
+            "set":{
+                "display_name":"Desk Template",
+                "system_prompt":"Handle returns politely.",
+                "tools_id":"desk-tools"
+            }
+        }),
+    )
+    .await;
+
+    let preview = ok(
+        &tools,
+        json!({
+            "argv":["agent","preview","create"],
+            "options":{"display-name":"Returns Desk","context-id":"desk-live","profile":profile}
+        }),
+    )
+    .await;
+    assert_eq!(preview["admitted"], true, "{preview}");
+    assert_eq!(preview["committed"], false, "{preview}");
+    assert_eq!(preview["agent"]["context_id"], "desk-live", "{preview}");
+
+    let created = ok(
+        &tools,
+        json!({
+            "argv":["agent","create"],
+            "options":{"display-name":"Returns Desk","context-id":"desk-live","profile":profile}
+        }),
+    )
+    .await;
+    assert_eq!(created["committed"], true, "{created}");
+    assert_eq!(created["admitted"], true, "{created}");
+    let created_did = created["agent_did"].as_str().expect("created agent_did");
+    assert_eq!(created["agent"]["context_id"], "desk-live", "{created}");
+    assert_eq!(
+        created["agent"]["display_name"], "Returns Desk",
+        "{created}"
+    );
+
+    let fresh_ctx_err = refused(
+        &tools,
+        json!({"argv":["context","get"],"target_id":format!("{created_did}:context")}),
+    )
+    .await;
+    assert!(
+        fresh_ctx_err.contains("no owned AgentContext"),
+        "must not allocate a fresh <agent_did>:context: {fresh_ctx_err}"
+    );
+
+    let desk_ctx = ok(
+        &tools,
+        json!({"argv":["context","get"],"target_id":"desk-live"}),
+    )
+    .await;
+    assert_eq!(
+        desk_ctx["document"]["system_prompt"],
+        "Handle returns politely."
+    );
+    assert_eq!(desk_ctx["document"]["tools_id"], "desk-tools");
+    assert_eq!(desk_ctx["document"]["display_name"], "Desk Template");
+
+    let missing_err = refused(
+        &tools,
+        json!({
+            "argv":["agent","create"],
+            "options":{"display-name":"Ghost","context-id":"no-such-context","profile":profile}
+        }),
+    )
+    .await;
+    assert!(
+        missing_err.contains("missing AgentContext") && missing_err.contains("no-such-context"),
+        "{missing_err}"
+    );
+    assert!(
+        missing_err.contains(r#"["context","list"]"#),
+        "missing context-id should suggest listing contexts: {missing_err}"
+    );
+
+    let blank_err = refused(
+        &tools,
+        json!({
+            "argv":["agent","create"],
+            "options":{"display-name":"Blank","context-id":"   ","profile":profile}
+        }),
+    )
+    .await;
+    assert!(
+        blank_err.contains("context_id cannot be blank"),
+        "{blank_err}"
+    );
+
+    for (label, extra) in [
+        ("system-prompt", ("system-prompt", json!("Override."))),
+        ("preset", ("preset", json!("readonly"))),
+        ("root", ("root", json!("/tmp"))),
+    ] {
+        let mut options = serde_json::Map::from_iter([
+            ("display-name".into(), json!("Conflict")),
+            ("context-id".into(), json!("desk-live")),
+            ("profile".into(), json!(profile)),
+        ]);
+        options.insert(extra.0.into(), extra.1);
+        let conflict = refused(
+            &tools,
+            json!({"argv":["agent","create"],"options":Value::Object(options.clone())}),
+        )
+        .await;
+        assert!(
+            conflict.contains("binds an existing AgentContext unchanged"),
+            "{label}: {conflict}"
+        );
+        let preview_conflict = ok(
+            &tools,
+            json!({"argv":["agent","preview","create"],"options":Value::Object(options)}),
+        )
+        .await;
+        assert_eq!(
+            preview_conflict["admitted"], false,
+            "{label}: {preview_conflict}"
+        );
+        assert_eq!(
+            preview_conflict["refusal"], "invalid_input",
+            "{label}: {preview_conflict}"
+        );
+    }
+
+    let clone_conflict = refused(
+        &tools,
+        json!({
+            "argv":["agent","clone"],
+            "options":{"from":fixture.agent_did(),"display-name":"CloneConflict","context-id":"desk-live","profile":profile}
+        }),
+    )
+    .await;
+    assert!(
+        clone_conflict.contains("omit context-id"),
+        "clone with context-id must be refused: {clone_conflict}"
+    );
+
+    let fresh = ok(
+        &tools,
+        json!({
+            "argv":["agent","create"],
+            "options":{"display-name":"Fresh","system-prompt":"Fresh prompt.","profile":profile}
+        }),
+    )
+    .await;
+    let fresh_did = fresh["agent_did"].as_str().expect("fresh agent_did");
+    assert_eq!(
+        fresh["agent"]["context_id"],
+        format!("{fresh_did}:context"),
+        "create without context-id still allocates a fresh context: {fresh}"
+    );
+}
+
+#[tokio::test]
 async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview() {
     let (fixture, tools) = authenticated_setup("profile-target", &["node", "profile"]).await;
     let agent_did = fixture.agent_did();

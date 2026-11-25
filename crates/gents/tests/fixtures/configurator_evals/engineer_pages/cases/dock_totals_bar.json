@@ -24,7 +24,8 @@
           "params": {
             "required": [
               "charts"
-            ]
+            ],
+            "route_reason": "The prompt explicitly asks to chart crates per dock as bars."
           },
           "tier": "acceptance",
           "weight": 1

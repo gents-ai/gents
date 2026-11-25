@@ -246,6 +246,11 @@ fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParam
         description: input.description.clone(),
         system_prompt: input.system_prompt.clone(),
         clone_from: input.clone_from.clone(),
+        context_id: input
+            .context_id
+            .clone()
+            .map(StringUpdate::Set)
+            .unwrap_or_default(),
         root: input.root.clone(),
         preset: input
             .preset
@@ -260,8 +265,7 @@ fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParam
 
 /// `operations::agent::put`: a whole Agent document becomes the edit of its
 /// changed writable fields when the Agent exists, else a create that selects
-/// the document's Context and profile; that create's input prompt is the
-/// selected Context's.
+/// the document's Context and profile.
 fn put_params(
     args: &ConfigureAgentParams,
     agent: &Agent,
@@ -329,18 +333,6 @@ fn put_params(
             params.tags = Some(agent.tags.clone()).filter(|tags| !tags.is_empty());
             if let Some(context_id) = &agent.context_id {
                 params.context_id = StringUpdate::Set(context_id.clone());
-                params.system_prompt = find(
-                    gents_store::collection::Collection::AgentContext,
-                    context_id,
-                )
-                .and_then(|context| {
-                    context
-                        .get("system_prompt")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .map(StringUpdate::Set)
-                .unwrap_or_default();
             }
         }
     }
@@ -810,6 +802,10 @@ async fn agent_apply_in_txn(
                 } else {
                     None
                 },
+                context_id: args
+                    .context_id
+                    .is_present()
+                    .then(|| args.context_id.value().unwrap_or_default().to_owned()),
             };
             (kind, agent::AgentOperation::Create(request))
         }
@@ -868,6 +864,13 @@ async fn agent_apply_in_txn(
     let mut prompt_warning = None;
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
+            admit(
+                !args.preset.is_present()
+                    && !args.root.is_present()
+                    && args.enable_lsp.is_none()
+                    && args.network_mode.is_none(),
+                AgentOperationError::CreateContextIdConflicts,
+            )?;
             let context_id = args
                 .context_id
                 .value()

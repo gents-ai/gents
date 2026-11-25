@@ -722,7 +722,7 @@ fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<St
     let mut out = format!("{resource}: {}\n", page.what);
     writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
     if resource == "agent" {
-        out = out.replace("create ID", "create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools)");
+        out = out.replace("create ID", "create (options.display-name, profile, plus system-prompt/preset or context-id; allocates ID)");
         out = out.replace(
             "agent preview create|update|delete ID",
             "agent preview create (same options) | update|delete ID",

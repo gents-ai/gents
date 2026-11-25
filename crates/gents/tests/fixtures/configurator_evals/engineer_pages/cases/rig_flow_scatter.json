@@ -20,7 +20,8 @@
           "params": {
             "required": [
               "charts"
-            ]
+            ],
+            "route_reason": "The prompt explicitly asks to plot the rig trial as a scatter chart."
           },
           "tier": "acceptance",
           "weight": 1

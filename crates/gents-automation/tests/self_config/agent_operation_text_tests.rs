@@ -238,8 +238,9 @@ async fn agent_create_and_clone_text_is_pinned() {
 }
 
 const PINNED: &str = r###"## help ["agent","create","--help"] (ok)
-agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root; argv switch --default
-ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the new Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
+agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root, context-id; argv switch --default
+ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
+Pass options.context-id to bind an existing AgentContext unchanged instead of allocating a new Context/Tools (omit system-prompt, preset and root).
 A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.
 Page and recipe: ["help","agent"]
 ## help ["agent","clone","--help"] (ok)
@@ -249,7 +250,7 @@ A new Agent with host tools needs a User to grant it WorkspaceRoot access; the r
 Page and recipe: ["help","agent"]
 ## help ["agent","preview","--help"] (ok)
 agent: an agent role. create bundles its Context and Tools; a profile supplies inference settings. get without an ID inspects your current role.
-Verbs: list | get ID | create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
+Verbs: list | get ID | create (options.display-name, profile, plus system-prompt/preset or context-id; allocates ID) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
 Also: agent clone, disable, default. Use context get/update for its selected Context.
 Fields of Agent: ["display_name","description","context_id","inference_profile_id","enabled","tags"]. Append --help to create/update for shapes.
 Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Creating, cloning and choosing the default need manage_agents on the Node; changing an Agent needs update on that Agent. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.
@@ -327,9 +328,9 @@ tool call error: {"error":"Tools.host.root \"/pinned/unpublished\" is not admitt
 ## create with options.id (refused)
 tool call error: {"error":"agent create provisions a fresh agent DID and returns it; remove options.id","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
 ## create with unknown option (refused)
-tool call error: {"error":"unknown agent option --name. agent create takes options.display-name, system-prompt, preset and profile; it allocates the ID and Context/Tools. Use agent update for an existing role; do not supply set fields to this command","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
+tool call error: {"error":"unknown agent option --name. agent create takes options.display-name, profile, and either system-prompt (with optional preset/root) or context-id; it allocates a fresh agent_did. Use agent update for an existing role; do not supply set fields to this command","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
 ## create with a positional (refused)
-tool call error: {"error":"unexpected positional argument \"Planner\". agent create takes options.display-name, system-prompt, preset and profile; it allocates the ID and Context/Tools. Use agent update for an existing role; do not supply a positional ID","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
+tool call error: {"error":"unexpected positional argument \"Planner\". agent create takes options.display-name, profile, and either system-prompt (with optional preset/root) or context-id; it allocates a fresh agent_did. Use agent update for an existing role; do not supply a positional ID","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
 ## create with set and cleared display_name (refused)
 tool call error: {"error":"display_name cannot be both set and cleared","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":false}}
 ## create with target_id (refused)
