@@ -690,7 +690,7 @@ async fn startup_source_failure_returns_only_after_the_slot_exits() {
             .is_err(),
         "run_agent returned while its generation-one slot was still gated"
     );
-    slot_exit_gate.add_permits(1);
+    slot_exit_gate.add_permits(tokio::sync::Semaphore::MAX_PERMITS);
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
             .await

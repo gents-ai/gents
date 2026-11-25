@@ -547,6 +547,7 @@ impl TrialExecutor for EmbeddedExecutor {
                 stated.is_some_and(|stated| stated.ended_by_backend),
                 classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind),
                 stated.map(|stated| stated.reason),
+                Some(&[]),
             );
             stages.push(StageEvidence {
                 subject_agent: subject.clone(),
@@ -556,6 +557,7 @@ impl TrialExecutor for EmbeddedExecutor {
                 terminal_state,
                 provider_reason: outcome.and_then(|(_, reason)| reason),
                 failure_kind: outcome.map(|(kind, _)| kind),
+                failure_detail: None,
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,
                 inference_calls: evidence.inference_calls,
@@ -569,6 +571,7 @@ impl TrialExecutor for EmbeddedExecutor {
                         subject: subject.as_ref(),
                         evaluator_did: Some(evaluator_did),
                         request_id: Some(&request.request_id),
+                        ..Default::default()
                     },
                 )
                 .await,

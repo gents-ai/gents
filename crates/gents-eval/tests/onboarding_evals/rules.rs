@@ -254,7 +254,10 @@ fn grades_a_run(stage: &EvalStage, check: &EvalCheckRef) -> bool {
         | "captured_files_match" => true,
         "captured_rows_count" | "captured_fields_match" | "crew_spec_match" => {
             read_captures(stage, check).any(|capture| {
-                matches!(capture, EvalCapture::Documents { .. }) && !is_configuration(capture)
+                matches!(
+                    capture,
+                    EvalCapture::Documents { .. } | EvalCapture::Runs { .. }
+                ) && !is_configuration(capture)
             })
         }
         _ => false,
@@ -278,7 +281,7 @@ fn is_configuration(capture: &EvalCapture) -> bool {
         EvalCapture::Documents { collection, .. } => Collection::ALL
             .iter()
             .any(|known| known.graphql_type() == collection),
-        EvalCapture::File { .. } => false,
+        EvalCapture::File { .. } | EvalCapture::Runs { .. } => false,
     }
 }
 

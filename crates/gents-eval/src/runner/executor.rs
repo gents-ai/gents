@@ -133,6 +133,8 @@ pub struct StageSpec {
     pub prompt: String,
     /// Written instead of submitting `prompt`.
     pub seed: Option<FixtureDocument>,
+    #[serde(default = "fire_expected")]
+    pub expect_fire: bool,
     /// Absent, the stage waits for its request's own terminal state.
     #[serde(default)]
     pub deadline_secs: Option<u64>,
@@ -166,6 +168,16 @@ pub enum Capture {
         #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
         text_paths: BTreeSet<String>,
     },
+    Runs {
+        name: String,
+        trigger_id: Option<String>,
+        source_collection: Option<String>,
+        of_seed: bool,
+    },
+}
+
+fn fire_expected() -> bool {
+    true
 }
 
 impl From<&EvalCapture> for Capture {
@@ -191,6 +203,17 @@ impl From<&EvalCapture> for Capture {
                 glob: glob.clone(),
                 text_paths: BTreeSet::new(),
             },
+            EvalCapture::Runs {
+                name,
+                trigger_id,
+                source_collection,
+                of_seed,
+            } => Self::Runs {
+                name: name.clone(),
+                trigger_id: trigger_id.clone(),
+                source_collection: source_collection.clone(),
+                of_seed: *of_seed,
+            },
         }
     }
 }
@@ -211,6 +234,11 @@ pub struct StageEvidence {
     pub request_id: Option<String>,
     pub terminal_state: Option<RequestLifecycleState>,
     pub failure_kind: Option<OutcomeKind>,
+    /// What the runner saw that ended the stage, when the request's own
+    /// record does not say: a trigger's recorded error, or a seed that fired
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_detail: Option<String>,
     pub provider_reason: Option<ProviderReason>,
     pub messages: Vec<MessageEvidence>,
     pub tool_calls: Vec<ToolCallEvidence>,

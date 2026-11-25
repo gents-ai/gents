@@ -10,22 +10,37 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};
-use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
-use gents_inference::admission::BackendAdmissionConfig;
-use gents_inference::resolved::ResolvedAgent;
+use gents_automation::triggers::runtime_snapshot::{AgentDispatcher, ResolvedRuntimeSnapshot};
 use gents_protocol::row::AgentRequest;
 use gents_tools::surface::AgentWithTools;
 use gents_tools::surface::ToolSurface;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 
-/// Bounds requests buffered for one slot and applies backpressure to dispatch.
+/// Bounds requests buffered for one worker level and applies backpressure to
+/// dispatch.
 const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
-/// Caps local worker tasks even when backend admission requests more capacity.
-const MAX_BEHAVIOR_WORKERS: usize = 256;
 
-fn bounded_active_limit(requested: usize) -> usize {
-    requested.clamp(1, MAX_BEHAVIOR_WORKERS)
+/// An Agent's worker levels and the most workers of each (Lean
+/// `WorkerLevels.levels`, `WorkerLevels.levelWorkers`), never sized from a
+/// backend: model calls take their backend's admission permit per call. A
+/// level starts one worker and builds another while all of its workers run
+/// requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct WorkerLayout {
+    pub(super) levels: usize,
+    pub(super) level_workers: usize,
+}
+
+impl WorkerLayout {
+    pub(super) const AGENT: Self = Self {
+        levels: 3,
+        level_workers: 8,
+    };
+
+    fn workers(self) -> usize {
+        self.levels * self.level_workers
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +50,7 @@ pub(super) enum AgentSlotState {
 }
 
 pub(super) struct AgentSlot {
-    pub(super) dispatcher: mpsc::Sender<AgentRequest>,
+    pub(super) dispatcher: AgentDispatcher,
     pub(super) state_tx: watch::Sender<AgentSlotState>,
     pub(super) handle: AbortOnDropHandle<Result<()>>,
     pub(super) agent_fingerprint: String,
@@ -61,11 +76,9 @@ impl AgentSlot {
         &self,
         agent_config: &AgentWithTools,
         tool_surface: &Arc<ToolSurface>,
-        executor_capacity: usize,
     ) -> bool {
         self.agent_fingerprint == agent_config.slot_fingerprint()
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
-            && self.executor_capacity == executor_capacity
     }
 }
 
@@ -223,7 +236,7 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut slots = RapidHashMap::with_capacity(resolved_snapshot.agents.len());
-    for (agent_did, agent) in &resolved_snapshot.agents {
+    for agent_did in resolved_snapshot.agents.keys() {
         let tool_surface = resolved_snapshot
             .tool_surfaces
             .get(agent_did)
@@ -234,7 +247,7 @@ where
             .expect("resolved snapshot should include tool configurations for runnable agents");
         slots.insert(
             agent_did.clone(),
-            spawn_slot_with_capacity(
+            spawn_slot_with_layout(
                 SlotConfig {
                     agent_config: agent_config.clone(),
                     tool_surface,
@@ -242,7 +255,7 @@ where
                     retry_policy: retry_policy.clone(),
                     failure_policy: failure_policy.clone(),
                 },
-                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs),
+                WorkerLayout::AGENT,
                 runner.clone(),
                 shutdown.clone(),
             ),
@@ -274,7 +287,7 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    spawn_slot_with_capacity(
+    spawn_slot_with_layout(
         SlotConfig {
             agent_config,
             tool_surface,
@@ -282,15 +295,18 @@ where
             retry_policy,
             failure_policy: None,
         },
-        1,
+        WorkerLayout {
+            levels: 1,
+            level_workers: 1,
+        },
         runner,
         shutdown,
     )
 }
 
-pub(super) fn spawn_slot_with_capacity<F, Fut>(
+pub(super) fn spawn_slot_with_layout<F, Fut>(
     slot: SlotConfig,
-    executor_capacity: usize,
+    layout: WorkerLayout,
     runner: F,
     shutdown: watch::Receiver<bool>,
 ) -> AgentSlot
@@ -316,25 +332,29 @@ where
         retry_policy,
         failure_policy,
     } = slot;
-    let requested_capacity = executor_capacity;
-    let executor_capacity = bounded_active_limit(executor_capacity);
-    if requested_capacity > executor_capacity {
-        tracing::warn!(
-            agent_did = %agent_config.agent.agent_did,
-            requested_capacity,
-            executor_capacity,
-            max_worker_tasks = MAX_BEHAVIOR_WORKERS,
-            "local node agent worker capacity was bounded"
-        );
-    }
-    let capacity = WorkerCapacity::new(executor_capacity);
-    let (dispatcher, request_rx) = mpsc::channel(AGENT_EXECUTOR_QUEUE_CAPACITY);
-    let request_rx = Arc::new(Mutex::new(request_rx));
+    let (mut senders, receivers): (Vec<_>, Vec<_>) = (0..=layout.levels)
+        .map(|_| mpsc::channel(AGENT_EXECUTOR_QUEUE_CAPACITY))
+        .unzip();
+    let auxiliary = senders
+        .pop()
+        .expect("the auxiliary lane follows the levels");
+    let dispatcher = AgentDispatcher::new(senders, auxiliary);
+    let queue_capacity = dispatcher.max_capacity();
     let (state_tx, state_rx) = watch::channel(AgentSlotState::Active);
     let agent_fingerprint = agent_config.slot_fingerprint();
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
+    let lanes = receivers
+        .into_iter()
+        .map(|request_rx| SlotRuntime {
+            request_rx: Arc::new(Mutex::new(request_rx)),
+            capacity: WorkerCapacity::new(layout.level_workers),
+            shutdown: shutdown.clone(),
+            state_rx: state_rx.clone(),
+            standing: standing.clone(),
+        })
+        .collect();
     let handle = AbortOnDropHandle::new(tokio::spawn(run_slot_workers(
         SlotConfig {
             agent_config,
@@ -343,14 +363,8 @@ where
             retry_policy,
             failure_policy,
         },
-        SlotRuntime {
-            request_rx,
-            capacity,
-            shutdown,
-            state_rx,
-            standing: standing.clone(),
-        },
-        executor_capacity,
+        lanes,
+        layout,
         runner,
     )));
 
@@ -360,33 +374,13 @@ where
         handle,
         agent_fingerprint,
         tool_surface_fingerprint,
-        executor_capacity,
+        executor_capacity: layout.workers(),
         #[cfg(test)]
-        worker_task_count: executor_capacity,
+        worker_task_count: layout.levels + 1,
         standing,
-        queue_capacity: AGENT_EXECUTOR_QUEUE_CAPACITY,
+        queue_capacity,
         generation,
     }
-}
-
-pub(super) fn agent_executor_capacity(
-    agent_config: &ResolvedAgent,
-    backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
-) -> usize {
-    let Some(backend_id) = agent_config
-        .backend_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|backend_id| !backend_id.is_empty())
-    else {
-        return 1;
-    };
-
-    backend_admission_configs
-        .get(backend_id)
-        .filter(|config| config.is_available())
-        .map(|config| bounded_active_limit(config.max_concurrent))
-        .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -540,10 +534,12 @@ where
     }
 }
 
+/// `lanes` holds one runtime per worker level and, last, the auxiliary lane,
+/// whose one worker only starts auxiliary requests and never grows.
 async fn run_slot_workers<F, Fut>(
     slot: SlotConfig,
-    runtime: SlotRuntime,
-    executor_capacity: usize,
+    lanes: Vec<SlotRuntime>,
+    layout: WorkerLayout,
     runner: F,
 ) -> Result<()>
 where
@@ -561,36 +557,72 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let worker_count = executor_capacity;
     let agent_did = slot.agent_config.agent.agent_did.clone();
     tracing::info!(
         agent_did = %agent_did,
-        executor_capacity,
-        worker_count,
+        levels = layout.levels,
+        level_workers = layout.level_workers,
         queue_capacity = AGENT_EXECUTOR_QUEUE_CAPACITY,
         "agent executor worker pool starting"
     );
     let mut workers = JoinSet::new();
-    for worker_index in 0..worker_count {
-        workers.spawn(run_slot_loop(slot.clone(), runtime.clone(), runner.clone()));
+    let mut spawned = vec![0; lanes.len()];
+    let spawn = |workers: &mut JoinSet<Result<()>>, spawned: &mut [usize], lane: usize| {
+        workers.spawn(run_slot_loop(
+            slot.clone(),
+            lanes[lane].clone(),
+            runner.clone(),
+        ));
+        spawned[lane] += 1;
         tracing::debug!(
             agent_did = %agent_did,
-            worker_index,
-            executor_capacity,
+            lane,
+            workers = spawned[lane],
             "agent executor worker spawned"
         );
+    };
+    for lane in 0..lanes.len() {
+        spawn(&mut workers, &mut spawned, lane);
     }
-
     let mut first_error = None;
-    while let Some(joined) = workers.join_next().await {
-        let error = match joined {
-            Ok(Ok(())) => continue,
-            Ok(Err(error)) => error,
-            Err(error) => anyhow::anyhow!("agent executor worker task join failed: {error}"),
+    loop {
+        let growing = lanes[..layout.levels]
+            .iter()
+            .zip(&spawned)
+            .enumerate()
+            .filter(|(_, (_, spawned))| **spawned < layout.level_workers)
+            .map(|(level, (runtime, spawned))| {
+                let capacity = runtime.capacity.clone();
+                let spawned = *spawned;
+                Box::pin(async move {
+                    capacity.saturated(spawned).await;
+                    level
+                })
+            })
+            .collect::<Vec<_>>();
+        let saturated = async {
+            if growing.is_empty() {
+                std::future::pending().await
+            } else {
+                futures::future::select_all(growing).await.0
+            }
         };
-        tracing::error!(agent_did = %agent_did, error = %error, "agent executor worker failed");
-        if first_error.is_none() {
-            first_error = Some(error);
+        tokio::select! {
+            level = saturated => spawn(&mut workers, &mut spawned, level),
+            joined = workers.join_next() => {
+                let Some(joined) = joined else {
+                    break;
+                };
+                let error = match joined {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(error)) => error,
+                    Err(error) => anyhow::anyhow!("agent executor worker task join failed: {error}"),
+                };
+                tracing::error!(agent_did = %agent_did, error = %error, "agent executor worker failed");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
     }
     first_error.map_or(Ok(()), Err)

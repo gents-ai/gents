@@ -46,7 +46,9 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
                         EvalCapture::Schema { .. } => CaptureResult::Schema {
                             collections: vec![],
                         },
-                        EvalCapture::Documents { .. } => CaptureResult::Documents { rows: vec![] },
+                        EvalCapture::Documents { .. } | EvalCapture::Runs { .. } => {
+                            CaptureResult::Documents { rows: vec![] }
+                        }
                         EvalCapture::File { .. } => panic!("unexpected file capture"),
                     },
                 );

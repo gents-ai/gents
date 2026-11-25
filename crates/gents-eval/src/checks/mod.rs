@@ -5,6 +5,7 @@ pub mod crew_spec_match;
 pub mod final_message_matches;
 pub mod handoff_delivery;
 pub mod schema_matches;
+pub mod stage_fields;
 pub mod tool_calls_expected;
 pub mod tool_result_matches;
 
@@ -211,6 +212,9 @@ pub(crate) fn failure_feedback(stage: &StageEvidence) -> String {
     if let Some(reason) = stage.provider_reason {
         text.push_str(&format!("; provider_reason {}", reason.as_str()));
     }
+    if let Some(detail) = &stage.failure_detail {
+        text.push_str(&format!("; {}", excerpt(detail, FEEDBACK_BYTES / 2)));
+    }
     let last_error =
         stage.tool_calls.iter().rev().find(|call| {
             call.status.as_deref() == Some("failed") || call.tool_failure_class.is_some()
@@ -348,6 +352,22 @@ mod catalog_tests {
             assert_eq!(check.params_schema["type"], "object", "{}", check.name);
             assert!(!check.summary.is_empty(), "{}", check.name);
             assert!(!check.reason_codes.is_empty(), "{}", check.name);
+        }
+    }
+
+    #[test]
+    fn every_stage_field_carries_the_schema_its_case_type_derives() {
+        for field in stage_fields::stage_fields() {
+            assert!(
+                field
+                    .schema
+                    .as_object()
+                    .is_some_and(|schema| !schema.is_empty()),
+                "{}: {}",
+                field.name,
+                field.schema
+            );
+            assert!(!field.outcomes.is_empty(), "{}", field.name);
         }
     }
 

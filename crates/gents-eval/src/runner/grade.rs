@@ -99,16 +99,20 @@ fn failed(
         );
     }
     let score_bp = (classify(kind, provider_reason) == EvidenceClass::Fail).then_some(0);
+    let mut row = synthetic(
+        stage,
+        check,
+        kind,
+        provider_reason,
+        score_bp,
+        "stage_failed",
+    );
+    if let Some(detail) = &observed.failure_detail {
+        row.raw["detail"] = json!(detail);
+    }
     VerdictRow {
         feedback: names_failure.then(|| failure_feedback(observed)),
-        ..synthetic(
-            stage,
-            check,
-            kind,
-            provider_reason,
-            score_bp,
-            "stage_failed",
-        )
+        ..row
     }
 }
 
@@ -191,6 +195,7 @@ mod tests {
                     stage_id: id.to_string(),
                     prompt: "p".into(),
                     seed: None,
+                    expect_fire: true,
                     deadline_secs: None,
                     settle: false,
                     continuation: None,

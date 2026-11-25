@@ -1,6 +1,7 @@
 import Proofs.Inference.Operations
 import Proofs.Inference.InferenceCall.Persistence
 import Proofs.Inference.ActivityViews
+import Proofs.Inference.SetupRecommendation
 import Proofs.Conformance.Family
 
 namespace InferenceOperations
@@ -22,3 +23,10 @@ attribute [conformance_function]
   InferenceCall.Persistence.mayStart
   InferenceCall.Persistence.mayInstallTerminal
 
+namespace InferenceSetup
+
+deriving instance Lean.ToJson for Provider
+
+attribute [conformance_function] recommendedMaxConcurrent
+
+end InferenceSetup

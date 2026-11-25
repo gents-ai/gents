@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkers ----
+EXTENDS AgentWorkers
+
+====
