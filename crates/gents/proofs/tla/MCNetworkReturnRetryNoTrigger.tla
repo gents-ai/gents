@@ -1,0 +1,4 @@
+---- MODULE MCNetworkReturnRetryNoTrigger ----
+EXTENDS NetworkReturnRetry
+
+====
