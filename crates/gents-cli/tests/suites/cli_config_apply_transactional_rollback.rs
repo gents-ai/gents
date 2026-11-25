@@ -1,7 +1,7 @@
 use crate::support::*;
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use axum::body::Bytes;
@@ -19,7 +19,6 @@ use uuid::Uuid;
 
 const TRANSACTION_STAGE_DEADLINE: Duration = Duration::from_secs(10);
 const TX_RECLAIM_DEADLINE: Duration = Duration::from_secs(10);
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 struct StallingProxyState {
@@ -159,7 +158,13 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     cli.wait().context("reap CLI")?;
     proxy.abort();
 
-    let deadline = Instant::now() + TX_RECLAIM_DEADLINE;
+    let access =
+        gents_store::config_client::ConfigAccess::Graphql(graphql::served_endpoint(&graphql));
+    let mut subscriptions: std::collections::BTreeMap<
+        &str,
+        gents_store::test_support::snapshot_reader::SnapshotChanges,
+    > = std::collections::BTreeMap::new();
+    let deadline = tokio::time::Instant::now() + TX_RECLAIM_DEADLINE;
     loop {
         let mut current = std::collections::BTreeMap::new();
         for c in &collections {
@@ -169,7 +174,26 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         if current == pre_apply {
             return Ok(());
         }
-        if Instant::now() > deadline {
+        let drifted = collections
+            .iter()
+            .copied()
+            .find(|c| current[c] != pre_apply[c])
+            .expect("drifted collection");
+        if !subscriptions.contains_key(drifted) {
+            subscriptions.insert(
+                drifted,
+                gents_store::test_support::snapshot_reader::SnapshotReader::subscribe_changes(
+                    &access, drifted,
+                )
+                .await,
+            );
+            continue;
+        }
+        let changes = subscriptions.get_mut(drifted).expect("subscription");
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
             let drift: Vec<String> = collections
                 .iter()
                 .filter_map(|c| {
@@ -183,7 +207,6 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
                 drift.join(", ")
             ));
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -50,18 +50,11 @@ impl Helper {
         response
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "synchronous test bounding a child process exit in real time"
-    )]
     fn exited(&mut self) -> std::process::ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                return status;
-            }
-            assert!(Instant::now() < deadline, "media helper did not exit");
-            std::thread::sleep(Duration::from_millis(10));
+        match self.responses.recv_timeout(Duration::from_secs(5)) {
+            Err(mpsc::RecvTimeoutError::Disconnected) => self.child.wait().unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("media helper did not exit"),
+            Ok(frame) => panic!("unexpected frame before media helper exit: {frame}"),
         }
     }
 }

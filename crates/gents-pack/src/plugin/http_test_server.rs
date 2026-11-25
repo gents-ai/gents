@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde_json::json;
 
@@ -37,10 +36,7 @@ impl Server {
             match path.as_str() {
                 "hello" => (StatusCode::OK, [("x-served", "yes")], "hello").into_response(),
                 "big" => "x".repeat(MAX_RESPONSE_BYTES + 1).into_response(),
-                "slow" => {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    "late".into_response()
-                }
+                "slow" => std::future::pending::<axum::response::Response>().await,
                 "cookie" => (StatusCode::OK, [("set-cookie", "session=1")], "set").into_response(),
                 "headers" => json!({
                     "cookie": header("cookie"),

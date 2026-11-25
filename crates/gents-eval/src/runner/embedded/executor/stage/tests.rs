@@ -57,29 +57,30 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         home_hint: None,
     };
     let (_ready_tx, never_ready) = watch::channel(None);
-    let canceller = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        canceller.cancel();
-    });
-    let observed = tokio::time::timeout(
-        Duration::from_secs(5),
-        submit_and_observe(
-            &spec,
-            &StageEnv {
-                agent_did: "did:test:unselected",
-                cancel: &cancel,
-                home: &home,
-                runtime: &exited_runtime(),
-                locator: &locator,
-                workspace: Path::new("."),
-                ready: &never_ready,
-            },
-            &stage,
-        ),
-    )
-    .await
-    .expect("the cancel ends the stage at once");
+    let exited = exited_runtime();
+    let stage_env = StageEnv {
+        agent_did: "did:test:unselected",
+        cancel: &cancel,
+        home: &home,
+        runtime: &exited,
+        locator: &locator,
+        workspace: Path::new("."),
+        ready: &never_ready,
+    };
+    let observed = {
+        let mut stage_run = std::pin::pin!(submit_and_observe(&spec, &stage_env, &stage));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                biased;
+                observed = &mut stage_run => return observed,
+                () = tokio::task::yield_now() => {}
+            }
+            cancel.cancel();
+            stage_run.await
+        })
+        .await
+        .expect("the cancel ends the stage at once")
+    };
     assert_eq!(
         (observed.request_id, observed.failure_kind),
         (None, Some(OutcomeKind::Runtime))
@@ -163,13 +164,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         gents_session::request::lifecycle::submit_client_request(&client, &request)
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while backend.observed_chunks(marker) == 0 {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("scheduled inference must reach its paused provider stream");
+        tokio::time::timeout(Duration::from_secs(30), backend.wait_for_chunks(marker, 1))
+            .await
+            .expect("scheduled inference must reach its paused provider stream");
         let before = collect_request_evidence_with_access(&client, &request_id)
             .await
             .unwrap();

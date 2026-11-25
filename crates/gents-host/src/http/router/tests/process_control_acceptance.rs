@@ -156,18 +156,23 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         if rows.len() == 2 && found.len() == 2 {
             break found;
         }
-        tokio::select! {
-            change = tool_calls.recv() => {
-                change.expect("the AgentToolCall change feed closed");
+        tokio::time::timeout(STALL_CEILING, async {
+            tokio::select! {
+                change = tool_calls.recv() => {
+                    change.expect("the AgentToolCall change feed closed");
+                }
+                change = record_changes.recv() => {
+                    change.expect("the record watch closed").expect("the record watch failed");
+                }
             }
-            change = record_changes.recv() => {
-                change.expect("the record watch closed").expect("the record watch failed");
-            }
-            () = tokio::time::sleep(STALL_CEILING) => panic!(
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
                 "both native workers must start and record ownership; nothing changed for \
-                 {STALL_CEILING:?}; running rows: {rows:?}; recorded: {found:?}"
-            ),
-        }
+             {STALL_CEILING:?}; running rows: {rows:?}; recorded: {found:?}"
+            )
+        });
     };
     drop((tool_calls, record_watch));
     let command = |row: &Value| OperatorProcessControlRequest {

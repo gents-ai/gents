@@ -97,11 +97,15 @@ async fn shared_graphql_client_preserves_per_request_timeouts() {
     assert!(std::ptr::eq(first, second));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let (release_tx, release_rx) = tokio::sync::watch::channel(false);
     let app = Router::new().route(
         "/",
-        post(|| async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            Json(serde_json::json!({ "data": { "ok": true } }))
+        post(move || {
+            let mut release_rx = release_rx.clone();
+            async move {
+                let _ = release_rx.wait_for(|&released| released).await;
+                Json(serde_json::json!({ "data": { "ok": true } }))
+            }
         }),
     );
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -113,6 +117,7 @@ async fn shared_graphql_client_preserves_per_request_timeouts() {
     assert!(execute_graphql_async(&endpoint, None, "{ ok }", options)
         .await
         .is_err());
+    let _ = release_tx.send(true);
     options.timeout = None;
     assert_eq!(
         execute_graphql_async(&endpoint, None, "{ ok }", options)

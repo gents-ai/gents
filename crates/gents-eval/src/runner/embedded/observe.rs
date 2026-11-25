@@ -1006,14 +1006,41 @@ mod tests {
 
     #[tokio::test]
     async fn await_terminal_without_a_deadline_waits_for_the_request_change() {
+        struct SubscribedHook {
+            ready: tokio::sync::Notify,
+            notified: std::sync::atomic::AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl ObservationHook for SubscribedHook {
+            async fn on_state(&self, _state: &str, _session_id: Option<&str>) {
+                if !self
+                    .notified
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.ready.notify_one();
+                }
+            }
+        }
         let home = EmbeddedHome::create_temp("observe-change").await.unwrap();
+        let hook = SubscribedHook {
+            ready: tokio::sync::Notify::new(),
+            notified: std::sync::atomic::AtomicBool::new(false),
+        };
+        let access = ConfigAccess::local(home.node.clone());
         let writer = async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            hook.ready.notified().await;
             insert_request(&home, "req-later", "completed").await;
         };
         let (observed, ()) = tokio::time::timeout(Duration::from_secs(10), async {
             tokio::join!(
-                await_terminal(&home.node, "req-later", None, Duration::ZERO,),
+                await_terminal_with_access(
+                    &home.node,
+                    &access,
+                    "req-later",
+                    None,
+                    Duration::ZERO,
+                    &hook,
+                ),
                 writer,
             )
         })

@@ -1588,19 +1588,14 @@ async fn exit_status_within(
     serve: &mut ServeProcess,
     limit: Duration,
 ) -> Result<std::process::ExitStatus> {
-    let deadline = tokio::time::Instant::now() + limit;
-    loop {
-        if let Some(status) = serve.child.try_wait()? {
-            return Ok(status);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let (stdout, stderr) = serve.captured_output()?;
-            return Err(anyhow!(
-                "server still running after {limit:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    use wait_timeout::ChildExt as _;
+    if let Some(status) = serve.child.wait_timeout(limit)? {
+        return Ok(status);
     }
+    let (stdout, stderr) = serve.captured_output()?;
+    Err(anyhow!(
+        "server still running after {limit:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1636,6 +1631,11 @@ async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> R
     )?;
     // The ready report follows the server's last startup write into the home.
     let (mut serve, _) = spawn_server_with_ready_json(temp.path(), allocate_port()?, &[], &[])?;
+    let (tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })?;
+    notify::Watcher::watch(&mut watcher, temp.path(), notify::RecursiveMode::Recursive)?;
     // The server writes into the home until it notices, so a removal can
     // race a new file; repeat it as a user repeats `rm -rf`.
     let removal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -1645,8 +1645,14 @@ async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> R
         {
             return Err(error.into());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        if tokio::time::timeout_at(removal_deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            return Err(error.into());
+        }
     }
+    drop(watcher);
     fs::create_dir(&home)?;
     let status = exit_status_within(&mut serve, Duration::from_secs(5)).await?;
     assert_eq!(status.code(), Some(68), "{:?}", serve.captured_output()?);

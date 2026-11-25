@@ -38,10 +38,6 @@ async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous test retrying a file lock that has no release notification"
-)]
 fn scenario_cache_lease_excludes_pruning() {
     let home = tempfile::tempdir().unwrap();
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
@@ -49,16 +45,9 @@ fn scenario_cache_lease_excludes_pruning() {
     let exclusive = gents_pack::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
     assert!(exclusive.try_lock().is_err());
     drop(lease);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut backoff = std::time::Duration::from_millis(1);
-    while let Err(error) = exclusive.try_lock() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the exclusive lock stayed blocked after the lease was dropped: {error:?}"
-        );
-        std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(std::time::Duration::from_millis(100));
-    }
+    exclusive
+        .try_lock()
+        .expect("the exclusive lock unlocks as soon as the lease drops");
 }
 
 #[test]

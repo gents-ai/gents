@@ -148,6 +148,15 @@ pub async fn spawn_observed_server(
         .context("server stderr capture")?
         .path()
         .to_owned();
+    let (stdout_tx, mut stdout_changes) = tokio::sync::mpsc::unbounded_channel();
+    let mut stdout_watch = notify::recommended_watcher(move |event| {
+        let _ = stdout_tx.send(event);
+    })?;
+    notify::Watcher::watch(
+        &mut stdout_watch,
+        &stdout,
+        notify::RecursiveMode::NonRecursive,
+    )?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut startup_samples = 0;
     let readiness = loop {
@@ -162,13 +171,18 @@ pub async fn spawn_observed_server(
             "server exited during bind observation: {}",
             tokio::fs::read_to_string(&stderr).await?
         );
-        ensure!(
-            tokio::time::Instant::now() < deadline,
-            "server readiness timed out: {}",
-            tokio::fs::read_to_string(&stderr).await?
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        match tokio::time::timeout_at(deadline, stdout_changes.recv()).await {
+            Ok(Some(event)) => {
+                event?;
+            }
+            Ok(None) => anyhow::bail!("server stdout watch closed"),
+            Err(_) => anyhow::bail!(
+                "server readiness timed out: {}",
+                tokio::fs::read_to_string(&stderr).await?
+            ),
+        }
     };
+    drop(stdout_watch);
     tokio::task::spawn_blocking(move || {
         support::graphql::register_served_home(
             &registered_home,

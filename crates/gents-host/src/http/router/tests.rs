@@ -1259,7 +1259,10 @@ async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
 }
 
 async fn stalled_activity_state(
-    core_delay: Duration,
+    core_gate: Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )>,
 ) -> (
     RuntimeHttpState,
     gents_store::test_support::wire_database::WireDatabase,
@@ -1279,10 +1282,16 @@ async fn stalled_activity_state(
             }],
         }),
         std::sync::Arc::new(move |collection| {
+            let core_gate = core_gate.clone();
             Box::pin(async move {
                 match collection.as_str() {
-                    "NodeRuntime" => tokio::time::sleep(core_delay).await,
-                    "InferenceCall" => tokio::time::sleep(Duration::from_secs(30)).await,
+                    "NodeRuntime" => {
+                        if let Some((entered, release)) = core_gate {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
+                    }
+                    "InferenceCall" => std::future::pending::<()>().await,
                     _ => {}
                 }
                 Ok(())
@@ -1312,7 +1321,7 @@ fn progress_age_ms(body: &Value) -> i64 {
 
 #[tokio::test]
 async fn stalled_liveness_activity_read_does_not_hold_health() {
-    let (state, _database) = stalled_activity_state(Duration::ZERO).await;
+    let (state, _database) = stalled_activity_state(None).await;
 
     let started = std::time::Instant::now();
     let (status, healthz) = health_body(healthz_handler(State(state.clone())).await).await;
@@ -1339,11 +1348,26 @@ async fn stalled_liveness_activity_read_does_not_hold_health() {
 
 #[tokio::test]
 async fn late_core_read_leaves_status_ok_when_activity_stalls() {
-    let (state, _database) = stalled_activity_state(Duration::from_millis(1_700)).await;
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (state, _database) = stalled_activity_state(Some((entered.clone(), release.clone()))).await;
 
     let started = std::time::Instant::now();
-    let (_, status_body) =
-        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await;
+    let status_fut = async {
+        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await
+    };
+    tokio::pin!(status_fut);
+    let (_, status_body) = tokio::select! {
+        biased;
+        result = &mut status_fut => result,
+        () = entered.notified() => {
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_millis(1_700)).await;
+            release.notify_one();
+            tokio::time::resume();
+            status_fut.await
+        }
+    };
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",

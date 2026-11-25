@@ -1901,13 +1901,25 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
     }
 
     starter_step(scratch, &home, "enable-running")?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        support::graphql::served_endpoint(&graphql),
+    );
+    let mut readiness_changes =
+        gents_store::test_support::snapshot_reader::SnapshotReader::subscribe_changes(
+            &access,
+            "NodeReadiness",
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     let reason = loop {
         let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
-        if reason.is_none() || std::time::Instant::now() >= deadline {
+        if reason.is_none()
+            || tokio::time::timeout_at(deadline, readiness_changes.recv())
+                .await
+                .is_err()
+        {
             break reason;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     };
     for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
         CorePack,
