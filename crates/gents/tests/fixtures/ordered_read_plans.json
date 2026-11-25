@@ -555,5 +555,74 @@
         "escaped_request_id": "probe"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-store/src/config_client/session_children/ownership.rs",
+      "collection": "$GENTS_collection$",
+      "arguments": "filter: { $GENTS_filter$$GENTS_seek$ }, order: [{ _docID: ASC }], limit: $GENTS_limit$"
+    },
+    "bindings": [
+      {
+        "collection": "AgentMessage",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "collection": "AgentMessage",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      },
+      {
+        "collection": "AgentOutputSegment",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "collection": "AgentOutputSegment",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      },
+      {
+        "collection": "AgentToolCall",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "collection": "AgentToolCall",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      },
+      {
+        "collection": "Goal",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "collection": "Goal",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      },
+      {
+        "collection": "GoalCreationClaim",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "collection": "GoalCreationClaim",
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, creator_did: { _eq: \"probe\" }, parent_linked: { _eq: false }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      }
+    ]
   }
 ]
