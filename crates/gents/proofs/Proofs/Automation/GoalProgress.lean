@@ -131,4 +131,27 @@ theorem waiting_past_the_deadline_pauses (record : Record) (deadline now : Nat)
     · have h3 : 3 ≤ streak + 1 + 1 + 1 := by omega
       simp [h1, h2, h3]
 
+/-- JSON object keys whose values vary only with the clock at read time
+(process/wait polls, live goal timers, P2P retry countdowns, command wall
+time). Stripping them before hashing a tool call's result lets no-progress
+detection recognize repeated identical polls without masking real state
+changes. -/
+def volatileResultFields : List String :=
+  [ "read_at"
+  , "elapsed_seconds"
+  , "active_time_seconds"
+  , "next_pending_retry_in_ms"
+  , "lease_remaining_days"
+  , "duration_ms"
+  ]
+
+def isVolatileResultField (key : String) : Bool :=
+  volatileResultFields.contains key
+
+theorem read_at_is_volatile : isVolatileResultField "read_at" = true := rfl
+theorem elapsed_seconds_is_volatile : isVolatileResultField "elapsed_seconds" = true := rfl
+theorem active_time_seconds_is_volatile : isVolatileResultField "active_time_seconds" = true := rfl
+theorem status_is_not_volatile : isVolatileResultField "status" = false := rfl
+theorem result_is_not_volatile : isVolatileResultField "result" = false := rfl
+
 end GoalProgress

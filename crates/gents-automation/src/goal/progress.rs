@@ -74,10 +74,41 @@ pub fn canonical_arguments(arguments: &str) -> String {
         .unwrap_or_else(|_| arguments.to_owned())
 }
 
+/// Lean `GoalProgress.isVolatileResultField`: whether a JSON key in a tool
+/// result varies only with the read-time clock and is omitted from the
+/// no-progress digest.
+pub fn is_volatile_result_field(key: &str) -> bool {
+    matches!(
+        key,
+        "read_at"
+            | "elapsed_seconds"
+            | "active_time_seconds"
+            | "next_pending_retry_in_ms"
+            | "lease_remaining_days"
+            | "duration_ms"
+    )
+}
+
+/// A call's result normalized for no-progress comparison: JSON objects have
+/// keys sorted and volatile read-time fields omitted; non-JSON text stays as
+/// given.
+pub fn canonical_result(result: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(result)
+        .map(|value| canonical_filtered(&value, true))
+        .unwrap_or_else(|_| result.to_owned())
+}
+
 fn canonical(value: &serde_json::Value) -> String {
+    canonical_filtered(value, false)
+}
+
+fn canonical_filtered(value: &serde_json::Value, drop_volatile: bool) -> String {
     match value {
         serde_json::Value::Object(map) => {
-            let mut keys: Vec<_> = map.keys().collect();
+            let mut keys: Vec<_> = map
+                .keys()
+                .filter(|key| !drop_volatile || !is_volatile_result_field(key))
+                .collect();
             keys.sort();
             let fields: Vec<String> = keys
                 .into_iter()
@@ -85,24 +116,28 @@ fn canonical(value: &serde_json::Value) -> String {
                     format!(
                         "{}:{}",
                         serde_json::Value::String(key.clone()),
-                        canonical(&map[key])
+                        canonical_filtered(&map[key], drop_volatile)
                     )
                 })
                 .collect();
             format!("{{{}}}", fields.join(","))
         }
         serde_json::Value::Array(items) => {
-            let items: Vec<String> = items.iter().map(canonical).collect();
+            let items: Vec<String> = items
+                .iter()
+                .map(|item| canonical_filtered(item, drop_volatile))
+                .collect();
             format!("[{}]", items.join(","))
         }
         other => other.to_string(),
     }
 }
 
-/// The digest of a call's result text.
+/// The digest of a call's normalized result text.
 pub fn result_digest(result: &str) -> String {
     use sha2::Digest;
-    sha2::Sha256::digest(result.as_bytes())
+    let normalized = canonical_result(result);
+    sha2::Sha256::digest(normalized.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
