@@ -1,0 +1,363 @@
+{
+  "case_id": "contractor-invoice-access",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "invoices.json",
+        "contents": "[\n  {\n    \"number\": \"INV-7\",\n    \"vendor\": \"Kestrel Joinery\",\n    \"amount\": 420,\n    \"memo\": \"dock ramp repair\"\n  },\n  {\n    \"number\": \"INV-8\",\n    \"vendor\": \"Tidewater Glass\",\n    \"amount\": 180,\n    \"memo\": \"office window panes\"\n  },\n  {\n    \"number\": \"INV-9\",\n    \"vendor\": \"Saltmarsh Rigging\",\n    \"amount\": 960,\n    \"memo\": \"winch cable replacement\"\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "set_up",
+      "settle": true,
+      "prompt": "Put the invoices in invoices.json into Invoice records. Then create a Contractor agent that may read INV-7 and INV-8 but not INV-9.",
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Invoice",
+          "filter": {
+            "number": {
+              "_eq": "INV-9"
+            }
+          },
+          "fields": [
+            "number"
+          ]
+        }
+      ],
+      "checks": []
+    },
+    {
+      "stage_id": "ask",
+      "settle": true,
+      "prompt": "Ask the Contractor which invoices it can see.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_inv7",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%dock ramp%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_inv8",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%window panes%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_inv9",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%winch cable%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "read_inv7",
+                "min": 1
+              },
+              {
+                "capture": "read_inv8",
+                "min": 1
+              },
+              {
+                "capture": "read_inv9",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "INV-7"
+              },
+              {
+                "matches": "INV-8"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "revoke",
+      "settle": true,
+      "prompt": "INV-7's memo is now \"dock ramp repair, second visit\"; update it. Then take the Contractor's access to INV-7 away and ask it again which invoices it can see.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "updated",
+          "collection": "Invoice",
+          "filter": {
+            "number": {
+              "_eq": "INV-7"
+            },
+            "memo": {
+              "_ilike": "%second visit%"
+            }
+          },
+          "fields": [
+            "number",
+            "memo"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "asked_again",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_inv7_after",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%second visit%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_inv9",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcontractor\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%winch cable%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "updated",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "asked_again",
+                "min": 1
+              },
+              {
+                "capture": "read_inv7_after",
+                "max": 0
+              },
+              {
+                "capture": "read_inv9",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "INV-8"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

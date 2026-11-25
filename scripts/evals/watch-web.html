@@ -15,7 +15,6 @@
 <header><div><div class="eyebrow">Engineer onboarding</div><h1 id="title">Eval observatory</h1><p class="muted" id="subtitle">Connecting to local results…</p></div><div class="controls"><span class="live-status" id="connection"><span class="running-dot"></span>Live · every 3s</span><button class="button" id="pause">Pause updates</button></div></header>
 <div class="divergence" id="divergence" role="alert"></div>
 <div class="notice" id="notice" role="status"></div>
-<p style="margin-bottom:16px"><a href="/compare">Compare crew rounds →</a></p>
 <section class="stats" id="stats" aria-label="Run metrics"></section>
 <section class="summary"><div class="summary-top"><strong id="completion">Waiting for snapshots</strong><span class="muted" id="elapsed"></span></div><div class="stack" id="stack"></div><div class="legend" id="legend"></div><div class="legend" id="tokenMeans"></div></section>
 <section class="summary" id="failureBreakdown" aria-label="Failure distribution"></section>
@@ -39,7 +38,7 @@ const initialRuns=new URLSearchParams(location.search).get('runs'),batchKeys=new
 let selection=batchKeys.size?'batch':'active', filter='all', selectedTrial=null, summaries=[], runs=[], paused=false, busy=false, sidebarState='';
 function selectedRunKeys(items,view=selection){return view==='active'?items.filter(r=>r.counts.running>0).map(r=>r.key):view==='batch'?items.filter(r=>batchKeys.has(r.key)).map(r=>r.key):[view]}
 const station=r=>(r.home.match(/workstation-\d+/)||[])[0]||r.home.split('/').pop();
-const suite=r=>r.run.definition.definition_id==='factory-setup'?'Crew configuration':r.run.definition.definition_id.replace('configurator-','').replaceAll('-',' ');
+const suite=r=>r.run.definition.definition_id.replace('configurator-','').replaceAll('-',' ');
 const age=s=>s?Math.max(0,(Date.now()-Date.parse(s))/1000):null;
 const goalValue=(slot,g)=>g.collection==='schemas'?slot.live.schemas?.length:g.capture?(slot.live.captures||{})[g.capture]:(slot.live.documents||{})[g.collection];
 const slotKey=(r,s)=>`${r.key}:${s.cell_id}:${s.case_id}:${s.trial_index}`;

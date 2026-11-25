@@ -365,7 +365,7 @@ class LiveEngineerEvalTests(unittest.TestCase):
         return self.drive("run", "--scope", "ladder", "--out", str(self.out), "--gents", str(self.gents),
                           "--stagger", "0", *arguments, **environment)
 
-    def test_ladder_passes_when_every_gated_rung_meets_its_floor(self):
+    def test_ladder_passes_when_every_rung_meets_its_floor(self):
         result = self.run_full()
         self.assertEqual(result.returncode, 0, result.stderr)
         verdict = self.result()
@@ -377,10 +377,9 @@ class LiveEngineerEvalTests(unittest.TestCase):
         self.assertTrue(all(r["argv"] == ["all", "3", "2"] and r["GENTS_EVAL_TEMPERATURE"] == "" and r["GENTS_EVAL_TOP_P"] == ""
                             and r["GENTS_EVAL_COMMAND_EXECUTION"] == "off" for r in records))
         rungs = {row["rung"]: row for row in verdict["rungs"]}
-        self.assertEqual(rungs["l2-agent"], {"rung": "l2-agent", "gated": True, "cases": 2, "cases_meeting_threshold": 2,
+        self.assertEqual(rungs["l2-agent"], {"rung": "l2-agent", "cases": 2, "cases_meeting_threshold": 2,
                                              "passes": 5, "finished": 6, "verdict": "pass"})
-        self.assertEqual(rungs["factory-setup"]["verdict"], "reported")
-        self.assertEqual(verdict["tokens"], {"input": 6000, "output": 300})
+        self.assertEqual(verdict["tokens"], {"input": 4000, "output": 200})
         self.assertIn("Live Engineer ladder: PASS", (self.out / "summary.md").read_text())
 
     def test_ladder_records_a_case_below_threshold_without_failing_the_job(self):
@@ -400,16 +399,11 @@ class LiveEngineerEvalTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("l2-agent passed 1 of 6 finished trials (floor 50%)", self.result()["reason"])
 
-    def test_ungated_factory_setup_never_fails_the_job(self):
-        plan = {"factory-setup": {"factory": "fail,fail,fail"}}
-        result = self.run_full(LADDER_CLASSES=json.dumps(plan))
-        self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_ladder_deadline_leaves_a_rung_incomplete_and_fails(self):
-        result = self.run_full("--eval-timeout", "5", HANG_SUITE="l4-automation")
+        result = self.run_full("--eval-timeout", "5", HANG_SUITE="l5-agents-tools")
         self.assertEqual(result.returncode, 1, result.stderr)
         verdict = self.result()
-        self.assertIn("l4-automation finished only 0 trials before the deadline", verdict["reason"])
+        self.assertIn("l5-agents-tools finished only 0 trials before the deadline", verdict["reason"])
         self.assertEqual(verdict["stopped_at_deadline"], 1)
 
     def test_loopback_endpoint_is_not_scrubbed_from_artifacts_but_a_remote_host_is(self):
