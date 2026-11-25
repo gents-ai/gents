@@ -9,7 +9,6 @@ use std::path::Path;
 #[rustfmt::skip]
 const SEPARATE_TEST_TARGETS: &[(&str, &str, &str)] = &[
     ("gents", "e2e_triggers", "its scenarios serialise on the process-global embedded P2P transport"),
-    ("gents", "write_owner_structure", "a source scanner that links no runtime crate; run alone while editing the structure rules"),
     ("gents-cli", "heap_profile", "installs a global allocator"),
     ("gents-cli", "port_allocation", "the Windows editor job builds and runs it without the CLI suite"),
     ("gents-cli", "plugin_build_sandbox", "sets GENTS_PLUGIN_BUILDER for the process"),

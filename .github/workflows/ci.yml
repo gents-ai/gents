@@ -385,7 +385,7 @@ jobs:
   # the changed crates and their dependents. It and lint-variants run side by
   # side on the portable runners, within their role's compile parallelism.
   lint:
-    needs: [plan, repository-guard]
+    needs: plan
     # Fork pull requests never run on a self-hosted runner: its account shares
     # the Cargo home, the compiler cache and the kept target trees with every
     # other runner on the host (test-rust-build-space.py checks every job).
@@ -495,7 +495,7 @@ jobs:
   # incremental tree, the CLI's Vera feature, gents-loop for WASI and the
   # desktop app's native-e2e capability check, for the crates the change reaches.
   lint-variants:
-    needs: [plan, repository-guard]
+    needs: plan
     if: >-
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -536,17 +536,22 @@ jobs:
           unit: lint-variants
 
   # Proofs, the files generated from them, the one-consumer-per-family scan
-  # and, when the runtime group does not run them, the structure ratchets.
+  # and, when the foundation group does not run them, the structure ratchets.
   contract:
-    needs: [plan, repository-guard]
+    needs: plan
     if: >-
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'contract')
-    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.portable }}
     timeout-minutes: 90
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ fromJSON(needs.plan.outputs.plan).build_jobs.portable || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: "8"
+      PROFILE: ci-native
+      TLA_JOBS: "2"
+      TLA_HEAP: "2g"
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -558,13 +563,14 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"
-          role: macos
+          role: portable
 
       - uses: actions/setup-node@v7
         if: fromJSON(needs.plan.outputs.plan).contract.ts_lean
         with:
           node-version: 22
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install workspace frontend dependencies
         if: fromJSON(needs.plan.outputs.plan).contract.ts_lean
@@ -594,7 +600,7 @@ jobs:
   # `jobs` in .github/ci-runners.json bound the job's compile and test parallelism.
   test:
     name: ${{ matrix.job }}
-    needs: [plan, repository-guard]
+    needs: plan
     if: >-
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -608,6 +614,7 @@ jobs:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
       CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
       RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
+      PROFILE: ${{ (matrix.job == 'test:native' || matrix.job == 'test:macos-only') && 'ci-native' || '' }}
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -667,7 +674,7 @@ jobs:
   # slices of it, compiling nothing.
   build:
     name: build (${{ matrix.archive }}${{ matrix.partition && format(' {0}/{1}', matrix.partition, matrix.partitions) || '' }})
-    needs: [plan, repository-guard]
+    needs: plan
     if: >-
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -1048,11 +1055,14 @@ jobs:
 
   notary-control-tests:
     # Focused, network-free tests for the staged-artifact notarization control
-    # scripts. They need real macOS ditto/shasum and no secrets. Draft PRs run
-    # them too.
+    # scripts. They need real macOS ditto/shasum and no secrets; run when
+    # notarization or release-signing scripts change.
     needs: plan
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'notary-control')
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 20
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -1071,6 +1081,12 @@ jobs:
           "${python}" .github/scripts/test-notarize-staged-artifact.py
           "${python}" .github/scripts/test-rc1-notary-auth.py
           "${python}" .github/scripts/test-release-signing-mode.py
+
+      - name: Record the pass
+        if: success()
+        uses: ./.github/actions/gate-record
+        with:
+          unit: notary-control
 
   # The one check to require: every job that runs on every event, and every
   # job the plan selected, succeeded. A skip passes only for a job the plan

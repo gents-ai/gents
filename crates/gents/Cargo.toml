@@ -15,10 +15,6 @@ path = "tests/integration.rs"
 name = "e2e_triggers"
 path = "tests/e2e_triggers.rs"
 
-[[test]]
-name = "write_owner_structure"
-path = "tests/write_owner_structure.rs"
-
 [features]
 # Gents executes Lens migrations at runtime, so keep Wasmtime explicit; Vera
 # document ACP stays behind the `vera` feature instead of DefraDB's default.
