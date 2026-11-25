@@ -108,6 +108,16 @@ pub fn result_digest(result: &str) -> String {
         .collect()
 }
 
+/// Whether the turn a record describes reported the Goal blocked: under
+/// `confirm_once` that turn was the report's confirmation turn's predecessor,
+/// so a report in the next turn pauses the Goal.
+pub fn reported_blocked(record: &ProgressRecord) -> bool {
+    record
+        .previous
+        .iter()
+        .any(|call| call.tool == "update_goal" && call.arguments.contains(r#""status":"blocked""#))
+}
+
 /// What the harness observed of one finished goal turn (Lean
 /// `GoalProgress.Turn`, plus the deadline of a live background job).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -169,7 +179,8 @@ fn stream_bytes(
 /// The turn's call prints from the latest goal request's `AgentToolCall`
 /// rows and its `AgentOutputSegment` rows: each call's name, its arguments
 /// as the provider turn emitted them (canonicalized) and a digest of its
-/// output. A running call whose deadline is after `now` (seconds) is live
+/// output stream's bytes. The row's `terminal_output` is not part of it: it
+/// names the call's own closing record, so it differs on every call. A running call whose deadline is after `now` (seconds) is live
 /// background work.
 pub fn observe_turn(
     tool_calls: &[serde_json::Value],
@@ -221,11 +232,10 @@ pub fn observe_turn(
                 );
             }
         }
-        let result = format!("{}\n{}", output(doc_id), row["terminal_output"]);
         observation.calls.push(CallPrint {
             tool,
             arguments: canonical_arguments(arguments(call_id).unwrap_or_default()),
-            result: result_digest(&result),
+            result: result_digest(&output(doc_id)),
         });
     }
     observation

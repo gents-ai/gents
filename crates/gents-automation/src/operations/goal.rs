@@ -428,9 +428,6 @@ pub struct GoalSetPlan {
     auto_resume: Option<bool>,
     completion_evidence: Option<Option<String>>,
     blocked_reason: Option<String>,
-    /// `Some` writes `blocked_confirmation`: whether the working Agent's
-    /// blocked report was given its one `confirm_once` confirmation turn.
-    blocked_confirmation: Option<bool>,
 }
 
 fn target_name(target: GoalTarget) -> &'static str {
@@ -551,7 +548,6 @@ fn plan_set(
         blocked_reason: (target == GoalTarget::Block)
             .then(|| reason.map(ToOwned::to_owned))
             .flatten(),
-        blocked_confirmation: None,
     })
 }
 
@@ -585,7 +581,6 @@ pub async fn apply_set_in_txn(
             .is_none_or(|enabled| current.auto_resume_at_reset == Some(enabled))
         && plan.completion_evidence.is_none()
         && plan.blocked_reason.is_none()
-        && plan.blocked_confirmation.is_none()
     {
         return Ok(Some(current));
     }
@@ -610,9 +605,6 @@ pub async fn apply_set_in_txn(
     }
     if let Some(reason) = &plan.blocked_reason {
         input["blocked_reason"] = reason.clone().into();
-    }
-    if let Some(confirming) = plan.blocked_confirmation {
-        input["blocked_confirmation"] = confirming.into();
     }
     let doc_id = gents_store::graphql::escape_graphql_string(&current.doc_id);
     let node_did = gents_store::graphql::escape_graphql_string(&current.node_did);
@@ -668,7 +660,12 @@ pub async fn set_in_txn(
     let outcome = if actor == GoalActor::WorkingAgent && input.target() == GoalTarget::Block {
         let policy =
             crate::goal::stop_policy::load_goal_stop_policy_in_txn(txn, &goal.doc_id).await?;
-        let confirming = goal.blocked_confirmation.unwrap_or(false);
+        let record: crate::goal::progress::ProgressRecord = goal
+            .progress_record
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        let confirming = crate::goal::progress::reported_blocked(&record);
         crate::goal::stop_policy::on_blocked_report(policy.on_blocked, confirming)
     } else {
         crate::goal::stop_policy::BlockedOutcome::Pause
@@ -684,10 +681,6 @@ pub async fn set_in_txn(
         if let Some(state) = goal.state() {
             plan.post = state;
         }
-        plan.blocked_confirmation =
-            Some(outcome == crate::goal::stop_policy::BlockedOutcome::Confirm);
-    } else if goal.blocked_confirmation == Some(true) {
-        plan.blocked_confirmation = Some(false);
     }
     let applied = apply_set_in_txn(txn, &plan).await?;
     Ok(match (applied, refusal) {

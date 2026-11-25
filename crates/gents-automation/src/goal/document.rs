@@ -51,10 +51,6 @@ pub struct GoalDocument {
     /// latest goal turn's call prints.
     #[serde(default)]
     pub progress_record: Option<String>,
-    /// The working Agent's blocked report was given its one `confirm_once`
-    /// confirmation turn; its next report pauses the Goal.
-    #[serde(default)]
-    pub blocked_confirmation: Option<bool>,
 }
 
 impl GoalDocument {

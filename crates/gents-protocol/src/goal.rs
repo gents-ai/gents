@@ -64,7 +64,6 @@ pub const GOAL_FIELDS: &str = r#"
     created_at
     updated_at
     progress_record
-    blocked_confirmation
 "#;
 
 pub fn deterministic_goal_id(node_did: &str, session_id: &str) -> String {

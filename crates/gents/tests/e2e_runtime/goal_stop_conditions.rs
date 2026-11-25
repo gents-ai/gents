@@ -249,7 +249,9 @@ fn repeated_call(marker: &str, id: &str) -> StreamResponse {
     )
 }
 
-/// One goal turn that makes the same `list_processes` call, then ends.
+/// One goal turn that makes the same `list_processes` call, then ends. The
+/// plans below match their marker anywhere in the request: a turn's follow-up
+/// call after a tool result carries the objective only in its history.
 fn repeated_turn(marker: &str, turn: usize) -> [StreamResponse; 2] {
     [
         repeated_call(marker, &format!("repeat-{turn}")),
@@ -281,7 +283,7 @@ async fn goal_failure(actors: &RequestActors, session: &str) -> serde_json::Valu
 async fn a_goal_that_repeats_the_same_call_is_paused_for_no_progress() {
     const MARKER: &str = "count-bins-goal";
     let limit = usize::try_from(gents_automation::goal::progress::NO_PROGRESS_LIMIT).unwrap();
-    let plan = StreamPlan::current_authored_user(
+    let plan = StreamPlan::new(
         MARKER,
         (0..limit + 2)
             .flat_map(|turn| repeated_turn(MARKER, turn))
@@ -360,7 +362,7 @@ async fn set_policy(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confirm_once_pauses_on_the_second_blocked_report() {
     const MARKER: &str = "label-crates-goal";
-    let plan = StreamPlan::current_authored_user(
+    let plan = StreamPlan::new(
         MARKER,
         vec![
             blocked_report(MARKER, "block-1", "I need the label printer."),
@@ -416,7 +418,7 @@ async fn confirm_once_pauses_on_the_second_blocked_report() {
 async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
     const MARKER: &str = "sort-mail-goal";
     let limit = usize::try_from(gents_automation::goal::progress::NO_PROGRESS_LIMIT).unwrap();
-    let plan = StreamPlan::current_authored_user(
+    let plan = StreamPlan::new(
         MARKER,
         (0..limit + 2)
             .flat_map(|turn| {
