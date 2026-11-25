@@ -1,5 +1,4 @@
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;

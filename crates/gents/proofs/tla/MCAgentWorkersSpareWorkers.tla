@@ -1,0 +1,4 @@
+---- MODULE MCAgentWorkersSpareWorkers ----
+EXTENDS AgentWorkers
+
+====
