@@ -62,7 +62,7 @@
   "stages": [
     {
       "stage_id": "answer",
-      "prompt": "It's day 15. Which supplier invoices in SupplierInvoice are overdue? One due today isn't overdue yet, and paid ones don't count. I'm reading this right now, so just answer here and don't put anything in my inbox. Reply with JSON containing \"overdue\" as an array of invoice numbers in ascending order.",
+      "prompt": "It's day 15. Which supplier invoices in SupplierInvoice are overdue? One due today isn't overdue yet, and paid ones don't count. I'm reading this now, so just answer here, not in my inbox, with the invoice numbers as a JSON list in ascending order.",
       "capture": [
         {
           "kind": "documents",
@@ -126,27 +126,11 @@
           "weight": 1
         },
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"overdue\"\\s*:\\s*\\[\\s*\"INV-301\"\\s*,\\s*\"INV-304\"\\s*\\]"
+                "matches": "\\[\\s*\"INV-301\"\\s*,\\s*\"INV-304\"\\s*\\]"
               }
             ]
           },

@@ -184,6 +184,21 @@ pub type ProviderConfigurationGuard = Arc<
         + Sync,
 >;
 
+/// The toolset a tool call staged for the request's later turns: its tools,
+/// the preamble that names them, and the check of the configuration they were
+/// resolved from.
+pub struct ReboundTools {
+    pub tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    pub preamble: Option<String>,
+    pub configuration_guard: Option<ProviderConfigurationGuard>,
+}
+
+/// Takes the toolset staged since the last turn boundary, if any. The loop
+/// calls it at each turn boundary, never while a turn's calls run (Lean
+/// `CompletionLoop.run`).
+pub type ToolRebinding =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<ReboundTools>> + Send>> + Send + Sync>;
+
 #[derive(Clone, Debug)]
 pub struct TurnCompactionRequest {
     pub messages: Vec<TaggedMessage>,
@@ -399,6 +414,7 @@ pub struct LoopConfig {
     pub tool_choice: Option<ToolChoice>,
     pub on_rendered_request: Option<RenderedRequestSink>,
     pub configuration_guard: Option<ProviderConfigurationGuard>,
+    pub tool_rebinding: Option<ToolRebinding>,
     pub turn_compactor: Option<TurnCompactor>,
     pub active_reduction_keys: Vec<String>,
     pub reduction_chain_keys: Vec<String>,

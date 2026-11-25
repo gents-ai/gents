@@ -44,6 +44,9 @@ structure Input where
   /-- The loop has a per-turn compactor for the forced reduction a provider
   context overflow asks for. -/
   compactor : Bool := false
+  /-- The accepted tool turn whose tool call commits a change to the request's
+  own Tools and stages the rebuilt toolset (`RuntimeReconcile.ToolRebinding`). -/
+  rebindAt : Option Nat := none
   deriving ToJson
 
 structure Coordinate where
@@ -93,6 +96,9 @@ structure Observation where
   ledgerUsed : Option Nat := none
   /-- Whether each provider request offered the loop's toolset. -/
   offered : List Bool := []
+  /-- Whether each provider request offered the toolset a tool call staged
+  rather than the one the request was claimed with. -/
+  rebound : List Bool := []
   deriving ToJson
 
 def failureClass : String → FailureClass
@@ -121,7 +127,9 @@ preview bytes or an unaccepted tool intent exist, transport recovery first
 retracts that attempt. Only accepted tool turns enter the next request. A
 context overflow is retried at once on the compacted input, at most once per
 turn, and the compacted input no longer threads the tool results it replaced;
-without a compactor it ends the run as that overflow. -/
+without a compactor it ends the run as that overflow. A toolset staged by a
+tool call is taken at the next turn boundary: every attempt of a later turn
+offers it, and no attempt of the turn that staged it does. -/
 def run (input : Input) : Observation := Id.run do
   let budget : Budget := ⟨input.transport, input.resample, 1, input.repair, 0, none⟩
   let mut state := { baseState with phase := .issuing, now := 0, budget := budget, deadline := if input.deadlineFits then none else some 0 }
@@ -129,6 +137,7 @@ def run (input : Input) : Observation := Id.run do
   let mut dirty := input.initialDirty
   let mut repaired := input.nestedUsage.isSome
   let mut repairAttempt := false
+  let mut bound := false
   let mut threaded : List String :=
     if input.initialDirty then ["ok"] else if input.recoveredPair then ["restored"] else []
   let mut ledger := input.limit.map fun limit =>
@@ -143,7 +152,7 @@ def run (input : Input) : Observation := Id.run do
       result := { result with failure := some .budgetExhausted }
       break
     result := { result with allowances := result.allowances ++ (ledger.map (·.remaining)).toList }
-    result := { result with dirtyInputs := result.dirtyInputs ++ [dirty], contextInputs := result.contextInputs ++ [input.context], offered := result.offered ++ [true], text := result.text ++ call.text, reasoning := result.reasoning ++ call.reasoning }
+    result := { result with dirtyInputs := result.dirtyInputs ++ [dirty], contextInputs := result.contextInputs ++ [input.context], offered := result.offered ++ [true], rebound := result.rebound ++ [bound], text := result.text ++ call.text, reasoning := result.reasoning ++ call.reasoning }
     result := { result with captures := result.captures ++ [⟨state.turn, state.attempt, if repairAttempt then "repair" else "budgeted", input.context || repaired, threaded, true⟩] }
     if input.missingCapture then
       result := { result with failure := some .captureMissing, text := [], reasoning := [] }
@@ -170,6 +179,7 @@ def run (input : Input) : Observation := Id.run do
     if call.failure.isNone && call.tool then
       result := { result with tools := result.tools ++ ["ECHOED"] }
       threaded := threaded ++ ["ECHOED"]
+      bound := bound || input.rebindAt == some state.turn
       dirty := dirty || call.poison
       repairAttempt := false
       state := { state with phase := .issuing, turn := state.turn + 1, attempt := 0, emptyUsed := 0, compactUsed := false }

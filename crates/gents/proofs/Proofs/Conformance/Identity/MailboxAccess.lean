@@ -100,4 +100,39 @@ def claimToolContext : Family ClaimInput Bool where
   inputs := [{ present := true, committed := false }, { present := true, committed := true }]
   model := fun i => (claimedRecipient (admittedFixture i.present) i.committed).isSome
 
+deriving instance ToJson for Admission, Hop
+
+structure FilingInput where
+  claimedSigner : Option String
+  lineage : List Hop
+  nodeOwner : Option String
+  deriving ToJson
+
+/-- A claimed request; continuations of a client-signed request, one and two
+turns deep; a trigger's run and its continuation, with the Node's owner
+observed or not; and the requests that file for no one: an unclaimed signed
+request, a peer's, a continuation whose source is not its parent, and an empty
+lineage. -/
+@[conformance_family]
+def filing : Family FilingInput (Option String) where
+  inputs :=
+    [{ claimedSigner := some "user", lineage := [⟨.client, "user"⟩], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.localControl, "agent"⟩, ⟨.client, "user"⟩],
+       nodeOwner := some "owner" },
+     { claimedSigner := none,
+       lineage := [⟨.localControl, "agent"⟩, ⟨.localControl, "agent"⟩, ⟨.client, "user"⟩],
+       nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.automatedTrigger, "agent"⟩],
+       nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.localControl, "agent"⟩, ⟨.automatedTrigger, "agent"⟩],
+       nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.automatedTrigger, "agent"⟩], nodeOwner := none },
+     { claimedSigner := none, lineage := [⟨.client, "user"⟩], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.other, "peer"⟩], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.localControl, "agent"⟩, ⟨.other, "user"⟩],
+       nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [⟨.localControl, "agent"⟩], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [], nodeOwner := some "owner" }]
+  model := fun i => filingRecipient i.claimedSigner i.lineage i.nodeOwner
+
 end Conformance.MailboxAccess

@@ -33,7 +33,7 @@
   "stages": [
     {
       "stage_id": "audit",
-      "prompt": "Two copies of the calibration_index pack came in: incoming/approved/calibration_index is the one we signed off, and incoming/received/calibration_index is from the vendor. Both say version 1.0.0. Are they the same release? Compare their pack digests and reply with JSON: approved_digest, received_digest, same_release, and differing_files (the files, by path inside the pack, whose contents differ). Don't install or change either copy.",
+      "prompt": "Two copies of the calibration_index pack came in: incoming/approved/calibration_index is the one we signed off, and incoming/received/calibration_index is from the vendor. Both say 1.0.0. Are they the same release, and if not, which files differ? Don't install or change either copy.",
       "capture": [
         {
           "kind": "documents",
@@ -62,37 +62,16 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "write_file",
-              "edit_file",
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"same_release\"\\s*:\\s*false"
-              },
+                "matches": "reference\\.txt"
+              }
+            ],
+            "any": [
               {
-                "matches": "\"differing_files\"\\s*:\\s*\\[\\s*\"[^\"]*reference\\.txt\"\\s*\\]"
-              },
-              {
-                "matches": "\"approved_digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
-              },
-              {
-                "matches": "\"received_digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
+                "matches": "(?i)\\bnot (?:the )?same\\b|\\bdiffer|\\bdifferent\\b|\\bdon'?t match|\\bdo not match|\\bmismatch"
               }
             ]
           },

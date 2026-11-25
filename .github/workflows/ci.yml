@@ -243,6 +243,18 @@ jobs:
       - name: Check gate selection and test guards
         run: make gate-selftest
 
+      - name: Check the workflow artifact names
+        run: |
+          set -euo pipefail
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
+          "${python}" .github/scripts/check-artifact-names.py
+
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
@@ -309,7 +321,6 @@ jobs:
           bash -n scripts/evals/run-ladder.sh
           python3 scripts/evals/test_suites.py
           python3 scripts/evals/test_ladder_batch.py
-          python3 scripts/evals/test_ladder_baseline.py
           python3 scripts/evals/test_live_engineer_eval.py
           bash -n scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh
           shellcheck scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh

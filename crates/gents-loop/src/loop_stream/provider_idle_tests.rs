@@ -292,6 +292,7 @@ fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: Some(arming_sink(CaptureScopeKind::Inference)),
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-script",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Script: JavaScript over the caller's own tools",
       "subject": {
         "kind": "agent",
@@ -20,13 +20,13 @@
         ]
       },
       "cases": [
-        "./cases/pickup_reconcile.json",
         "./cases/wet_lots_audit.json",
         "./cases/sensor_recovery.json",
         "./cases/ticket_bulk_close.json",
         "./cases/cold_bin_notices.json",
         "./cases/dock_totals_file.json",
         "./cases/freight_pagination.json",
+        "./cases/chrome_tabs_setup.json",
         "./cases/retired_bins.json",
         "./cases/manifest_overlap.json",
         "./cases/relay_precedence.json",

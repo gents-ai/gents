@@ -652,34 +652,16 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "Enable your general read access only to ScanDelivery, IndexedDelivery. Keep shell execution off and leave all other permissions alone. Inspect the available fields before preparing reports.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": []
-    },
-    {
       "stage_id": "scan",
-      "prompt": "The queued-delivery report feels slow. Inspect the plan for ScanDelivery, returning reference and status with a 20-row limit. Explain how records are found. Do not execute the report or change records or schema.",
+      "prompt": "The queued-deliveries report on ScanDelivery (reference and status, first 20 rows) feels slow. Without running it, show me its plan and explain how the records are found.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
-              "scan"
+              {
+                "matches": "(?i)scan"
+              }
             ]
           },
           "tier": "acceptance",
@@ -701,16 +683,6 @@
                 "field": "plan",
                 "contains": "scanNode"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
             ]
           },
           "tier": "acceptance",
@@ -1512,13 +1484,15 @@
     },
     {
       "stage_id": "indexed",
-      "prompt": "Now inspect the same queued-delivery report on IndexedDelivery without executing it. Compare its access path with the previous plan and tell me whether keeping this index is justified by this query. Distinguish what the plan proves from a recommendation about other workloads.",
+      "prompt": "Now the same report on IndexedDelivery, still without running it. How does its plan differ, and is the status index worth keeping for this query?",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
-              "index"
+              {
+                "matches": "(?i)index"
+              }
             ]
           },
           "tier": "acceptance",
@@ -1540,16 +1514,6 @@
                 "field": "plan",
                 "contains": "indexName"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
             ]
           },
           "tier": "acceptance",

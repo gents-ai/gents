@@ -24,12 +24,8 @@ class LadderBatchTests(unittest.TestCase):
         fixtures = pathlib.Path("crates/gents/tests/fixtures/configurator_evals")
         registered = {json.loads(path.read_text())["id"]: path.parent.relative_to(source / fixtures)
                       for path in (source / fixtures).rglob("suite.json")}
-        for relative in ["ladder/engineer_subject", *[registered[suite] for suite in matrix["default"]]]:
+        for relative in [registered[suite] for suite in matrix["default"]]:
             shutil.copytree(source / fixtures / relative, self.root / fixtures / relative)
-        for relative in ["crates/gents-protocol/prompts/engineer.md", "crates/gents-protocol/presets/engineer-self-config.json"]:
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(source / relative, destination)
         self.home = self.root / "eval-home"
         self.home.mkdir()
         (self.home / "init.json").write_text(json.dumps({"node_did": "did:test:node"}))
@@ -51,6 +47,16 @@ if args[:3] == ["utils", "data", "query"] and args[args.index("--collection") + 
 elif args[:3] == ["utils", "data", "query"]:
     assert args[args.index("--collection") + 1] == "DefaultAgentSelection", args
     print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
+elif args[:2] == ["runtime", "version"]:
+    print("gents 1.0.0 (abc1234)")
+elif args[:3] == ["utils", "eval", "subject"]:
+    out = pathlib.Path(args[args.index("--out") + 1])
+    out.mkdir(parents=True)
+    (out / "manifest.json").write_text(json.dumps({"assets": ["pack_config.json"],
+        "inference_slots": [{"name": "engineer", "agents": ["engineer"]}]}))
+    (out / "pack_config.json").write_text(json.dumps({"agents": [{"agent_slot": "engineer", "context_id": "c"}],
+        "contexts": [{"context_id": "c", "tools_id": "t"}], "tools": [{"tools_id": "t"}]}))
+    print(json.dumps({"subject": str(out), "command_execution": args[args.index("--command-execution") + 1]}))
 elif args[:2] == ["config", "apply"] and os.getenv("FAIL_CONFIG_APPLY"):
     print(json.dumps({"errors": ["specific validation failure"]}))
     raise SystemExit(1)
@@ -205,7 +211,7 @@ elif args[:2] != ["config", "apply"]:
         plan.write_text(json.dumps({"runs": [{"args": ["definition", "--run-id", "same"]}]}))
         import sys
         from unittest.mock import patch
-        arguments = ["plan", str(plan), "definition", str(self.root), "profile", "train", "3", "2", "same"]
+        arguments = ["plan", str(plan), "definition", str(self.root), "profile", "train", "3", "2", "same", "divergences.json"]
         before = plan.read_bytes()
         with patch.object(sys, "argv", arguments):
             with self.assertRaisesRegex(SystemExit, "duplicate run id"):

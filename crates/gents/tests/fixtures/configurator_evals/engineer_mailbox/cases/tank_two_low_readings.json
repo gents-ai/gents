@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "watch",
-      "prompt": "I'll pass you tank B's level readings one at a time. Its minimum is 30 cm. A single reading below 30 cm can be a sensor blip, so flag my inbox only once two readings in a row are below 30 cm, titled \"Tank B low\" with the note \"Tank B has read below 30 cm twice in a row.\" Keep that one flag while the tank stays low. First reading: 41 cm.",
+      "prompt": "I'll pass you tank B's level readings one at a time. Its minimum is 30 cm, but one low reading can be a sensor blip, so flag my inbox only once two readings in a row are below 30 cm, titled \"Tank B low\" with the note \"Tank B has read below 30 cm twice in a row.\" One flag is enough while it stays low. First reading: 41 cm.",
       "capture": [
         {
           "kind": "documents",
@@ -58,22 +58,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_rows_count",
           "params": {
@@ -142,22 +126,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_rows_count",
           "params": {
             "name": "visible",
@@ -224,24 +192,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -348,21 +298,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

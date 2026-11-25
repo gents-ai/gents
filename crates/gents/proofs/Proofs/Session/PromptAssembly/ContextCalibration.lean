@@ -69,8 +69,8 @@ def State.observe (s : State) (observedInput estimatedInput : Nat) : State :=
   | some ratio => s.push ratio
   | none => s
 
-/-- A reduction or rewrite of the transcript: the anchored call no longer
-describes a prefix of the next request. -/
+/-- A reduction or rewrite of the transcript, or a rebound toolset: the
+anchored call no longer describes a prefix of the next request. -/
 def State.invalidate (s : State) : State := { s with anchor := none }
 
 def State.ratio (s : State) : Nat :=

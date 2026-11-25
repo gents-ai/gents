@@ -1,6 +1,6 @@
 ---- MODULE CommitResponseWait ----
 \* lean: none
-\* crates: gents-store, gents-protocol, gents-pack
+\* crates: gents-store, gents-protocol, gents-pack, gents-observe
 \* models: TransactionReplay.clientMayRepeat
 (***************************************************************************)
 (* A client's wait for a store request's answer over the runtime's HTTP    *)

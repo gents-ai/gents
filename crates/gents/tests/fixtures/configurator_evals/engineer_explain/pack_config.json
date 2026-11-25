@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-explain",
-      "comparability_version": 3,
+      "comparability_version": 4,
       "title": "Native query plans and bounded execution diagnostics",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

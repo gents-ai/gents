@@ -103,10 +103,8 @@ class HostileRun(unittest.TestCase):
         source = self.run_dir / "source"
         write(source / "scripts/evals/matrix.json", {"default": ["s1"]})
         fixtures = source / orchestrate.FIXTURES
-        write(fixtures / "ladder/engineer_subject/pack_config.json", {})
         for suite in ("s1", "s2"):
-            write(fixtures / f"ladder/{suite}/suite.json", {"id": suite, "title": suite, "coverage": [],
-                                                           "subject": "ladder/engineer_subject"})
+            write(fixtures / f"ladder/{suite}/suite.json", {"id": suite, "title": suite, "coverage": []})
             write(fixtures / f"ladder/{suite}/pack_config.json",
                   {"eval_definitions": [{"definition_id": f"{suite}-definition", "cases": ["./cases/a.json"]}]})
             write(fixtures / f"ladder/{suite}/cases/a.json", {"case_id": f"{suite}-case", "split": "train"})
@@ -137,7 +135,6 @@ class HostileRun(unittest.TestCase):
         self.assertEqual(slots, ["s1.s1-case.t0"])
         view = suites["s1"]["view"]
         self.assertTrue((view / "ladder/s1/cases/a.json").is_file())
-        self.assertTrue((view / "ladder/engineer_subject").is_dir())
         self.assertFalse((view / "ladder/s2").exists())
 
     def done_with(self, slot_id, export):

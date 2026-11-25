@@ -375,3 +375,37 @@ async fn a_remote_only_start_sets_aside_another_versions_client_store() {
             .unwrap(),
     );
 }
+
+/// Selecting a node reads it at once unless its observer is connecting it
+/// (Lean `RuntimeConnectionObservation.selectionReadsNode`), for every status
+/// and for a node not yet observed.
+#[test]
+fn selecting_a_node_reads_it_unless_its_observer_is_connecting() {
+    use gents_observe::client_projection::observe::RuntimeConnectionStatus;
+
+    #[derive(Clone, Copy, Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Status {
+        Connecting,
+        Connected,
+        Disconnected,
+        Refused,
+        NoEndpoint,
+    }
+
+    let cases = gents_lean_vocab::families::runtime_connection_observation_selection_reads::cases::<
+        Status,
+    >();
+    assert!(!cases.is_empty(), "Lean emitted no selection cases");
+    for case in cases {
+        let status = match case.input.status {
+            Status::Connecting => RuntimeConnectionStatus::Connecting,
+            Status::Connected => RuntimeConnectionStatus::Connected,
+            Status::Disconnected => RuntimeConnectionStatus::Disconnected,
+            Status::Refused => RuntimeConnectionStatus::Refused,
+            Status::NoEndpoint => RuntimeConnectionStatus::NoEndpoint,
+        };
+        let observed = case.input.observed.then_some(status);
+        case.check(selection_reads_node(observed));
+    }
+}

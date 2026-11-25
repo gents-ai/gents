@@ -4,3 +4,5 @@ mod client_core;
 mod client_store;
 #[path = "manage_view.rs"]
 mod manage_view;
+#[path = "snapshot_wire.rs"]
+mod snapshot_wire;

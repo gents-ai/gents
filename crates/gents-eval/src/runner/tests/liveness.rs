@@ -343,9 +343,8 @@ async fn a_run_is_finished_when_it_owes_nothing_and_no_live_process_holds_a_slot
     assert!(
         [0, 1, 250, 999, 1_000, 5_000, u64::MAX].iter().all(|ms| {
             let options = RunOptions {
-                trial_budget: None,
                 poll_backoff_base: Duration::from_millis(*ms),
-                poll_backoff_cap: Duration::from_secs(60),
+                ..RunOptions::default()
             };
             marker_poll(&options) * 3 <= STALE_WINDOW
         }),

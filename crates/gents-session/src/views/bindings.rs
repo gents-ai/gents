@@ -17,8 +17,6 @@ pub struct SessionRequestBindings {
     session_id: String,
     requester_did: Option<String>,
     physical: Option<Vec<String>>,
-    after: Option<String>,
-    limit: Option<u64>,
 }
 
 impl SessionRequestBindings {
@@ -32,23 +30,11 @@ impl SessionRequestBindings {
             session_id: session_id.into(),
             requester_did,
             physical: None,
-            after: None,
-            limit: None,
         }
     }
 
     pub fn physical(mut self, ids: Vec<String>) -> Self {
         self.physical = Some(ids);
-        self
-    }
-
-    pub fn after(mut self, doc_id: impl Into<String>) -> Self {
-        self.after = Some(doc_id.into());
-        self
-    }
-
-    pub fn limit(mut self, limit: u64) -> Self {
-        self.limit = Some(limit);
         self
     }
 }
@@ -75,12 +61,6 @@ impl View for SessionRequestBindings {
         .order_by(agent_request::DOC_ID, Direction::Asc);
         if let Some(ids) = &self.physical {
             query = query.filter(Filter::any_of(agent_request::DOC_ID, ids));
-        }
-        if let Some(after) = &self.after {
-            query = query.filter(Filter::gt(agent_request::DOC_ID, after));
-        }
-        if let Some(limit) = self.limit {
-            query = query.limit(limit);
         }
         query
     }

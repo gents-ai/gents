@@ -206,6 +206,57 @@ where
     read_views(reader, &(view,)).await.map(|(rows,)| rows)
 }
 
+/// One page of `view` read through DefraDB's `_cursor`: up to `first` rows
+/// after the `after` token, and the token to resume from while more remain.
+/// A missing or null root is an empty last page, as for [`read_view`].
+pub async fn read_view_page<R, V>(
+    reader: &R,
+    view: &V,
+    first: u64,
+    after: Option<&str>,
+) -> Result<(Vec<V::Row>, Option<String>), ViewError>
+where
+    R: crate::config_client::ConfigRead + ?Sized,
+    V: View,
+{
+    let actor = reader.reader_did().ok_or(ViewError::ActorRequired)?;
+    let query = view.query(&actor).render_cursor(first, after);
+    let response = reader
+        .execute_read_with_variables(&query.document, &query.variables)
+        .await?;
+    let data = response.get("data").unwrap_or(&response);
+    if !data.is_object() {
+        return Err(ViewError::InvalidResponse);
+    }
+    let collection = V::Collection::NAME;
+    let Some(cursor) = data.get("_cursor").filter(|cursor| !cursor.is_null()) else {
+        return Ok((view.finish(Vec::new()), None));
+    };
+    let rows: Vec<V::Row> = match cursor.get(collection) {
+        None | Some(Value::Null) => return Ok((view.finish(Vec::new()), None)),
+        Some(rows @ Value::Array(_)) => serde_json::from_value(rows.clone())
+            .map_err(|source| ViewError::Decode { collection, source })?,
+        Some(_) => return Err(ViewError::InvalidResponse),
+    };
+    let page_info = cursor.get("_pageInfo").ok_or(ViewError::InvalidResponse)?;
+    let next = match page_info.get("hasNext").and_then(Value::as_bool) {
+        Some(false) => None,
+        Some(true) => Some(
+            page_info
+                .get("endCursor")
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
+                .ok_or(ViewError::InvalidResponse)?
+                .to_owned(),
+        ),
+        None => return Err(ViewError::InvalidResponse),
+    };
+    if next.is_some() && rows.is_empty() {
+        return Err(ViewError::InvalidResponse);
+    }
+    Ok((view.finish(rows), next))
+}
+
 pub async fn read_views<R, V>(reader: &R, views: &V) -> Result<V::Rows, ViewError>
 where
     R: crate::config_client::ConfigRead + ?Sized,

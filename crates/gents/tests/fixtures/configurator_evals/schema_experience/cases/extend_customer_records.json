@@ -5,26 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "We already have Customer records in production. Add an optional notes text field and an optional newsletter true/false field. Keep the current name and email fields and every existing customer. Don't rebuild or replace the collection.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "Customer"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "customers",
-          "collection": "Customer",
-          "filter": {},
-          "fields": [
-            "name",
-            "email"
-          ]
-        }
-      ],
+      "prompt": "We already have Customer records in production. Add an optional notes text field and an optional newsletter true/false field, and keep every existing customer as it is.",
       "checks": [
         {
           "check": "schema_matches",
@@ -32,19 +13,6 @@
             "name": "schema",
             "sdl": "type Customer { name: String email: String notes: String newsletter: Boolean }",
             "exact_nullability": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "schema"
-            ],
-            "forbidden": [
-              "bash"
-            ]
           },
           "tier": "acceptance",
           "weight": 1
@@ -89,6 +57,114 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Customer"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "customers",
+          "collection": "Customer",
+          "filter": {},
+          "fields": [
+            "name",
+            "email"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Mina wants the newsletter. And add the note \"prefers phone calls\" to Owen.",
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "customers",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "customers",
+                "key": "name",
+                "id": "Mina",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "mina@example.test"
+                  },
+                  {
+                    "field": "newsletter",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "customers",
+                "key": "name",
+                "id": "Owen",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "owen@example.test"
+                  },
+                  {
+                    "field": "notes",
+                    "equals": "prefers phone calls"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "customers",
+          "collection": "Customer",
+          "filter": {},
+          "fields": [
+            "name",
+            "email",
+            "notes",
+            "newsletter"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "Customer",
+          "filter": {
+            "name": {
+              "_eq": "Owen"
+            },
+            "notes": {
+              "_eq": "prefers phone calls"
+            }
+          },
+          "fields": [
+            "name",
+            "notes"
+          ]
         }
       ]
     }

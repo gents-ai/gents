@@ -31,6 +31,7 @@ use pack_installer::{pin_edit, pin_move_call, PackInstaller};
 mod pack_plugins;
 mod pack_wiring;
 mod read;
+mod rebinding;
 mod requests;
 pub mod tools_operation;
 use requests::{

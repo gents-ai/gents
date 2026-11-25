@@ -1,5 +1,18 @@
-import { Fragment, type ReactElement, type ReactNode } from "react";
-import { ChevronsUpDown, Waypoints } from "lucide-react";
+import {
+  cloneElement,
+  Fragment,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { Check, ChevronsUpDown, Waypoints } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@gents/ui/components/sheet";
+import { useMediaQuery } from "@/lib/media";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -85,6 +98,128 @@ export function NodeSwitcher({
   const choose = (nodeDid: string) => {
     if (nodeDid !== current) switchToNode(nodeDid, actions.selectNode, route);
   };
+  /* a phone gets a sheet of full-width rows, not a desktop menu off a caret */
+  const narrow = useMediaQuery("(max-width: 767px)");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  if (narrow) {
+    return (
+      <>
+        {trigger ? (
+          cloneElement(
+            trigger as ReactElement<{ onClick?: () => void }>,
+            { onClick: () => setSheetOpen(true) },
+            children,
+          )
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Switch node"
+            onClick={() => setSheetOpen(true)}
+            className={cn(
+              "me-1 shrink-0 bg-secondary text-muted-foreground",
+              className,
+            )}
+          >
+            {children ?? <ChevronsUpDown />}
+          </Button>
+        )}
+        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+          <SheetContent
+            side="bottom"
+            showCloseButton={false}
+            className="max-h-[80vh] gap-1 rounded-t-2xl border border-b-0 border-border/50 px-2 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          >
+            <span
+              aria-hidden
+              className="mx-auto mb-2 h-1 w-10 rounded-full bg-border"
+            />
+            <div className="px-3 pb-2">
+              <SheetTitle>Switch node</SheetTitle>
+              <SheetDescription className="text-xs">
+                The node this app works with.
+              </SheetDescription>
+            </div>
+            <div className="min-h-0 overflow-y-auto">
+              {groups.map((group) => (
+                <div key={group.label} className="pb-2">
+                  <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">
+                    {group.label}
+                  </p>
+                  {group.nodes.map((node) => {
+                    const name = node.node.displayName ?? node.label;
+                    const online = !runtimeConnectionBlocksAdmission(
+                      node.runtimeConnection,
+                    );
+                    const selected = node.nodeDid === current;
+                    return (
+                      <button
+                        key={node.nodeDid}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => {
+                          setSheetOpen(false);
+                          choose(node.nodeDid);
+                        }}
+                        className={cn(
+                          "flex min-h-14 w-full items-center gap-3 rounded-xl px-3 text-start active:bg-accent",
+                          selected && "bg-accent/60",
+                        )}
+                      >
+                        <span className="relative shrink-0">
+                          <NodeAvatar
+                            name={name}
+                            {...nodeAvatarOf(node)}
+                            className={cn("size-9", !online && "opacity-50")}
+                          />
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-popover",
+                              online ? "bg-brand" : "bg-border",
+                            )}
+                          />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-heading">
+                            {name}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {online
+                              ? group.label === "Local"
+                                ? "On this device"
+                                : "Connected"
+                              : projectRuntimeConnectionStatus(node.runtimeConnection)
+                                  .shortLabel}
+                          </span>
+                        </span>
+                        {selected && (
+                          <Check
+                            className="size-4 shrink-0 text-brand"
+                            aria-label="Current"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSheetOpen(false);
+                navigate({ name: "nodes" });
+              }}
+              className="flex min-h-12 w-full items-center gap-3 rounded-xl border-t border-border/60 px-3 text-sm text-muted-foreground active:bg-accent"
+            >
+              <Waypoints className="size-4" /> All nodes
+            </button>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+  }
   const opener = (
     <DropdownMenuTrigger
       render={

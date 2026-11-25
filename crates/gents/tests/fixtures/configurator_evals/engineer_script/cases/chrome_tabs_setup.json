@@ -1,0 +1,28 @@
+{
+  "case_id": "chrome-tabs-setup",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "ask",
+      "prompt": "Next week I want you to work in tabs in my own Chrome. What will I need to switch on in Chrome first, and is there anything I'll have to click when you connect?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)chrome://inspect"
+              },
+              {
+                "matches": "(?i)\\ballow\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

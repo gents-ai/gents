@@ -5,6 +5,7 @@ mod effective_settings_binding;
 mod plugin_publication;
 mod plugin_readmission;
 mod router;
+mod slot_retirement;
 mod startup_recovery;
 mod support;
 

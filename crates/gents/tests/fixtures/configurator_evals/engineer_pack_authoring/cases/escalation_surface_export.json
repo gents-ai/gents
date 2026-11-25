@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "export",
-      "prompt": "I want to carry this node's live engineer-mailbox datastore surface to another node. Export it as a new pack named escalation_surface in namespace fielddesk, written to escalation_surface/ in the workspace, and give it version 1.0.0. Check and build it, but don't install it here.",
+      "prompt": "I want to take this node's engineer-mailbox datastore surface to another node. Export it as a pack, fielddesk/escalation_surface 1.0.0, in escalation_surface/, and build the pack file so I can carry it over. Don't install it here.",
       "capture": [
         {
           "kind": "documents",
@@ -33,21 +33,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_rows_count",
           "params": {

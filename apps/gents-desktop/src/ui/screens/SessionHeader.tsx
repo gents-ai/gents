@@ -177,7 +177,7 @@ export function Title({
           variant="quiet"
           size="icon-xs"
           aria-label={`Rename ${title}`}
-          className="opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100"
+          className="opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:hidden"
           onClick={() => setEditing(true)}
         >
           <Pencil />

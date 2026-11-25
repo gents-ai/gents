@@ -241,7 +241,7 @@ impl Tool for ReadFileTool {
                     "raw_json": {
                         "type": "boolean",
                         "default": false,
-                        "description": "When true, return structured JSON instead of the compact default text."
+                        "description": "When true, return structured JSON whose content is the file's text without line numbers."
                     }
                 },
                 "required": ["path"]
@@ -260,7 +260,7 @@ impl Tool for ReadFileTool {
         let bytes = on_blocking(move || located.read()).await?;
         let content_hash = content_hash(&bytes);
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        let rendered = render_file_contents(&text, args.start_line, args.end_line);
+        let rendered = render_file_contents(&text, args.start_line, args.end_line, !args.raw_json);
         let max_chars = args
             .max_chars
             .unwrap_or(self.default_max_chars)

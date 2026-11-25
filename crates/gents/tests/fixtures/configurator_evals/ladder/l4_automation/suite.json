@@ -8,7 +8,5 @@
     "outcome settings",
     "schedules",
     "pause, retime, suspend and resume in place"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+  ]
 }

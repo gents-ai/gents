@@ -308,7 +308,7 @@ where
     cursor_page_data(response.data.as_ref(), collection)
 }
 
-pub(crate) fn cursor_page_data<T>(
+pub fn cursor_page_data<T>(
     data: Option<&serde_json::Value>,
     collection: &str,
 ) -> Result<(Vec<T>, Option<String>)>

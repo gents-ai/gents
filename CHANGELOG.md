@@ -21,6 +21,31 @@ source consistency checks, not a separate runtime compatibility version.
   automation goal policy --session S`. The working Agent may now change or
   clear its own Goal's budget; the user's ceiling still bounds it. The
   Household policy ID changes, so an existing home is refused once.
+- Breaking: every inference call records `first_token_at`, when the
+  provider streamed the call's first text, reasoning or tool-call delta;
+  response headers, keep-alives and message ids are not tokens. It is null for
+  a call that was not streamed or that failed before a token, and each retry
+  records its own. On the Claude Messages wire a tool call now streams its
+  name as a tool-call delta when its block starts. A home whose
+  `InferenceCall` predates the field is refused as an older home (exit code
+  65) and left unchanged; start a new home.
+- Eval trials report the subject's time to first token, from a call's
+  `started_at` to its `first_token_at`: `subject_usage` holds the first
+  request's (`first_request.first_token_ms`, unknown when that first call
+  streamed no token) and the median over the subject's turns that streamed
+  one (`median_first_token_ms`). `eval trial` prints both, `eval show` adds
+  their medians per cell and run, and `eval compare` shows their change on
+  passing trials.
+- The Engineer creates document access policies. `config` `policy create`
+  registers a policy it writes (resources with typed relations and union
+  permissions; names beginning `Gents` are the runtime's) as the calling
+  Agent, which needs node permission `add-dac-policy`, now in the default
+  Agent's `policy-delegate` set. The receipt gives the `@policy` line that
+  binds it to a new collection; `policy grant` and `policy revoke` change its
+  relations per document. Under `self_config_no_lockout` an Agent no longer
+  revokes its own document relations. On a home initialised earlier the
+  Engineer was issued the set without `add-dac-policy`, so `policy create`
+  is refused there.
 - Eval trials record what the subject agent itself spent, beside the
   home-wide `usage`: each completion's `subject_usage` holds its first request's
   prompt tokens and estimated component split (tool schemas among them), its

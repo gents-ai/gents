@@ -1239,8 +1239,10 @@ def check (state : State) : Action → Option Bool
 
 open Lean
 
-def policyYamlOf (definitions : List ResourceDefinition) : String :=
-  "name: Gents identity ownership model\nresources:\n" ++ String.join (definitions.map fun resource =>
+def policyName : String := "Gents identity ownership model"
+
+def policyYamlNamed (name : String) (definitions : List ResourceDefinition) : String :=
+  "name: " ++ name ++ "\nresources:\n" ++ String.join (definitions.map fun resource =>
     "  - name: " ++ resource.name ++ "\n" ++
     (if resource.relations.isEmpty then "    relations: []\n" else "    relations:\n") ++
     String.join (resource.relations.map fun relation =>
@@ -1257,6 +1259,9 @@ def policyYamlOf (definitions : List ResourceDefinition) : String :=
     (match resource.create with
      | none => ""
      | some (parent, required) => "    create: {parent: " ++ parent ++ ", requires: " ++ required ++ "}\n"))
+
+def policyYamlOf (definitions : List ResourceDefinition) : String :=
+  policyYamlNamed policyName definitions
 
 def policyYaml : String := policyYamlOf policy
 

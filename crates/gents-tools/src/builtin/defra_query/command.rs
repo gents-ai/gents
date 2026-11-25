@@ -2,10 +2,10 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use super::{build_query, discovery_payload, CollectionScope, DefraQueryParams};
-use gents_store::config_client::schema_introspection::{
-    introspection_query, parse_collection_schema, validate_identifier,
-};
+use super::relation::{self, ResolveError, SelectionRefusal};
+use super::schema::discovery_payload;
+use super::{build_query, CollectionScope, DefraQueryParams};
+use gents_store::config_client::schema_introspection::validate_identifier;
 use gents_store::config_client::{ConfigClientError, ConfigRead, RerunNote, TransactionFailure};
 
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +16,8 @@ pub(crate) struct CollectionDiscoveryError(String);
 pub(crate) enum QueryCommandError {
     #[error(transparent)]
     Discovery(#[from] CollectionDiscoveryError),
+    #[error(transparent)]
+    Refused(#[from] SelectionRefusal),
     #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
     #[error(fmt = gents_protocol::error_chain::held)]
@@ -29,6 +31,7 @@ impl QueryCommandError {
     pub(super) fn erased(self) -> anyhow::Error {
         match self {
             Self::Discovery(error) => error.into(),
+            Self::Refused(error) => error.into(),
             Self::Access(error) => error.into(),
             Self::Other(error) => error,
         }
@@ -40,7 +43,7 @@ impl TransactionFailure for QueryCommandError {
         match self {
             Self::Access(error) => Some(error),
             Self::Other(error) => TransactionFailure::config_client_error(error),
-            Self::Discovery(_) => None,
+            Self::Discovery(_) | Self::Refused(_) => None,
         }
     }
 
@@ -48,7 +51,16 @@ impl TransactionFailure for QueryCommandError {
         match self {
             Self::Access(error) => TransactionFailure::rerun_requested(error),
             Self::Other(error) => TransactionFailure::rerun_requested(error),
-            Self::Discovery(_) => None,
+            Self::Discovery(_) | Self::Refused(_) => None,
+        }
+    }
+}
+
+impl From<ResolveError> for QueryCommandError {
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::Refused(refusal) => Self::Refused(refusal),
+            ResolveError::Other(error) => Self::Other(error),
         }
     }
 }
@@ -99,12 +111,16 @@ pub(super) fn write_verb(args: &QueryParams) -> Option<&str> {
         .filter(|verb| WRITE_VERBS.contains(verb))
 }
 
+const COMMANDS: [&str; 5] = ["fields", "find", "count", "search", "explain"];
+
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
-        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
+        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields lists names/types; find returns a bounded page; count totals matching rows; search ranks by BM25 keywords or vector similarity. Configuration uses config; definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_geq,_lt,_leq,_in,_nin,_like,_nlike,_ilike,_nilike; compose with _and,_or,_not. A repeated key keeps only the last, so join conditions on one field with _and. Use search for BM25 keywords. Recover a truncated string with options.field_page:{doc_id,field,offset_bytes:0}. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Set options.signer:true to add _signer:{created,latest,writers,unsigned}, the document's provenance from its verified version signatures: the DIDs behind its first and newest versions (null when unsigned or ambiguous), every DID that signed any version (an edit in between shows here even when created and latest agree), and unsigned:true when some version cannot be attributed (unsigned, or missing from the readable history). Not combinable with field_page. Relationship selections and vector search are not exposed here."),
-        Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}}. Returns native BM25 _score, highest first; zero-score rows may follow matches. search_fields are String fields; fields selects returned values. Default limit 10, maximum 1000. Optional filter uses native operators; optional order uses find’s typed field-order tie-breakers. _docID breaks remaining ties. Configure fulltext indexes through schema help indexes fulltext; no embeddings needed."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\",\"carrier.name\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required; relation.field reads a related document's field, one relationship deep. A list relationship shows up to 20 per row; truncated_relations names rows with more. Grants and ACP apply to related documents. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_geq,_lt,_leq,_in,_nin,_like,_nlike,_ilike,_nilike; compose with _and,_or,_not; cross a relationship as {carrier:{name:{_eq:\"Ada\"}}}. A repeated key keeps only the last, so join conditions on one field with _and. Use search for BM25 keywords or vector similarity. Truncated strings: help field_page. Provenance: help signer."),
+        Some("field_page") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"notes\"],field_page:{doc_id:\"DOC_ID\",field:\"notes\",offset_bytes:0}}} reads a truncated string; field_recovery names the call. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Not combinable with offset, order or signer."),
+        Some("signer") => Ok("Set options.signer:true on find to add _signer:{created,latest,writers,unsigned}, the document's provenance from its verified version signatures: the DIDs behind its first and newest versions (null when unsigned or ambiguous), every DID that signed any version (an edit in between shows here even when created and latest agree), and unsigned:true when some version cannot be attributed (unsigned, or missing from the readable history). Not combinable with field_page."),
+        Some("search") => Ok("Ranks rows, highest _score first. Keywords: {argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}} scores BM25 over String fields; zero-score rows may follow matches. Vectors: options:{fields:[\"sku\"],vector_field:\"coordinates\",vector:[0.1,0.2,0.3]} scores by the field's vector index metric. Default limit 10, maximum 1000. fields, filter and order work as in find. Indexes: schema help indexes fulltext | vector."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
         _ => bail!("unknown query command; call query with {{\"argv\":[\"help\"]}}"),
@@ -206,7 +222,11 @@ pub(super) async fn execute_typed_command(
         .into());
     }
     let command = argv[0];
-    query_help(Some(command))?;
+    if !COMMANDS.contains(&command) {
+        return Err(
+            anyhow!("unknown query command; call query with {{\"argv\":[\"help\"]}}").into(),
+        );
+    }
     let collection = args.collection.as_deref().ok_or_else(|| {
         CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
     })?;
@@ -232,6 +252,8 @@ pub(super) async fn execute_typed_command(
             "order",
             "search_fields",
             "text",
+            "vector_field",
+            "vector",
         ],
         "explain" => &["fields", "filter", "limit", "offset", "order", "mode"],
         _ => unreachable!(),
@@ -241,15 +263,13 @@ pub(super) async fn execute_typed_command(
             return Err(anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into());
         }
     }
-    let schema_response = access
-        .execute_read(&introspection_query(collection)?)
-        .await?;
-    let schema = parse_collection_schema(schema_response.get("data"))
+    let observed = relation::observe(access, collection)
+        .await?
         .ok_or_else(|| CollectionDiscoveryError(super::unknown_collection_message(collection)))?;
     if command == "fields" {
-        return Ok(discovery_payload(collection, &schema));
+        return Ok(discovery_payload(&observed));
     }
-    let fields = if command == "count" {
+    let requested: Vec<String> = if command == "count" {
         vec!["_docID".into()]
     } else {
         serde_json::from_value(args.options.get("fields").cloned().context(
@@ -257,6 +277,7 @@ pub(super) async fn execute_typed_command(
         )?)
         .context("options.fields must be an array of field names")?
     };
+    let (fields, relations) = relation::resolve(access, &observed, &requested, scope).await?;
     let limit = args
         .options
         .get("limit")
@@ -269,9 +290,12 @@ pub(super) async fn execute_typed_command(
         filter: args.options.get("filter").cloned(),
         limit,
     };
+    if !relations.is_empty() && !params.fields.iter().any(|field| field == "_docID") {
+        params.fields.push("_docID".into());
+    }
     build_query(&params, scope)?;
     if let Some(filter) = params.filter.as_ref() {
-        super::native_filter::validate_filter(access, collection, filter).await?;
+        super::native_filter::validate_filter(access, collection, filter, scope).await?;
     }
     let field_page: Option<super::field_page::FieldPage> = args
         .options
@@ -286,6 +310,12 @@ pub(super) async fn execute_typed_command(
     };
     let selected_fields = params.fields.clone();
     if let Some(page) = &field_page {
+        if !relations.is_empty() {
+            return Err(anyhow!(
+                "field_page reads one field of this collection; omit relation.field"
+            )
+            .into());
+        }
         page.validate(&selected_fields)?;
         if args.options.contains_key("offset") || args.options.contains_key("order") {
             return Err(anyhow!("field_page cannot combine with row offset/order").into());
@@ -304,7 +334,9 @@ pub(super) async fn execute_typed_command(
         params.fields = vec![page.field.clone(), "_docID".into()];
         params.fields.dedup();
         params.limit = Some(1);
-    } else if command == "find" && !params.fields.iter().any(|field| field == "_docID") {
+    } else if matches!(command, "find" | "search")
+        && !params.fields.iter().any(|field| field == "_docID")
+    {
         params.fields.push("_docID".into());
     }
     let query = if command == "count" {
@@ -317,7 +349,7 @@ pub(super) async fn execute_typed_command(
         let arguments = filter.map(|f| format!("filter: {f}")).unwrap_or_default();
         format!("{{ COUNT({collection}: {{ {arguments} }}) }}")
     } else if command == "search" {
-        super::search::build_search_query(&params, scope, &schema, &args.options)?
+        super::search::build_search_query(&params, scope, &observed, &args.options)?
     } else {
         let offset = args
             .options
@@ -327,6 +359,16 @@ pub(super) async fn execute_typed_command(
             .context("offset must be an unsigned integer")?
             .unwrap_or(0);
         build_paged_query(&params, scope, args.options.get("order"), offset)?
+    };
+    let query = if relations.is_empty() {
+        query
+    } else {
+        let selection = query
+            .rfind(" } }")
+            .context("query renderer omitted selection boundary")?;
+        let mut query = query;
+        query.insert_str(selection, &relation::render(&relations));
+        query
     };
     let mode = if command == "explain" {
         let mode = args
@@ -353,7 +395,7 @@ pub(super) async fn execute_typed_command(
     let response = access.execute_read(&query).await.map_err(|error| {
         let error = anyhow::Error::from(error);
         let diagnostic =
-            super::diagnose_failed_query(&params, Some(&schema), &format!("{error:#}"));
+            super::diagnose_failed_query(&params, Some(&observed.schema), &format!("{error:#}"));
         error.context(format!(
             "{diagnostic}; recovery: {}",
             json!({"tool":"query","args":{"argv":["help",command]}})
@@ -414,6 +456,7 @@ pub(super) async fn execute_typed_command(
             json!({"collection":collection,"field_page":page.read(&rows[0], &selected_fields)?}),
         );
     }
+    let truncated_relations = relation::page_related(&mut rows, &relations);
     let recovery = if command == "find" {
         super::field_page::recovery_metadata(&rows)
     } else {
@@ -432,7 +475,7 @@ pub(super) async fn execute_typed_command(
             row["_signer"] = serde_json::to_value(signers).map_err(anyhow::Error::from)?;
         }
     }
-    if command == "find" && !selected_fields.iter().any(|field| field == "_docID") {
+    if !requested.iter().any(|field| field == "_docID") {
         for row in rows.as_array_mut().unwrap() {
             if let Some(object) = row.as_object_mut() {
                 object.remove("_docID");
@@ -452,8 +495,11 @@ pub(super) async fn execute_typed_command(
     if !recovery.is_empty() {
         result["field_recovery"] = json!(recovery);
     }
+    if !truncated_relations.is_empty() {
+        result["truncated_relations"] = json!(truncated_relations);
+    }
     if command == "search" {
-        result["ranking"] = json!("bm25");
+        result["ranking"] = json!(super::search::ranking_name(&args.options));
     }
     Ok(result)
 }
@@ -517,6 +563,7 @@ pub fn render_result(value: Value) -> Result<String> {
                 "total_count",
                 "fields",
                 "truncated_fields",
+                "truncated_relations",
                 "field_recovery",
                 "next_call",
                 "mode",

@@ -61,6 +61,7 @@ mod delegation;
 mod delegation_conformance;
 mod destructive_decision;
 pub mod document_decide;
+mod document_policy;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
@@ -231,7 +232,23 @@ pub struct GraphqlEndpoint {
     delegation_audience: held_audience::HeldAudienceCell,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
+    /// What this endpoint's answers said of gzip request bodies, shared by
+    /// the endpoint's clones (Lean `RequestEncoding`).
+    request_encoding: RequestEncodingCell,
 }
+
+/// What an endpoint learned from its answers. It is not part of which
+/// endpoint this is, so two endpoints compare equal whatever they learned.
+#[derive(Clone, Debug, Default)]
+struct RequestEncodingCell(Arc<gents_protocol::graphql::RequestEncoding>);
+
+impl PartialEq for RequestEncodingCell {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RequestEncodingCell {}
 
 impl GraphqlEndpoint {
     pub fn anonymous(url: impl Into<String>) -> Self {
@@ -247,6 +264,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            request_encoding: RequestEncodingCell::default(),
         }
     }
 
@@ -267,6 +285,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            request_encoding: RequestEncodingCell::default(),
         }
     }
 
@@ -293,6 +312,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
+            request_encoding: RequestEncodingCell::default(),
         })
     }
 

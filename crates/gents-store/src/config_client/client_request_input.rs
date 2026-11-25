@@ -33,12 +33,14 @@ pub fn client_request_input(
     .map_err(|error| ClientRequestInputError::Parse(Box::new(error)))?;
     let query::query_parse::ParsedOperation::Mutation {
         mutations,
+        excluded,
         explain: None,
     } = parsed
     else {
         return Err(ClientRequestInputError::NotMutation);
     };
     if mutations.len() != 1
+        || !excluded.is_empty()
         || mutations[0].collection_name != "AgentRequest"
         || mutations[0].mutation_type != query::MutationType::Add
         || mutations[0].create_input.len() != 1

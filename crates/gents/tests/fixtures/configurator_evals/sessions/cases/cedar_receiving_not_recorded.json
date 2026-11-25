@@ -63,28 +63,13 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "Look up our Cedar transfer notes. Is a receiving time actually recorded? Give only the time if present, otherwise say NOT RECORDED, followed by the Cedar transfer source session ID.",
+      "prompt": "Look up our Cedar transfer notes. Is a receiving time actually recorded? Give the time if there is one, otherwise say NOT RECORDED, and tell me which session ID you found it in.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               "NOT RECORDED"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

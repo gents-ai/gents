@@ -87,6 +87,7 @@ class Snapshots:
                                 stage=active.get("stage_id") if active and (running or state == "stopped") else None,
                                 updated_at=observed.get("written_at") or observed.get("ended_at")))
                 item = dict(key=key, run=run, home=str(path.parents[3]), counts=counts,
+                            divergences=report.get("divergences"),
                             updated_at=progress.get("holder", {}).get("written_at") or snapshot.get("written_at"))
                 if selected:
                     item["slots"] = slots
@@ -95,6 +96,13 @@ class Snapshots:
                                      for c in definition.get("cases", [])]
                 result.append(item)
             return sorted(result, key=lambda r: r["run"].get("created_at", ""), reverse=True)
+
+
+def merged_divergences(runs):
+    merged = []
+    for run in runs:
+        merged += [item for item in run.get("divergences") or [] if item not in merged]
+    return merged
 
 
 def comparison_summary(runs):
@@ -173,7 +181,9 @@ def serve(root, port):
                         dashboard=entry.get("dashboard"), summary=comparison_summary(details),
                         sources=sorted({r["run"].get("source_commit", "unknown") for r in details}),
                         versions=sorted({r["run"]["definition"]["comparability_version"] for r in details}),
-                        runs=[dict(key=r["key"], run_id=r["run"]["run_id"]) for r in details]))
+                        runs=[dict(key=r["key"], run_id=r["run"]["run_id"]) for r in details],
+                        divergences=merged_divergences(details),
+                        unrecorded=sum(r.get("divergences") is None for r in details)))
                 body = json.dumps({"rounds": rounds}).encode()
             elif request.path == "/api/health":
                 body = json.dumps({"root": str(snapshots.root)}).encode()

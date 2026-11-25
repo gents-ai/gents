@@ -52,6 +52,7 @@ import { JoinRequestDialog } from "./ui/screens/sharing/JoinRequestDialog";
 import { useFleet } from "./ui/hooks/useFleet";
 import { fleetNodes } from "./ui/lib/scope";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
+import { useSessionShown } from "./ui/hooks/useSessionShown";
 import { defaultAgentOf } from "./ui/lib/agents";
 import { isLocalNode, nodeSetUp } from "./ui/lib/firstRun";
 import { useUxHost } from "./ui/hooks/useUxHost";
@@ -205,6 +206,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   const route = useRoute();
   useClientRuntime(app, bridge.listenToUpdates);
   useFollowRoute(route);
+  useSessionShown(route);
   useWindowTitle(route);
   useDockVisit(route);
   useMobileVisualViewport();

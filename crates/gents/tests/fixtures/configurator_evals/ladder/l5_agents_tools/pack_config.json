@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l5-agents-tools",
-      "comparability_version": 13,
+      "comparability_version": 14,
       "title": "The Engineer \u2014 AgentTarget wiring and delegation",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

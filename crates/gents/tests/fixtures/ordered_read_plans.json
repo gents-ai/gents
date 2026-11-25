@@ -406,55 +406,6 @@
   },
   {
     "read": {
-      "path": "crates/gents-automation/src/triggers/engine/event_delivery.rs",
-      "collection": "$GENTS_0$",
-      "arguments": "filter:$GENTS_filter$,order:{_docID:ASC},limit:$GENTS_GROUP_RECOVERY_PAGE_SIZE$"
-    },
-    "bindings": [
-      {
-        "0": "AgentRequest",
-        "filter": "{node_did: {_eq: \"probe\"}}",
-        "GROUP_RECOVERY_PAGE_SIZE": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-automation/src/triggers/engine/event_delivery/source_scan.rs",
-      "collection": "$GENTS_collection$",
-      "arguments": "filter: $GENTS_filter$, order: { _docID: ASC }, limit: $GENTS_SOURCE_SCAN_PAGE_SIZE$"
-    },
-    "bindings": [
-      {
-        "collection": "AgentMessage",
-        "filter": "{node_did: {_eq: \"probe\"}}",
-        "SOURCE_SCAN_PAGE_SIZE": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-automation/src/triggers/callback/documents.rs",
-      "collection": "$GENTS_collection$",
-      "arguments": "filter: {owner_node_did: {_eq: \"$GENTS_0$\"}, agent_did: {_eq: \"$GENTS_1$\"}, parent_linked: {_eq: false}, _docID: {_gt: \"$GENTS_2$\"}}, order: {_docID: ASC}, limit: 256"
-    },
-    "bindings": [
-      {
-        "collection": "CallbackInvocation",
-        "0": "probe",
-        "1": "probe",
-        "2": ""
-      },
-      {
-        "collection": "CallbackResult",
-        "0": "probe",
-        "1": "probe",
-        "2": ""
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents-p2p/src/p2p_reconcile/enrollment_exchange.rs",
       "collection": "EnrollmentRenewalIntent",
       "arguments": "filter: { admin_did: { _eq: \"$GENTS_admin$\" }, expires_at: { _gt: \"$GENTS_now$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 4"

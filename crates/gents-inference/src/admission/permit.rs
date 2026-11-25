@@ -23,6 +23,7 @@ pub struct AdmissionPermit {
     cancel_observer: Option<CancellationToken>,
     terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     provider_activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
+    first_token_at: Option<String>,
     runtime: DropCleanup,
 }
 
@@ -92,6 +93,7 @@ impl AdmissionPermit {
             cancel_observer,
             terminal_failure_observer,
             provider_activity: None,
+            first_token_at: None,
             runtime,
         }
     }
@@ -158,6 +160,7 @@ impl AdmissionPermit {
             terminal.provider_limit,
             terminal.usage,
             terminal.cached_input_tokens,
+            self.first_token_at.as_deref(),
         )
         .await
         {
@@ -196,6 +199,12 @@ impl StreamGuardLifecycle for AdmissionPermit {
     fn mark_stream_error(&mut self, error: &str) {
         if self.terminal.is_none() {
             self.terminal = Some(PermitTerminal::failed(error, self.call.max_rate_limit_wait));
+        }
+    }
+
+    fn mark_first_token(&mut self) {
+        if self.first_token_at.is_none() {
+            self.first_token_at = Some(chrono::Utc::now().to_rfc3339());
         }
     }
 
@@ -269,6 +278,7 @@ impl Drop for AdmissionPermit {
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
         let doc_id = self.doc_id.clone();
+        let first_token_at = self.first_token_at.take();
         let charged_usage = terminal.usage;
         // Drop must never block a Tokio runtime thread.
         self.runtime.spawn(async move {
@@ -281,6 +291,7 @@ impl Drop for AdmissionPermit {
                 terminal.provider_limit,
                 terminal.usage,
                 terminal.cached_input_tokens,
+                first_token_at.as_deref(),
             )
             .await
             {

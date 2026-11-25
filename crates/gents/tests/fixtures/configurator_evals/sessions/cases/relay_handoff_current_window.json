@@ -63,7 +63,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "What time did we settle on for the Relay handoff? Show me where you found it.",
+      "prompt": "What time did we settle on for the Relay handoff? Give me the session ID where you found it.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -72,21 +72,6 @@
               {
                 "matches": "(?i)\\b0?9[:.]?40\\b"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",

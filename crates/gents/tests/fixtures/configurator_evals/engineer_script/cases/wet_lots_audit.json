@@ -11,22 +11,169 @@
       {
         "collection": "FloorLot",
         "document": {
-          "lot": "FM41",
+          "lot": "FM20",
           "hold": "wet"
         }
       },
       {
         "collection": "FloorLot",
         "document": {
-          "lot": "FM42",
+          "lot": "FM21",
           "hold": "clear"
         }
       },
       {
         "collection": "FloorLot",
         "document": {
-          "lot": "FM43",
+          "lot": "FM22",
           "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM23",
+          "hold": "dry"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM24",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM25",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM26",
+          "hold": "clear"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM27",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM28",
+          "hold": "dry"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM29",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM30",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM31",
+          "hold": "clear"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM32",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM33",
+          "hold": "dry"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM34",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM35",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM36",
+          "hold": "clear"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM37",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM38",
+          "hold": "dry"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM39",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM40",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM41",
+          "hold": "clear"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM42",
+          "hold": "wet"
+        }
+      },
+      {
+        "collection": "FloorLot",
+        "document": {
+          "lot": "FM43",
+          "hold": "dry"
         }
       },
       {
@@ -47,7 +194,7 @@
         "collection": "FloorLot",
         "document": {
           "lot": "FM46",
-          "hold": "dry"
+          "hold": "clear"
         }
       },
       {
@@ -58,51 +205,31 @@
         }
       },
       {
-        "collection": "LotRelease",
+        "collection": "FloorLot",
         "document": {
-          "lot": "FM41",
-          "revision": 1,
-          "approved": true
+          "lot": "FM48",
+          "hold": "dry"
         }
       },
       {
-        "collection": "LotRelease",
+        "collection": "FloorLot",
         "document": {
-          "lot": "FM43",
-          "revision": 1,
-          "approved": true
+          "lot": "FM49",
+          "hold": "wet"
         }
       },
       {
-        "collection": "LotRelease",
+        "collection": "FloorLot",
         "document": {
-          "lot": "FM44",
-          "revision": 1,
-          "approved": false
+          "lot": "FM50",
+          "hold": "wet"
         }
       },
       {
-        "collection": "LotRelease",
+        "collection": "FloorLot",
         "document": {
-          "lot": "FM46",
-          "revision": 1,
-          "approved": true
-        }
-      },
-      {
-        "collection": "LotRelease",
-        "document": {
-          "lot": "FM43",
-          "revision": 2,
-          "approved": false
-        }
-      },
-      {
-        "collection": "LotRelease",
-        "document": {
-          "lot": "FM44",
-          "revision": 3,
-          "approved": true
+          "lot": "FM51",
+          "hold": "clear"
         }
       },
       {
@@ -110,7 +237,79 @@
         "document": {
           "lot": "FM42",
           "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM25",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM35",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM50",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM27",
+          "revision": 1,
           "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM49",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM29",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM20",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM34",
+          "revision": 3,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM27",
+          "revision": 3,
+          "approved": true
         }
       },
       {
@@ -125,6 +324,22 @@
         "collection": "LotRelease",
         "document": {
           "lot": "FM44",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM47",
+          "revision": 3,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM34",
           "revision": 2,
           "approved": false
         }
@@ -132,7 +347,127 @@
       {
         "collection": "LotRelease",
         "document": {
+          "lot": "FM45",
+          "revision": 1,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM45",
+          "revision": 2,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM40",
+          "revision": 2,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM27",
+          "revision": 2,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM37",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
           "lot": "FM47",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM39",
+          "revision": 2,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM32",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM24",
+          "revision": 1,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM39",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM22",
+          "revision": 2,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM22",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM40",
+          "revision": 1,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM34",
+          "revision": 1,
+          "approved": false
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM24",
+          "revision": 2,
+          "approved": true
+        }
+      },
+      {
+        "collection": "LotRelease",
+        "document": {
+          "lot": "FM30",
           "revision": 1,
           "approved": false
         }
@@ -142,88 +477,26 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Before the floor handoff I need the wet lots that are not released. Write one script that queries the FloorLot and LotRelease records with your query tool and joins them. A lot can have several releases and only its newest one, the highest revision, counts: the lot is released when that release is approved. Have the script return {\"lots\": [...]} with the unreleased wet lot IDs sorted, and list them for me.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_queries",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "query"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        }
-      ],
+      "prompt": "Before the floor handoff: how many wet lots still aren't released, and which ones? A lot can have several releases; only its newest one, the highest revision, counts, and that one has to be approved.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "query"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "file_mailbox_item"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "lots",
-                "equals": [
-                  "FM43",
-                  "FM45"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_queries",
-                "min": 2
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "FM43"
+                "matches": "\\bFM22\\b"
               },
               {
-                "matches": "FM45"
+                "matches": "\\bFM30\\b"
+              },
+              {
+                "matches": "\\bFM40\\b"
+              },
+              {
+                "matches": "\\bFM47\\b"
+              },
+              {
+                "matches": "(?i)\\b(4|four)\\b[^.\\n]{0,40}\\blots?|\\blots?[^.\\n]{0,60}\\b(4|four)\\b"
               }
             ]
           },

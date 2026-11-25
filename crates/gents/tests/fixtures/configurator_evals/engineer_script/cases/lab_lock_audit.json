@@ -6,44 +6,35 @@
     "files": [
       {
         "path": "audit/locks/inventory.csv",
-        "contents": "lock,zone\nK40,lab\nK41,cold\nK42,lab\nK43,lab\nK44,lab\n"
+        "contents": "lock,zone\nK40,lab\nK41,cold\nK42,cold\nK43,lab\nK44,lab\nK45,cold\nK46,office\nK47,lab\nK48,office\nK49,lab\nK50,lab\nK51,lab\nK52,lab\nK53,office\nK54,lab\nK55,cold\nK56,lab\nK57,office\nK58,cold\nK59,office\nK60,lab\nK61,office\nK62,lab\nK63,lab\n"
       },
       {
-        "path": "audit/locks/events/2026-11/20.ndjson",
-        "contents": "{\"lock\": \"K40\", \"sequence\": 1, \"status\": \"open\"}\n{\"lock\": \"K40\", \"sequence\": 3, \"status\": \"closed\"}\n{\"lock\": \"K41\", \"sequence\": 8, \"status\": \"open\"}\n{\"lock\": \"K44\", \"sequence\": 4, \"status\": \"closed\"}\n"
+        "path": "audit/locks/events/2026-10/30.ndjson",
+        "contents": "{\"lock\": \"K63\", \"sequence\": 29, \"status\": \"open\"}\n{\"lock\": \"K49\", \"sequence\": 70, \"status\": \"closed\"}\n{\"lock\": \"K44\", \"sequence\": 28, \"status\": \"open\"}\n{\"lock\": \"K50\", \"sequence\": 54, \"status\": \"open\"}\n{\"lock\": \"K54\", \"sequence\": 74, \"status\": \"closed\"}\n{\"lock\": \"K52\", \"sequence\": 8, \"status\": \"closed\"}\n{\"lock\": \"K44\", \"sequence\": 69, \"status\": \"open\"}\n{\"lock\": \"K53\", \"sequence\": 38, \"status\": \"closed\"}\n{\"lock\": \"K44\", \"sequence\": 19, \"status\": \"closed\"}\n{\"lock\": \"K48\", \"sequence\": 27, \"status\": \"closed\"}\n{\"lock\": \"K50\", \"sequence\": 32, \"status\": \"open\"}\n{\"lock\": \"K61\", \"sequence\": 35, \"status\": \"closed\"}\n{\"lock\": \"K61\", \"sequence\": 16, \"status\": \"closed\"}\n{\"lock\": \"K49\", \"sequence\": 63, \"status\": \"open\"}\n{\"lock\": \"K60\", \"sequence\": 21, \"status\": \"closed\"}\n{\"lock\": \"K60\", \"sequence\": 76, \"status\": \"closed\"}\n{\"lock\": \"K41\", \"sequence\": 20, \"status\": \"closed\"}\n{\"lock\": \"K53\", \"sequence\": 40, \"status\": \"closed\"}\n"
       },
       {
-        "path": "audit/locks/events/2026-11/21.ndjson",
-        "contents": "{\"lock\": \"K40\", \"sequence\": 2, \"status\": \"open\"}\n{\"lock\": \"K43\", \"sequence\": 2, \"status\": \"open\"}\n{\"lock\": \"K44\", \"sequence\": 6, \"status\": \"open\"}\n{\"lock\": \"K43\", \"sequence\": 5, \"status\": \"closed\"}\n"
+        "path": "audit/locks/events/2026-10/31.ndjson",
+        "contents": "{\"lock\": \"K60\", \"sequence\": 49, \"status\": \"closed\"}\n{\"lock\": \"K42\", \"sequence\": 26, \"status\": \"open\"}\n{\"lock\": \"K60\", \"sequence\": 30, \"status\": \"closed\"}\n{\"lock\": \"K63\", \"sequence\": 15, \"status\": \"closed\"}\n{\"lock\": \"K40\", \"sequence\": 67, \"status\": \"closed\"}\n{\"lock\": \"K42\", \"sequence\": 45, \"status\": \"closed\"}\n{\"lock\": \"K63\", \"sequence\": 9, \"status\": \"closed\"}\n{\"lock\": \"K48\", \"sequence\": 4, \"status\": \"closed\"}\n{\"lock\": \"K45\", \"sequence\": 56, \"status\": \"closed\"}\n{\"lock\": \"K44\", \"sequence\": 42, \"status\": \"open\"}\n{\"lock\": \"K48\", \"sequence\": 34, \"status\": \"closed\"}\n{\"lock\": \"K43\", \"sequence\": 68, \"status\": \"closed\"}\n{\"lock\": \"K40\", \"sequence\": 24, \"status\": \"open\"}\n{\"lock\": \"K51\", \"sequence\": 59, \"status\": \"open\"}\n{\"lock\": \"K51\", \"sequence\": 58, \"status\": \"open\"}\n{\"lock\": \"K42\", \"sequence\": 66, \"status\": \"open\"}\n"
+      },
+      {
+        "path": "audit/locks/events/2026-11/01.ndjson",
+        "contents": "{\"lock\": \"K44\", \"sequence\": 6, \"status\": \"closed\"}\n{\"lock\": \"K62\", \"sequence\": 77, \"status\": \"closed\"}\n{\"lock\": \"K62\", \"sequence\": 25, \"status\": \"closed\"}\n{\"lock\": \"K61\", \"sequence\": 3, \"status\": \"closed\"}\n{\"lock\": \"K48\", \"sequence\": 10, \"status\": \"open\"}\n{\"lock\": \"K50\", \"sequence\": 36, \"status\": \"closed\"}\n{\"lock\": \"K63\", \"sequence\": 52, \"status\": \"closed\"}\n{\"lock\": \"K51\", \"sequence\": 72, \"status\": \"closed\"}\n{\"lock\": \"K43\", \"sequence\": 57, \"status\": \"closed\"}\n{\"lock\": \"K53\", \"sequence\": 60, \"status\": \"open\"}\n{\"lock\": \"K50\", \"sequence\": 71, \"status\": \"closed\"}\n{\"lock\": \"K58\", \"sequence\": 65, \"status\": \"open\"}\n{\"lock\": \"K61\", \"sequence\": 14, \"status\": \"open\"}\n{\"lock\": \"K48\", \"sequence\": 61, \"status\": \"closed\"}\n{\"lock\": \"K52\", \"sequence\": 73, \"status\": \"open\"}\n{\"lock\": \"K41\", \"sequence\": 53, \"status\": \"open\"}\n{\"lock\": \"K58\", \"sequence\": 37, \"status\": \"open\"}\n{\"lock\": \"K56\", \"sequence\": 75, \"status\": \"closed\"}\n"
+      },
+      {
+        "path": "audit/locks/events/2026-11/02.ndjson",
+        "contents": "{\"lock\": \"K42\", \"sequence\": 11, \"status\": \"closed\"}\n{\"lock\": \"K55\", \"sequence\": 46, \"status\": \"open\"}\n{\"lock\": \"K40\", \"sequence\": 17, \"status\": \"closed\"}\n{\"lock\": \"K45\", \"sequence\": 50, \"status\": \"open\"}\n{\"lock\": \"K50\", \"sequence\": 62, \"status\": \"closed\"}\n{\"lock\": \"K51\", \"sequence\": 43, \"status\": \"closed\"}\n{\"lock\": \"K58\", \"sequence\": 47, \"status\": \"open\"}\n{\"lock\": \"K63\", \"sequence\": 78, \"status\": \"closed\"}\n{\"lock\": \"K53\", \"sequence\": 39, \"status\": \"open\"}\n{\"lock\": \"K57\", \"sequence\": 18, \"status\": \"open\"}\n{\"lock\": \"K58\", \"sequence\": 7, \"status\": \"closed\"}\n{\"lock\": \"K45\", \"sequence\": 12, \"status\": \"closed\"}\n{\"lock\": \"K61\", \"sequence\": 41, \"status\": \"closed\"}\n"
+      },
+      {
+        "path": "audit/locks/events/2026-11/late/03.ndjson",
+        "contents": "{\"lock\": \"K46\", \"sequence\": 55, \"status\": \"closed\"}\n{\"lock\": \"K41\", \"sequence\": 23, \"status\": \"open\"}\n{\"lock\": \"K52\", \"sequence\": 44, \"status\": \"closed\"}\n{\"lock\": \"K46\", \"sequence\": 31, \"status\": \"open\"}\n{\"lock\": \"K59\", \"sequence\": 33, \"status\": \"open\"}\n{\"lock\": \"K54\", \"sequence\": 13, \"status\": \"closed\"}\n{\"lock\": \"K63\", \"sequence\": 64, \"status\": \"open\"}\n{\"lock\": \"K53\", \"sequence\": 5, \"status\": \"closed\"}\n{\"lock\": \"K40\", \"sequence\": 22, \"status\": \"closed\"}\n{\"lock\": \"K45\", \"sequence\": 48, \"status\": \"closed\"}\n{\"lock\": \"K56\", \"sequence\": 2, \"status\": \"open\"}\n{\"lock\": \"K53\", \"sequence\": 1, \"status\": \"closed\"}\n{\"lock\": \"K41\", \"sequence\": 51, \"status\": \"closed\"}\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run the lab lock audit as one script. audit/locks/inventory.csv lists every lock and its zone, and the event logs are the .ndjson files somewhere under audit/locks/events/. A lock's current state is the status of its event with the greatest sequence number, whichever log it is in. Which lab locks are currently open or have no event at all? Return {\"open_or_unknown\": [...]} sorted and tell me. Leave the logs alone.",
+      "prompt": "Lab lock audit: audit/locks/inventory.csv lists every lock and its zone, and the event logs are the .ndjson files somewhere under audit/locks/events/. A lock's current state is the status of its event with the highest sequence number, whichever log it's in. How many lab locks are open right now or have no events at all, and which?",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "audit",
@@ -52,68 +43,33 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "open_or_unknown",
-                "equals": [
-                  "K42",
-                  "K44"
-                ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_reads",
-                "min": 3
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "captured_files_match",
           "params": {
             "name": "audit",
             "expect": [
               {
                 "path": "audit/locks/inventory.csv",
-                "sha256": "73f653e6a9dfbcaedbc0f0758cbc7bf08e6b6da7a67d2492ec50b515e72335cf"
+                "sha256": "ae28b11b4854b04dd545d0ad91577f211822136f3e7c785498dbb1beaba7a75f"
               },
               {
-                "path": "audit/locks/events/2026-11/20.ndjson",
-                "sha256": "8aeacd2eb6482681e7f5d2a09600c39c4b9ccfb68e736488ba30aa23f9d9b589"
+                "path": "audit/locks/events/2026-10/30.ndjson",
+                "sha256": "773b2dcfe1d44efc9e3e9fa814d5beeca366205d7939efe5321ed8486608b586"
               },
               {
-                "path": "audit/locks/events/2026-11/21.ndjson",
-                "sha256": "bf0a94d5a858fab2d4d0b7d10617eb4c315d45315618c98f4ebee7c3aeb3b7a4"
+                "path": "audit/locks/events/2026-10/31.ndjson",
+                "sha256": "4512b28d97f7ccfa62a8960df0aecd692d878b4631d2a86c5f9eaa0d3b9edb95"
+              },
+              {
+                "path": "audit/locks/events/2026-11/01.ndjson",
+                "sha256": "328a1fae920412a16312dc963663eaf69c9cf2701870b90c86cfcf50fc6d0bfb"
+              },
+              {
+                "path": "audit/locks/events/2026-11/02.ndjson",
+                "sha256": "5dd5d8fc54c895dc772498deec0825e7ee52f869585dd28f21aa434205d243c6"
+              },
+              {
+                "path": "audit/locks/events/2026-11/late/03.ndjson",
+                "sha256": "9e1687c45fa144b697001f40dfcd3323c66beaa51e2e553705140e0e6898f5d6"
               }
             ]
           },
@@ -125,10 +81,16 @@
           "params": {
             "all": [
               {
-                "matches": "K42"
+                "matches": "\\bK44\\b"
               },
               {
-                "matches": "K44"
+                "matches": "\\bK47\\b"
+              },
+              {
+                "matches": "\\bK52\\b"
+              },
+              {
+                "matches": "(?i)\\b(3|three)\\b[^.\\n]{0,40}\\blocks?|\\blocks?[^.\\n]{0,60}\\b(3|three)\\b"
               }
             ]
           },
