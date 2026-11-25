@@ -232,22 +232,20 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     let identity = db.node_identity.clone();
 
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    let (running, agent) = gents::runtime::embedded::boot_runtime(
+        &db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let node_did = agent.node_did().to_string();
+    let node_did = running.node_did;
     let default_agent_did = agent.default_agent_did().to_string();
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    let shutdown_tx = running.shutdown;
+    let handle = running.handle;
 
     let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0) && snapshot.default_agent_did == default_agent_did

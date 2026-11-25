@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents::{DocumentRuntimeOptions, ProcessLifecycleObserver, ProcessLifecycleState};
 use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents_store::config_client::ConfigAccess;
 use gents_tools::surface::ToolCeiling;
@@ -132,11 +132,10 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         generation_tx,
         event_sources_tx,
     });
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    let (running, agent) = gents::runtime::embedded::boot_runtime(
+        &db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             runtime_snapshot_observer: Some(observer),
@@ -145,11 +144,10 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await
     .unwrap();
-    let node_did = agent.node_did().to_string();
+    let node_did = running.node_did;
     let default_agent_did = agent.default_agent_did().to_string();
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.clone().run(shutdown_rx));
+    let shutdown_tx = running.shutdown;
+    let handle = running.handle;
 
     wait_for_observed(
         &mut process_state_rx,

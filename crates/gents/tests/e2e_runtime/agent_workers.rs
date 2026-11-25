@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::{DocumentRuntimeOptions, Gents};
+use gents::DocumentRuntimeOptions;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
@@ -332,20 +332,17 @@ async fn delegates_start_while_their_turn_holds_the_backend() {
             .await
             .expect("publish client request");
         let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-        let agent = Gents::from_default_agent_documents(
-            db.node.clone(),
+        let (running, _agent) = gents::runtime::embedded::boot_runtime(
+            &db,
             identity,
             DocumentRuntimeOptions {
-                backend_admission: Some(db.backend_admission()),
                 tool_ceiling: ToolCeiling::meta_only(),
                 ..Default::default()
             },
         )
         .await
-        .expect("build runtime");
-        let node_did = agent.node_did().to_string();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let runtime = BootedAgent::new(shutdown_tx, tokio::spawn(agent.run(shutdown_rx)), node_did);
+        .expect("boot runtime");
+        let runtime = BootedAgent::from_running(running);
 
         let agent_access = ConfigAccess::local_as(db.node.clone(), agent_did.parse().unwrap());
         let node_access =

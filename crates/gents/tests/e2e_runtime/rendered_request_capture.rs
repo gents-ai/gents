@@ -2573,9 +2573,7 @@ impl OwnedCaptureFixture {
             .expect("build real capture runtime")
         };
         let node_did = root.did().to_owned();
-        let (tx, rx) = tokio::sync::watch::channel(false);
-        let handle = tokio::spawn(agent.run(rx));
-        let runtime = BootedAgent::new(tx, handle, node_did.clone());
+        let runtime = spawn_runtime(&db, agent).await;
         Self {
             _db: db,
             node: node.clone(),

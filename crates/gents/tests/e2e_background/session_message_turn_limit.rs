@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::{DocumentRuntimeOptions, Gents};
+use gents::DocumentRuntimeOptions;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
@@ -463,22 +463,18 @@ async fn start_child_session(
         .await
         .expect("publish client request");
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    let (running, _agent) = gents::runtime::embedded::boot_runtime(
+        db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
-    .expect("build child-limit runtime");
-    let node_did = agent.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    .expect("boot child-limit runtime");
     let runtime = AcceptedTurnRuntime {
-        runtime: BootedAgent::new(shutdown_tx, handle, node_did),
+        runtime: BootedAgent::from_running(running),
         backend,
     };
     (parent_did, child_did, access, runtime)
