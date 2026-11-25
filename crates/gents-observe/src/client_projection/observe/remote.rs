@@ -503,6 +503,17 @@ impl Drop for EndNotice {
     }
 }
 
+/// The change subscription of `collection`. A request's event also names its
+/// session scope and its trigger, which `delivery::Change::of` routes it by.
+pub(super) fn subscription(collection: &str) -> String {
+    let scope = if collection == gents_protocol::schemas::AGENT_REQUEST_NAME {
+        " session_id requester_did caused_by_trigger_id"
+    } else {
+        ""
+    };
+    format!("subscription {{ {collection}(showDeleted: true) {{ _docID _deleted{scope} }} }}")
+}
+
 /// DefraDB emits changes only after subscription response headers; arm every
 /// root before allowing a snapshot. The source takes each stream's renewal
 /// cadence so the set is renewed as a whole, a full period after it is armed.
@@ -520,11 +531,7 @@ async fn arm(
         .iter()
         .copied()
         .chain(["AgentToolControl", "AgentToolControlClaim"])
-        .map(|collection| {
-            let query =
-                format!("subscription {{ {collection}(showDeleted: true) {{ _docID _deleted }} }}");
-            (collection, query)
-        })
+        .map(|collection| (collection, subscription(collection)))
         .collect::<Vec<_>>();
     /* every root is opened at once: one round trip for the set instead of one
     per root, and a slow handshake does not hold the rest back. All are

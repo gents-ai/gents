@@ -9,7 +9,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use crate::client_projection::query::{
-    load_collection_roots_on, load_node_snapshot_on, CollectionRoot, SnapshotReadError,
+    load_node_snapshot_on, load_partial_read_on, PartialRead, SnapshotReadError,
 };
 use crate::client_projection::store::ClientStore;
 use gents_store::client_journal::runtime_directory::RuntimeDirectory;
@@ -17,11 +17,11 @@ use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 mod delivery;
 mod projection_store;
 mod remote;
-use projection_store::RuntimeConnectionEvent;
 pub use projection_store::{
     ObservedStore, ObservedStores, ObserverMetrics, ObserverMetricsSnapshot,
     RuntimeConnectionStatus, StoreProjectionRevision, StoreUpdateNotice,
 };
+use projection_store::{PartialPublication, RuntimeConnectionEvent};
 
 fn snapshot_retry_delay(failures: u32) -> Duration {
     remote::reconnect_delay(failures)
@@ -52,12 +52,14 @@ impl Settlement {
     }
 }
 
-/// `ObserverResync.CollectionSettlement` of a finished collection reload.
+/// `ObserverResync.CollectionSettlement` of a finished partial read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollectionSettlement {
     Published,
     Superseded,
     Failed,
+    /// A session scope it read does not derive alone; the full load reads it.
+    Deferred,
 }
 
 /// The loop's per-node `ObserverResync.Slot` fields other than `loading` and
@@ -66,8 +68,9 @@ enum CollectionSettlement {
 #[derive(Default)]
 struct Queue {
     pending: BTreeSet<String>,
-    /// `collections`: the roots queued for a collection reload, per node.
-    collections: BTreeMap<String, BTreeSet<CollectionRoot>>,
+    /// `collections`: the roots and session scopes queued for a partial read,
+    /// per node.
+    collections: BTreeMap<String, PartialRead>,
     retry_at: BTreeMap<String, Instant>,
     failures: BTreeMap<String, u32>,
     /// The source generation whose every root is armed, per node. A replaced
@@ -177,8 +180,8 @@ impl Queue {
     /// The nodes and collections the stores asked to read again.
     fn take_requests(&mut self, stores: &ObservedStores) {
         self.pending.extend(stores.take_resync_requests());
-        for (node, roots) in stores.take_collection_requests() {
-            self.collections.entry(node).or_default().extend(roots);
+        for (node, read) in stores.take_partial_requests() {
+            self.collections.entry(node).or_default().extend(read);
         }
     }
 
@@ -202,24 +205,24 @@ impl Queue {
     fn collections_startable(&self, node: &str, generation: u64, reading: bool) -> bool {
         self.collections
             .get(node)
-            .is_some_and(|roots| !roots.is_empty())
+            .is_some_and(|read| !read.is_empty())
             && !self.pending.contains(node)
             && !self.retry_at.contains_key(node)
             && !reading
             && self.armed.get(node) == Some(&generation)
     }
 
-    /// `ObserverResync.startCollections`: every queued collection.
-    fn start_collections(&mut self, node: &str) -> BTreeSet<CollectionRoot> {
+    /// `ObserverResync.startCollections`: every queued collection and scope.
+    fn start_collections(&mut self, node: &str) -> PartialRead {
         self.collections.remove(node).unwrap_or_default()
     }
 
-    /// `ObserverResync.settleCollections` of a reload of `roots`.
+    /// `ObserverResync.settleCollections` of a partial read of `read`.
     fn settle_collections(
         &mut self,
         node: &str,
         settlement: CollectionSettlement,
-        roots: BTreeSet<CollectionRoot>,
+        read: PartialRead,
     ) {
         match settlement {
             CollectionSettlement::Published => {}
@@ -227,9 +230,9 @@ impl Queue {
                 self.collections
                     .entry(node.to_owned())
                     .or_default()
-                    .extend(roots);
+                    .extend(read);
             }
-            CollectionSettlement::Failed => {
+            CollectionSettlement::Failed | CollectionSettlement::Deferred => {
                 self.pending.insert(node.to_owned());
             }
         }
@@ -378,10 +381,7 @@ impl ObserverHandle {
 /// What a finished read of a node fetched.
 enum Fetched {
     Node(Result<ClientStore, SnapshotReadError>),
-    Collections(
-        BTreeSet<CollectionRoot>,
-        Result<ClientStore, SnapshotReadError>,
-    ),
+    Partial(PartialRead, Result<ClientStore, SnapshotReadError>),
 }
 
 struct Load {
@@ -422,9 +422,9 @@ impl Loads {
         node: String,
         source: &remote::Source,
         store: Arc<ObservedStore>,
-        roots: BTreeSet<CollectionRoot>,
+        read: PartialRead,
     ) {
-        self.spawn(node, source, store, Some(roots));
+        self.spawn(node, source, store, Some(read));
     }
 
     fn spawn(
@@ -432,20 +432,20 @@ impl Loads {
         node: String,
         source: &remote::Source,
         store: Arc<ObservedStore>,
-        roots: Option<BTreeSet<CollectionRoot>>,
+        partial: Option<PartialRead>,
     ) {
         self.next_id += 1;
         let id = self.next_id;
         let access = ConfigAccess::Graphql(source.endpoint.clone());
         let captured = store.capture_read();
         let task_node = node.clone();
-        let collections = roots.is_some();
+        let collections = partial.is_some();
         let abort = self.tasks.spawn(async move {
-            let fetched = match roots {
+            let fetched = match partial {
                 None => Fetched::Node(load_node_snapshot_on(&access, &task_node).await),
-                Some(roots) => {
-                    let result = load_collection_roots_on(&access, &task_node, &roots).await;
-                    Fetched::Collections(roots, result)
+                Some(read) => {
+                    let result = load_partial_read_on(&access, &task_node, &read).await;
+                    Fetched::Partial(read, result)
                 }
             };
             Load {
@@ -516,25 +516,26 @@ impl Loads {
     }
 }
 
-/// Publishes a finished collection reload through the reload fence
-/// (`ObserverResync.collectionSettlement`).
+/// Publishes a finished partial read (`ObserverResync.collectionSettlement`).
 fn settle_collection_reload(
     store: &ObservedStore,
     captured: &projection_store::StoreReadFence,
-    roots: BTreeSet<CollectionRoot>,
+    read: PartialRead,
     result: Result<ClientStore, SnapshotReadError>,
     metrics: &ObserverMetrics,
 ) -> CollectionSettlement {
     match result {
         Ok(rows) => {
             let fetched = rows.row_count();
-            if store.replace_collections_at_read(captured, roots, rows) {
-                metrics
-                    .docs_fetched
-                    .fetch_add(fetched as u64, Ordering::Relaxed);
-                CollectionSettlement::Published
-            } else {
-                CollectionSettlement::Superseded
+            match store.publish_partial_at_read(captured, read, rows) {
+                PartialPublication::Published => {
+                    metrics
+                        .docs_fetched
+                        .fetch_add(fetched as u64, Ordering::Relaxed);
+                    CollectionSettlement::Published
+                }
+                PartialPublication::Superseded => CollectionSettlement::Superseded,
+                PartialPublication::Deferred => CollectionSettlement::Deferred,
             }
         }
         Err(error) => {
@@ -653,7 +654,7 @@ pub fn spawn_observer(
                             match loads.forget(error.id()) {
                                 Some((node, true)) => {
                                     tracing::warn!(node_did = %node, error = %error, "runtime collection reload task failed");
-                                    queue.settle_collections(&node, CollectionSettlement::Failed, BTreeSet::new());
+                                    queue.settle_collections(&node, CollectionSettlement::Failed, PartialRead::default());
                                 }
                                 Some((node, false)) => {
                                     tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
@@ -671,9 +672,9 @@ pub fn spawn_observer(
                     let Load { node, store, captured, fetched, .. } = load;
                     let result = match fetched {
                         Fetched::Node(result) => result,
-                        Fetched::Collections(roots, result) => {
-                            let settlement = settle_collection_reload(&store, &captured, roots.clone(), result, &metrics_for_task);
-                            queue.settle_collections(&node, settlement, roots);
+                        Fetched::Partial(read, result) => {
+                            let settlement = settle_collection_reload(&store, &captured, read.clone(), result, &metrics_for_task);
+                            queue.settle_collections(&node, settlement, read);
                             break 'settled;
                         }
                     };
@@ -763,10 +764,10 @@ pub fn spawn_observer(
                 .cloned()
                 .collect();
             for node in collection_runnable {
-                let roots = queue.start_collections(&node);
+                let read = queue.start_collections(&node);
                 if let Some(source) = sources.entries.get(&node) {
                     let store = stores.ensure(&node);
-                    loads.start_collections(node, source, store, roots);
+                    loads.start_collections(node, source, store, read);
                 }
             }
         }

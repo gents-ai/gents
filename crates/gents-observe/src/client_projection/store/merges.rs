@@ -146,6 +146,34 @@ impl ClientStore {
         ClientStore::from_rows(rows)
     }
 
+    /// The store with the requests of `scopes` replaced by `incoming`, as a
+    /// full reload replaces them: a scope's rows `incoming` lacks are gone,
+    /// and an unpersisted placeholder an incoming row answers is retired.
+    pub fn replace_session_requests(
+        &self,
+        scopes: &std::collections::BTreeSet<gents_protocol::session::SessionScope>,
+        incoming: Vec<AgentRequestRow>,
+    ) -> Self {
+        let mut rows = self.to_rows();
+        rows.requests
+            .retain(|row| !scopes.iter().any(|scope| request_in_scope(row, scope)));
+        retire_request_placeholders(&mut rows.requests, &incoming);
+        rows.requests.extend(incoming);
+        ClientStore::from_rows(rows)
+    }
+
+    /// Whether the store holds a request of `scopes` that a trigger caused
+    /// (`SessionRequestReload.derivesAlone`, `heldTriggered`).
+    pub fn holds_triggered_request(
+        &self,
+        scopes: &std::collections::BTreeSet<gents_protocol::session::SessionScope>,
+    ) -> bool {
+        self.requests.iter().any(|row| {
+            row.caused_by_trigger_id.is_some()
+                && scopes.iter().any(|scope| request_in_scope(row, scope))
+        })
+    }
+
     pub fn to_rows(&self) -> ClientStoreRows {
         ClientStoreRows {
             nodes: self.nodes.clone(),
@@ -184,6 +212,12 @@ impl ClientStore {
                 .clone(),
         }
     }
+}
+
+fn request_in_scope(row: &AgentRequestRow, scope: &gents_protocol::session::SessionScope) -> bool {
+    row.node_did.as_deref() == Some(scope.node_did.as_str())
+        && row.session_id.as_deref() == Some(scope.session_id.as_str())
+        && row.requester_did == scope.requester_did
 }
 
 #[cfg(test)]

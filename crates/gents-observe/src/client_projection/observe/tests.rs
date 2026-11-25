@@ -916,7 +916,7 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
 #[tokio::test]
 async fn collection_reload_reads_the_rows_a_full_load_shows() {
     use crate::client_projection::query::{
-        load_collection_roots_on, replace_collection_roots, OBSERVED_COLLECTIONS,
+        load_collection_roots_on, replace_collection_roots, CollectionRoot, OBSERVED_COLLECTIONS,
     };
     use gents_store::config_client::runtime_endpoints::RuntimeEndpoints;
 
@@ -955,6 +955,194 @@ async fn collection_reload_reads_the_rows_a_full_load_shows() {
         .await
         .unwrap_err();
     assert!(refused.refused(), "{refused}");
+    fixture.stop().await;
+}
+
+/// Premise of `ObserverResync.Change.sessionRequest`: a request's change
+/// event carries its session scope and its trigger, when it is created and
+/// when it is updated, so the delivery routes it without a read.
+#[tokio::test]
+async fn request_change_event_names_its_session_scope() {
+    let fixture = ObservedRuntime::start().await;
+    let mut stream = fixture
+        .access
+        .subscribe(&remote::subscription(
+            gents_protocol::schemas::AGENT_REQUEST_NAME,
+        ))
+        .await
+        .unwrap();
+    let node = gents_store::graphql::escape_graphql_string(&fixture.runtime_did);
+    let created = fixture
+        .access
+        .write(
+            "test.observer.request",
+            &format!(
+                "mutation {{ create_AgentRequest(input: {{request_id: \"request\", purpose: \"normal\", node_did: \"{node}\", requester_did: \"did:test:requester\", session_id: \"session\", lifecycle_state: \"pending\", caused_by_trigger_id: \"trigger\"}}) {{ _docID }} }}"
+            ),
+        )
+        .await
+        .unwrap();
+    let doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    fixture
+        .access
+        .write(
+            "test.observer.request",
+            &format!(
+                "mutation {{ update_AgentRequest(docID: \"{doc}\", input: {{lifecycle_state: \"processing\"}}) {{ _docID }} }}"
+            ),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let envelope = stream.recv().await.unwrap().unwrap();
+        let rows = envelope["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{envelope}");
+        assert_eq!(
+            rows[0],
+            serde_json::json!({
+                "_docID": doc,
+                "_deleted": false,
+                "session_id": "session",
+                "requester_did": "did:test:requester",
+                "caused_by_trigger_id": "trigger",
+            }),
+        );
+    }
+    drop(stream);
+    fixture.stop().await;
+}
+
+/// `SessionRequestReload.session_requests_derive_alone` against a served
+/// runtime. A follow-up turn moves a session's head: replacing the scope's
+/// requests with a read of the scope leaves the store's requests as a full
+/// load shows them, without the earlier turn's finished request. Once the
+/// scope holds a trigger-caused request the read publishes nothing
+/// (`SessionRequestReload.derivesAlone`).
+#[tokio::test]
+async fn session_reload_leaves_the_requests_a_full_load_shows() {
+    use crate::client_projection::query::load_partial_read_on;
+    use gents_protocol::session::SessionScope;
+    use projection_store::PartialPublication;
+
+    let fixture = ObservedRuntime::start().await;
+    let node = fixture.runtime_did.clone();
+    let requester = "did:test:requester";
+    let create = |collection: &'static str, value: serde_json::Value| {
+        let access = fixture.access.clone();
+        async move {
+            let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
+            let created = access
+                .write(
+                    "test.observer.seed",
+                    &format!("mutation {{ create_{collection}(input: {input}) {{ _docID }} }}"),
+                )
+                .await
+                .unwrap();
+            gents_store::graphql::created_doc_id(&created, collection).unwrap()
+        }
+    };
+    let request = |session: &str, id: &str, state: &str, second: u32| {
+        serde_json::json!({
+            "request_id": id, "purpose": "normal", "node_did": node,
+            "requester_did": requester, "agent_did": "default", "session_id": session,
+            "content": id, "lifecycle_state": state,
+            "created_at": format!("2026-11-01T00:00:{second:02}Z"),
+        })
+    };
+    let head = |doc: &str, id: &str, state: &str| {
+        serde_json::json!({
+            "last_activity_at": "2026-11-01T00:01:00Z",
+            "latest_request": {"request_doc_id": doc, "request_id": id, "lifecycle_state": state},
+        })
+    };
+    let session = |id: &str, observation: serde_json::Value| {
+        serde_json::json!({
+            "session_id": id, "node_did": node, "requester_did": requester,
+            "agent_did": "default", "created_at": "2026-11-01T00:00:00Z",
+            "observation": observation,
+        })
+    };
+    let other = create("AgentRequest", request("other", "other-a", "completed", 1)).await;
+    create(
+        "AgentSession",
+        session("other", head(&other, "other-a", "completed")),
+    )
+    .await;
+    let first = create("AgentRequest", request("chat", "first", "completed", 1)).await;
+    let chat = create(
+        "AgentSession",
+        session("chat", head(&first, "first", "completed")),
+    )
+    .await;
+    let ids = |store: &ClientStore| {
+        store
+            .requests
+            .iter()
+            .map(|row| row.request_id.clone())
+            .collect::<Vec<_>>()
+    };
+    let rows = |store: &ClientStore| serde_json::to_value(&store.requests).unwrap();
+
+    let before = load_node_snapshot_on(&fixture.access, &node).await.unwrap();
+    assert_eq!(ids(&before), ["first", "other-a"]);
+    let stores = ObservedStores::new();
+    let store = stores.insert_for_test(&node, before);
+
+    let second = create("AgentRequest", request("chat", "second", "processing", 2)).await;
+    let moved = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "observation": head(&second, "second", "processing"),
+    }))
+    .unwrap();
+    fixture
+        .access
+        .write(
+            "test.observer.seed",
+            &format!("mutation {{ update_AgentSession(docID: \"{chat}\", input: {moved}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    let read = PartialRead {
+        scopes: BTreeSet::from([SessionScope {
+            node_did: node.clone(),
+            session_id: "chat".to_owned(),
+            requester_did: Some(requester.to_owned()),
+        }]),
+        ..Default::default()
+    };
+    let reloaded = load_partial_read_on(&fixture.access, &node, &read)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.publish_partial_at_read(&store.capture_read(), read.clone(), reloaded),
+        PartialPublication::Published
+    );
+    let full = load_node_snapshot_on(&fixture.access, &node).await.unwrap();
+    assert_eq!(ids(&full), ["second", "other-a"]);
+    assert_eq!(rows(&store.snapshot()), rows(&full));
+
+    let mut fired = request("chat", "fired", "completed", 3);
+    fired["caused_by_trigger_id"] = "trigger".into();
+    create(
+        "Trigger",
+        serde_json::json!({
+            "node_did": node, "trigger_id": "trigger", "task_id": "task",
+            "source": {"kind": "schedule", "schedule_id": "schedule"}, "enabled": true,
+        }),
+    )
+    .await;
+    create("AgentRequest", fired).await;
+    let full = load_node_snapshot_on(&fixture.access, &node).await.unwrap();
+    assert_eq!(ids(&full), ["second", "fired", "other-a"]);
+    assert!(store.replace_reloaded_snapshot_at_read(&store.capture_read(), full.clone()));
+    let reloaded = load_partial_read_on(&fixture.access, &node, &read)
+        .await
+        .unwrap();
+    assert_eq!(ids(&reloaded), ["second"]);
+    assert_eq!(
+        store.publish_partial_at_read(&store.capture_read(), read, reloaded),
+        PartialPublication::Deferred
+    );
+    assert_eq!(rows(&store.snapshot()), rows(&full));
     fixture.stop().await;
 }
 
@@ -1401,21 +1589,47 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         }))
         .unwrap()
     };
-    // `Conformance.ObserverResync.snapshot`.
+    let request = |node: usize, id: &str, trigger: Option<&str>| {
+        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
+            "_docID": format!("{id}-{node}"), "request_id": format!("{id}-{node}"),
+            "purpose": "normal", "node_did": did(node),
+            "session_id": format!("session-{node}"), "lifecycle_state": "completed",
+            "caused_by_trigger_id": trigger,
+        }))
+        .unwrap()
+    };
+    // `Conformance.ObserverResync.scopeRequests`.
+    let scope_requests = |node: usize| vec![request(node, "request", None)];
+    // `Conformance.ObserverResync.snapshot` and `nodeRequests`.
     let snapshot = |node: usize| {
+        let mut requests = scope_requests(node);
+        if node == 1 {
+            requests.push(request(node, "triggered", Some("trigger")));
+        }
         ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(node)],
+            requests,
             ..Default::default()
         })
     };
-    // `Conformance.ObserverResync.observationRows`.
-    let observations = |node: usize| {
+    // `Conformance.ObserverResync.observationRows` for the read's roots and
+    // `scopeRequests` for its session scopes.
+    let partial_rows = |node: usize, read: &PartialRead| {
         ClientStore::from_rows(ClientStoreRows {
-            backend_observations: vec![serde_json::from_value(serde_json::json!({
-                "backend_id": format!("observation-{node}"),
-                "probe_status": null, "last_probe": null,
-            }))
-            .unwrap()],
+            backend_observations: if read.roots.is_empty() {
+                Vec::new()
+            } else {
+                vec![serde_json::from_value(serde_json::json!({
+                    "backend_id": format!("observation-{node}"),
+                    "probe_status": null, "last_probe": null,
+                }))
+                .unwrap()]
+            },
+            requests: if read.scopes.is_empty() {
+                Vec::new()
+            } else {
+                scope_requests(node)
+            },
             ..Default::default()
         })
     };
@@ -1444,6 +1658,10 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("finish_collections", 0, "rows"),
         op("finish_collections", 0, "transport_failed"),
         op("finish_collections", 0, "refused"),
+        op("deliver_session", 0, ""),
+        op("deliver_session", 1, ""),
+        op("start_collections", 1, ""),
+        op("finish_collections", 1, "rows"),
     ];
     let prefix = [
         op("armed", 0, ""),
@@ -1472,6 +1690,12 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("deliver_collection", 0, ""),
         op("start_collections", 0, ""),
         op("finish_collections", 0, "rows"),
+        op("deliver_session", 0, ""),
+        op("deliver_session", 1, ""),
+        op("start_collections", 0, ""),
+        op("start_collections", 1, ""),
+        op("finish_collections", 0, "rows"),
+        op("finish_collections", 1, "rows"),
     ];
     let mut traces = Vec::new();
     for a in &alphabet {
@@ -1520,12 +1744,9 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         let mut queue = Queue::default();
         let mut sources = remote::Sources::default();
         let mut generation = [0_u64; NODES];
-        // A node's read in flight: its capture, and the roots of a collection
-        // reload (`None` for a full load).
-        type Reading = (
-            projection_store::StoreReadFence,
-            Option<BTreeSet<CollectionRoot>>,
-        );
+        // A node's read in flight: its capture, and what a partial read
+        // reads (`None` for a full load).
+        type Reading = (projection_store::StoreReadFence, Option<PartialRead>);
         let mut in_flight = BTreeMap::<String, Reading>::new();
         let now = Instant::now();
         for (node, generation) in generation.iter_mut().enumerate() {
@@ -1617,29 +1838,30 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                         generation[node],
                         in_flight.contains_key(&node_did),
                     ) {
-                        let roots = queue.start_collections(&node_did);
-                        in_flight.insert(node_did.clone(), (store.capture_read(), Some(roots)));
+                        let read = queue.start_collections(&node_did);
+                        in_flight.insert(node_did.clone(), (store.capture_read(), Some(read)));
                     }
                 }
                 "finish_collections" => match in_flight.remove(&node_did) {
-                    Some((captured, Some(roots))) => {
-                        let read = match result {
-                            "rows" => Ok(observations(node)),
+                    Some((captured, Some(read))) => {
+                        let rows = match result {
+                            "rows" => Ok(partial_rows(node, &read)),
                             "refused" => Err(SnapshotReadError::NodeUnavailable),
                             _ => Err(SnapshotReadError::from(anyhow::anyhow!("unreachable"))),
                         };
                         let settlement = settle_collection_reload(
                             &store,
                             &captured,
-                            roots.clone(),
-                            read,
+                            read.clone(),
+                            rows,
                             &metrics,
                         );
-                        queue.settle_collections(&node_did, settlement, roots);
+                        queue.settle_collections(&node_did, settlement, read);
                         let name = match settlement {
                             CollectionSettlement::Published => "published",
                             CollectionSettlement::Superseded => "superseded",
                             CollectionSettlement::Failed => "failed",
+                            CollectionSettlement::Deferred => "deferred",
                         };
                         collection_settlements.insert(name);
                         finished = serde_json::json!({"collection_settlement": name});
@@ -1649,6 +1871,20 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     }
                     None => {}
                 },
+                "deliver_session" => {
+                    delivery::deliver(
+                        &store,
+                        &metrics,
+                        "AgentRequest",
+                        &serde_json::json!({"data": {"AgentRequest": [{
+                            "_docID": "changed", "_deleted": false,
+                            "session_id": format!("session-{node}"),
+                            "requester_did": null, "caused_by_trigger_id": null,
+                        }]}}),
+                    )
+                    .unwrap();
+                    queue.take_requests(&stores);
+                }
                 "deliver" | "tool_call_event" | "transcript_event" | "deliver_collection" => {
                     let collection = match step["op"].as_str().unwrap() {
                         "deliver" => "AgentRequest",
@@ -1731,7 +1967,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 "pending": queue.pending.contains(&node_did),
                 "waiting": queue.retry_at.contains_key(&node_did),
                 "loading": matches!(in_flight.get(&node_did), Some((_, None))),
-                "collections": queue.collections.get(&node_did).is_some_and(|roots| !roots.is_empty()),
+                "collections": queue.collections.get(&node_did).is_some_and(|read| !read.is_empty()),
                 "reloading_collections": matches!(in_flight.get(&node_did), Some((_, Some(_)))),
                 "armed": queue.armed.get(&node_did) == Some(&generation[node])
                     && !sources.entries[&node_did].ended(),
@@ -1764,11 +2000,20 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 .collect();
             assert_eq!(&serde_json::Value::Array(stored), modeled, "{trace}");
         }
+        for (node, modeled) in expected["requests"].as_array().unwrap().iter().enumerate() {
+            let stored: Vec<_> = stores
+                .snapshot(&did(node))
+                .requests
+                .iter()
+                .map(|row| serde_json::json!(row.request_id))
+                .collect();
+            assert_eq!(&serde_json::Value::Array(stored), modeled, "{trace}");
+        }
     }
     assert_eq!(settlements.len(), 4, "every settlement is exercised");
     assert_eq!(
         collection_settlements.len(),
-        3,
+        4,
         "every collection settlement is exercised"
     );
     assert_eq!(
