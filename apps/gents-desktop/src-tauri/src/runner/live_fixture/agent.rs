@@ -330,6 +330,8 @@ fn live_backend_candidate(
 }
 
 async fn wait_for_runtime_process_state(home: &EmbeddedHome, node_did: &str) -> Result<()> {
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&home.node, ["NodeReadiness"])?;
     let access =
         gents_store::config_client::ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
     let query = format!(
@@ -349,9 +351,11 @@ async fn wait_for_runtime_process_state(home: &EmbeddedHome, node_did: &str) -> 
         if process_state.map(|state| state.as_str()) == Some("ready") {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
+        let Ok(changed) = tokio::time::timeout_at(deadline, changes.recv()).await else {
             anyhow::bail!("timed out waiting for NodeReadiness {node_did} to reach ready; last={process_state:?}");
+        };
+        if changed.is_none() {
+            anyhow::bail!("NodeReadiness subscription closed before {node_did} reached ready; last={process_state:?}");
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

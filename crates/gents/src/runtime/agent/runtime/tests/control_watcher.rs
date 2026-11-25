@@ -15,6 +15,7 @@ use tracing_subscriber::{Layer, Registry};
 #[derive(Clone, Default)]
 struct RuntimeViewLoadCapture {
     count: Arc<AtomicUsize>,
+    notify: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Default)]
@@ -42,6 +43,7 @@ where
         event.record(&mut operation);
         if operation.0 {
             self.count.fetch_add(1, Ordering::Relaxed);
+            self.notify.notify_waiters();
         }
     }
 }
@@ -204,6 +206,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let reloads = RuntimeViewLoadCapture::default();
     let reload_count = Arc::clone(&reloads.count);
+    let reload_notify = Arc::clone(&reloads.notify);
     let phases = ReconcilePhaseCapture::default();
     let announced_phases = phases.clone();
     let subscriber = Registry::default().with(reloads).with(phases);
@@ -280,13 +283,20 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .set_reconcile_phase(ReconcilePhase::Idle)
         .await;
     let settled = fetch_runtime_status(node.as_ref(), agent.node_did()).await;
+    let reloaded = reload_notify.notified();
+    tokio::pin!(reloaded);
+    reloaded.as_mut().enable();
     let loads_after_reconcile = reload_count.load(Ordering::Relaxed);
     assert!(
         loads_after_reconcile > 0,
         "runtime-view telemetry was captured"
     );
-    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_retry * 5).await;
-    tokio::task::yield_now().await;
+    assert!(
+        tokio::time::timeout(TEST_CONTROL_WATCHER_TIMING.settle_retry * 5, reloaded)
+            .await
+            .is_err(),
+        "a visible reconcile must quiesce instead of polling the full runtime view"
+    );
     let retried = fetch_runtime_status(node.as_ref(), agent.node_did()).await;
     assert_eq!(retried.reconcile_phase, "idle");
     assert_eq!(retried.updated_at, settled.updated_at);
@@ -521,7 +531,10 @@ async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
     let busy = tokio::spawn({
         let bus = bus.clone();
         async move {
+            let mut interval = tokio::time::interval(timing.debounce / 4);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
+                interval.tick().await;
                 bus.publish(events::Message::acp_cache_invalidated(
                     events::AcpCacheInvalidatedData {
                         height: 0,
@@ -530,7 +543,6 @@ async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
                         entries_invalidated: 0,
                     },
                 ));
-                tokio::time::sleep(timing.debounce / 4).await;
             }
         }
     });
@@ -845,10 +857,6 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     )
     .await
     .unwrap();
-
-    tokio::task::yield_now().await;
-    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
-    tokio::task::yield_now().await;
 
     // The WorkspaceRoot and Tools writes are separate control changes; under
     // load the debounce can propose the root alone first. Take the first
@@ -1224,9 +1232,13 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         installed.configuration_fingerprint(),
         "a same-digest reinstall must not produce a new fingerprint"
     );
-    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_window).await;
     assert!(
-        proposal_rx.try_recv().is_err(),
+        tokio::time::timeout(
+            TEST_CONTROL_WATCHER_TIMING.settle_window,
+            proposal_rx.recv()
+        )
+        .await
+        .is_err(),
         "a settled same-fingerprint observation must not keep proposing"
     );
 

@@ -1210,18 +1210,16 @@ async fn await_settled_runtime_status(
     node: &Arc<defra_node::Node>,
     node_did: &str,
 ) -> RuntimeStatusRow {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(row) = fetch_runtime_status(node, node_did).await {
-                if row.reconcile_phase == "idle" {
-                    return row;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    gents_store::test_support::read_when_changed(
+        node.as_ref(),
+        "NodeRuntime",
+        "supervisor publishes its terminal status after the active snapshot",
+        async || match fetch_runtime_status(node, node_did).await {
+            Some(row) if row.reconcile_phase == "idle" => Ok(row),
+            other => Err(format!("{other:?}")),
+        },
+    )
     .await
-    .expect("supervisor publishes its terminal status after the active snapshot")
 }
 
 async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, String) {
@@ -1235,6 +1233,7 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
+    let starts_notify = Arc::new(Notify::new());
     let lineage = AgentLineage::provision("general");
     let agent_did = lineage.binding.agent_did.clone();
     let mut initial_agent = lineage.revision("general");
@@ -1247,6 +1246,7 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
 
     let runner = {
         let starts = starts.clone();
+        let starts_notify = starts_notify.clone();
         move |agent_config: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -1254,12 +1254,14 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
+            let starts_notify = starts_notify.clone();
             async move {
                 *starts
                     .lock()
                     .unwrap()
                     .entry(agent_config.agent.agent_did.clone())
                     .or_default() += 1;
+                starts_notify.notify_waiters();
                 loop {
                     tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
@@ -1303,6 +1305,9 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
+            let notified = starts_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if starts
                 .lock()
                 .unwrap()
@@ -1313,7 +1318,7 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            notified.await;
         }
     })
     .await
@@ -1339,6 +1344,9 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
+            let notified = starts_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if starts
                 .lock()
                 .unwrap()
@@ -1349,7 +1357,7 @@ async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, Stri
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            notified.await;
         }
     })
     .await
@@ -2255,8 +2263,10 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let updated_snapshot = snapshot_for_agents(&node, &agent_did, vec![updated_agent]).await;
 
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let observed_notify = Arc::new(Notify::new());
     let runner = {
         let observed_tool_names = observed_tool_names.clone();
+        let observed_notify = observed_notify.clone();
         move |_agent: AgentWithTools,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -2264,11 +2274,13 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let observed_tool_names = observed_tool_names.clone();
+            let observed_notify = observed_notify.clone();
             async move {
                 observed_tool_names
                     .lock()
                     .unwrap()
                     .push(tool_surface.tool_names());
+                observed_notify.notify_waiters();
                 loop {
                     tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
@@ -2317,6 +2329,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
+            let notified = observed_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if observed_tool_names
                 .lock()
                 .unwrap()
@@ -2325,7 +2340,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            notified.await;
         }
     })
     .await
@@ -2345,6 +2360,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 
     struct RecordingPolicy {
         retired: std::sync::Mutex<Vec<(String, bool)>>,
+        retired_notify: Notify,
         demote_calls: AtomicUsize,
     }
 
@@ -2371,6 +2387,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
                 .lock()
                 .expect("retired mutex")
                 .push((agent_did.to_string(), recreated));
+            self.retired_notify.notify_waiters();
         }
     }
 
@@ -2397,6 +2414,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 
     let policy = Arc::new(RecordingPolicy {
         retired: std::sync::Mutex::new(Vec::new()),
+        retired_notify: Notify::new(),
         demote_calls: AtomicUsize::new(0),
     });
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -2430,22 +2448,24 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         .expect("removal generation should publish")
         .unwrap();
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    loop {
-        if policy
-            .retired
-            .lock()
-            .expect("retired mutex")
-            .contains(&(agent_did.clone(), false))
-        {
-            break;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let notified = policy.retired_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if policy
+                .retired
+                .lock()
+                .expect("retired mutex")
+                .contains(&(agent_did.clone(), false))
+            {
+                break;
+            }
+            notified.await;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "retirement must notify the policy so the barrier is released"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    })
+    .await
+    .expect("retirement must notify the policy so the barrier is released");
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(2), task)

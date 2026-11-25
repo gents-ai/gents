@@ -191,19 +191,24 @@ fn discovery_binds_to_the_live_ready_did() {
 
 async fn serve_status_after(
     listener: std::net::TcpListener,
-    delay: std::time::Duration,
+    drop_initial_connections: usize,
     body: serde_json::Value,
 ) -> tokio::task::JoinHandle<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let body = body.to_string();
     tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
         listener.set_nonblocking(true).unwrap();
         let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let mut remaining_drops = drop_initial_connections;
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
+            if remaining_drops > 0 {
+                remaining_drops -= 1;
+                drop(stream);
+                continue;
+            }
             let mut buffer = [0_u8; 4096];
             let _ = stream.read(&mut buffer).await;
             let response = format!(
@@ -249,7 +254,7 @@ async fn discovery_rejects_a_bad_live_did_without_touching_the_peer_store() {
         let port = listener.local_addr().unwrap().port();
         let server = serve_status_after(
             listener,
-            std::time::Duration::ZERO,
+            0,
             json!({ "node_did": live, "lifecycle": "ready" }),
         )
         .await;
@@ -289,7 +294,7 @@ async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
     };
     let server = serve_status_after(
         listener,
-        std::time::Duration::from_millis(600),
+        1,
         json!({ "node_did": did, "lifecycle": "ready" }),
     )
     .await;
@@ -308,12 +313,8 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
     let did = "did:key:z6MkLocal";
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = serve_status_after(
-        listener,
-        std::time::Duration::ZERO,
-        json!({ "node_did": did, "version": "0.18.2" }),
-    )
-    .await;
+    let server =
+        serve_status_after(listener, 0, json!({ "node_did": did, "version": "0.18.2" })).await;
     let runtime = StoredRuntimeState {
         graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
         node_name: "Local".to_string(),

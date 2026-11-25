@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use defra_p2p_adapter::P2POperations;
@@ -11,20 +11,13 @@ pub(super) async fn wait_for_runtime_iroh_addr(
     p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let addrs = p2p.listen_addresses().await?;
-        if let Some(addr) = addrs
-            .iter()
-            .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
-        {
-            return Ok(addr.clone());
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for {label} listen address");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let addrs = tokio::time::timeout(Duration::from_secs(15), p2p.listen_addresses())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for {label} listen address"))??;
+    addrs
+        .into_iter()
+        .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
+        .ok_or_else(|| anyhow::anyhow!("no {label} listen address available"))
 }
 
 pub(super) async fn wait_for_live_documents(
@@ -32,8 +25,10 @@ pub(super) async fn wait_for_live_documents(
     node_did: &str,
     docs: &LiveAgentDocs,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let mut updates = desktop_core.store_updates();
     loop {
+        updates.borrow_and_update();
         desktop_core.refresh_node(node_did).await?;
         let snapshot = desktop_core.stores().snapshot(node_did);
         let has_node = snapshot.nodes.iter().any(|row| row.node_did == node_did);
@@ -73,9 +68,11 @@ pub(super) async fn wait_for_live_documents(
             return Ok(());
         }
 
-        if Instant::now() >= deadline {
+        if tokio::time::timeout_at(deadline, updates.changed())
+            .await
+            .is_err()
+        {
             anyhow::bail!("timed out waiting for live documents from runtime");
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

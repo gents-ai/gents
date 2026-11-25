@@ -283,10 +283,6 @@ async fn probe_output(path: &Path) -> Vec<u8> {
 }
 
 #[cfg(target_os = "macos")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous test waiting for a child process marker file"
-)]
 fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     use super::super::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
     use std::time::{Duration, Instant};
@@ -301,6 +297,39 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     } else {
         "/usr/bin:/bin".to_string()
     };
+    use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+
+    let root_dir = std::fs::File::open(root).unwrap();
+    // SAFETY: kqueue() takes no pointers and returns a new owned fd or -1.
+    let kq_raw = unsafe { libc::kqueue() };
+    assert!(kq_raw >= 0, "kqueue: {}", std::io::Error::last_os_error());
+    // SAFETY: kq_raw was just returned by kqueue() and is valid.
+    let kq = unsafe { OwnedFd::from_raw_fd(kq_raw) };
+    let change = libc::kevent {
+        ident: root_dir.as_raw_fd() as libc::uintptr_t,
+        filter: libc::EVFILT_VNODE,
+        flags: libc::EV_ADD | libc::EV_CLEAR,
+        fflags: libc::NOTE_WRITE,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    // SAFETY: `change` points to a valid initialized kevent and `kq` is open.
+    let registered = unsafe {
+        libc::kevent(
+            kq.as_raw_fd(),
+            &change,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert!(
+        registered >= 0,
+        "kevent register: {}",
+        std::io::Error::last_os_error()
+    );
+
     let first = std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -313,10 +342,35 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
                 "printf finite",
             ))
     });
-    let start = Instant::now();
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !root.join("first").exists() {
-        assert!(start.elapsed() < Duration::from_secs(10));
-        std::thread::sleep(Duration::from_millis(1));
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("first spawn marker timed out");
+        let timeout = libc::timespec {
+            tv_sec: libc::time_t::try_from(remaining.as_secs()).unwrap_or(libc::time_t::MAX),
+            tv_nsec: libc::c_long::from(remaining.subsec_nanos()),
+        };
+        let mut event = std::mem::MaybeUninit::<libc::kevent>::uninit();
+        // SAFETY: `event` is writable for 1 kevent and `timeout` is a valid timespec.
+        let n = unsafe {
+            libc::kevent(
+                kq.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                event.as_mut_ptr(),
+                1,
+                &timeout,
+            )
+        };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            panic!("kevent wait: {err}");
+        }
+        assert!(n > 0, "first spawn marker timed out");
     }
     let second = std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()

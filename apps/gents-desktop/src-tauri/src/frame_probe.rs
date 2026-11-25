@@ -11,7 +11,7 @@
 //! separately and only narrow it further.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -98,7 +98,7 @@ pub fn verify_frame_ipc(receipt: &Path) -> anyhow::Result<()> {
     for window in &mut context.config_mut().app.windows {
         window.create = false;
     }
-    let seen = Arc::new(Mutex::new(Seen::default()));
+    let seen = Arc::new((Mutex::new(Seen::default()), Condvar::new()));
     let receipt = receipt.to_path_buf();
     let app = tauri::Builder::default()
         .register_uri_scheme_protocol(SCHEME, |_, request| {
@@ -121,12 +121,14 @@ pub fn verify_frame_ipc(receipt: &Path) -> anyhow::Result<()> {
                         let Ok(payload) = serde_json::from_str::<Value>(event.payload()) else {
                             return;
                         };
-                        let mut seen = seen.lock().expect("probe state");
+                        let (state, notify) = &*seen;
+                        let mut seen = state.lock().expect("probe state");
                         match payload["from"].as_str() {
                             Some("parent") => seen.parent = true,
                             Some("report") => seen.report = Some(payload["report"].clone()),
                             _ => seen.frame.push(payload),
                         }
+                        notify.notify_all();
                     }
                 });
                 tauri::WebviewWindowBuilder::new(
@@ -150,20 +152,17 @@ pub fn verify_frame_ipc(receipt: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a dedicated OS thread of a test-only probe, off the runtime"
-)]
-fn write_when_settled(handle: &tauri::AppHandle, seen: &Mutex<Seen>, receipt: &Path) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while std::time::Instant::now() < deadline && seen.lock().expect("probe state").report.is_none()
-    {
-        std::thread::sleep(Duration::from_millis(100));
-    }
+fn write_when_settled(handle: &tauri::AppHandle, seen: &(Mutex<Seen>, Condvar), receipt: &Path) {
+    let (state, notify) = seen;
+    let guard = state.lock().expect("probe state");
+    let (guard, _) = notify
+        .wait_timeout_while(guard, Duration::from_secs(30), |s| s.report.is_none())
+        .expect("probe state");
     // The frame's fetches and posts may settle after its report; a late
     // arrival is still caught within this grace period.
-    std::thread::sleep(Duration::from_secs(2));
-    let seen = seen.lock().expect("probe state");
+    let (seen, _) = notify
+        .wait_timeout_while(guard, Duration::from_secs(2), |s| s.frame.is_empty())
+        .expect("probe state");
     let written = std::fs::write(
         receipt,
         json!({

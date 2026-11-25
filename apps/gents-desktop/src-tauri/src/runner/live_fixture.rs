@@ -505,13 +505,15 @@ fn live_core_options() -> ClientRuntimeOptions {
 #[cfg(test)]
 mod tests {
     use super::{find_in_node_stores, refresh_every_node};
-    use std::time::{Duration, Instant};
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use anyhow::{bail, Context, Result};
     use gents_desktop_bridge::client_runtime::ClientRuntime;
     use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
     use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
+    use tokio::sync::Notify;
 
     use super::{run_on_live_runtime, LiveBackendOverride, LiveBridgeFixture};
     use gents_desktop_bridge::commands::{
@@ -542,11 +544,11 @@ mod tests {
     fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
-            let mock = held_prompt_backend("skill loaded")?;
+            let (mock, request_notify) = held_prompt_backend("skill loaded")?;
             let fixture =
                 LiveBridgeFixture::start(Some(backend_override(&mock, MODEL_NAME)), None, false)
                     .await?;
-            let result = slash_skill_chat_case(fixture.as_ref(), &mock).await;
+            let result = slash_skill_chat_case(fixture.as_ref(), &mock, &request_notify).await;
             fixture.shutdown().await?;
             result
         })?
@@ -583,6 +585,7 @@ mod tests {
     async fn slash_skill_chat_case(
         fixture: &LiveBridgeFixture,
         mock: &ScriptedBackend,
+        request_notify: &Notify,
     ) -> Result<()> {
         let node_did = fixture.node_did().to_string();
         let agent_did = fixture
@@ -636,8 +639,9 @@ mod tests {
             },
         )
         .await?;
-        wait_for_captured_chat_request(mock, HELD_PROMPT).await?;
+        wait_for_captured_chat_request(mock, request_notify, HELD_PROMPT).await?;
         wait_for_condition(
+            fixture.desktop_core().as_ref(),
             "active initial desktop request",
             Duration::from_secs(60),
             || async {
@@ -681,6 +685,7 @@ mod tests {
         .await?;
 
         let requester_scope = wait_for_row(
+            fixture.desktop_core().as_ref(),
             "desktop submitted request scope",
             Duration::from_secs(60),
             || async {
@@ -782,22 +787,18 @@ mod tests {
             Some(initial.request_id.as_str())
         );
 
-        let captured = wait_for_row(
+        let captured = wait_for_captured_chat_request_matching(
+            mock,
+            request_notify,
             "queued skill provider request",
-            Duration::from_secs(120),
-            || async {
-                Ok(mock
-                    .observed_completion_bodies()
-                    .into_iter()
-                    .find(|request| {
-                        request.to_string().contains(skill_body)
-                            && request["messages"].as_array().is_some_and(|messages| {
-                                messages.iter().any(|message| {
-                                    message["role"] == "user"
-                                        && message["content"].to_string().contains(task)
-                                })
-                            })
-                    }))
+            |request| {
+                request.to_string().contains(skill_body)
+                    && request["messages"].as_array().is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            message["role"] == "user"
+                                && message["content"].to_string().contains(task)
+                        })
+                    })
             },
         )
         .await?;
@@ -887,8 +888,10 @@ mod tests {
         agent_did: &str,
         expected_skill_ids: &[&str],
     ) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut updates = core.store_updates();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
+            updates.borrow_and_update();
             refresh_every_node(core).await?;
             let observed = find_in_node_stores(core, |store| {
                 store
@@ -914,42 +917,54 @@ mod tests {
             if matches {
                 return Ok(());
             }
-            if Instant::now() >= deadline {
+            if tokio::time::timeout_at(deadline, updates.changed())
+                .await
+                .is_err()
+            {
                 bail!(
                     "remote context for agent {agent_did} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
     async fn wait_for_remote_skill(core: &ClientRuntime, skill_id: &str) -> Result<()> {
-        wait_for_condition("remote Skill create", Duration::from_secs(60), || async {
-            refresh_every_node(core).await?;
-            Ok(find_in_node_stores(core, |store| {
-                store
-                    .skills
-                    .iter()
-                    .any(|skill| skill.skill_id == skill_id)
-                    .then_some(())
-            })
-            .is_some())
-        })
+        wait_for_condition(
+            core,
+            "remote Skill create",
+            Duration::from_secs(60),
+            || async {
+                refresh_every_node(core).await?;
+                Ok(find_in_node_stores(core, |store| {
+                    store
+                        .skills
+                        .iter()
+                        .any(|skill| skill.skill_id == skill_id)
+                        .then_some(())
+                })
+                .is_some())
+            },
+        )
         .await
     }
 
     async fn wait_for_remote_skill_absent(core: &ClientRuntime, skill_id: &str) -> Result<()> {
-        wait_for_condition("remote Skill delete", Duration::from_secs(60), || async {
-            refresh_every_node(core).await?;
-            Ok(find_in_node_stores(core, |store| {
-                store
-                    .skills
-                    .iter()
-                    .any(|skill| skill.skill_id == skill_id)
-                    .then_some(())
-            })
-            .is_none())
-        })
+        wait_for_condition(
+            core,
+            "remote Skill delete",
+            Duration::from_secs(60),
+            || async {
+                refresh_every_node(core).await?;
+                Ok(find_in_node_stores(core, |store| {
+                    store
+                        .skills
+                        .iter()
+                        .any(|skill| skill.skill_id == skill_id)
+                        .then_some(())
+                })
+                .is_none())
+            },
+        )
         .await
     }
 
@@ -957,16 +972,21 @@ mod tests {
         core: &ClientRuntime,
         request_id: &str,
     ) -> Result<AgentRequestRow> {
-        wait_for_row("remote AgentRequest", Duration::from_secs(60), || async {
-            refresh_every_node(core).await?;
-            Ok(find_in_node_stores(core, |store| {
-                store
-                    .requests
-                    .iter()
-                    .find(|request| request.request_id == request_id)
-                    .cloned()
-            }))
-        })
+        wait_for_row(
+            core,
+            "remote AgentRequest",
+            Duration::from_secs(60),
+            || async {
+                refresh_every_node(core).await?;
+                Ok(find_in_node_stores(core, |store| {
+                    store
+                        .requests
+                        .iter()
+                        .find(|request| request.request_id == request_id)
+                        .cloned()
+                }))
+            },
+        )
         .await
     }
 
@@ -1004,6 +1024,7 @@ mod tests {
         node_did: &str,
     ) -> Result<u64> {
         wait_for_row(
+            core,
             "remote authoritative runtime generation",
             Duration::from_secs(60),
             || async { query_runtime_observation(core, node_did).await },
@@ -1018,6 +1039,7 @@ mod tests {
         previous_generation: u64,
     ) -> Result<()> {
         wait_for_condition(
+            core,
             "remote authoritative runtime generation advance",
             Duration::from_secs(90),
             || async {
@@ -1052,26 +1074,46 @@ mod tests {
         })
     }
 
-    async fn wait_for_captured_chat_request(mock: &ScriptedBackend, needle: &str) -> Result<Value> {
-        let deadline = Instant::now() + Duration::from_secs(120);
+    async fn wait_for_captured_chat_request(
+        mock: &ScriptedBackend,
+        request_notify: &Notify,
+        needle: &str,
+    ) -> Result<Value> {
+        wait_for_captured_chat_request_matching(
+            mock,
+            request_notify,
+            &format!("mock chat request containing {needle:?}"),
+            |request| has_exact_user_text(request, needle),
+        )
+        .await
+    }
+
+    async fn wait_for_captured_chat_request_matching<F>(
+        mock: &ScriptedBackend,
+        request_notify: &Notify,
+        label: &str,
+        mut predicate: F,
+    ) -> Result<Value>
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         loop {
+            let notified = request_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             let captured = mock.observed_completion_bodies();
-            if let Some(request) = captured
-                .iter()
-                .find(|request| has_exact_user_text(request, needle))
-            {
+            if let Some(request) = captured.iter().find(|request| predicate(request)) {
                 return Ok(request.clone());
             }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out waiting for mock chat request containing {needle:?}; captured={captured:?}"
-                );
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                bail!("timed out waiting for {label}; captured={captured:?}");
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
     async fn wait_for_row<T, F, Fut>(
+        core: &ClientRuntime,
         label: &'static str,
         timeout: Duration,
         mut check: F,
@@ -1080,19 +1122,24 @@ mod tests {
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<Option<T>>>,
     {
-        let deadline = Instant::now() + timeout;
+        let mut updates = core.store_updates();
+        let deadline = tokio::time::Instant::now() + timeout;
         loop {
+            updates.borrow_and_update();
             if let Some(row) = check().await? {
                 return Ok(row);
             }
-            if Instant::now() >= deadline {
+            if tokio::time::timeout_at(deadline, updates.changed())
+                .await
+                .is_err()
+            {
                 bail!("timed out waiting for {label}");
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
     async fn wait_for_condition<F, Fut>(
+        core: &ClientRuntime,
         label: &'static str,
         timeout: Duration,
         mut check: F,
@@ -1101,15 +1148,19 @@ mod tests {
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<bool>>,
     {
-        let deadline = Instant::now() + timeout;
+        let mut updates = core.store_updates();
+        let deadline = tokio::time::Instant::now() + timeout;
         loop {
+            updates.borrow_and_update();
             if check().await? {
                 return Ok(());
             }
-            if Instant::now() >= deadline {
+            if tokio::time::timeout_at(deadline, updates.changed())
+                .await
+                .is_err()
+            {
                 bail!("timed out waiting for {label}");
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -1139,9 +1190,12 @@ mod tests {
 
     /// Answers every completion with `final_text`, holding the one whose user
     /// text is exactly [`HELD_PROMPT`] until the gate is released.
-    fn held_prompt_backend(final_text: &'static str) -> Result<ScriptedBackend> {
-        ScriptedBackend::builder(MODEL_NAME)
+    fn held_prompt_backend(final_text: &'static str) -> Result<(ScriptedBackend, Arc<Notify>)> {
+        let request_notify = Arc::new(Notify::new());
+        let notify = Arc::clone(&request_notify);
+        let backend = ScriptedBackend::builder(MODEL_NAME)
             .respond(move |request| {
+                notify.notify_waiters();
                 let reply = StreamResponse::text(final_text);
                 Some(if has_exact_user_text(request, HELD_PROMPT) {
                     reply.after(HELD_GATE)
@@ -1149,7 +1203,8 @@ mod tests {
                     reply
                 })
             })
-            .start()
+            .start()?;
+        Ok((backend, request_notify))
     }
 
     fn backend_override(backend: &ScriptedBackend, model_name: &str) -> LiveBackendOverride {

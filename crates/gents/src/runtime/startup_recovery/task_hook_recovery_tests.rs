@@ -166,21 +166,36 @@ impl Fixture {
             .unwrap();
         }
         drop(lifecycle);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let response = self.agent_access().execute(
-                    &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
-                        gents_store::graphql::escape_graphql_string(&doc_id)),
-                ).await.unwrap();
-                let row = response["data"]["AgentRequest"].as_array().unwrap()
-                    .first().expect("abandoned request");
+        let agent_access = self.agent_access();
+        gents_store::test_support::read_when_changed(
+            &agent_access,
+            "AgentRequest",
+            "dropping the owner must relinquish its execution lease",
+            async || {
+                let response = agent_access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
+                        gents_store::graphql::escape_graphql_string(&doc_id)
+                    ))
+                    .await
+                    .unwrap();
+                let row = response["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .first()
+                    .expect("abandoned request");
                 let expiry = chrono::DateTime::parse_from_rfc3339(
                     row["execution_lease_expires_at"].as_str().unwrap(),
-                ).unwrap();
-                if expiry < chrono::Utc::now() { break; }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        }).await.expect("dropping the owner must relinquish its execution lease");
+                )
+                .unwrap();
+                if expiry < chrono::Utc::now() {
+                    Ok(())
+                } else {
+                    Err(format!("lease expiry {expiry} still >= now"))
+                }
+            },
+        )
+        .await;
         doc_id
     }
 
@@ -581,9 +596,25 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
 #[tokio::test]
 async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     let fixture = Fixture::new().await;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let dir = tempfile::tempdir().expect("case directory");
     let log = dir.path().join("cleanup.log");
-    let started = dir.path().join("first-started");
+    let started = dir.path().join("first-started.fifo");
+    let started_c = std::ffi::CString::new(started.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `started_c` is a NUL-terminated path valid through mkfifo.
+    assert_eq!(unsafe { libc::mkfifo(started_c.as_ptr(), 0o600) }, 0);
+    struct UnblockFifo(std::path::PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
+        }
+    }
+    let _unblock = UnblockFifo(started.clone());
     let doc_id = fixture.abandoned_request(false).await;
     let records = dir.path().join("task-hooks");
     let mut held = logging_hook(&generated("first", TaskHookPhase::Finally), &log, 0);
@@ -591,7 +622,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
         "sh".into(),
         "-c".into(),
         format!(
-            "printf 'first\\n' >> {}; : > {}; exec sleep 30",
+            "printf 'first\\n' >> {}; printf 'started\\n' > {}; exec sleep 30",
             log.display(),
             started.display()
         ),
@@ -623,13 +654,15 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
         )
         .await;
     assert_eq!(outcome.task_hooks.unwrap(), 1);
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while !started.exists() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+    let started_reader = started.clone();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(&started_reader)),
+    )
     .await
-    .expect("recovered cleanup started");
+    .expect("recovered cleanup started")
+    .expect("started fifo reader task")
+    .expect("read started fifo");
     tokio::time::timeout(
         Duration::from_secs(20),
         running.task_hook_records().shutdown(),

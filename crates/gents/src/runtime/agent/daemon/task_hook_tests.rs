@@ -119,6 +119,17 @@ impl Harness {
         format!("touch {}", self.mark(name).display())
     }
 
+    fn fifo(&self, name: &str) -> String {
+        use std::os::unix::ffi::OsStrExt;
+        let path = self.mark(name);
+        if !path.exists() {
+            let path_c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: `path_c` is a NUL-terminated path valid through mkfifo.
+            assert_eq!(unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) }, 0);
+        }
+        format!("printf 'ready\\n' > {}", path.display())
+    }
+
     async fn apply(&self, documents: Vec<(Collection, serde_json::Value)>) {
         let plan = DesiredStateApplyPlan::new(
             documents
@@ -406,15 +417,36 @@ impl Harness {
             .expect("request processing returned");
         self.request_row(&doc_id).await
     }
+}
 
+async fn wait_for_fifo(marker: &Path) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    struct UnblockFifo(PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
+        }
+    }
+
+    let path = marker.to_path_buf();
+    let _unblock = UnblockFifo(path.clone());
+    tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
+        .await
+        .expect("hook marker reader task")
+        .expect("read hook started fifo");
+}
+
+impl Harness {
     async fn run_interrupting_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(false);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let interrupt = async {
-            while !marker.exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            wait_for_fifo(marker).await;
             gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
                 &self.agent_access,
                 &doc_id,
@@ -610,7 +642,7 @@ async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_re
     let harness = Harness::new().await;
     let held = format!(
         "{}; sleep 30; {}",
-        harness.touch("verify-started"),
+        harness.fifo("verify-started"),
         harness.touch("verify-finished")
     );
     harness
@@ -642,7 +674,7 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
     let harness = Harness::new().await;
     let held = format!(
         "{}; sleep 30; {}",
-        harness.touch("prepare-started"),
+        harness.fifo("prepare-started"),
         harness.touch("prepare-finished")
     );
     harness
@@ -934,33 +966,49 @@ impl Harness {
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf()),
         );
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let crashed = async {
-            while !marker.exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        };
         tokio::select! {
             _ = daemon.process_request(request, shutdown_rx) => panic!("the held hook must not finish"),
-            () = crashed => {}
+            () = wait_for_fifo(marker) => {}
         }
     }
 
     async fn restart(&self, records: &Path, doc_id: &str) {
+        let escaped_doc_id = gents_store::graphql::escape_graphql_string(doc_id);
+        gents_store::test_support::read_when_changed(
+            &self.agent_access,
+            "AgentRequest",
+            "crashed request relinquishes its execution lease",
+            async || {
+                let response = self
+                    .agent_access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ execution_lease_expires_at }} }}"#,
+                    ))
+                    .await
+                    .unwrap();
+                let expiry = response["data"]["AgentRequest"][0]["execution_lease_expires_at"]
+                    .as_str()
+                    .expect("execution_lease_expires_at");
+                let deadline = chrono::DateTime::parse_from_rfc3339(expiry).unwrap();
+                if deadline < chrono::Utc::now() {
+                    Ok(())
+                } else {
+                    Err(format!("lease expiry {deadline} still >= now"))
+                }
+            },
+        )
+        .await;
         let registry =
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf());
-        for _ in 0..40 {
-            let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+        let outcome =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &self.node,
                 self.owner(),
                 std::slice::from_ref(&self.agent_config.agent_identity),
                 &registry,
             )
             .await;
-            if outcome.task_hooks.expect("task hook recovery") > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+        assert!(outcome.task_hooks.expect("task hook recovery") > 0);
         registry.task_hook_records().wait_for_recoveries().await;
         let row = self.request_row(doc_id).await;
         assert!(
@@ -1002,7 +1050,7 @@ async fn a_restart_during_a_before_hook_runs_cleanup_once_without_rerunning_it()
         "prepare",
         &format!(
             "{}; sleep 30; {}",
-            harness.touch("prepare-started"),
+            harness.fifo("prepare-started"),
             harness.touch("prepare-finished")
         ),
     );
@@ -1031,7 +1079,7 @@ async fn a_restart_during_cleanup_runs_only_the_remaining_cleanup() {
     let harness = Harness::new().await;
     let held = harness.logging(
         "first",
-        &format!("{}; sleep 30", harness.touch("first-started")),
+        &format!("{}; sleep 30", harness.fifo("first-started")),
     );
     harness
         .install_task(json!([
@@ -1065,11 +1113,16 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
     let request = harness.create_request(Lineage::ManualFire, false).await;
     let doc_id = request.doc_id.clone();
     let mut daemon = harness.daemon_model(false, true, BackgroundExecutionRegistry::default());
+    let model = harness
+        .models
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("daemon model");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let replace = async {
-        while harness.calls() == 0 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        model.wait_for_calls(1).await;
         harness.agent_access.write(
             "test.replace_task_hook_generation",
             &format!(
@@ -1204,9 +1257,7 @@ impl Harness {
         let mut daemon = self.daemon(false);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let supersede = async {
-            while !marker.exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            wait_for_fifo(marker).await;
             self.agent_access.write(
                 "test.supersede_task_hook_execution",
                 &format!(
@@ -1237,7 +1288,7 @@ async fn revocation_during_a_before_hook_cancels_it_and_still_cleans_up() {
         .stream_liveness_timeout = Duration::from_secs(8);
     let held = format!(
         "{}; sleep 30; {}",
-        harness.touch("prepare-started"),
+        harness.fifo("prepare-started"),
         harness.touch("prepare-finished")
     );
     harness
@@ -1277,7 +1328,7 @@ async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up(
         .stream_liveness_timeout = Duration::from_secs(8);
     let held = format!(
         "{}; sleep 30; {}",
-        harness.touch("verify-started"),
+        harness.fifo("verify-started"),
         harness.touch("verify-finished")
     );
     harness
@@ -1332,7 +1383,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
                     format!(
                         "sleep 0.3; {}; {}; while [ ! -e {} ]; do sleep 0.01; done",
                         harness.touch(&hook.hook_id),
-                        harness.touch("ready"),
+                        harness.fifo("ready"),
                         gate.display()
                     )
                 } else {
@@ -1348,9 +1399,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         let mut daemon = harness.daemon(false);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let revoke = async {
-            while !harness.mark("ready").exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            wait_for_fifo(&harness.mark("ready")).await;
             harness.agent_access.write("test.revoke_between_task_hooks", &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
                 gents_store::graphql::escape_graphql_string(&doc_id)

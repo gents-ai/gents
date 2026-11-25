@@ -310,17 +310,17 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
         gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
     ));
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-    let raw = loop {
-        if let Some(raw) = raw_receipt(&home.node, &id).await {
-            break raw;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "deferred edit was not retried once its issuance passed"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
+    let raw = gents_store::test_support::read_when_changed(
+        &home.node,
+        "AgentSessionInputEdit",
+        "deferred edit was not retried once its issuance passed",
+        async || {
+            raw_receipt(&home.node, &id)
+                .await
+                .ok_or("receipt not yet issued")
+        },
+    )
+    .await;
     cancel.cancel();
     worker.await.unwrap().unwrap();
     let receipt: SessionInputEditReceipt = serde_json::from_str(&raw).unwrap();
@@ -418,22 +418,19 @@ async fn reconcile_until_verified(
         gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
     ));
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-    let receipt = loop {
-        let raw = raw_receipt(&home.node, id).await;
-        if let Some(receipt) =
+    let receipt = gents_store::test_support::read_when_changed(
+        &home.node,
+        "AgentSessionInputEdit",
+        "reconciler left the command without a verified receipt",
+        async || {
+            let raw = raw_receipt(&home.node, id).await;
             verified_receipt(home.node_identity.as_ref(), command, raw.as_deref())
                 .await
                 .unwrap()
-        {
-            break receipt;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "reconciler left the command without a verified receipt"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
+                .ok_or_else(|| format!("unverified receipt: {raw:?}"))
+        },
+    )
+    .await;
     cancel.cancel();
     worker.await.unwrap().unwrap();
     receipt

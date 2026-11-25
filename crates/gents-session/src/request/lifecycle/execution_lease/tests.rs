@@ -35,8 +35,11 @@ fn lease_tuple(row: &AgentRequestRow) -> (Option<String>, Option<String>) {
 }
 
 async fn await_expired(access: &gents_store::config_client::ConfigAccess, doc_id: &str) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
+    gents_store::test_support::read_when_changed(
+        access,
+        "AgentRequest",
+        "dropped owner must promptly expire its lease",
+        async || {
             let row = request_row(access, doc_id).await;
             let deadline =
                 DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
@@ -47,13 +50,16 @@ async fn await_expired(access: &gents_store::config_client::ConfigAccess, doc_id
                     Some(RequestLifecycleState::Processing),
                     "drop relinquishes; recovery terminalizes"
                 );
-                return;
+                Ok(())
+            } else {
+                Err(format!(
+                    "lease deadline {deadline} still >= now (state={:?})",
+                    row.lifecycle_state
+                ))
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("dropped owner must promptly expire its lease, before normal lease timeout");
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -139,7 +145,7 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
     drop(lifecycle);
     tokio::time::timeout(Duration::from_secs(5), async {
         while Arc::strong_count(&node) >= owners_before_drop {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
         }
     })
     .await
@@ -346,8 +352,11 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
         DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
             .unwrap();
 
-    tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
+    gents_store::test_support::read_when_changed(
+        &access,
+        "AgentRequest",
+        "the actual renewal timer must advance the durable deadline while reads wait",
+        async || {
             let row = request_row(&access, &doc_id).await;
             let deadline =
                 DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
@@ -357,13 +366,16 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
                 assert_eq!(row.execution_generation, generation);
                 assert!(!provider_read.is_finished());
                 assert!(!tool_read.is_finished());
-                break;
+                Ok(())
+            } else {
+                Err(format!(
+                    "deadline {deadline} not past {first_deadline} (state={:?})",
+                    row.lifecycle_state
+                ))
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("the actual renewal timer must advance the durable deadline while reads wait");
+        },
+    )
+    .await;
 
     provider_read.abort();
     tool_read.abort();

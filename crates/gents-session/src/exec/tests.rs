@@ -1,7 +1,9 @@
 #[cfg(unix)]
 use rapidhash::RapidHashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -11,16 +13,32 @@ use super::*;
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_deadline_kills_process_group() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let tool_name = "r3-soak-blocker";
     let directory = tempfile::tempdir().unwrap();
-    let ready = directory.path().join("ready");
+    let ready = directory.path().join("ready.fifo");
+    let ready_c = std::ffi::CString::new(ready.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `ready_c` is a NUL-terminated path valid through mkfifo.
+    assert_eq!(unsafe { libc::mkfifo(ready_c.as_ptr(), 0o600) }, 0);
+    struct UnblockFifo(PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
+        }
+    }
+    let _unblock = UnblockFifo(ready.clone());
     let child_ready = ready.clone();
     let handle = tokio::spawn(async move {
         run_managed_exec(ManagedExecRequest {
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "trap '' TERM; printf started; : > \"$1\"; while :; do sleep 60; done".to_string(),
+                "trap '' TERM; printf started; printf 'ready\\n' > \"$1\"; while :; do sleep 60; done".to_string(),
                 "managed-deadline".to_string(),
                 child_ready.to_str().unwrap().to_string(),
             ],
@@ -42,15 +60,17 @@ async fn managed_exec_deadline_kills_process_group() {
     assert_eq!(snapshot.tool_name.as_deref(), Some(tool_name));
     assert_eq!(snapshot.argv0, "/bin/sh");
     chrono::DateTime::parse_from_rfc3339(&snapshot.started_at)
-        .expect("active executor snapshot must expose RFC3339 started_at");
+        .expect("active executor snapshot must expose RFC3399 started_at");
 
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while !ready.exists() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
+    let ready_reader = ready.clone();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(&ready_reader)),
+    )
     .await
-    .expect("the command installs its signal handler and writes output before the deadline");
+    .expect("the command installs its signal handler and writes output before the deadline")
+    .expect("fifo reader task")
+    .expect("read ready fifo");
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(60)).await;
     tokio::time::resume();
@@ -131,7 +151,7 @@ async fn managed_exec_cancellation_kills_process_group() {
     assert_eq!(unsafe { libc::getpgid(snapshot.pid) }, snapshot.pid);
     let snapshot_id = snapshot.id;
     let first_age = snapshot.age_ms;
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
     let aged_snapshot = crate::exec::status::active_native_executors()
         .into_iter()
         .find(|snapshot| snapshot.id == snapshot_id)
@@ -239,18 +259,20 @@ async fn managed_exec_cancellation_kills_job_object() {
 
 #[cfg(any(unix, windows))]
 async fn wait_for_native_executor(tool_name: &str) -> crate::exec::status::NativeExecutorStatus {
-    let timeout_at = Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
+        let notified = super::process::active_executors_notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         if let Some(snapshot) = crate::exec::status::active_native_executors()
             .into_iter()
             .find(|snapshot| snapshot.tool_name.as_deref() == Some(tool_name))
         {
             return snapshot;
         }
-        if Instant::now() >= timeout_at {
+        if tokio::time::timeout_at(deadline, notified).await.is_err() {
             panic!("timed out waiting for active native executor snapshot for {tool_name}");
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -731,6 +753,7 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
     for case in gents_lean_vocab::families::contracts_managed_exec_liveness_exec::cases::<String>()
     {
         let cancellation_token = CancellationToken::new();
+        let tool_name = format!("liveness-{}", case.input.name);
         let (script, deadline_at) = match case.input.trigger.as_str() {
             "deadline_elapsed" => (
                 "printf partial; sleep 30",
@@ -738,8 +761,9 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
             ),
             "cancel_requested" => {
                 let token = cancellation_token.clone();
+                let cancel_tool_name = tool_name.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    let _ = wait_for_native_executor(&cancel_tool_name).await;
                     token.cancel();
                 });
                 ("sleep 30", None)
@@ -758,7 +782,7 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
                 max_output_bytes: 1024,
                 stdin: Vec::new(),
                 environment: None,
-                tool_name: Some(format!("liveness-{}", case.input.name)),
+                tool_name: Some(tool_name),
                 live_output: None,
                 process_recorder: None,
             }),

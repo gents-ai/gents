@@ -95,24 +95,29 @@ async fn wait_for_held_request_state(
     expected: &str,
 ) {
     let doc_id = escape_graphql_string(doc_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 1) {{lifecycle_state}} }}"#
-        )).await.unwrap();
-        let rows = response["data"]["AgentRequest"].as_array().unwrap();
-        let [row] = rows.as_slice() else {
-            panic!("held Agent cannot read its request")
-        };
-        if row["lifecycle_state"] == expected {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "request {doc_id} did not reach {expected}: {row:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    gents_store::test_support::read_when_changed(
+        access,
+        "AgentRequest",
+        &format!("request {doc_id} reaching {expected}"),
+        async || {
+            let response = access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 1) {{lifecycle_state}} }}"#
+                ))
+                .await
+                .unwrap();
+            let rows = response["data"]["AgentRequest"].as_array().unwrap();
+            let [row] = rows.as_slice() else {
+                panic!("held Agent cannot read its request")
+            };
+            if row["lifecycle_state"] == expected {
+                Ok(())
+            } else {
+                Err(format!("{row:?}"))
+            }
+        },
+    )
+    .await;
 }
 
 async fn fetch_backend_probe_row(
@@ -159,19 +164,20 @@ async fn wait_for_backend_probe_status(
     backend_id: &str,
     expected_status: &str,
 ) -> (String, Option<String>) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let row = fetch_backend_probe_row(node, backend_id).await;
-        if row.0 == expected_status {
-            return row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for InferenceBackend {backend_id} to reach \
-             probe_status={expected_status}, last row={row:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    gents_store::test_support::read_when_changed(
+        node,
+        "InferenceBackendObservation",
+        &format!("InferenceBackend {backend_id} reaching probe_status={expected_status}"),
+        async || {
+            let row = fetch_backend_probe_row(node, backend_id).await;
+            if row.0 == expected_status {
+                Ok(row)
+            } else {
+                Err(format!("{row:?}"))
+            }
+        },
+    )
+    .await
 }
 
 #[tokio::test]
@@ -845,6 +851,11 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         AgentReadinessState::Unavailable
     );
 
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &node,
+        ["NodeRuntime", "NodeReadiness"],
+    )
+    .expect("subscribe runtime recovery collections");
     update_backend_probe_status(&node, identity.did(), "backend-recovers", "healthy").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
@@ -862,11 +873,12 @@ async fn run_agent_recovers_backend_availability_without_restart() {
             break;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            tokio::time::timeout_at(deadline, changes.recv())
+                .await
+                .is_ok(),
             "timed out waiting for runtime to recover backend availability; last status: {:?}",
             status
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     let _ = shutdown_tx.send(true);
@@ -882,21 +894,15 @@ async fn wait_for_held_inference_state(
     expected: &str,
 ) {
     let request = escape_graphql_string(request_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = access.execute(&format!(
-            r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{request}"}}}}) {{call_state}} }}"#
-        )).await.unwrap();
-        let rows = response["data"]["InferenceCall"].as_array().unwrap();
-        if rows.iter().any(|row| row["call_state"] == expected) {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "inference call {request} did not reach {expected}: {rows:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let query = format!(
+        r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{request}"}}}}) {{call_state}} }}"#
+    );
+    gents_store::test_support::rows_when(access, "InferenceCall", &query, |data| {
+        data["InferenceCall"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["call_state"] == expected))
+    })
+    .await;
 }
 
 #[tokio::test]

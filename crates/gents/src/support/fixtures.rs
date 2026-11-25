@@ -415,6 +415,11 @@ pub async fn held_canonical_message(
     gents_protocol::output::TranscriptMessage,
     gents_inference::llm::message::Message,
 ) {
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &db.node,
+        ["AgentMessage", "AgentOutputSegment"],
+    )
+    .expect("subscribe canonical message collections");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         match gents_session::session::load_canonical_message(
@@ -427,14 +432,21 @@ pub async fn held_canonical_message(
         {
             Ok(message) => return message,
             Err(error)
-                if tokio::time::Instant::now() < deadline
-                    && error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
-                    }) =>
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                        .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
+                }) =>
             {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                let changed = tokio::time::timeout_at(deadline, changes.recv())
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("read fixture canonical message {header} stalled: {error:#}")
+                    });
+                assert!(
+                    changed.is_some(),
+                    "canonical message subscription closed while reading {header}"
+                );
             }
             Err(error) => panic!("read fixture canonical message {header}: {error:#}"),
         }

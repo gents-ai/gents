@@ -1172,7 +1172,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let mut tails = writer.provider_tails.lock().await;
     let mut publication = Box::pin(writer.publish_native_turn(&lifecycle, 0, 0, &message));
     assert!(futures::poll!(publication.as_mut()).is_pending());
-    tokio::time::sleep(Duration::from_millis(2)).await;
+    tokio::task::yield_now().await;
     let tail = tails.get_mut(&request.doc_id).unwrap();
     let delta = provider_flush_delta(&tail.streams, &encoded).unwrap();
     let segment = OutputSegment {

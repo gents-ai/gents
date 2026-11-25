@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Duration;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -179,21 +178,22 @@ async fn wait_for_terminal_request(
     request_doc_id: &str,
 ) -> LifecycleStateRow {
     let doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
-    let started = std::time::Instant::now();
-    loop {
-        let response = actors
-            .query(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
-            ))
-            .await;
-        if let Some(row) = first_optional_row::<LifecycleStateRow>(&response, "AgentRequest") {
-            if row.lifecycle_state.is_terminal() {
-                return row;
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+    );
+    gents_store::test_support::read_when_changed(
+        &actors.agent_access,
+        "AgentRequest",
+        "wait for terminal AgentRequest",
+        async || {
+            let response = actors.query(&query).await;
+            match first_optional_row::<LifecycleStateRow>(&response, "AgentRequest") {
+                Some(row) if row.lifecycle_state.is_terminal() => Ok(row),
+                other => Err(format!("{other:?}")),
             }
-        }
-        assert!(started.elapsed() < Duration::from_secs(60));
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+        },
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize)]

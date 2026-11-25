@@ -49,12 +49,14 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
                     }
                 }
 
+                let mut ticks_interval = tokio::time::interval(Duration::from_millis(25));
+                ticks_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     let ticks = sibling_ticks.fetch_add(1, Ordering::SeqCst) + 1;
                     sibling_tick_tx.send_replace(ticks);
                     tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
-                        _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+                        _ = ticks_interval.tick() => {}
                     }
                 }
             }

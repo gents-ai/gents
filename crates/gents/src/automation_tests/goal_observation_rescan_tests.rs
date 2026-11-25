@@ -92,11 +92,14 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                     Some(snapshot_rx),
                 );
             tokio::pin!(run);
-            tokio::select! {
-                result = &mut run => panic!("reconciler stopped before its first wait: {result:?}"),
-                () = waiting.notified() => {}
-                () = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("reconciler did not reach its first wait"),
-            }
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::select! {
+                    result = &mut run => panic!("reconciler stopped before its first wait: {result:?}"),
+                    () = waiting.notified() => {}
+                }
+            })
+            .await
+            .expect("reconciler did not reach its first wait");
             let previous = load_session_goal_observation(
                 &access,
                 f.identity.as_ref(),
@@ -159,11 +162,14 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             );
             let _ = waiting.notified().now_or_never();
             ticks_tx.unbounded_send(()).unwrap();
-            tokio::select! {
-                result = &mut run => panic!("reconciler stopped during durable refresh: {result:?}"),
-                () = waiting.notified() => {}
-                () = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("reconciler did not finish its durable refresh"),
-            }
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::select! {
+                    result = &mut run => panic!("reconciler stopped during durable refresh: {result:?}"),
+                    () = waiting.notified() => {}
+                }
+            })
+            .await
+            .expect("reconciler did not finish its durable refresh");
             let refreshed = load_session_goal_observation(
                 &access,
                 f.identity.as_ref(),

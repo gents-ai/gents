@@ -103,35 +103,48 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let model = partial_then_empty_provider(eof.clone());
     let returned = tokio_util::sync::CancellationToken::new();
     let observe_renewal = async {
+        tokio::select! {
+            () = returned.cancelled() => return false,
+            () = model.wait_until(|log| {
+                log.iter()
+                    .map(|record| record.yielded.saturating_sub(1))
+                    .sum::<usize>()
+                    > 0
+            }) => {}
+        }
         let mut silent_lease = None;
+        let mut changes =
+            gents_store::subscription_source::subscribe_collections(&node, ["AgentRequest"])
+                .expect("subscribe AgentRequest");
         loop {
-            tokio::select! {
-                () = returned.cancelled() => return false,
-                () = tokio::time::sleep(Duration::from_millis(100)) => {}
-            }
-            if silent_deltas(&model) == 0 {
-                continue;
-            }
             let snapshot = agent_access.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await.unwrap();
             let rows = snapshot["data"]["AgentRequest"].as_array().unwrap();
-            let Some(row) = rows.first() else { continue };
-            if row["lifecycle_state"] != "processing" {
-                continue;
+            if let Some(row) = rows.first() {
+                if row["lifecycle_state"] == "processing" {
+                    let generation = row["execution_generation"].as_str().unwrap();
+                    let expiry = chrono::DateTime::parse_from_rfc3339(
+                        row["execution_lease_expires_at"].as_str().unwrap(),
+                    )
+                    .unwrap();
+                    let (silent_generation, silent_expiry) =
+                        silent_lease.get_or_insert_with(|| (generation.to_owned(), expiry));
+                    assert_eq!(
+                        generation, silent_generation,
+                        "renewal keeps the owning generation"
+                    );
+                    if expiry > *silent_expiry {
+                        eof.cancel();
+                        return true;
+                    }
+                }
             }
-            let generation = row["execution_generation"].as_str().unwrap();
-            let expiry = chrono::DateTime::parse_from_rfc3339(
-                row["execution_lease_expires_at"].as_str().unwrap(),
-            )
-            .unwrap();
-            let (silent_generation, silent_expiry) =
-                silent_lease.get_or_insert_with(|| (generation.to_owned(), expiry));
-            assert_eq!(
-                generation, silent_generation,
-                "renewal keeps the owning generation"
-            );
-            if expiry > *silent_expiry {
-                eof.cancel();
-                return true;
+            tokio::select! {
+                () = returned.cancelled() => return false,
+                changed = changes.recv() => {
+                    if changed.is_none() {
+                        return false;
+                    }
+                }
             }
         }
     };
