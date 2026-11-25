@@ -1,5 +1,6 @@
-use super::support::{cfg_test, item_cfg_test, named_exceptions, repo_root, Workspace};
-use quote::ToTokens;
+use super::support::{
+    cfg_test, item_cfg_test, macro_expressions, named_exceptions, repo_root, Workspace,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
@@ -74,7 +75,6 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents-host", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-inference", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-lean-contract", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-lean-vocab", 1, "the sleep-call token matcher literal in fixtures.rs"),
     ("gents-loop", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-media-host", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-p2p", 8, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
@@ -466,38 +466,103 @@ fn production_traits_have_test_implementations_only_in_test_support() {
     );
 }
 
-/// The token text of a source's test code: a whole test file, or each
-/// outermost test-only item of a production file.
-fn test_code(source: &Source) -> Vec<String> {
-    fn items(within: &[syn::Item], output: &mut Vec<String>) {
-        for item in within {
-            if item_cfg_test(item) {
-                output.push(item.to_token_stream().to_string());
-            } else if let syn::Item::Mod(syn::ItemMod {
-                content: Some((_, inner)),
-                ..
-            }) = item
-            {
-                items(inner, output);
-            }
+struct SleepCalls {
+    in_test: bool,
+    found: usize,
+}
+
+fn is_sleep_call(call: &syn::ExprCall) -> bool {
+    let syn::Expr::Path(path) = call.func.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "sleep")
+}
+
+impl Visit<'_> for SleepCalls {
+    fn visit_item(&mut self, item: &syn::Item) {
+        let entered = !self.in_test && item_cfg_test(item);
+        if entered {
+            self.in_test = true;
+        }
+        if self.in_test || matches!(item, syn::Item::Mod(_)) {
+            visit::visit_item(self, item);
+        }
+        if entered {
+            self.in_test = false;
         }
     }
-    if !source.production {
-        return vec![source.syntax.to_token_stream().to_string()];
+
+    fn visit_expr_call(&mut self, call: &syn::ExprCall) {
+        if self.in_test && is_sleep_call(call) {
+            self.found += 1;
+        }
+        visit::visit_expr_call(self, call);
     }
-    let mut output = Vec::new();
-    items(&source.syntax.items, &mut output);
-    output
+
+    fn visit_expr_method_call(&mut self, call: &syn::ExprMethodCall) {
+        if self.in_test && call.method == "sleep" {
+            self.found += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &syn::Macro) {
+        if !self.in_test {
+            return;
+        }
+        let mut parsed = Vec::new();
+        let mut loose = Vec::new();
+        macro_expressions(mac.tokens.clone(), &mut parsed, &mut loose);
+        for expr in &parsed {
+            self.visit_expr(expr);
+        }
+    }
+}
+
+fn count_test_sleeps(source: &Source) -> usize {
+    let mut visitor = SleepCalls {
+        in_test: !source.production,
+        found: 0,
+    };
+    visitor.visit_file(&source.syntax);
+    visitor.found
+}
+
+#[test]
+fn sleep_visitor_ignores_literals_and_counts_calls() {
+    let syntax = syn::parse_file(
+        r#"
+        fn test_body() {
+            let _ = "sleep (";
+            tokio::time::sleep(d);
+            std::thread::sleep(d);
+            time::sleep(d);
+            sleep(d);
+            clock.sleep(d);
+            tokio::select! {
+                _ = tokio::time::sleep(d) => {}
+            }
+        }
+        "#,
+    )
+    .expect("parse snippet");
+    let source = Source {
+        package: String::new(),
+        relative: String::new(),
+        syntax,
+        production: false,
+    };
+    assert_eq!(count_test_sleeps(&source), 6);
 }
 
 #[test]
 fn test_sleeps_only_shrink() {
     let mut counts = BTreeMap::new();
     for source in workspace_sources() {
-        let found: usize = test_code(&source)
-            .iter()
-            .map(|tokens| tokens.matches("sleep (").count())
-            .sum();
+        let found = count_test_sleeps(&source);
         if found > 0 {
             *counts.entry(source.package.clone()).or_default() += found;
         }
