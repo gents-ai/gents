@@ -387,7 +387,12 @@ class Shards(unittest.TestCase):
                         {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, [])):
                 os.environ.pop("GITHUB_ACTIONS", None)
                 gate.run(selection, "build:portable:1")
-            self.assertEqual(events, ["list", "wait", "run", "stop"] if built else ["list", "wait", "stop"])
+            if built:
+                # The archive's run, then the Vera builds' beside it.
+                self.assertEqual((events[:3], events[-1]), (["list", "wait", "run"], "stop"))
+                self.assertEqual(set(events[3:-1]), {"run"})
+            else:
+                self.assertEqual(events, ["list", "wait", "stop"])
         workflow = workflow_jobs(CI)["build"]
         self.assertIn("lean-contract: deferred", workflow)
 
@@ -522,10 +527,15 @@ class VeraTests(unittest.TestCase):
         client = with_event("push", lambda: sharded(1, "crates/gents-cli/src/lib.rs"))
         self.assertEqual(client["archives"][0]["vera"], "gents-cli")
 
-    def test_a_pull_request_leaves_them_to_the_merge_queue(self):
-        self.assertEqual(with_event("pull_request", lambda: sharded(1, everything=True))["archives"][0]["vera"], "")
+    def test_a_pull_request_runs_them_too(self):
+        self.assertEqual(with_event("pull_request", lambda: sharded(1, everything=True))["archives"][0]["vera"],
+                         sharded(1, everything=True)["archives"][0]["vera"])
         selection = with_event("pull_request", lambda: select(everything=True))
-        self.assertEqual({entry["vera"] for entry in selection["matrix"]}, {""})
+        vera = {entry["job"]: entry["vera"] for entry in selection["matrix"]}
+        self.assertEqual(vera.pop("test:store"), "gents-store")
+        self.assertEqual(vera.pop("test:session"), "gents-tools gents-toolcalls")
+        self.assertEqual(vera.pop("test:cli"), "gents-cli")
+        self.assertEqual(set(vera.values()), {""})
 
     def test_the_build_job_runs_them_in_their_own_nextest_build(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
@@ -1679,10 +1689,8 @@ class ReuseKeys(unittest.TestCase):
             pull = keys_of(select("crates/gents-cli/src/main.rs"))
         with mock.patch.dict(os.environ, {"GATE_EVENT": "merge_group"}):
             queue = keys_of(select("crates/gents-cli/src/main.rs"))
-        # Only the Vera checks a pull request leaves to the queue differ.
-        differ = {unit for unit in pull if pull[unit] != queue.get(unit)}
-        self.assertEqual(differ, {"lint-variants", "test:cli"})
-        self.assertEqual(set(pull), set(queue))
+        # A pull request runs the queue's checks, the Vera ones included.
+        self.assertEqual(pull, queue)
 
     def test_every_selected_job_but_a_shard_is_made_of_units(self):
         selection = sharded(1, everything=True)
