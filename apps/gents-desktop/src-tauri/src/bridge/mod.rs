@@ -42,6 +42,25 @@ use tauri::Manager;
 #[cfg(desktop)]
 use tauri::{Emitter, Listener};
 
+/// On a phone the store's runtimes start before anything starts them on
+/// first use, set for a device that mostly idles: the async runtime without
+/// its handoff monitor, which wakes every tick to look for a blocked poll (a
+/// task that blocks then holds up only the other tasks of its worker), and
+/// the default worker pool on the phone's settings, returned for the app to
+/// hold.
+#[cfg(mobile)]
+fn start_phone_runtimes() -> Option<workers::Pool> {
+    if let Err(error) = nuclei::runtime::Builder::new()
+        .handoff_after(None)
+        .build_global()
+    {
+        tracing::warn!(%error, "the store's async runtime kept its handoff monitor");
+    }
+    gents_desktop_core::client::phone::start_default_pool()
+        .inspect_err(|error| tracing::warn!(%error, "the default worker pool starts on first use"))
+        .ok()
+}
+
 /// The app's Tauri context. It expands once per crate, since it embeds the
 /// macOS Info.plist under a fixed symbol.
 pub(crate) fn context() -> tauri::Context<tauri::Wry> {
@@ -60,6 +79,10 @@ pub fn run() {
     // open no browser at all while still reporting success.
     prefer_host_tools();
     install_runtime();
+    #[cfg(target_os = "ios")]
+    crate::backup_exclusion::exclude_app_data();
+    #[cfg(mobile)]
+    let phone_pool = start_phone_runtimes();
 
     #[cfg(all(feature = "native-e2e", debug_assertions))]
     let native_e2e = native_e2e_launch();
@@ -109,6 +132,10 @@ pub fn run() {
             #[cfg(all(feature = "native-e2e", debug_assertions))]
             if let Some(launch) = native_e2e {
                 app.manage(launch);
+            }
+            #[cfg(mobile)]
+            if let Some(pool) = phone_pool {
+                app.manage(pool);
             }
             let telemetry_path = app
                 .path()
