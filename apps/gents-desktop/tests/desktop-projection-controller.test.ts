@@ -438,12 +438,22 @@ describe("desktopUpdateRefreshScope", () => {
       "snapshot",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
-      "sessionDelta",
+      "storeUpdate",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("storeUpdate");
     expect(desktopUpdateRefreshScope("store", null, null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
+  });
+
+  it("reads the list on an update that changed a row while the open session's turn is followed", () => {
+    expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
+      "storeUpdate",
+    );
+    expect(
+      desktopUpdateRefreshScope("store", "session-1", "request-1", false, false),
+    ).toBe("sessionDelta");
+    expect(desktopUpdateRefreshScope("config", "session-1", "request-1")).toBe("full");
   });
 
   it("reads a store change for a session not shown yet at once", () => {

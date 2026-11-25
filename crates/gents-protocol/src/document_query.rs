@@ -86,10 +86,10 @@ impl Scalar<kind::Json> for &Value {
     }
 }
 
-/// Kinds with a total order DefraDB can range over.
+/// Kinds DefraDB's filter input types give range operators. `ID` (`_docID`
+/// and relation IDs) has equality and membership only.
 pub trait Ordered {}
 impl Ordered for kind::Str {}
-impl Ordered for kind::DocId {}
 impl Ordered for kind::Int {}
 impl Ordered for kind::Float {}
 impl Ordered for kind::DateTime {}
@@ -701,7 +701,24 @@ where
     }
 
     fn render_root(&self, alias: Option<&str>, variables: &mut Variables) -> String {
+        self.render_root_paged(alias, variables, None)
+    }
+
+    fn render_root_paged(
+        &self,
+        alias: Option<&str>,
+        variables: &mut Variables,
+        cursor: Option<(u64, Option<&str>)>,
+    ) -> String {
         let mut arguments = Vec::new();
+        if let Some((first, after)) = cursor {
+            let reference = variables.bind("Int", Value::from(first));
+            arguments.push(format!("first: {reference}"));
+            if let Some(after) = after {
+                let reference = variables.bind("String", Value::String(after.to_owned()));
+                arguments.push(format!("after: {reference}"));
+            }
+        }
         if let Some(doc_id) = self.doc_id.as_ref().filter(|_| !self.count) {
             let reference = variables.bind("ID!", Value::String(doc_id.clone()));
             arguments.push(format!("docID: {reference}"));
@@ -781,6 +798,34 @@ where
         let root = self.render_root(None, &mut variables);
         Rendered {
             document: format!("query{} {{ {root} }}", variables.header()),
+            variables: Value::Object(variables.values),
+        }
+    }
+
+    /// One page of a DefraDB `_cursor` read: `first` rows after the `after`
+    /// token, with `_pageInfo { hasNext endCursor }`. The order must be one
+    /// DefraDB can seek, `_docID` or an indexed field; `limit` and `offset`
+    /// do not apply to a cursor and are left out.
+    pub fn render_cursor(&self, first: u64, after: Option<&str>) -> Rendered {
+        let mut variables = Variables::default();
+        let page: Query<C> = Query {
+            filter: self.filter.clone(),
+            doc_id: self.doc_id.clone(),
+            order: self.order.clone(),
+            limit: None,
+            offset: None,
+            selection: Selection {
+                body: self.selection.body.clone(),
+                collection: PhantomData,
+            },
+            count: false,
+        };
+        let root = page.render_root_paged(None, &mut variables, Some((first, after)));
+        Rendered {
+            document: format!(
+                "query{} {{ _cursor {{ {root} _pageInfo {{ hasNext endCursor }} }} }}",
+                variables.header()
+            ),
             variables: Value::Object(variables.values),
         }
     }

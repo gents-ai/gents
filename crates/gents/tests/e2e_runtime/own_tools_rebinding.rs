@@ -8,7 +8,6 @@ use crate::support::live_inference::request_terminal_rows;
 use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, SignedMailboxTurn};
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{StreamChunk, StreamResponse};
-use gents_store::test_support::TestStore;
 
 const BACKEND_ID: &str = "own-tools-backend";
 const MODEL: &str = "own-tools-model";
@@ -52,7 +51,7 @@ async fn configure(tools: &[Box<dyn gents_loop::tool::ToolDyn>], call: Value) ->
 /// The Engineer, holding the Node administration init gives the default
 /// Agent, creates two helper agents and an agent target for each: `writer`
 /// runs, `helper` it disables.
-async fn seed_agent_targets(db: &TestStore, turn: &SignedMailboxTurn) {
+async fn seed_agent_targets(db: &gents_store::test_support::TestStore, turn: &SignedMailboxTurn) {
     let node_did = turn.node_did.clone();
     let engineer = turn.agent.did().to_owned();
     turn.client

@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+  type TouchEvent,
+} from "react";
 import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -153,8 +160,44 @@ function SidebarToggle() {
   );
 }
 
+/* a left swipe on the menu drags it with the finger and closes it past a
+   short distance; a mostly vertical move leaves the list to scroll */
+function useSwipeToClose() {
+  const [offset, setOffset] = useState(0);
+  const from = useRef<{ x: number; y: number; horizontal: boolean | null } | null>(
+    null,
+  );
+  return {
+    offset,
+    start: (event: TouchEvent) => {
+      const touch = event.touches[0];
+      from.current = touch
+        ? { x: touch.clientX, y: touch.clientY, horizontal: null }
+        : null;
+    },
+    move: (event: TouchEvent) => {
+      const touch = event.touches[0];
+      const start = from.current;
+      if (!touch || !start) return;
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
+      if (start.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) {
+        start.horizontal = Math.abs(dx) > Math.abs(dy);
+      }
+      if (start.horizontal) setOffset(Math.min(0, dx));
+    },
+    end: (close: () => void) => {
+      const closing = offset < -60;
+      from.current = null;
+      setOffset(0);
+      if (closing) close();
+    },
+  };
+}
+
 function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
   const sheet = useExclusivePopover();
+  const drag = useSwipeToClose();
   return (
     <Sheet
       open={sheet.open}
@@ -176,7 +219,16 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
       <SheetContent
         ref={sheet.popupRef}
         side="left"
-        className="flex w-72 flex-col gap-2 border-border/60 bg-raised pt-4 pb-2"
+        className="nav-sheet flex w-72 flex-col gap-2 border-border/60 bg-raised pt-4 pb-2"
+        style={
+          drag.offset < 0
+            ? { transform: `translateX(${drag.offset}px)`, transition: "none" }
+            : undefined
+        }
+        onTouchStart={drag.start}
+        onTouchMove={drag.move}
+        onTouchEnd={() => drag.end(() => sheet.onOpenChange(false))}
+        onTouchCancel={() => drag.end(() => {})}
         onClickCapture={(e) => {
           if ((e.target as HTMLElement).closest("a[href]")) sheet.onOpenChange(false);
         }}

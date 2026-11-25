@@ -11,6 +11,7 @@ use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::status::RuntimeStatusHandle;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents_inference::admission::AdmissionRegistry;
 use gents_protocol::node_readiness::ReconcilePhase;
 use gents_protocol::row::AgentRequest;
@@ -61,6 +62,7 @@ pub(super) struct GenerationSupervisor<F> {
     slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     retiring_slots: JoinSet<Result<()>>,
     retired_slot_error: Option<anyhow::Error>,
+    observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
 }
 
 fn slot_join_result(
@@ -205,7 +207,16 @@ where
             slot_failure_policy,
             retiring_slots: JoinSet::new(),
             retired_slot_error: None,
+            observer: None,
         })
+    }
+
+    pub(super) fn with_observer(
+        mut self,
+        observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    ) -> Self {
+        self.observer = observer;
+        self
     }
 
     pub(super) fn current_snapshot(&self) -> Arc<ActiveRuntimeSnapshot> {
@@ -471,7 +482,7 @@ where
             if let Some(slot) = staged_slots.remove(agent_did) {
                 if let Some(existing) = self.active_slots.remove(agent_did) {
                     let old_generation = existing.generation;
-                    retired_slots.push(existing);
+                    retired_slots.push((agent_did.clone(), existing));
                     retired_agents.push((agent_did.clone(), old_generation, true));
                 }
                 next_slots.insert(agent_did.clone(), slot);
@@ -485,17 +496,24 @@ where
         }
         debug_assert!(staged_slots.is_empty());
         for (agent_did, slot) in self.active_slots.drain() {
-            retired_agents.push((agent_did, slot.generation, false));
-            retired_slots.push(slot);
+            retired_agents.push((agent_did.clone(), slot.generation, false));
+            retired_slots.push((agent_did, slot));
         }
 
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;
-        for slot in retired_slots {
+        for (agent_did, slot) in retired_slots {
             let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
+            let generation = slot.generation;
+            let observer = self.observer.clone();
             self.retiring_slots.spawn(async move {
-                slot_join_result(slot.handle.await, "retired agent slot failed")
+                let joined = slot_join_result(slot.handle.await, "retired agent slot failed");
+                tracing::info!(agent_did = %agent_did, generation, "retired agent slot joined");
+                if let Some(observer) = observer {
+                    observer.on_retired_slot_joined(&agent_did, generation);
+                }
+                joined
             });
         }
         while let Some(joined) = self.retiring_slots.try_join_next() {

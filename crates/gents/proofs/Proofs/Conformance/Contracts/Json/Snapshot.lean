@@ -169,6 +169,8 @@ import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Clients.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.ClientSyncHealthCases
+import Proofs.Conformance.LineageRereadCases
+import Proofs.Conformance.SessionShownCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
@@ -329,6 +331,7 @@ import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
 import Proofs.Conformance.AccountStore
+import Proofs.Conformance.RequestEncoding
 import Proofs.Conformance.AccountListing
 import Proofs.Conformance.UsageRead
 import Proofs.Conformance.Triggers.Contracts

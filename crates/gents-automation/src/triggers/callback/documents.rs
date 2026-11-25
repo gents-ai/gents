@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 
 use gents_documents::callback::validate_callback_binding;
 use gents_store::graphql::{
-    escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
+    cursor_after_arg, cursor_page, escape_graphql_string, first_row,
+    graphql_with_transaction_retry, rows,
 };
 
 use gents_session::workspace::{
@@ -429,14 +430,15 @@ async fn repair_unlinked_children(
         matches!(collection, "CallbackInvocation" | "CallbackResult"),
         "invalid callback child collection"
     );
+    let mut cursor: Option<String> = None;
     let mut after = String::new();
     loop {
         let query = format!(
-            "{{ {collection}(filter: {{owner_node_did: {{_eq: \"{}\"}}, agent_did: {{_eq: \"{}\"}}, parent_linked: {{_eq: false}}, _docID: {{_gt: \"{}\"}}}}, order: {{_docID: ASC}}, limit: 256) {{_docID invocation_id}} }}",
-            escape_graphql_string(owner), escape_graphql_string(agent_did), escape_graphql_string(&after),
+            "{{ _cursor {{ {collection}(first: 256{}, filter: {{owner_node_did: {{_eq: \"{}\"}}, agent_did: {{_eq: \"{}\"}}, parent_linked: {{_eq: false}}}}, order: [{{_docID: ASC}}]) {{_docID invocation_id}} _pageInfo {{ hasNext endCursor }} }} }}",
+            cursor_after_arg(cursor.as_deref()), escape_graphql_string(owner), escape_graphql_string(agent_did),
         );
         let response = callback_query_as(node, agent_did, &query, "callback.list_unlinked").await?;
-        let rows: Vec<Value> = rows(&response, collection)?;
+        let (rows, next) = cursor_page::<Value>(&response, collection)?;
         for row in &rows {
             let doc_id = row["_docID"]
                 .as_str()
@@ -450,8 +452,9 @@ async fn repair_unlinked_children(
                 .await?;
             after = doc_id.to_owned();
         }
-        if rows.len() < 256 {
-            return Ok(());
+        match next {
+            None => return Ok(()),
+            Some(next) => cursor = Some(next),
         }
     }
 }

@@ -154,3 +154,26 @@ body,
   > [data-slot="scroll-area-scrollbar"] {
   visibility: hidden;
 }
+
+/* The phone's menu: native drawer sizes, larger than the desktop nav it
+   reuses. Scoped to the menu sheet only. */
+.nav-sheet .text-sm {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+.nav-sheet .text-xs {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.nav-sheet .h-8,
+.nav-sheet .h-9 {
+  height: 2.5rem;
+}
+
+/* On a phone a dialog's close button sits over its header's end: keep the
+   title and description clear of it. */
+@media (max-width: 767px) {
+  [data-slot="dialog-content"] [data-slot="dialog-header"] {
+    padding-inline-end: 2.5rem;
+  }
+}

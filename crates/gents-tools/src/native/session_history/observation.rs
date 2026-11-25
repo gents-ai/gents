@@ -10,40 +10,44 @@ pub(super) enum RequestBindings<'a> {
     Page(Option<&'a str>),
 }
 
+/// The scoped requests' physical to logical identities. A page also returns
+/// the cursor token to resume from while more requests remain.
 pub(super) async fn load_session_request_bindings(
     access: &dyn gents_store::config_client::ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     selection: RequestBindings<'_>,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(BTreeMap<String, String>, Option<String>)> {
     anyhow::ensure!(
         !node_did.trim().is_empty() && !session_id.trim().is_empty(),
         "session request selection requires a node and session"
     );
-    let mut view = SessionRequestBindings::new(
+    let view = SessionRequestBindings::new(
         node_did.trim(),
         requester_did.map(str::to_owned),
         session_id.trim(),
     );
-    view = match selection {
+    let (rows, next) = match selection {
         RequestBindings::Physical(ids) => {
             if ids.is_empty() {
-                return Ok(BTreeMap::new());
+                return Ok((BTreeMap::new(), None));
             }
-            view.physical(ids.to_vec())
+            let rows = gents_store::views::read_view(access, &view.physical(ids.to_vec()))
+                .await
+                .context("session accounting ownership")?;
+            (rows, None)
         }
-        RequestBindings::Page(after) => {
-            view = view.limit(context_calls::PAGE_SIZE as u64);
-            if let Some(after) = after {
-                view = view.after(after);
-            }
-            view
-        }
-    };
-    gents_store::views::read_view(access, &view)
+        RequestBindings::Page(after) => gents_store::views::read_view_page(
+            access,
+            &view,
+            context_calls::PAGE_SIZE as u64,
+            after,
+        )
         .await
-        .context("session accounting ownership")?
+        .context("session accounting ownership")?,
+    };
+    let bindings = rows
         .into_iter()
         .map(|request| {
             Ok((
@@ -53,5 +57,6 @@ pub(super) async fn load_session_request_bindings(
                     .context("accounting request lacks logical identity")?,
             ))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok((bindings, next))
 }
