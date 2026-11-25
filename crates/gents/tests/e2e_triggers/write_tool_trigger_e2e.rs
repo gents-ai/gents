@@ -1,7 +1,7 @@
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::time::Duration;
 
-use gents::{DocumentRuntimeOptions, Gents};
+use gents::DocumentRuntimeOptions;
 use gents_documents::{WriteToolDecl, WriteToolField};
 use gents_loop::tool::Tool;
 use gents_protocol::row::AgentRequestRow;

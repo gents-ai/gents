@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents::{DocumentRuntimeOptions, Gents};
+use gents::DocumentRuntimeOptions;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
