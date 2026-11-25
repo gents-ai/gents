@@ -301,29 +301,8 @@ pub async fn signed_claimed_authored_request_with_retry(
     session_id: &str,
     retry: Option<crate::request::lifecycle::RetryLink>,
 ) -> crate::request::lifecycle::RequestLifecycle {
+    use crate::request::lifecycle::{ClaimOutcome, RequestIdentity, RequestSigner, RequestSpec};
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    signed_claimed_request(
-        db,
-        user,
-        client,
-        binding,
-        (request_id, session_id, &created_at),
-        retry,
-    )
-    .await
-}
-
-pub async fn signed_claimed_request(
-    db: &gents_store::test_support::TestStore,
-    user: &dyn gents_store::identity::NodeIdentity,
-    client: &gents_store::config_client::ConfigAccess,
-    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    (request_id, session_id, created_at): (&str, &str, &str),
-    retry: Option<crate::request::lifecycle::RetryLink>,
-) -> crate::request::lifecycle::RequestLifecycle {
-    use crate::request::lifecycle::{
-        ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
-    };
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), binding).unwrap();
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -342,7 +321,7 @@ pub async fn signed_claimed_request(
             session_id: session_id.into(),
             content: "race".into(),
             execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-            created_at: created_at.into(),
+            created_at,
         },
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
     );
@@ -374,23 +353,14 @@ pub async fn signed_claimed_request(
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
     let request = row.try_into().unwrap();
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let mut lifecycle = crate::test_support::admitted_client_lifecycle(
         db.node.clone(),
         db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-        .await
-        .unwrap();
-    assert!(
-        admission.is_some(),
-        "client request needs verified claim admission"
-    );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
+        &request,
+        agent.as_ref(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed

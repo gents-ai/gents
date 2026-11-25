@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, watch, Mutex};
 
 use gents_session::exec::ManagedProcess;
 use gents_store::drop_cleanup::DropCleanup;
@@ -45,7 +45,7 @@ pub(crate) struct LspClient {
     language_ids: Mutex<RapidHashMap<String, String>>,
     server_status: Arc<Mutex<Option<ServerStatus>>>,
     progress: Arc<Mutex<RapidHashSet<String>>>,
-    alive: Arc<AtomicBool>,
+    alive: Arc<watch::Sender<bool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +79,8 @@ impl LspClient {
         let server_status_reader = server_status.clone();
         let progress: Arc<Mutex<RapidHashSet<String>>> = Arc::new(Mutex::new(RapidHashSet::new()));
         let progress_reader = progress.clone();
-        let alive = Arc::new(AtomicBool::new(true));
+        let (alive_tx, _alive_rx) = watch::channel(true);
+        let alive = Arc::new(alive_tx);
         let alive_reader = alive.clone();
         let reader_workspace = workspace.clone();
         let settings = server.settings.clone();
@@ -97,7 +98,7 @@ impl LspClient {
                 },
             )
             .await;
-            alive_reader.store(false, Ordering::SeqCst);
+            alive_reader.send_replace(false);
             if let Err(error) = result {
                 tracing::warn!(%error, "lsp reader exited");
                 fail_pending(&pending_reader, &error).await;
@@ -449,7 +450,13 @@ impl LspClient {
     }
 
     pub(crate) fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::SeqCst)
+        *self.alive.borrow()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_exited(&self) {
+        let mut rx = self.alive.subscribe();
+        let _ = rx.wait_for(|&alive| !alive).await;
     }
 
     /// `cancel` is the cancellation of the call the request serves, if any.
@@ -548,7 +555,7 @@ impl LspClient {
         }
         let _ = self.request("shutdown", Value::Null, cancel).await;
         let _ = self.notify("exit", Value::Null).await;
-        self.alive.store(false, Ordering::SeqCst);
+        self.alive.send_replace(false);
         let mut process = self.process.lock().await;
         process.terminate().await;
         self.reader.abort();

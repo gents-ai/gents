@@ -326,44 +326,7 @@ fn freeze_rejects_drifted_placement_binding() {
     assert!(docs.receipts.is_empty());
 }
 
-struct FailFreezePlacementOnce {
-    inner: MemoryWorkspaceDocuments,
-    fail_placement: bool,
-    workspace_writes: usize,
-    placement_writes: usize,
-}
-
-impl WorkspaceDocuments for FailFreezePlacementOnce {
-    fn load_isolated_workspace(&self, id: &str) -> anyhow::Result<Option<IsolatedWorkspaceDoc>> {
-        self.inner.load_isolated_workspace(id)
-    }
-    fn load_placement(&self, id: &str) -> anyhow::Result<Option<WorkspacePlacementDoc>> {
-        self.inner.load_placement(id)
-    }
-    fn write_isolated_workspace(&mut self, doc: IsolatedWorkspaceDoc) -> anyhow::Result<()> {
-        self.workspace_writes += 1;
-        self.inner.write_isolated_workspace(doc)
-    }
-    fn write_placement(&mut self, doc: WorkspacePlacementDoc) -> anyhow::Result<()> {
-        self.placement_writes += 1;
-        if std::mem::take(&mut self.fail_placement) {
-            anyhow::bail!("injected placement persistence failure after workspace write");
-        }
-        self.inner.write_placement(doc)
-    }
-    fn load_bindings(&self, id: &str) -> anyhow::Result<Vec<WorkspaceBindingDoc>> {
-        self.inner.load_bindings(id)
-    }
-    fn write_binding(&mut self, doc: WorkspaceBindingDoc) -> anyhow::Result<()> {
-        self.inner.write_binding(doc)
-    }
-    fn load_receipts(&self, id: &str) -> anyhow::Result<Vec<WorkspaceReceiptDoc>> {
-        self.inner.load_receipts(id)
-    }
-    fn write_receipt(&mut self, doc: WorkspaceReceiptDoc) -> anyhow::Result<()> {
-        self.inner.write_receipt(doc)
-    }
-}
+use crate::test_support::doubles::FailFreezePlacementOnce;
 
 fn freeze_fault_context<'a>(
     fx: &'a Fixture,

@@ -805,9 +805,10 @@ mod provider_account_tests {
                 )
             }
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
-            newer_writing.try_recv().is_err(),
+            tokio::time::timeout(Duration::from_millis(50), &mut newer_writing)
+                .await
+                .is_err(),
             "the newer save must wait for the older write"
         );
 
@@ -863,7 +864,7 @@ mod provider_account_tests {
         });
         newer_writing.await.expect("newer save is writing");
 
-        let save_older = tokio::spawn({
+        let mut save_older = tokio::spawn({
             let pending = pending.clone();
             let writes = writes.clone();
             async move {
@@ -878,7 +879,12 @@ mod provider_account_tests {
                 )
             }
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut save_older)
+                .await
+                .is_err(),
+            "the older save must wait for the newer write"
+        );
         release_newer.send(()).expect("release newer write");
         assert!(save_newer.await.unwrap());
         assert!(save_older.await.unwrap(), "the older save is superseded");

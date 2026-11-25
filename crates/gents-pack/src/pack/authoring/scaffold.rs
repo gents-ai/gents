@@ -767,21 +767,11 @@ mod tests {
         );
     }
 
-    struct NoPlugins;
-
-    impl super::super::build::PluginCompiler for NoPlugins {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
-            unreachable!("an assets pack has no plugin to build")
-        }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
-            unreachable!("an assets pack has no plugin to build")
-        }
-    }
-
     /// `pack build` refuses a file-produced UX module the webview would
     /// refuse, so a built archive is lint-clean by construction.
     #[tokio::test]
     async fn build_refuses_a_ux_module_the_lint_refuses() {
+        use crate::test_support::NoPlugins;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("review_toolkit");
         let args = ScaffoldInput {

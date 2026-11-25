@@ -4,8 +4,7 @@ use gents_session::request::lifecycle::{
 };
 use gents_store::local::document_acp::DocumentAcp;
 
-use super::stored_create::ClientUser;
-use crate::test_support::vera_test_home::{seen, Household, PROVIDERS};
+use crate::test_support::vera_test_home::{seen, ClientUser, Household, PROVIDERS};
 
 /// What a client request leaves on one home: the publication's outcome, and
 /// which of its relationships the store then honours.

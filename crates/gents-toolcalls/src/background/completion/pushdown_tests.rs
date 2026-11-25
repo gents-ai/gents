@@ -1,6 +1,4 @@
-use crate::test_support::background_completion::{
-    admission_verifier, background_hints, desktop_owned_session,
-};
+use crate::test_support::background_completion::{background_hints, desktop_owned_session};
 use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
 use gents_session::request::lifecycle::ExecutionOrigin;
 use gents_session::test_support::AgentHome;
@@ -28,34 +26,16 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     .unwrap()
     .request
     .expect("completion wake");
-    let wake = gents_session::request::admission::load_request_for_admission_test_as(
-        &db.node,
-        &wake.doc_id,
-        db.agent_did(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(wake.requester_did.as_deref(), Some(desktop.did()));
-    assert_eq!(wake.request_hop, parent.request_hop);
-    let verified = admission_verifier(&db)
-        .verify_fresh(&wake, db.agent_did())
-        .await
-        .unwrap();
-    let mut lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            db.node.clone(),
-            verified.clone(),
-            60,
-            ExecutionOrigin::Scheduled,
-            "backend-test",
-        );
-    lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
+    let wake =
+        gents_session::test_support::ClaimedRequest::existing(&db, &db.binding, &wake.doc_id)
+            .origin(ExecutionOrigin::Scheduled)
+            .backend("backend-test")
+            .drive(gents_session::test_support::Stage::Claimed)
+            .await
+            .lifecycle;
+    let verified = wake.request();
+    assert_eq!(verified.requester_did.as_deref(), Some(desktop.did()));
+    assert_eq!(verified.request_hop, parent.request_hop);
     crate::call::hook::DefraSessionHook::resume_with_actor_policy(
         db.node.clone(),
         session_id,

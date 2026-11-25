@@ -60,35 +60,8 @@ pub fn preview_config(
 
 #[cfg(test)]
 mod tests {
-    use super::super::build::PluginCompiler;
     use super::*;
-    use std::path::Path;
-
-    struct RefusingCompiler {
-        called: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl RefusingCompiler {
-        fn new() -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
-            let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            (
-                Self {
-                    called: called.clone(),
-                },
-                called,
-            )
-        }
-    }
-
-    impl PluginCompiler for RefusingCompiler {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
-            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("no compiler in this test")
-        }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
-            unreachable!("load_and_validate refuses first")
-        }
-    }
+    use crate::test_support::RefusingCompiler;
 
     #[test]
     fn a_built_pack_verifies_and_a_tampered_one_does_not() {

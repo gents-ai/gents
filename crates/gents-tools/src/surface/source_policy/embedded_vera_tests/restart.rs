@@ -1,9 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::ReportedDelegationAudience;
-use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, ResolveAudience};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::local::backend_protection::{FreshBackendStore, ProtectedBackendStore};
 use gents_store::local::document_acp::{DocumentAcp, HttpEdge};
 
@@ -125,33 +124,7 @@ async fn serve_claiming(
     Ok((node, status))
 }
 
-/// Reads the runtime's public status over HTTP with no credential, as a
-/// client does after a refusal.
-struct PublicStatus {
-    url: String,
-}
-
-impl ResolveAudience for PublicStatus {
-    fn resolve<'a>(
-        &'a self,
-        nonce: &'a gents_protocol::home_attestation::HomeNonce,
-    ) -> BoxFuture<'a, Option<serde_json::Value>> {
-        Box::pin(async move {
-            reqwest::Client::new()
-                .get(&self.url)
-                .query(&[(
-                    gents_protocol::home_attestation::HOME_NONCE_QUERY,
-                    nonce.as_str(),
-                )])
-                .send()
-                .await
-                .ok()?
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-        })
-    }
-}
+use crate::test_support::vera_test_home::HttpStatusAudience as PublicStatus;
 
 async fn vera_home(
     root: &std::path::Path,

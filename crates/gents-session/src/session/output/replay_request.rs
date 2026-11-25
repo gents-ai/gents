@@ -94,7 +94,7 @@ pub trait ReplayRequestReader: Sync {
 
 #[derive(Clone)]
 pub struct ReplayRequestFacts {
-    pub(in crate::session) rows: Vec<serde_json::Value>,
+    pub(crate) rows: Vec<serde_json::Value>,
     commits: Vec<gents_store::graphql::CompositeCommit>,
 }
 

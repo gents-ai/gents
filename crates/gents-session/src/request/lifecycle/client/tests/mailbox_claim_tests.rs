@@ -1,14 +1,12 @@
 use super::*;
-use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
-    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+    ClaimOutcome, ExecutionOrigin, RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::session::mailbox::MailboxCreateTool;
 use gents_documents::mailbox_write_decl::{
     MailboxAction, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
 };
 use gents_loop::tool::{bind_request_tools, ToolDyn};
-use gents_protocol::row::AgentRequest;
 use gents_store::config_client::NodePermission;
 
 #[tokio::test]
@@ -19,17 +17,19 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let node = db.node.clone();
-    let runtime: Arc<dyn NodeIdentity> = Arc::new(
-        gents_store::test_support::held_runtime_identity(db.node_identity.did()),
-    );
-    let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None)?;
+    let runtime = db.node_identity.clone();
+    let signed_home = gents_documents::test_support::SignedHome::enroll(db, "mailbox-owner").await;
+    let node = signed_home.store.node.clone();
+    let binding = signed_home
+        .create_agent(
+            "Mailbox fixture agent",
+            &gents_documents::test_support::AdmitAllProfiles,
+        )
+        .await;
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None)?;
     let outsider = KeyIdentity::load_or_create(home.path().join("other.key"), None)?;
-    let binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
-    grant_operator_user(&node, runtime.as_ref(), &owner).await;
+    let admin = signed_home.node_access();
     for did in [user.did(), outsider.did(), agent.did()] {
         for permission in [
             NodePermission::DocumentRead,
@@ -43,11 +43,10 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
                 .await?;
         }
     }
-    let client = |key: &KeyIdentity| -> anyhow::Result<ConfigAccess> { Ok(db.client_access(key)) };
-    let owner_access = client(&owner)?;
-    let user_access = client(&user)?;
-    let outsider_access = client(&outsider)?;
-    seed_owned_agent(&owner_access, runtime.did(), &binding).await;
+    let owner = &signed_home.user;
+    let owner_access = &signed_home.user_access;
+    let user_access = signed_home.store.client_access(&user);
+    let outsider_access = signed_home.store.client_access(&outsider);
     let agent_rows = owner_access.execute("{ Agent { _docID } }").await?;
     let agent_doc = agent_rows["data"]["Agent"][0]["_docID"]
         .as_str()
@@ -71,7 +70,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         AgentRequestAdmissionRecord::client(owner.did()),
     );
     let (session_doc, selected_agent_doc) =
-        reserve_client_targets(&owner_access, &owner_create).await?;
+        reserve_client_targets(owner_access, &owner_create).await?;
     // The delegate signs the request, so the claim requires its update on the
     // session, as the modeled cross-actor claim does of the immediate signer.
     owner_access
@@ -101,31 +100,19 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     create.agent_doc_id = Some(selected_agent_doc);
     crate::request::admission::sign_agent_request_create(&user, &mut create).await?;
     submit_client_request(&user_access, &create).await?;
-    let agent_access =
-        ConfigAccess::local_managed_agent(node.clone(), agent.did().parse()?, agent.as_ref())?;
-    let response = agent_access
-        .execute(&format!(
-            "{{ AgentRequest {{ {} }} }}",
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await?;
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
-    let request = AgentRequest::try_from(row)?;
-    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, agent.did())
-        .await?;
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    lifecycle.bind_managed_agent(agent.as_ref())?;
-    lifecycle.set_client_claim_admission(admission);
+    let request_doc = user_access
+        .execute(
+            r#"{ AgentRequest(filter: {request_id: {_eq: "mailbox-delegated-request"}}) { _docID } }"#,
+        )
+        .await?["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claimed =
+        crate::test_support::ClaimedRequest::existing(&signed_home, &binding, &request_doc)
+            .drive(crate::test_support::Stage::Admitted)
+            .await;
+    let (mut lifecycle, agent_access) = (claimed.lifecycle, claimed.agent_access);
     let mut before_claim = Some(lifecycle.claimed_tool_context().is_ok());
     assert_eq!(
         lifecycle.claim_with_identity().await?,
@@ -269,22 +256,19 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     reply.caused_by_source_doc_id = Some(doc.to_owned());
     crate::request::admission::sign_agent_request_create(&user, &mut reply).await?;
     submit_client_request(&user_access, &reply).await?;
-    let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
-    let reply_row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(reply_row["data"]["AgentRequest"][0].clone())?;
-    let reply_request = AgentRequest::try_from(reply_row)?;
-    let (reply_request, reply_admission) = verifier
-        .verify_fresh_for_claim(&reply_request, agent.did())
-        .await?;
-    let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        reply_request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    reply_lifecycle.bind_managed_agent(agent.as_ref())?;
-    reply_lifecycle.set_client_claim_admission(reply_admission);
+    let reply_doc = agent_access
+        .execute(
+            r#"{ AgentRequest(filter: {request_id: {_eq: "mailbox-delegated-reply"}}) { _docID } }"#,
+        )
+        .await?["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut reply_lifecycle =
+        crate::test_support::ClaimedRequest::existing(&signed_home, &binding, &reply_doc)
+            .drive(crate::test_support::Stage::Admitted)
+            .await
+            .lifecycle;
     agent_access
         .delete_actor_relationship("MailboxItem", doc, "recipient", &user.did().parse()?)
         .await?;

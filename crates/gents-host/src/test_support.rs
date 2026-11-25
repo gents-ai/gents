@@ -842,3 +842,36 @@ impl crate::serve::ServeClient for TestServeClient {
         )
     }
 }
+
+pub struct ReportingServeClient(pub tokio::sync::mpsc::UnboundedSender<serde_json::Value>);
+
+#[async_trait::async_trait]
+impl crate::serve::ServeClient for ReportingServeClient {
+    fn report(&self, report: &serde_json::Value) -> anyhow::Result<()> {
+        let _ = self.0.send(report.clone());
+        Ok(())
+    }
+
+    fn start_failure_hint(&self, home_dir: &std::path::Path) -> String {
+        TestServeClient.start_failure_hint(home_dir)
+    }
+
+    fn version(&self) -> crate::http::version::VersionResponse {
+        TestServeClient.version()
+    }
+
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        TestServeClient.host_executable()
+    }
+
+    async fn bound_root_agents(
+        &self,
+        root: &std::path::Path,
+        home_dir: &std::path::Path,
+        access: &gents_store::config_client::ConfigAccess,
+    ) -> anyhow::Result<crate::serve::BoundRootAgents> {
+        TestServeClient
+            .bound_root_agents(root, home_dir, access)
+            .await
+    }
+}

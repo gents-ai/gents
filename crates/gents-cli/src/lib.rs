@@ -36,6 +36,8 @@ mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;
 mod shared;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod version;
 
 use cli::*;

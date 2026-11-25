@@ -35,6 +35,8 @@ pub mod snapshot;
 pub mod state;
 #[cfg(feature = "tauri-host")]
 pub mod tauri_commands;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support;
 pub mod types;
 #[cfg(feature = "tauri-host")]
 mod ux_watch;

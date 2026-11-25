@@ -3,10 +3,10 @@ use super::*;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 use crate::backends::registry::backend_fields;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use gents_lean_vocab::families::inference_registry_admission as family;
 
@@ -96,9 +96,10 @@ async fn acquire_with_signer(
 struct Harness {
     registry: AdmissionRegistry,
     node: Arc<EmbeddedNode>,
+    changes: gents_store::subscription_source::ChangeSubscription,
     signer: gents_store::identity::ManagedAgentSigner,
     backend_id: String,
-    calls: Vec<JoinHandle<Result<AdmissionPermit, AdmissionError>>>,
+    calls: JoinSet<Result<AdmissionPermit, AdmissionError>>,
     held: VecDeque<AdmissionPermit>,
     outcomes: Counters,
     started: usize,
@@ -114,7 +115,7 @@ impl Harness {
         let signer = self.signer.clone();
         let request_id = format!("{}-{}", self.backend_id, self.started);
         self.started += 1;
-        self.calls.push(tokio::spawn(async move {
+        self.calls.spawn(async move {
             acquire_with_signer(
                 &node,
                 &registry,
@@ -124,41 +125,40 @@ impl Harness {
                 &connection,
             )
             .await
-        }));
+        });
+    }
+
+    fn record_outcome(&mut self, outcome: Result<AdmissionPermit, AdmissionError>) -> Result<()> {
+        match outcome {
+            Ok(permit) => {
+                self.outcomes.admitted += 1;
+                let Some(slot) = self.slots.get(permit.attribution_for_test()) else {
+                    bail!("admitted call is not attributed to a caller's slot");
+                };
+                self.outcomes.attributed.push(*slot);
+                self.outcomes.attributed.sort_unstable();
+                self.held.push_back(permit);
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if message.contains("QueueFull") {
+                    self.outcomes.queue_full += 1;
+                } else if message.contains("BackendGone") {
+                    self.outcomes.gone += 1;
+                } else {
+                    bail!("unexpected admission error: {message}");
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn settle(&mut self) -> Result<()> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
-            let mut pending = Vec::new();
-            for call in self.calls.drain(..) {
-                if !call.is_finished() {
-                    pending.push(call);
-                    continue;
-                }
-                match call.await? {
-                    Ok(permit) => {
-                        self.outcomes.admitted += 1;
-                        let Some(slot) = self.slots.get(permit.attribution_for_test()) else {
-                            bail!("admitted call is not attributed to a caller's slot");
-                        };
-                        self.outcomes.attributed.push(*slot);
-                        self.outcomes.attributed.sort_unstable();
-                        self.held.push_back(permit);
-                    }
-                    Err(error) => {
-                        let message = error.to_string();
-                        if message.contains("QueueFull") {
-                            self.outcomes.queue_full += 1;
-                        } else if message.contains("BackendGone") {
-                            self.outcomes.gone += 1;
-                        } else {
-                            bail!("unexpected admission error: {message}");
-                        }
-                    }
-                }
+            while let Some(joined) = self.calls.try_join_next() {
+                self.record_outcome(joined?)?;
             }
-            self.calls = pending;
             let pool = self.registry.pool_for_test(&self.backend_id);
             let (waiters, transit, available) = pool.as_ref().map_or((0, 0, 0), |pool| {
                 (
@@ -177,7 +177,26 @@ impl Harness {
                 "admission never settled: {} calls, {waiters} waiters, {transit} in transit",
                 self.calls.len()
             );
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::timeout_at(deadline, async {
+                tokio::select! {
+                    joined = self.calls.join_next(), if !self.calls.is_empty() => {
+                        if let Some(joined) = joined {
+                            self.record_outcome(joined?)?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    changed = self.changes.recv() => {
+                        changed.context("InferenceCall subscription closed").map(|_| ())
+                    }
+                }
+            })
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "admission never settled: {} calls, {waiters} waiters, {transit} in transit",
+                    self.calls.len()
+                )
+            })??;
         }
     }
 
@@ -208,12 +227,15 @@ async fn run_case(
     trace: &family::Trace<String>,
 ) -> Result<family::Outcome> {
     let backend_id = format!("registry-{}", trace.name);
+    let changes =
+        gents_store::subscription_source::subscribe_collections(&node, ["InferenceCall"])?;
     let mut harness = Harness {
         registry: AdmissionRegistry::new(node.clone()),
         node,
+        changes,
         signer,
         backend_id: backend_id.clone(),
-        calls: Vec::new(),
+        calls: JoinSet::new(),
         held: VecDeque::new(),
         outcomes: Counters::default(),
         started: 0,
@@ -269,9 +291,7 @@ async fn run_case(
     for mut permit in harness.held.drain(..) {
         permit.finish_success(None).await?;
     }
-    for call in harness.calls.drain(..) {
-        call.abort();
-    }
+    harness.calls.abort_all();
     Ok(family::Outcome { observations })
 }
 

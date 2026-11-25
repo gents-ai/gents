@@ -1,5 +1,5 @@
 use super::*;
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::RequestLifecycle;
 use crate::test_support::{fixture, fixture_access, fixture_query, fixture_with_ids, FixtureGuard};
 use std::{sync::Arc, time::Duration};
 
@@ -41,90 +41,37 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
     )
     .await;
     let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, owner) = signed_home.into_parts();
-    let node = db.node.clone();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let create = crate::request::lifecycle::build_signed_client_request(
-        &owner,
-        crate::request::lifecycle::RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            crate::request::lifecycle::RequestIdentity {
-                request_id: "request-authored".into(),
-                node_did: db.node_identity.did().into(),
-                requester_did: Some(user.did().into()),
-                agent_did: agent.did().into(),
-                session_id: "session-authored".into(),
-                content: "hello".into(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-        ),
-        crate::request::lifecycle::RequestSigner::Identity(&user),
-    )
-    .await
-    .unwrap();
-    crate::request::lifecycle::submit_client_request(&owner, &create)
-        .await
-        .unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest {{ {} }} }}",
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = row.try_into().unwrap();
-    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        node.clone(),
-        db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, agent.did())
-        .await
-        .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer =
-        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
-            .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let claimed = crate::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+        .ids("request-authored", "session-authored")
+        .drive(crate::test_support::Stage::Executing)
+        .await;
     let message = gents_protocol::message::Message::user("continue ✓");
-    let first = writer
-        .publish_authored_message(&lifecycle, "reminder:0", &message)
+    let first = claimed
+        .writer()
+        .publish_authored_message(&claimed.lifecycle, "reminder:0", &message)
         .await
         .unwrap();
-    let replay = writer
-        .publish_authored_message(&lifecycle, "reminder:0", &message)
+    let replay = claimed
+        .writer()
+        .publish_authored_message(&claimed.lifecycle, "reminder:0", &message)
         .await
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &access,
+        &claimed.agent_access,
         &first,
-        db.node_identity.did(),
-        Some(user.did()),
+        signed_home.node_did(),
+        Some(signed_home.user.did()),
     )
     .await
     .unwrap();
     assert_eq!(reconstructed, message);
-    node.shutdown().await.expect("shut down test node");
+    signed_home
+        .store
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]

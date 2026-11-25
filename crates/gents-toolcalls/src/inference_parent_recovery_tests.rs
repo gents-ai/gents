@@ -6,11 +6,7 @@ use gents_store::graphql::escape_graphql_string;
 
 #[tokio::test]
 async fn parent_recovery_lookup_uses_agent_native_authority() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_store::config_client::{ConfigAccess, NodePermission};
-    use gents_store::identity::NodeIdentity;
+    use gents_store::config_client::NodePermission;
 
     let signed_home = gents_documents::test_support::SignedHome::start(
         "inference-recovery-native-authority",
@@ -18,42 +14,19 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     )
     .await;
     let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, owner) = signed_home.into_parts();
-    let node = db.node.clone();
-    let runtime = db.node_identity.clone();
-    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "private-recovery",
-        RequestScope::new(
-            runtime.did(),
-            user.did(),
-            agent.did(),
-            "private-recovery-session",
-        ),
-        "recover",
-        "interactive",
-        "2026-09-01T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
-        &node,
-        &owner,
-        runtime.clone(),
-        &user,
-        agent.as_ref(),
-        create,
-    )
-    .await
-    .unwrap();
-    let request_doc = lifecycle.request().doc_id.clone();
-    let agent_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
+    let claimed =
+        gents_session::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+            .ids("private-recovery", "private-recovery-session")
+            .content("recover")
+            .created_at("2026-09-01T00:00:00Z")
+            .drive(gents_session::test_support::Stage::Admitted)
+            .await;
+    let node = signed_home.node.clone();
+    let runtime = signed_home.node_identity.clone();
+    let admin = signed_home.node_access();
+    let agent = claimed.agent;
+    let request_doc = claimed.doc_id;
+    let agent_access = claimed.agent_access;
     agent_access.write("test.inference_recovery.processing", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&request_doc), RequestLifecycleState::Processing.as_str(),

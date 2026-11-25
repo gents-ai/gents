@@ -177,46 +177,15 @@ pub fn validate_http_bind(addr: IpAddr) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::{OsStr, OsString};
     use std::fs;
-    use std::sync::{Arc, Mutex};
 
     use clap::Parser as _;
 
     use super::*;
     use crate::native_service::{
-        CommandOutput, NativeServiceConfig, NativeServicePlatform, SERVICE_LABEL, SYSTEMD_UNIT,
+        NativeServiceConfig, NativeServicePlatform, SERVICE_LABEL, SYSTEMD_UNIT,
     };
-
-    /// Answers every supervisor query as a stopped, never-loaded job.
-    #[derive(Clone, Default)]
-    struct StoppedSupervisor {
-        calls: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl CommandRunner for StoppedSupervisor {
-        fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
-            let args: Vec<String> = args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect();
-            let call = format!("{} {}", program.to_string_lossy(), args.join(" "));
-            self.calls.lock().unwrap().push(call);
-            let (success, stdout) = match (program.to_str().unwrap(), args.as_slice()) {
-                ("/usr/bin/id", _) => (true, "501"),
-                ("launchctl", [verb, ..]) if verb == "print" => (false, "Could not find service"),
-                ("launchctl", [verb, ..]) if verb == "print-disabled" => (true, "{}"),
-                ("systemctl", [_, verb, ..]) if verb == "is-active" => (false, "inactive"),
-                ("systemctl", [_, verb, ..]) if verb == "is-enabled" => (false, "disabled"),
-                _ => (true, ""),
-            };
-            Ok(CommandOutput {
-                success,
-                stdout: stdout.to_owned(),
-                stderr: String::new(),
-            })
-        }
-    }
+    use crate::test_support::StoppedSupervisor;
 
     fn service_config(root: &Path) -> NativeServiceConfig {
         let home = root.join("node-home");

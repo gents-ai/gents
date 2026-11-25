@@ -18,7 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
 
-pub(super) trait ManagedLaunch {
+pub(crate) trait ManagedLaunch {
     async fn requires_approval(&self) -> Result<bool, BridgeError>;
     async fn await_approval(&self) -> anyhow::Result<()>;
     async fn start(&self) -> Result<Launched, BridgeError>;
@@ -26,7 +26,7 @@ pub(super) trait ManagedLaunch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Launched {
+pub(crate) enum Launched {
     Started,
     ApprovalPending(String),
 }

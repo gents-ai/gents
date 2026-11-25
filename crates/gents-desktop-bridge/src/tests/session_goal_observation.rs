@@ -35,6 +35,12 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
             .unwrap();
     let snapshot_goal = async |session_id: &str| -> Value {
         let mut last = String::new();
+        let mut store_updates = desktop.core.store_updates();
+        let mut node_updates = gents_store::subscription_source::subscribe_collections(
+            runtime.node(),
+            ["AgentSession", "GoalObservation"],
+        )
+        .unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 match crate::commands::session_snapshot(
@@ -61,7 +67,14 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
                     }
                     Err(error) => panic!("session snapshot: {error}"),
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::select! {
+                    changed = store_updates.changed() => {
+                        changed.expect("desktop store update channel closed");
+                    }
+                    changed = node_updates.recv() => {
+                        changed.expect("runtime session observation subscription closed");
+                    }
+                }
             }
         })
         .await

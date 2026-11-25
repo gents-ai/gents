@@ -42,18 +42,12 @@ const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
     ("gents", 43, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-automation", 15, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-cli", 2, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-desktop-bridge", 4, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-eval", 23, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-inference", 17, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-loop", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-p2p", 9, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-pack", 5, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-service", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-session", 8, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-store", 10, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-toolcalls", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-tools", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
 ];
 
 /// `sleep(` calls in test code, per crate.
@@ -62,24 +56,21 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents", 53, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-automation", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-client-host", 29, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-desktop-bridge", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-client-host", 2, "cross-process IPC/HTTP readiness where no OS notification seam exists (local listener connect and Windows ConPTY runtime status)"),
     ("gents-desktop-tauri", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-eval", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-fs-runner", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-host", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-inference", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-lean-contract", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-loop", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-media-host", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-p2p", 8, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-pack", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-protocol", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-service", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-session", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-store", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-toolcalls", 20, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-tools", 44, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-tools", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
 ];
 
 struct Source {

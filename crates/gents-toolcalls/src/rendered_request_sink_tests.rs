@@ -42,55 +42,25 @@ struct CaptureFixture {
 
 impl CaptureFixture {
     async fn new() -> Self {
-        use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-        };
         let signed_home = gents_documents::test_support::SignedHome::start(
             "rendered-capture",
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
         let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (db, user, client) = signed_home.into_parts();
-        let agent =
-            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-                .unwrap();
-        let create = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            "request",
-            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), "session"),
-            "capture",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            AgentRequestAdmissionRecord::client(user.did()),
-        );
-        let mut lifecycle =
-            crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
-                &db.node,
-                &client,
-                db.node_identity.clone(),
-                &user,
-                agent.as_ref(),
-                create,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            lifecycle.claim_with_identity().await.unwrap(),
-            gents_session::request::lifecycle::ClaimOutcome::Claimed
-        );
-        let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
-            db.node.clone(),
-            &lifecycle,
-            std::time::Duration::ZERO,
-        )
-        .unwrap();
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let claimed =
+            gents_session::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+                .ids("request", "session")
+                .content("capture")
+                .batch_interval(std::time::Duration::ZERO)
+                .drive(gents_session::test_support::Stage::Executing)
+                .await;
+        let (db, user, _client) = signed_home.into_parts();
         Self {
             db,
             _user: user,
-            agent,
-            lifecycle,
+            agent: claimed.agent,
+            lifecycle: claimed.lifecycle,
         }
     }
 

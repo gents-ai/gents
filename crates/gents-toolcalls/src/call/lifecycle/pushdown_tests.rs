@@ -3,44 +3,20 @@ use gents_session::request::lifecycle::execution_lease::*;
 use gents_session::request::lifecycle::test_support::{
     agent_access, agent_write_value, observed_execution, test_node,
 };
-use gents_session::request::lifecycle::{
-    ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage,
-};
 use gents_store::graphql::escape_graphql_string;
 use std::time::Duration;
 
 #[tokio::test]
 async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
-    let (node, _directory, runtime, binding) = test_node().await;
+    let (node, home, runtime, binding) = test_node().await;
     let access = agent_access(&node, &runtime, &binding);
-    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
-        node.clone(),
-        &binding.agent_did,
-        runtime.clone(),
-        "hello",
-        gents_session::request::lifecycle::ExecutionBinding {
-            deadline_duration_secs: 60,
-            execution_origin: ExecutionOrigin::Interactive,
-            backend_id: "lease-test".into(),
-            operator_tool_root: None,
-        },
-        TriggerLineage::default(),
-        Some(agent.clone()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        agent.as_ref(),
-        Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let claimed = gents_session::test_support::ClaimedRequest::self_signed(&home, &binding)
+        .backend("lease-test")
+        .drive(gents_session::test_support::Stage::Executing)
+        .await;
+    let agent = claimed.agent;
+    let lifecycle = claimed.lifecycle;
+    let writer = claimed.writer.expect("executing request has its writer");
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,

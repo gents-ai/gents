@@ -520,8 +520,10 @@ async fn owned_begin_uses_only_its_own_claim_and_rechecks_its_generation() {
     .unwrap();
     let claimed = request_row(&access, &doc_id).await;
 
-    let mut unclaimed =
-        RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
+    let mut unclaimed = ClaimedRequest::existing(&home, &agent, &doc_id)
+        .drive(Stage::Submitted)
+        .await
+        .lifecycle;
     unclaimed
         .bind_managed_agent(
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -562,8 +564,10 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
         .await
         .lifecycle;
     let before = request_row(&access, &lifecycle.request.doc_id).await;
-    let mut competitor =
-        RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
+    let mut competitor = ClaimedRequest::existing(&home, &agent, &lifecycle.request.doc_id)
+        .drive(Stage::Submitted)
+        .await
+        .lifecycle;
     competitor
         .bind_managed_agent(
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -2049,22 +2053,19 @@ async fn parked_admission_requires_the_original_claimed_deadline() {
 
 #[tokio::test]
 async fn backend_wake_adopts_fresh_lease_and_preserves_claim_binding() {
-    let (node, _db, identity, agent, _access, mut original) = parked_fixture().await;
-    let request = original.request().clone();
+    let (node, home, identity, agent, _access, mut original) = parked_fixture().await;
+    let doc_id = original.request().doc_id.clone();
     let old_generation = original.execution_generation().unwrap().to_owned();
     let claim_cid = original.request_commit_cid().unwrap().to_owned();
     let deadline = original.claimed_deadline_at();
     assert!(original.park_for_backend().await.unwrap());
     drop(original);
     let managed = agent_identity(&identity, &agent);
-    let mut resumed = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test".to_owned(),
-    );
-    resumed.bind_managed_agent(managed.as_ref()).unwrap();
+    let mut resumed = ClaimedRequest::existing(&home, &agent, &doc_id)
+        .backend("lease-test")
+        .drive(Stage::Admitted)
+        .await
+        .lifecycle;
     assert!(resumed
         .wake_for_backend(Some(chrono::Utc::now()))
         .await
@@ -2447,21 +2448,7 @@ async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
         late_row.lifecycle_state,
         Some(RequestLifecycleState::Pending)
     );
-    let signed = access
-        .execute(&format!(
-            r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,
-            gents_store::graphql::escape_graphql_string(&late_doc_id),
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-        ))
-        .await
-        .unwrap();
-    let signed: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(signed["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut next =
-        RequestLifecycle::new_with_node_did(node.clone(), signed.try_into().unwrap(), 60);
-    next.bind_managed_agent(agent_identity.as_ref()).unwrap();
-    assert_eq!(
-        next.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
+    ClaimedRequest::existing(&home, &agent, &late_doc_id)
+        .drive(Stage::Claimed)
+        .await;
 }

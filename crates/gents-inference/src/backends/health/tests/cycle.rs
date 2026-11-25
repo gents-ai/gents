@@ -80,17 +80,24 @@ impl CycleFixture {
     }
 
     async fn wait_for_promotion(&self, backend: &InferenceBackend) {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let observation = self.observation(backend).await;
-                if observation.probe_status.as_deref() == Some("healthy")
-                    && observation.last_probe.is_some()
-                {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            gents_store::test_support::read_when_changed(
+                &self.db.node,
+                "InferenceBackendObservation",
+                "backend promotion",
+                async || {
+                    let observation = self.observation(backend).await;
+                    if observation.probe_status.as_deref() == Some("healthy")
+                        && observation.last_probe.is_some()
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("{observation:?}"))
+                    }
+                },
+            ),
+        )
         .await
         .expect("the backend was not probed before the periodic interval");
     }

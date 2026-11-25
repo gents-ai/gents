@@ -107,21 +107,22 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     let retried = call(&candidate_tool, request).await;
     assert_eq!(retried["outcome"]["request_id"], request_id);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    loop {
-        let pending = call(&server_tool, json!({"action":"enrollment_pending"})).await;
-        let listed = pending["outcome"]["pending"].as_array().unwrap();
-        if let Some(entry) = listed.iter().find(|e| e["request_id"] == request_id) {
-            assert_eq!(entry["peer_id"], candidate_peer);
-            assert_eq!(entry["peer_did"], candidate.node_identity.did());
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "request never arrived: {pending}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    let entry = gents_store::test_support::read_when_changed(
+        &server.node,
+        "NetworkEnrollmentRequest",
+        "enrollment request arrival",
+        async || {
+            let pending = call(&server_tool, json!({"action":"enrollment_pending"})).await;
+            pending["outcome"]["pending"]
+                .as_array()
+                .and_then(|listed| listed.iter().find(|e| e["request_id"] == request_id))
+                .cloned()
+                .ok_or_else(|| format!("request never arrived: {pending}"))
+        },
+    )
+    .await;
+    assert_eq!(entry["peer_id"], candidate_peer);
+    assert_eq!(entry["peer_did"], candidate.node_identity.did());
     for invalid in [json!(0), json!(7_776_001), json!(-1), json!(1.5)] {
         let error = Tool::call(
             &server_tool,
@@ -420,18 +421,23 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
     };
     let server_tool = tool(&server);
     let pending = |count: usize| {
+        let server_node = server.node.clone();
         let server_tool = server_tool.clone();
         async move {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
-                let listed = call(&server_tool, json!({"action":"enrollment_pending"})).await;
-                if listed["outcome"]["pending"].as_array().unwrap().len() >= count
-                    || std::time::Instant::now() > deadline
-                {
-                    return listed;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
+            gents_store::test_support::read_when_changed(
+                &server_node,
+                "NetworkEnrollmentRequest",
+                "pending enrollment requests",
+                async || {
+                    let listed = call(&server_tool, json!({"action":"enrollment_pending"})).await;
+                    if listed["outcome"]["pending"].as_array().unwrap().len() >= count {
+                        Ok(listed)
+                    } else {
+                        Err(format!("pending count below {count}: {listed}"))
+                    }
+                },
+            )
+            .await
         }
     };
 
@@ -500,22 +506,28 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
                 .to_owned(),
         );
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let error = loop {
-        let error = Tool::call(
-            &server_tool,
-            serde_json::from_value(json!({"action":"enrollment_approve","request_id":ids[1]}))
-                .unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::default(),
+    server
+        .rows_when(
+            "NetworkEnrollmentRequest",
+            "{ NetworkEnrollmentRequest { request_id } }",
+            |data| {
+                let Some(rows) = data["NetworkEnrollmentRequest"].as_array() else {
+                    return false;
+                };
+                ids.iter()
+                    .all(|id| rows.iter().any(|row| row["request_id"] == *id))
+            },
         )
-        .await
-        .unwrap_err()
-        .to_string();
-        if error.contains("challenge is reused") || std::time::Instant::now() > deadline {
-            break error;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
+        .await;
+    let error = Tool::call(
+        &server_tool,
+        serde_json::from_value(json!({"action":"enrollment_approve","request_id":ids[1]})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("challenge is reused"), "{error}");
     assert!(error.contains("single use"), "{error}");
     assert!(
         error.contains("next call: p2p {\"action\":\"enrollment_offer\"}"),
