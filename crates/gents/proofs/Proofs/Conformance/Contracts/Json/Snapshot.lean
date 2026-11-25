@@ -383,6 +383,7 @@ import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.SessionControl
 import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
+import Proofs.Conformance.AgentWorkers
 import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval

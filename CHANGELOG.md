@@ -18,6 +18,19 @@ source consistency checks, not a separate runtime compatibility version.
   `trigger_id`, `source_collection` or `of_seed`. Breaking: `eval checks
   --json` prints `{"checks": [...], "stage_fields": [...]}`; the text output
   lists the stage fields after the checks.
+- An Agent's request workers no longer follow its backend's `max_concurrent`.
+  Each Agent runs up to eight requests at each of three causal levels (hop 0,
+  hop 1, hop 2 and deeper), so a delegate, the delegate it starts, and other
+  sessions start while the turn that caused them is open; only model calls
+  wait for the backend, per call. A session's title audit (and any auxiliary
+  request) waits in a lane of its own, so it no longer waits for the turn of
+  its own session to end. `gents status` reports 24 workers per Agent.
+  Plugin model calls take their permit from the same backend pool as agent
+  calls (it was a second limiter of the same size), so a backend's server runs
+  at most `max_concurrent` calls from one runtime, and a backend the runtime
+  does not admit (unavailable, not yet probed) refuses plugin calls. Setup (`gents init`'s
+  model choice, the shell and the desktop) recommends the unset default for a
+  local server (it recommended 1) and 8 for hosted accounts.
 - Breaking: every inference call records `first_token_at`, when the
   provider streamed the call's first text, reasoning or tool-call delta;
   response headers, keep-alives and message ids are not tokens. It is null for

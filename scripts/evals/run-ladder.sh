@@ -5,7 +5,8 @@
 #       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
 # `all` runs L1-L5 and the capstone.
-# Defaults: 3 trials per case; global trial cap floor(4 / PER_TRIAL); train + validation.
+# Defaults: 3 trials per case; 4 trials at once (floor(4 / PER_TRIAL) when
+# GENTS_EVAL_PER_TRIAL is set); train + validation.
 # The cap covers active trials across all runs, not every provider/background call.
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.
 #
@@ -13,7 +14,8 @@
 # GENTS_EVAL_TARGET_FILE: target JSON path; overrides scripts/evals/targets/TARGET.json.
 # GENTS_EVAL_SHARD: 1/2 or 2/2 splits the selected suites across two launchers.
 # GENTS_EVAL_HOME / GENTS_EVAL_PORT: isolated home / optional fixed port.
-# GENTS_EVAL_PER_TRIAL: concurrent calls per trial (default 1).
+# GENTS_EVAL_PER_TRIAL: concurrent calls per trial; unset, each trial's backend
+#   leaves max_concurrent to the shipped default, as `gents init` writes it.
 # GENTS_EVAL_REASONING defaults to high and GENTS_EVAL_TEMPERATURE defaults to 1.
 #   Set GENTS_EVAL_TOP_P to override the provider's nucleus sampling default.
 #   An empty temperature or top_p leaves that parameter to the provider.
@@ -62,7 +64,7 @@ SUITES="$ROOT/scripts/evals/suites.py"
 SHA=${GENTS_EVAL_SHA:-$(git -C "$ROOT" rev-parse --short HEAD)}
 TRIALS=${NAMED_TRIALS:-${POSITIONAL[1]:-3}}
 CONCURRENCY=${NAMED_CONCURRENCY:-${POSITIONAL[2]:-4}}
-PER_TRIAL=${GENTS_EVAL_PER_TRIAL:-1}
+PER_TRIAL=${GENTS_EVAL_PER_TRIAL:-}
 SPLITS=${GENTS_EVAL_SPLITS:-train validation}
 EVAL_HOME=${GENTS_EVAL_HOME:-$HOME/gents-eval-homes/ladder-$SHA-$TARGET}
 EVAL_HOME=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$EVAL_HOME")
@@ -101,11 +103,20 @@ SELECTED=()
 SELECTED_TEXT=$(python3 "$SUITES" select "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}")
 while IFS= read -r level; do [ -z "$level" ] || SELECTED+=("$level"); done <<< "$SELECTED_TEXT"
 [ ${#SELECTED[@]} -gt 0 ] || { echo "no suites selected for $SELECTION and shard ${GENTS_EVAL_SHARD:-1/1}; use list" >&2; exit 2; }
-[[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$CONCURRENCY" =~ ^[1-9][0-9]*$ && "$PER_TRIAL" =~ ^[1-9][0-9]*$ ]] || usage
+[[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || usage
+[[ -z "$PER_TRIAL" || "$PER_TRIAL" =~ ^[1-9][0-9]*$ ]] || usage
 [ -f "$TARGET_FILE" ] || { echo "no target $TARGET_FILE" >&2; exit 2; }
 [ "$PORT" != 9191 ] || { echo "port 9191 belongs to the desktop node; pick another GENTS_EVAL_PORT" >&2; exit 2; }
-(( PER_TRIAL >= 1 && CONCURRENCY >= PER_TRIAL )) || { echo "CONCURRENCY must be at least GENTS_EVAL_PER_TRIAL" >&2; exit 2; }
-TRIAL_CONCURRENCY=$(( CONCURRENCY / PER_TRIAL ))
+if [ -n "$PER_TRIAL" ]; then
+  (( CONCURRENCY >= PER_TRIAL )) || { echo "CONCURRENCY must be at least GENTS_EVAL_PER_TRIAL" >&2; exit 2; }
+  TRIAL_CONCURRENCY=$(( CONCURRENCY / PER_TRIAL ))
+  PER_TRIAL_TEXT="$PER_TRIAL call(s) per trial"
+  INIT_CONCURRENCY=(--max-concurrent "$PER_TRIAL")
+else
+  TRIAL_CONCURRENCY=$CONCURRENCY
+  PER_TRIAL_TEXT="the backend default of calls per trial"
+  INIT_CONCURRENCY=()
+fi
 python3 - "$SPLITS" <<'PYVALIDATESPLITS'
 import sys
 splits = sys.argv[1].split()
@@ -141,7 +152,7 @@ mkdir -p "$EVAL_HOME/work"
 if [ ! -f "$EVAL_HOME/init.json" ]; then
   echo "initializing $EVAL_HOME ..." >&2
   (cd "$EVAL_HOME/work" && "$GENTS" init --home "$EVAL_HOME" --write --inference-url "$ENDPOINT" \
-    --model-name "$MODEL" --max-concurrent "$PER_TRIAL" --tool-root "$EVAL_HOME/work" >/dev/null)
+    --model-name "$MODEL" ${INIT_CONCURRENCY[@]+"${INIT_CONCURRENCY[@]}"} --tool-root "$EVAL_HOME/work" >/dev/null)
 fi
 DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_did"])' "$EVAL_HOME/init.json")
 
@@ -208,7 +219,10 @@ import json, os, sys
 target, did, per_trial, root, reasoning, temperature, top_p, default_agent, name = sys.argv[1:10]
 t = json.load(open(target))
 backend = dict(t["inference_backends"][0])
-backend.update(backend_id=f"{did}:ladder-{name}", node_did=did, max_concurrent=int(per_trial))
+backend.update(backend_id=f"{did}:ladder-{name}", node_did=did)
+backend.pop("max_concurrent", None)
+if per_trial:
+    backend["max_concurrent"] = int(per_trial)
 sampling = {"sampling_id": f"{did}:ladder-{name}-sampling", "node_did": did, "display_name": f"Ladder {name}"}
 sampling.update({key: float(value) for key, value in [("temperature", temperature), ("top_p", top_p)] if value})
 profile = {"profile_id": f"{did}:ladder-{name}", "node_did": did, "display_name": f"Ladder {name}",
@@ -225,7 +239,7 @@ json.dump({"node": {"node_did": did}, "default_agent_selection": {"node_did": di
            "inference_execution": [execution], "inference_profiles": [profile]}, open(f"{root}/pack_config.json", "w"), indent=2)
 PY
 apply_config "$INFERENCE"
-echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature ${TEMPERATURE:-target}, top_p ${TOP_P:-target}, $PER_TRIAL call(s) per trial" >&2
+echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature ${TEMPERATURE:-target}, top_p ${TOP_P:-target}, $PER_TRIAL_TEXT" >&2
 
 STAMP=$(python3 -c 'import datetime,uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:8])')
 PLAN="$EVAL_HOME/batch-$STAMP.json"
@@ -272,7 +286,7 @@ PYSPLIT
     RUN_ID="ladder-$level-$SHA-$TARGET-$split-$STAMP"
     cat >&2 <<EOF
 
-== $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT, command execution $COMMAND_EXECUTION
+== $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL_TEXT, $MODEL at $ENDPOINT, command execution $COMMAND_EXECUTION
 watch:  $GENTS utils eval watch $RUN_ID --home $EVAL_HOME
 EOF
     python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" "$DIVERGENCES" <<'PYPLAN'
@@ -303,7 +317,7 @@ python3 "$SUITES" banner "$DIVERGENCES" "${RECEIPTS[@]}" >&2
 BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
 FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
 echo "saved batch plan: $PLAN" >&2
-echo "requested active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); the eval runner holds embedded trials to its per-process ceiling; provider/background calls are not globally capped" >&2
+echo "requested active trial cap: $TRIAL_CONCURRENCY with $PER_TRIAL_TEXT; the eval runner holds embedded trials to its per-process ceiling; provider/background calls are not globally capped" >&2
 (cd "$EVAL_HOME/work" && exec "$GENTS" utils eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
 BATCH_PID=$!
 WATCH_COMMAND="$GENTS utils eval watch $FIRST_RUN_ID --home $EVAL_HOME"

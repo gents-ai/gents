@@ -112,7 +112,7 @@ impl CapacityPool {
         }
     }
 
-    async fn admit_waiting(self: &Arc<Self>) -> Option<PoolPermit> {
+    pub(super) async fn admit_waiting(self: &Arc<Self>) -> Option<PoolPermit> {
         loop {
             let semaphore = self.ledger().semaphore.clone();
             let permit = semaphore.clone().acquire_owned().await.ok()?;
@@ -172,6 +172,31 @@ impl CapacityPool {
         }
     }
 
+    /// A call's admission at arrival: a permit, a refusal, or `None` with the
+    /// call entered into the queue at the returned depth. A full queue gets
+    /// one more try at a permit before the call is refused.
+    pub(super) fn enter(
+        self: &Arc<Self>,
+        max_queue_depth: usize,
+    ) -> (Option<Result<PoolPermit, AdmitError>>, usize) {
+        match self.try_admit() {
+            Err(AdmitError::NoPermits) => match self.try_enter_queue(max_queue_depth) {
+                Some(depth) => (None, depth),
+                None => (Some(self.try_admit()), self.waiters.load(Ordering::SeqCst)),
+            },
+            other => (Some(other), 0),
+        }
+    }
+
+    /// Leaves the queue the call entered when dropped.
+    pub(super) fn queued(&self) -> QueuedWaiter<'_> {
+        QueuedWaiter(self)
+    }
+
+    fn leave_queue(&self) {
+        self.waiters.fetch_sub(1, Ordering::SeqCst);
+    }
+
     fn try_enter_queue(&self, max_queue_depth: usize) -> Option<usize> {
         loop {
             let current = self.waiters.load(Ordering::SeqCst);
@@ -186,6 +211,14 @@ impl CapacityPool {
                 return Some(current + 1);
             }
         }
+    }
+}
+
+pub(super) struct QueuedWaiter<'a>(&'a CapacityPool);
+
+impl Drop for QueuedWaiter<'_> {
+    fn drop(&mut self) {
+        self.0.leave_queue();
     }
 }
 
@@ -251,22 +284,7 @@ impl BackendAdmissionController {
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, AdmissionError> {
-        let mut queue_depth = 0;
-        let immediate = match self.pool.try_admit() {
-            Err(AdmitError::NoPermits) => {
-                match self.pool.try_enter_queue(self.config.max_queue_depth) {
-                    Some(depth) => {
-                        queue_depth = depth;
-                        None
-                    }
-                    None => {
-                        queue_depth = self.pool.waiters.load(Ordering::SeqCst);
-                        Some(self.pool.try_admit())
-                    }
-                }
-            }
-            other => Some(other),
-        };
+        let (immediate, queue_depth) = self.pool.enter(self.config.max_queue_depth);
         if let Some(outcome) = immediate {
             let call = self.call_record(pending, queue_depth, slot_connection);
             return match outcome {
@@ -385,10 +403,6 @@ impl BackendAdmissionController {
         ))
     }
 
-    fn leave_queue(&self) {
-        self.pool.waiters.fetch_sub(1, Ordering::SeqCst);
-    }
-
     fn backend_gone(&self) -> AdmissionError {
         AdmissionError(format!(
             "BackendGone: backend {} was removed or became unavailable",
@@ -496,7 +510,7 @@ impl QueuedCallGuard {
 
 impl Drop for QueuedCallGuard {
     fn drop(&mut self) {
-        self.controller.leave_queue();
+        self.controller.pool.leave_queue();
         let Some(doc_id) = self.doc_id.take() else {
             return;
         };
