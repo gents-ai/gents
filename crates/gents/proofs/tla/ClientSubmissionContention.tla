@@ -1,7 +1,7 @@
 ---- MODULE ClientSubmissionContention ----
 \* lean: TransactionReplay.disposition, Identity.Configuration.clientSignedWriteMayRetry
 \* crates: gents-session, gents-store
-\* models: TransactionFence.a_bound_session_stays_bound
+\* models: TransactionFence.DeclaredFence, TransactionFence.a_bound_session_stays_bound
 \* A User's optimistic chat send racing its session's active turn.
 \*
 \* Client (Lean `ClientOptimisticSend`): the client picks the request
@@ -44,16 +44,18 @@
 \* A submission into a session whose relationships are already published
 \* (`PublishedBinding`) reads the session's binding, its requester and Agent,
 \* before the transaction (`bound_published_session`), and the transaction
-\* reads only the Agent. The Agent's refreshes then never abort it. That read
-\* is current at commit because a bound session stays bound, whatever its
-\* other writers commit (Lean `TransactionFence.a_bound_session_stays_bound`:
+\* reads only the Agent. The Agent's refreshes then never abort it, and the
+\* store orders nothing between that read and the commit.
+\*
+\* Premise (Lean `TransactionFence.DeclaredFence.immutableBinding`, the fence
+\* that send names): no writer changes a published session's binding.
 \* `requester_did` and `agent_did` are `@immutable`, `relationships_pending`
-\* only goes from true to false, and no path deletes a session, which the
-\* `gents` structure test `a_session_binding_is_never_rewritten` and
-\* `session_custody` hold). So `binding` changes only under `BindingChanges`,
-\* the RED that breaks that premise. Without `PublishedBinding` the
-\* transaction reads the session, and a binding change, a write to the
-\* session, aborts it like any refresh.
+\* is written true only at a session's create, and no production path
+\* deletes a session, so a bound session stays bound whatever its other
+\* writers commit (`a_bound_session_stays_bound`). Here `binding` changes only
+\* under `BindingChanges`, the RED that removes the premise. Without
+\* `PublishedBinding` the transaction reads the session, and a binding change,
+\* a write to the session, aborts it like any refresh.
 \*
 \* `Publications` bounds the Agent's session refreshes that land inside one
 \* attempt series, and `MaxSends` bounds the person's retries.

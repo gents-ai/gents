@@ -158,14 +158,35 @@ theorem a_unique_index_fences_twin_arrivals (first second : Doc) (value : Unique
 and then writes names as the fence its decision rests on: a fence the store
 validates (`Fence`: a common write, a point read or a unique index), a single
 writer (no second decider runs: one lease holder, one in-process lock, one
-owner), or idempotence (a decision taken on a stale read is harmless, because
-what it missed is decided again where it lands). The structure rule
+owner), idempotence (a decision taken on a stale read is harmless, because
+what it missed is decided again where it lands), or an immutable binding (no
+writer can change what the decision read). The structure rule
 `every_range_read_then_write_names_its_fence` asks every such transaction for
 one, by these names. -/
 inductive DeclaredFence where
   | store (fence : Fence)
   | singleWriter
   | idempotent
+  /-- The decision reads a session's binding (`SessionBinding`: its requester,
+  its Agent and whether its relationships are pending) before its transaction,
+  and the transaction does not read the session, so the store orders nothing
+  between that read and the commit (`a_binding_read_before_the_transaction_is_not_fenced`).
+  No writer can unbind a bound session (`a_bound_session_stays_bound`), so
+  what the read decided holds at commit; a binding a writer could change goes
+  stale (`a_rewritable_binding_can_go_stale`).
+
+  External premise (the pinned schema and the writers on `main`):
+  `AgentSession.requester_did` and `AgentSession.agent_did` are `@immutable`;
+  `relationships_pending` is written true only when a session is created, and
+  afterwards only from true to false; no production path deletes an
+  `AgentSession`. Every other write to a session (its observation refresh,
+  its title, its archive state) leaves the binding as it was (`SessionWrite`).
+  The `gents` structure tests hold it: `a_session_binding_is_never_rewritten`
+  (the schema directives and every production write of
+  `relationships_pending` as true) and
+  `agent_reachable_surfaces_never_detach_or_delete_a_session` (every
+  production delete of an `AgentSession`). -/
+  | immutableBinding
   deriving DecidableEq, Repr
 
 /-- A declared store fence orders the decider against the writer it names. -/
@@ -212,18 +233,32 @@ theorem reading_the_same_rows_again_adds_no_conflict (decider writer : Footprint
       cases returned.any writer.deletes.contains <;> simp
   | arrivalHead => rfl
 
-/-! ## Immutable-field fences
+/-! ## Immutable bindings
 
-A decision may also rest on facts no writer can change. Then no fence is
-needed: what a read outside the transaction decided is what a read inside it
-would decide at commit, whatever commits in between.
+`DeclaredFence.immutableBinding`: a decision may rest on facts no writer can
+change. The store then orders nothing between a read outside the transaction
+and the commit, and nothing needs ordering: what that read decided is what a
+read inside the transaction would decide at commit, whatever commits in
+between. The premise is on the variant. -/
 
-External premise (the pinned schema and the writers on `main`, held by the
-structure tests `a_session_binding_is_never_rewritten` and `session_custody`):
-`AgentSession.requester_did` and `AgentSession.agent_did` are `@immutable`;
-`relationships_pending` is written only from true to false; no path deletes an
-`AgentSession`. Every other write to a session (its observation refresh, its
-title, its archive state) leaves the binding as it was. -/
+/-- A decider that neither reads the session by id nor writes it holds no
+store fence against the session's writer: that writer's commit does not abort
+it, so a binding read before the transaction is checked again by nothing. -/
+theorem a_binding_read_before_the_transaction_is_not_fenced (decider : Footprint)
+    (session : Doc) (h_read : session ∉ decider.pointReads)
+    (h_write : session ∉ decider.writes) :
+    fencedAgainst decider { Footprint.empty with writes := [session] } = false := by
+  simp only [fencedAgainst, conflicts, Footprint.empty, Bool.or_eq_false_iff,
+    List.any_eq_false]
+  refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩
+  · intro x hx; simp only [List.contains_cons, List.contains_nil, Bool.or_false,
+      beq_iff_eq, Bool.not_eq_true']
+    intro he; subst he; exact h_read hx
+  · intro x hx; simp only [List.contains_cons, List.contains_nil, Bool.or_false,
+      beq_iff_eq, Bool.not_eq_true']
+    intro he; subst he; exact h_write hx
+  · intro x _; simp
+  · intro x _; simp
 
 /-- What a client request's admission decides on in its session. -/
 structure SessionBinding where
@@ -232,7 +267,9 @@ structure SessionBinding where
   relationshipsPending : Bool
   deriving DecidableEq, Repr
 
-/-- The writes a session admits, by what they do to its binding. -/
+/-- The writes a session admits under the premise of
+`DeclaredFence.immutableBinding`, by what they do to its binding: none deletes
+it, rebinds it or re-pends its relationships. -/
 inductive SessionWrite where
   /-- Any write that leaves the binding as it was: the working Agent's
   observation refresh, a title, an archive. -/
@@ -269,9 +306,10 @@ theorem published_relationships_stay_published (s : SessionBinding)
   | cons w rest ih =>
       cases w <;> exact ih _ (by simp [SessionWrite.apply, h])
 
-/-- A session bound to a request before its transaction is bound to it at
-commit, whatever the session's other writers commit in between: reading the
-binding outside the transaction decides what a read inside it would. -/
+/-- `DeclaredFence.immutableBinding` holds: a session bound to a request
+before its transaction is bound to it at commit, whatever the session's other
+writers commit in between, so reading the binding outside the transaction
+decides what a read inside it would. -/
 theorem a_bound_session_stays_bound (s : SessionBinding) (writes : List SessionWrite)
     (requester agent : Nat) (h : s.bound requester agent = true) :
     (s.after writes).bound requester agent = true := by
@@ -279,8 +317,9 @@ theorem a_bound_session_stays_bound (s : SessionBinding) (writes : List SessionW
   simp only [SessionBinding.bound, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h ⊢
   exact ⟨⟨hr ▸ h.1.1, ha ▸ h.1.2⟩, published_relationships_stay_published s writes h.2⟩
 
-/-- Without the premise the read outside goes stale: a write that re-pends
-the relationships, or changes the Agent, unbinds a session that was bound. -/
+/-- Without the premise of `DeclaredFence.immutableBinding` the read outside
+goes stale: a write that re-pends the relationships, or changes the Agent,
+unbinds a session that was bound. -/
 theorem a_rewritable_binding_can_go_stale :
     let s : SessionBinding := ⟨0, 0, false⟩
     s.bound 0 0 = true ∧ ({ s with relationshipsPending := true } : SessionBinding).bound 0 0 = false ∧
