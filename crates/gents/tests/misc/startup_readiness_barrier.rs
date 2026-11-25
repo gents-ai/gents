@@ -1,9 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use events::EventName;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::startup_readiness::StartupReadinessOptions;
+use gents::test_support::observers::{RecordingBuildFailureObserver, RecordingProcessObserver};
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleState};
 use gents_protocol::row::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
@@ -13,81 +14,8 @@ use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::waits::RecordingProcessObserver;
 use crate::support::{managed_agent_fixture, trial_store};
 use gents_inference::test_support::scripted_backend::ScriptedBackend;
-
-#[derive(Clone, Debug)]
-struct BuildFailure {
-    agent_did: String,
-    failure_number: u32,
-    budget: u32,
-    error: String,
-}
-
-struct RecordingBuildFailureObserver {
-    failures: Mutex<Vec<BuildFailure>>,
-    failure_count_tx: watch::Sender<usize>,
-}
-
-impl Default for RecordingBuildFailureObserver {
-    fn default() -> Self {
-        let (failure_count_tx, _) = watch::channel(0);
-        Self {
-            failures: Mutex::new(Vec::new()),
-            failure_count_tx,
-        }
-    }
-}
-
-impl RecordingBuildFailureObserver {
-    fn failures(&self) -> Vec<BuildFailure> {
-        self.failures
-            .lock()
-            .expect("build failure observer mutex poisoned")
-            .clone()
-    }
-
-    async fn wait_for_failure_count(&self, expected: usize) {
-        let mut failure_count_rx = self.failure_count_tx.subscribe();
-        loop {
-            if self
-                .failures
-                .lock()
-                .expect("build failure observer mutex poisoned")
-                .len()
-                >= expected
-            {
-                return;
-            }
-            failure_count_rx
-                .changed()
-                .await
-                .expect("build failure observer closed");
-        }
-    }
-}
-
-impl gents::runtime::startup_readiness::StartupBuildFailureObserver
-    for RecordingBuildFailureObserver
-{
-    fn on_build_failure(&self, agent_did: &str, failure_number: u32, budget: u32, error: &str) {
-        let count = {
-            let mut failures = self
-                .failures
-                .lock()
-                .expect("build failure observer mutex poisoned");
-            failures.push(BuildFailure {
-                agent_did: agent_did.to_string(),
-                failure_number,
-                budget,
-                error: error.to_string(),
-            });
-            failures.len()
-        };
-        self.failure_count_tx.send_replace(count);
-    }
-}
 
 async fn wait_for_node_readiness(
     node: &EmbeddedNode,

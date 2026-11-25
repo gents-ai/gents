@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use gents::test_support::tools::HeldTool;
 use gents::Gents;
 use gents_documents::inference_defaults::ReasoningEffort;
 use gents_inference::resolved::SamplingConfig;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::QueueDelivery;
 use gents_session::request::lifecycle::{
@@ -28,40 +28,6 @@ const SECOND: &str = "retained-beta-9e31";
 const OLD: &str = "obsolete-before-edit-28af";
 const DROP: &str = "removed-before-intake-61ed";
 
-#[derive(Clone)]
-struct HeldTool {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-impl ToolDyn for HeldTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "held_probe".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "held_probe".into(),
-                description: "Call exactly once before answering; waits for operator updates."
-                    .into(),
-                parameters: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            self.entered.notify_one();
-            self.release.notified().await;
-            Ok("Operator updates are ready. Answer using the latest user instructions; do not call held_probe again.".into())
-        })
-    }
-}
 struct Release(Arc<Notify>);
 impl Drop for Release {
     fn drop(&mut self) {
@@ -105,7 +71,14 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         .tool_ceiling(ToolCeiling::meta_only()).agent(agent_did).identity_binding(actors.fixture.binding.clone()).backend_id(target.backend_id()).model_name(target.model())
         .system_prompt("Call held_probe exactly once before answering. After it returns, use the latest user messages, then give a concise answer. Do not call other tools.")
         .sampling(SamplingConfig { reasoning_effort: Some(ReasoningEffort::High), temperature: Some(1.0), top_p: Some(0.95), ..Default::default() })
-        .max_turns(1000).deadline_duration_secs(24*60*60).custom_tool(HeldTool { entered: entered.clone(), release: release.clone() }).done().build().await?;
+        .max_turns(1000).deadline_duration_secs(24*60*60).custom_tool(HeldTool::notified(
+            "held_probe",
+            "Call exactly once before answering; waits for operator updates.",
+            serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            "Operator updates are ready. Answer using the latest user instructions; do not call held_probe again.",
+            entered.clone(),
+            release.clone(),
+        )).done().build().await?;
     let active = enqueue(
         &actors,
         ACTIVE,

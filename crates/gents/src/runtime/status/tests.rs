@@ -797,36 +797,13 @@ async fn storage_full_readiness_write_is_retained_as_a_process_local_fault() {
         RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
     };
 
-    #[derive(Debug, thiserror::Error)]
-    #[error("native transaction")]
-    struct NativeTransaction(#[source] storage::corekv::Error);
-
-    struct StorageFullWriter;
-
-    #[async_trait::async_trait]
-    impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullWriter {
-        async fn upsert(
-            &self,
-            _node_did: &str,
-            _snapshot: &gents_protocol::row::NodeReadinessSnapshot,
-            _updated_at: &str,
-        ) -> anyhow::Result<()> {
-            Err(anyhow::Error::new(NativeTransaction(
-                storage::corekv::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::StorageFull,
-                    "write-ahead log left in an unknown state: No space left on device (os error 28)",
-                )),
-            )))
-        }
-    }
-
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
     let (owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         node_did.clone(),
-        Arc::new(StorageFullWriter),
+        Arc::new(crate::test_support::readiness::StorageFullReadinessWriter),
         std::time::Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );

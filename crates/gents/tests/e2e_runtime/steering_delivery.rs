@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use gents::test_support::tools::HeldTool;
 use gents::Gents;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
@@ -29,40 +29,6 @@ use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";
-
-#[derive(Clone)]
-struct HeldTool {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-impl ToolDyn for HeldTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "held_probe".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "held_probe".into(),
-                description: "Wait for the caller to release the tool".into(),
-                parameters: serde_json::json!({"type":"object","properties":{}}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            self.entered.notify_one();
-            self.release.notified().await;
-            Ok("held tool settled".into())
-        })
-    }
-}
 
 async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
     crate::support::live_inference::wait_for_request_terminal(access, request_id).await
@@ -340,10 +306,14 @@ fn held_runtime(
         .model_name(MODEL)
         .stream_batch_ms(0)
         .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
-        .custom_tool(HeldTool {
-            entered: entered.clone(),
-            release: release.clone(),
-        })
+        .custom_tool(HeldTool::notified(
+            "held_probe",
+            "Wait for the caller to release the tool",
+            serde_json::json!({"type":"object","properties":{}}),
+            "held tool settled",
+            entered.clone(),
+            release.clone(),
+        ))
         .done()
         .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
 }

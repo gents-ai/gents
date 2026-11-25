@@ -15,8 +15,6 @@ use control_watcher::{
     ControlWatcherTiming,
 };
 #[cfg(test)]
-use gents_session::request::watcher::Watcher;
-#[cfg(test)]
 pub(in crate::runtime::agent) use router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
 #[cfg(test)]
 use router::{resolve_agent_for_request, wait_for_next_request_with_latest_snapshot};

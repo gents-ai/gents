@@ -37,7 +37,6 @@ const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 /// module, per crate.
 #[rustfmt::skip]
 const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
-    ("gents", 43, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-automation", 15, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-cli", 2, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-desktop-bridge", 4, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),

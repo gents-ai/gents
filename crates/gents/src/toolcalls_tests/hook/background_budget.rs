@@ -1,34 +1,5 @@
 use super::*;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-
-struct PendingTool;
-
-impl ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "slow_tool".into()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "slow_tool".into(),
-                description: "Held background work for admission accounting".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
+use crate::test_support::tools::PendingTool;
 
 async fn assert_background_rows(
     access: &gents_store::config_client::ConfigAccess,
@@ -76,7 +47,10 @@ async fn admit_until_refused(index: usize, case: &AdmissionCase) {
     let executions = BackgroundExecutionRegistry::default()
         .with_release_wait(gents_store::test_support::STALL_CEILING);
     let registry = BackgroundToolRegistry::from_config(
-        vec![Box::new(PendingTool)],
+        vec![Box::new(PendingTool::new(
+            "slow_tool",
+            "Held background work for admission accounting",
+        ))],
         &gents_tools::surface::BackgroundToolConfig {
             allowlist: vec!["slow_tool".into()],
             limit,

@@ -16,15 +16,12 @@ pub mod canonical_reads;
 pub mod commit_race_proxy;
 
 pub mod fixtures;
-pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod live_inference;
-pub mod mock_subscription;
 pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
-pub mod waits;
 
 /// A test's `#[tokio::test]` runtime is its entry point; constructors take
 /// that runtime's handle from here.
@@ -46,7 +43,7 @@ pub fn materialization_identity() -> Arc<dyn NodeIdentity> {
 }
 
 pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
-    identity_stubs::SigningStubNodeIdentity::arc(did)
+    crate::test_support::identity::SigningStubNodeIdentity::arc(did)
 }
 
 /// Installs a test-writer subscriber when `RUST_LOG` names a filter, so owner

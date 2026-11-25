@@ -1,48 +1,15 @@
 use std::collections::VecDeque;
 
 use super::*;
-
-#[derive(Clone, Copy)]
-enum WritePlan {
-    Success,
-}
-
-struct ControlledWriter {
-    plans: std::sync::Mutex<VecDeque<WritePlan>>,
-    attempts: mpsc::UnboundedSender<NodeReadinessProcessState>,
-    persisted: tokio::sync::Mutex<Vec<NodeReadinessProcessState>>,
-}
-
-#[async_trait::async_trait]
-impl NodeReadinessWriter for ControlledWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> Result<()> {
-        let plan = self
-            .plans
-            .lock()
-            .expect("writer plans mutex")
-            .pop_front()
-            .expect("test supplied a write plan");
-        self.attempts
-            .send(snapshot.process_state)
-            .expect("attempt observer remains alive");
-        match plan {
-            WritePlan::Success => {}
-        }
-        self.persisted.lock().await.push(snapshot.process_state);
-        Ok(())
-    }
-}
+use crate::test_support::readiness::{
+    CapturingReadinessWriter, ControlledReadinessWriter, WritePlan,
+};
 
 #[tokio::test(start_paused = true)]
 async fn generated_readiness_publication_traces_write_only_semantic_changes() {
     for case in gents_lean_vocab::families::contracts_readiness_publication::cases() {
         let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-        let writer = Arc::new(ControlledWriter {
+        let writer = Arc::new(ControlledReadinessWriter {
             plans: std::sync::Mutex::new(VecDeque::from(vec![
                 WritePlan::Success;
                 case.input.states.len()
@@ -99,21 +66,11 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
     }
 }
 
-struct RecordingWriter(std::sync::Mutex<Vec<NodeReadinessProcessState>>);
-
-#[async_trait::async_trait]
-impl NodeReadinessWriter for RecordingWriter {
-    async fn upsert(&self, _: &str, snapshot: &NodeReadinessSnapshot, _: &str) -> Result<()> {
-        self.0.lock().unwrap().push(snapshot.process_state);
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn generated_process_writes_follow_the_lean_transition() {
     use gents_lean_vocab::families::process_state_next as family;
     for case in family::cases() {
-        let writer = Arc::new(RecordingWriter(Default::default()));
+        let writer = Arc::new(CapturingReadinessWriter::default());
         let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
             writer.clone(),
             "did:test:process-transition",
@@ -122,7 +79,7 @@ async fn generated_process_writes_follow_the_lean_transition() {
         publisher.initialize("general").await.unwrap();
         let pre: NodeReadinessProcessState = case.input.pre;
         publisher.set_process_state(pre).await.unwrap();
-        let writes_before = writer.0.lock().unwrap().len();
+        let writes_before = writer.process_states().len();
         let written = publisher
             .apply_process_action(
                 case.input.action,
@@ -132,7 +89,7 @@ async fn generated_process_writes_follow_the_lean_transition() {
             .await
             .unwrap();
         let durable = publisher.observation().process_state();
-        let persisted = writer.0.lock().unwrap().clone();
+        let persisted = writer.process_states();
         match written {
             Ok(state) => assert_eq!(state, durable),
             Err(refused) => {

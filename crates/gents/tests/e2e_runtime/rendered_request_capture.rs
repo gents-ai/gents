@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use gents::defra_node::Node as EmbeddedNode;
+use gents::test_support::tools::FixedOutputTool;
 use gents::{AgentBuilder, Gents};
 use gents_inference::compaction::CompactionStrategy;
 use gents_inference::llm::message::Message;
 use gents_inference::rendered_request::RenderedCompletionRequest;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_store::identity::NodeIdentity;
@@ -1874,52 +1874,6 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     );
 
     agent.shutdown().await;
-}
-
-#[derive(Clone)]
-struct FixedOutputTool {
-    name: String,
-    output: String,
-}
-
-impl FixedOutputTool {
-    fn new(name: impl Into<String>, output: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            output: output.into(),
-        }
-    }
-}
-
-impl ToolDyn for FixedOutputTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.clone(),
-                description: "Test probe that returns a fixed string".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": { "note": { "type": "string" } },
-                    "required": ["note"]
-                }),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { Ok(self.output.clone()) })
-    }
 }
 
 fn coordinates(rows: &[Value]) -> Vec<(&str, i64, i64)> {

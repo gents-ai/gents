@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::test_support::runtime::ObservedTicks;
 use futures::FutureExt;
 use gents_automation::goal::operator_resume::support::{Fixture, SESSION};
 use gents_automation::goal::*;
@@ -13,26 +14,6 @@ async fn fixture() -> Fixture {
         "latest_request":10,"children":[],"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     Fixture::new(&before).await
-}
-
-struct ObservedTicks {
-    waiting: Arc<tokio::sync::Notify>,
-    ticks: futures::channel::mpsc::UnboundedReceiver<()>,
-}
-
-impl futures::Stream for ObservedTicks {
-    type Item = ();
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<()>> {
-        let result = std::pin::Pin::new(&mut self.ticks).poll_next(context);
-        if result.is_pending() {
-            self.waiting.notify_one();
-        }
-        result
-    }
 }
 
 #[tokio::test]
