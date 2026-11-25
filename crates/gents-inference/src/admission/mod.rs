@@ -1,7 +1,7 @@
 mod client;
 mod config;
 mod controller;
-mod permit;
+pub(crate) mod permit;
 mod persistence;
 mod pools;
 mod recovery;

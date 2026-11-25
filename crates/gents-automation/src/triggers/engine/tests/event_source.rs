@@ -105,45 +105,8 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     node.shutdown().await.expect("node shutdown");
 }
 
-use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
-
-#[derive(Clone)]
-struct FakeUpdateSubscriptionSource(Arc<ChannelBus>);
-
-impl FakeUpdateSubscriptionSource {
-    fn new() -> Self {
-        Self(Arc::new(ChannelBus::new()))
-    }
-
-    fn publish_update(&self, collection_id: impl Into<String>, doc_id: impl Into<String>) {
-        let collection_id = collection_id.into();
-        let doc_id = doc_id.into();
-        let block = format!("{collection_id}:{doc_id}").into_bytes();
-        let cid = defra_core::block::generate_cid_from_bytes(&block)
-            .expect("synthetic update block bytes must produce a CID");
-        self.0.publish(Message::update(Update::new(
-            doc_id,
-            cid,
-            collection_id,
-            block,
-            false,
-            true,
-        )));
-    }
-}
-
-impl gents_store::subscription_source::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
-    fn subscribe_updates(&self) -> Subscription {
-        self.0.subscribe(&[EventName::Update])
-    }
-
-    fn subscribe_changes(
-        &self,
-        collection_ids: Vec<String>,
-    ) -> gents_store::subscription_source::ChangeSubscription {
-        self.0.subscribe_collection_changes(collection_ids).into()
-    }
-}
+use crate::test_support::doubles::{MockUpdateSubscriptionSource, SubscriptionObserver};
+use events::{EventName, Message, Subscription};
 
 #[tokio::test]
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
@@ -166,7 +129,7 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
     )
     .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
-    let subs = Arc::new(FakeUpdateSubscriptionSource::new());
+    let subs = Arc::new(MockUpdateSubscriptionSource::new());
     let mut source = EventSource::with_subscription_source(
         subs.clone(),
         rx,
@@ -247,29 +210,6 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
     assert_eq!(intent.trigger_id.as_deref(), Some("receipt-trigger"));
     assert_eq!(intent.event_vars["source_doc_id"], doc_id);
     assert!(!source.has_seen("WorkspaceReceipt", ""));
-}
-
-type ReconciliationRecord = (u64, String, Result<(), String>);
-
-#[derive(Default)]
-struct SubscriptionObserver(std::sync::Mutex<Vec<ReconciliationRecord>>);
-
-impl crate::triggers::snapshot_observer::RuntimeSnapshotObserver for SubscriptionObserver {
-    fn on_generation_published(&self, _generation: u64, _fingerprint: &str, _behaviors: &[String]) {
-    }
-
-    fn on_event_sources_reconciled(
-        &self,
-        generation: u64,
-        fingerprint: &str,
-        result: Result<(), &str>,
-    ) {
-        self.0.lock().unwrap().push((
-            generation,
-            fingerprint.to_owned(),
-            result.map_err(str::to_owned),
-        ));
-    }
 }
 
 #[tokio::test]
@@ -2420,7 +2360,7 @@ mod unacknowledged;
 /// The database's real change notifications, held so a trace decides whether
 /// each reaches the source, is lost, or arrives again.
 struct HeldNotifications {
-    transport: FakeUpdateSubscriptionSource,
+    transport: MockUpdateSubscriptionSource,
     node_updates: Subscription,
     held: RapidHashMap<String, Message>,
 }
@@ -2428,7 +2368,7 @@ struct HeldNotifications {
 impl HeldNotifications {
     fn new(node: &defra_node::Node) -> Self {
         Self {
-            transport: FakeUpdateSubscriptionSource::new(),
+            transport: MockUpdateSubscriptionSource::new(),
             node_updates: node.subscribe(&[EventName::Update]),
             held: RapidHashMap::default(),
         }
@@ -2456,7 +2396,7 @@ impl HeldNotifications {
     }
 
     fn deliver(&self, document: &str) {
-        self.transport.0.publish(self.held[document].clone());
+        self.transport.publish_message(self.held[document].clone());
     }
 
     fn lose(&mut self, document: &str) {

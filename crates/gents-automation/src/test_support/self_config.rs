@@ -1,9 +1,31 @@
-use gents_loop::tool::ToolDyn;
+use gents_loop::tool::{BoxFuture, ToolCallEnvelope, ToolDefinition, ToolDyn};
+use gents_loop::tool_call_lifecycle::ToolOutcome;
+use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_toolcalls::test_support::self_config::{config, SelfConfigFixture};
 use gents_tools::builtin::self_config::ops::ApplyRequest;
 use gents_tools::builtin::self_config::*;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+pub struct RecordingEffectDispatcher(pub Mutex<Vec<String>>);
+
+impl ToolEffectDispatcher for RecordingEffectDispatcher {
+    fn call<'a>(
+        &'a self,
+        _parent: &'a ToolCallEnvelope,
+        _ordinal: u32,
+        name: &'a str,
+        _arguments: &'a str,
+    ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+        self.0.lock().unwrap().push(name.to_owned());
+        Box::pin(async { Ok(ToolOutcome::Completed(json!({"rows": []}).to_string())) })
+    }
+
+    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
+        Box::pin(async { Vec::new() })
+    }
+}
 
 pub async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
     let fixture = crate::test_support::self_config_fixture(name).await;

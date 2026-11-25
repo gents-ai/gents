@@ -15,8 +15,6 @@ use gents_loop::provider_call::ProviderCall;
 use gents_loop::provider_patches::patch_instructions_body;
 use serde_json::{json, Value};
 
-#[cfg(test)]
-use crate::auth::credential::BearerSource;
 use crate::auth::credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,

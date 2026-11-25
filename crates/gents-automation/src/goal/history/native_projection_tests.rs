@@ -1,7 +1,7 @@
 use super::*;
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::test_support::doubles::NativeReader;
+use gents_store::config_client::ConfigAccess;
 use std::io::Write;
-use std::sync::Mutex;
 
 fn model(facts: &[ReuseFacts]) -> Vec<bool> {
     let mut source = tempfile::Builder::new().suffix(".lean").tempfile().unwrap();
@@ -37,52 +37,6 @@ fn native_projection_reuse_follows_the_executed_model() {
         facts.iter().map(ReuseFacts::can_reuse).collect::<Vec<_>>(),
         model(&facts)
     );
-}
-
-struct NativeReader<'txn, 'node> {
-    txn: &'txn ConfigApplyTxn<'node>,
-    full: bool,
-    cids: Mutex<Vec<String>>,
-    facts: Mutex<Vec<ReuseFacts>>,
-}
-
-impl<'txn, 'node> NativeReader<'txn, 'node> {
-    fn new(txn: &'txn ConfigApplyTxn<'node>, full: bool) -> Self {
-        Self {
-            txn,
-            full,
-            cids: Mutex::new(Vec::new()),
-            facts: Mutex::new(Vec::new()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ConfigRead for NativeReader<'_, '_> {
-    async fn execute_read(
-        &self,
-        query: &str,
-    ) -> std::result::Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-        let mut response = self.txn.execute(query).await?;
-        if let Some((_, rest)) = query.split_once("cid: [") {
-            let raw = rest.split_once(']').unwrap().0;
-            let cids: Vec<String> = serde_json::from_str(&format!("[{raw}]"))?;
-            self.cids.lock().unwrap().extend(cids);
-        }
-        if let Some(commits) = response
-            .pointer_mut("/data/_commits")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            for commit in commits {
-                let decoded: GoalCompositeCommit = serde_json::from_value(commit.clone())?;
-                self.facts.lock().unwrap().push(decoded.reuse_facts());
-                if self.full {
-                    commit.as_object_mut().unwrap().remove("links");
-                }
-            }
-        }
-        Ok(response)
-    }
 }
 
 #[tokio::test]

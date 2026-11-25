@@ -1,5 +1,4 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,12 +6,12 @@ use crate::goal::{
     seed_goal_from_access, session_token_usage, CreateGoalForSessionError,
     CreateGoalForSessionOutcome,
 };
+use crate::test_support::doubles::MockUpdateSubscriptionSource;
 use crate::{
     triggers::engine::goal_source::GoalSource, triggers::engine::FireIntent,
     triggers::engine::TriggerSource, triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
 use defra_node::Node as EmbeddedNode;
-use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::goal_status::GoalStatus;
@@ -22,7 +21,7 @@ use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_store::test_support::TestStore;
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
-use tokio::sync::{watch, Notify};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 async fn test_db(name: &str) -> TestStore {
@@ -263,62 +262,6 @@ async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) 
         defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
     db::block::verify::verified_signature_signer_did(&block, &signature)
         .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
-}
-
-#[derive(Clone)]
-struct MockUpdateSubscriptionSource {
-    bus: Arc<ChannelBus>,
-    subscriber_count: Arc<AtomicUsize>,
-    subscriber_notify: Arc<Notify>,
-}
-
-impl MockUpdateSubscriptionSource {
-    pub fn new() -> Self {
-        Self {
-            bus: Arc::new(ChannelBus::new()),
-            subscriber_count: Arc::new(AtomicUsize::new(0)),
-            subscriber_notify: Arc::new(Notify::new()),
-        }
-    }
-
-    pub fn close(&self) {
-        self.bus.close();
-    }
-
-    pub fn publish_update(&self, collection_id: impl Into<String>, doc_id: impl Into<String>) {
-        let collection_id = collection_id.into();
-        let doc_id = doc_id.into();
-        let block = format!("{collection_id}:{doc_id}").into_bytes();
-        let cid = defra_core::block::generate_cid_from_bytes(&block)
-            .expect("synthetic update block bytes must produce a CID");
-        let update = Update::new(doc_id, cid, collection_id, block, false, true);
-        self.bus.publish(Message::update(update));
-    }
-}
-
-impl Default for MockUpdateSubscriptionSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
-    fn subscribe_updates(&self) -> Subscription {
-        let subscription = self.bus.subscribe(&[EventName::Update]);
-        self.subscriber_count.fetch_add(1, Ordering::SeqCst);
-        self.subscriber_notify.notify_waiters();
-        subscription
-    }
-
-    fn subscribe_changes(
-        &self,
-        collection_ids: Vec<String>,
-    ) -> gents_store::subscription_source::ChangeSubscription {
-        let subscription = self.bus.subscribe_collection_changes(collection_ids);
-        self.subscriber_count.fetch_add(1, Ordering::SeqCst);
-        self.subscriber_notify.notify_waiters();
-        subscription.into()
-    }
 }
 
 const SESSION: &str = "goal-session";

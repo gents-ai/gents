@@ -1,7 +1,5 @@
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use bytes::Bytes;
 use futures::StreamExt;
 use gents_loop::provider_call::admission::AdmissionCallContext;
 use gents_loop::provider_call::{ForCall, ProviderCall};
@@ -9,78 +7,8 @@ use gents_loop::provider_input::routing_affinity::RoutingAffinity;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
 
-use crate::llm::rig_compat::http::{
-    self as http_client, BoxedStream, HeaderMap, HeaderValue, LazyBody, MultipartForm, Request,
-    Response, StreamingResponse, Transport,
-};
-
-/// Records the headers of every request it is sent and answers each
-/// streaming send with the next of `replies`' headers and an ended stream.
-#[derive(Clone, Debug, Default)]
-struct RecordingTransport {
-    sent: Arc<Mutex<Vec<HeaderMap>>>,
-    replies: Arc<Mutex<Vec<HeaderMap>>>,
-}
-
-impl RecordingTransport {
-    fn replying(replies: Vec<HeaderMap>) -> Self {
-        Self {
-            sent: Arc::default(),
-            replies: Arc::new(Mutex::new(replies.into_iter().rev().collect())),
-        }
-    }
-
-    fn sent(&self) -> Vec<HeaderMap> {
-        self.sent.lock().unwrap().clone()
-    }
-}
-
-impl Transport for RecordingTransport {
-    fn send(
-        &self,
-        _call: &ProviderCall,
-        request: Request<Bytes>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
-        self.sent.lock().unwrap().push(request.headers().clone());
-        async move {
-            let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
-            Ok(Response::builder().status(200).body(body)?)
-        }
-    }
-
-    fn send_multipart(
-        &self,
-        _call: &ProviderCall,
-        request: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
-        self.sent.lock().unwrap().push(request.headers().clone());
-        async move {
-            let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
-            Ok(Response::builder().status(200).body(body)?)
-        }
-    }
-
-    fn send_streaming(
-        &self,
-        _call: &ProviderCall,
-        request: Request<Bytes>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
-        self.sent.lock().unwrap().push(request.headers().clone());
-        let headers = self.replies.lock().unwrap().pop().unwrap_or_default();
-        async move {
-            let body: BoxedStream = Box::pin(futures::stream::iter([Ok(Bytes::from_static(
-                b"data: [DONE]\n\n",
-            ))]));
-            let mut response = Response::builder()
-                .status(200)
-                .header("content-type", "text/event-stream");
-            if let Some(map) = response.headers_mut() {
-                map.extend(headers);
-            }
-            Ok(response.body(body)?)
-        }
-    }
-}
+use crate::llm::rig_compat::http::{HeaderMap, HeaderValue};
+use crate::test_support::doubles::RecordingTransport;
 
 /// Sends one streaming request through `model` and drains its stream.
 async fn stream_once<M>(model: M)

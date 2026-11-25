@@ -1,5 +1,28 @@
+use gents_documents::views::tasks::TaskList;
+use gents_protocol::document_query::{fields::task, Query};
+use gents_protocol::views::View;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+
+pub struct TaskCount {
+    pub view: TaskList,
+    pub document_id: Option<String>,
+    pub counted_first: bool,
+}
+
+impl View for TaskCount {
+    type Collection = task::Doc;
+    type Row = u64;
+
+    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
+        let query = self.view.query(reader_did);
+        match (&self.document_id, self.counted_first) {
+            (Some(id), true) => query.counted().doc_id(id),
+            (Some(id), false) => query.doc_id(id).counted(),
+            (None, _) => query.counted(),
+        }
+    }
+}
 
 pub fn signed_schema(collection: gents_store::collection::Collection) -> &'static str {
     let name = collection.graphql_type();

@@ -708,30 +708,9 @@ async fn plugin_run_drives_the_rounds_a_tool_call_does() {
 /// call's dispatcher, as the same plugin called as a tool would.
 #[tokio::test]
 async fn plugin_run_composes_through_the_dispatcher_of_the_config_call() {
-    use gents_loop::tool_call_lifecycle::ToolOutcome;
-    use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
+    use gents_automation::test_support::self_config::RecordingEffectDispatcher;
+    use gents_loop::tool_effects::ToolEffectDispatcher;
     use gents_pack::test_support::{asking_plugin_wat, installed_plugin};
-
-    #[derive(Default)]
-    struct Recording(std::sync::Mutex<Vec<String>>);
-    impl ToolEffectDispatcher for Recording {
-        fn call<'a>(
-            &'a self,
-            _parent: &'a gents_loop::tool::ToolCallEnvelope,
-            _ordinal: u32,
-            name: &'a str,
-            _arguments: &'a str,
-        ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-            self.0.lock().unwrap().push(name.to_owned());
-            Box::pin(async { Ok(ToolOutcome::Completed(json!({"rows": []}).to_string())) })
-        }
-
-        fn definitions<'a>(
-            &'a self,
-        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
-            Box::pin(async { Vec::new() })
-        }
-    }
 
     let request =
         json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
@@ -758,7 +737,7 @@ async fn plugin_run_composes_through_the_dispatcher_of_the_config_call() {
             Some(home.path().to_owned()),
         )),
     );
-    let dispatcher = Arc::new(Recording::default());
+    let dispatcher = Arc::new(RecordingEffectDispatcher::default());
     let envelope = gents_loop::tool::ToolCallEnvelope::default()
         .with_effects(Some(dispatcher.clone() as Arc<dyn ToolEffectDispatcher>));
     let text = tools

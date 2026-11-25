@@ -1,5 +1,5 @@
 use super::*;
-use futures::{future::BoxFuture, StreamExt};
+use futures::StreamExt;
 use serde_json::Value;
 
 fn agent_access(
@@ -430,39 +430,6 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
     assert_eq!(rows[0]["call_state"], "cancelled");
 }
 
-struct SignalledPermitFinalizer {
-    permit: super::super::permit::AdmissionPermit,
-    invoked: tokio::sync::oneshot::Sender<()>,
-}
-
-impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinalizer {
-    fn mark_stream_success(
-        &mut self,
-        usage: Option<super::super::ProviderCallUsage>,
-        cached_input_tokens: gents_loop::rig_compat::CachedInputTokensObservation,
-    ) {
-        super::super::stream_guard::StreamGuardLifecycle::mark_stream_success(
-            &mut self.permit,
-            usage,
-            cached_input_tokens,
-        );
-    }
-
-    fn mark_stream_error(&mut self, error: &str) {
-        super::super::stream_guard::StreamGuardLifecycle::mark_stream_error(
-            &mut self.permit,
-            error,
-        );
-    }
-
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), super::super::AdmissionError>> {
-        Box::pin(async move {
-            let _ = self.invoked.send(());
-            super::super::stream_guard::StreamGuardLifecycle::finish_stream(self.permit).await
-        })
-    }
-}
-
 /// Dropping a stream while its independently scheduled terminal persistence is
 /// waiting for the canonical gate must still return real admission ownership.
 /// Once the existing gate owner exits, AdmissionPermit's Drop repair installs
@@ -531,7 +498,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     )])));
     let mut stream = crate::llm::rig_compat::hold_stream_guard(
         inner,
-        SignalledPermitFinalizer {
+        crate::test_support::doubles::SignalledPermitFinalizer {
             permit,
             invoked: invoked_tx,
         },

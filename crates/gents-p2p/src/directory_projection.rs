@@ -478,40 +478,8 @@ mod tests {
         Ok(node)
     }
 
+    use crate::test_support::doubles::FailingStore;
     use gents_lean_vocab::families::directory_publication_reconcile as family;
-
-    struct FailingStore {
-        entries: tokio::sync::Mutex<BTreeMap<String, DirectoryEntry>>,
-        deleted: BTreeSet<String>,
-    }
-
-    #[async_trait]
-    impl DirectoryStore for FailingStore {
-        async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
-            Ok(SourceSnapshot::default())
-        }
-        async fn list_directory_entries(
-            &self,
-            source_did: &str,
-        ) -> Result<BTreeMap<String, DirectoryEntry>> {
-            Ok(self
-                .entries
-                .lock()
-                .await
-                .iter()
-                .filter(|(_, entry)| entry.source_did == source_did)
-                .map(|(did, entry)| (did.clone(), entry.clone()))
-                .collect())
-        }
-        async fn upsert_directory_entry(&self, _entry: &DirectoryEntry) -> Result<()> {
-            anyhow::bail!("unexpected upsert")
-        }
-        async fn delete_directory_entry(&self, _source_did: &str, node_did: &str) -> Result<()> {
-            anyhow::ensure!(self.deleted.contains(node_did), "injected delete failure");
-            self.entries.lock().await.remove(node_did);
-            Ok(())
-        }
-    }
 
     fn entry_of(source: &str, node: &str) -> family::Entry {
         family::Entry {

@@ -1,4 +1,8 @@
+pub mod bearer;
+#[cfg(test)]
+pub(crate) mod doubles;
 pub mod embedded;
+pub use bearer::StaticBearer;
 pub use embedded::default_agent;
 
 use gents_documents::test_support::{ensure_test_node, set_test_default_agent_as};

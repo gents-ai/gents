@@ -67,16 +67,7 @@ fn core_request(reasoning: &str) -> CompletionRequest {
     }
 }
 
-#[derive(Debug)]
-struct StaticBearer;
-
-impl crate::auth::credential::BearerSource for StaticBearer {
-    async fn current_bearer(&self) -> anyhow::Result<String> {
-        Ok("test-oauth-token".to_string())
-    }
-
-    async fn invalidate(&self) {}
-}
+use crate::test_support::StaticBearer;
 
 #[derive(Clone, Debug, Default)]
 struct WireCapturingClient {
@@ -277,7 +268,7 @@ async fn codex_responses_projection_matches_the_terminal_rewritten_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
-        Arc::new(StaticBearer),
+        Arc::new(StaticBearer::new("test-oauth-token")),
         terminal,
     );
     let client = crate::llm::rig_compat::providers::build_openai_responses_client(
@@ -310,7 +301,7 @@ async fn xai_responses_projection_matches_the_terminal_rewritten_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
-        Arc::new(StaticBearer),
+        Arc::new(StaticBearer::new("test-oauth-token")),
         terminal,
     );
     let client = crate::llm::rig_compat::providers::build_openai_responses_client(
@@ -534,7 +525,7 @@ async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
-        Arc::new(StaticBearer),
+        Arc::new(StaticBearer::new("test-oauth-token")),
         terminal,
     );
     let body = terminal_body(
@@ -620,7 +611,7 @@ async fn service_tier_transport_follows_the_lean_model() {
         match family {
             BackendProviderKind::ChatGptCodex => {
                 let transport = crate::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
-                    Arc::new(StaticBearer),
+                    Arc::new(StaticBearer::new("test-oauth-token")),
                     terminal,
                 )
                 .with_policy(crate::clients::chatgpt_codex::ChatGptCodexPolicy {

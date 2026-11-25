@@ -349,42 +349,6 @@ fn rejected_notice(text: &str) -> String {
 
 #[tokio::test]
 async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_records_them() {
-    use gents_loop::tool::{Tool, ToolDefinition};
-
-    struct StrictArgsTool;
-    #[derive(Debug, thiserror::Error)]
-    #[error("strict tool error")]
-    struct StrictToolError;
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct StrictArgs {
-        report_type: String,
-        findings: Vec<String>,
-    }
-    impl Tool for StrictArgsTool {
-        const NAME: &'static str = "post_status";
-        type Error = StrictToolError;
-        type Args = StrictArgs;
-        type Output = String;
-        async fn definition(&self, _prompt: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.to_string(),
-                description: String::new(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        }
-        async fn call(
-            &self,
-            args: Self::Args,
-            _context: &gents_loop::tool::ToolCallEnvelope,
-        ) -> Result<Self::Output, Self::Error> {
-            panic!(
-                "the tool must not run on unparseable arguments; it parsed report_type {:?} and findings {:?}",
-                args.report_type, args.findings
-            );
-        }
-    }
-
     for case in gents_lean_vocab::families::argument_failure_refusal::cases::<String, String>() {
         let arguments = match case.input.failure.as_str() {
             "syntax" => serde_json::Value::String("{\"report_type\":?}".into()),

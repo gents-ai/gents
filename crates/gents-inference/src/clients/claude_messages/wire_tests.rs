@@ -2,7 +2,6 @@
 //! plain-text server: the exact request head, gzip with padding and its
 //! rejection latch, the 401 replay, and usage observation.
 
-use std::collections::VecDeque;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +22,7 @@ use super::lock_fixtures_for_test;
 use super::send::{stream_messages_at, MessagesAccount, Replay};
 use super::tests::{echo_request, test_account};
 use super::transport::{capturing, ClaudeHttpClient};
-use crate::auth::credential::BearerSource;
+use crate::test_support::doubles::ScriptedBearer;
 use gents_loop::claude_messages_body::ClaudeAccountContext;
 
 const SSE_DONE: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
@@ -184,42 +183,6 @@ impl Wire {
             .iter()
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
-    }
-}
-
-/// Returns scripted tokens in order, then repeats the last; `Err` entries fail the refresh.
-struct ScriptedBearer {
-    script: Mutex<VecDeque<Result<String, String>>>,
-    last: Mutex<Result<String, String>>,
-    invalidations: AtomicUsize,
-}
-
-impl ScriptedBearer {
-    fn new(script: &[Result<&str, &str>]) -> Self {
-        let owned: VecDeque<Result<String, String>> = script
-            .iter()
-            .map(|entry| entry.map(str::to_owned).map_err(str::to_owned))
-            .collect();
-        Self {
-            last: Mutex::new(owned.front().cloned().expect("script")),
-            script: Mutex::new(owned),
-            invalidations: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl BearerSource for ScriptedBearer {
-    async fn current_bearer(&self) -> anyhow::Result<String> {
-        let mut script = self.script.lock().expect("script");
-        let next = script
-            .pop_front()
-            .unwrap_or_else(|| self.last.lock().expect("last").clone());
-        *self.last.lock().expect("last") = next.clone();
-        next.map_err(|message| anyhow::anyhow!(message))
-    }
-
-    async fn invalidate(&self) {
-        self.invalidations.fetch_add(1, Ordering::SeqCst);
     }
 }
 

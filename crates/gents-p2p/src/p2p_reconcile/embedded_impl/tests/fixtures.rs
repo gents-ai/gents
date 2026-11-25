@@ -11,31 +11,8 @@ pub(in crate::p2p_reconcile) struct TestNode {
     pub(super) _tempdir: tempfile::TempDir,
 }
 
-struct NoToolSources;
-
 pub(super) fn no_tool_sources() -> Arc<dyn gents_store::local::ToolSourcePolicy> {
-    Arc::new(NoToolSources)
-}
-
-impl gents_store::local::ToolSourcePolicy for NoToolSources {
-    fn node_operation_sources(
-        &self,
-        _tools: &serde_json::Value,
-        _surfaces: &[serde_json::Value],
-    ) -> anyhow::Result<Vec<gents_store::local::ProjectedOperationSource>> {
-        Ok(Vec::new())
-    }
-
-    fn plugin_refs(
-        &self,
-        _tools: &serde_json::Value,
-    ) -> anyhow::Result<Vec<gents_store::local::ProjectedPluginRef>> {
-        Ok(Vec::new())
-    }
-
-    fn selected_tools(&self, _node: &str, _context: &serde_json::Value) -> Option<String> {
-        None
-    }
+    crate::test_support::doubles::no_tool_sources()
 }
 
 async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {

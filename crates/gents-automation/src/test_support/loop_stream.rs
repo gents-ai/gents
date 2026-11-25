@@ -5,7 +5,9 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
 use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+pub use gents_loop::tool::{
+    BoxFuture, Tool, ToolCallEnvelope, ToolDefinition, ToolDyn, ToolError, ToolFootprint,
+};
 use rig::completion::CompletionError;
 
 use gents_inference::llm::message::Message;
@@ -130,6 +132,128 @@ impl ToolDyn for FixedTool {
         _context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("strict tool error")]
+pub struct StrictToolError;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrictStatusArgs {
+    report_type: String,
+    findings: Vec<String>,
+}
+
+pub struct StrictArgsTool;
+
+impl Tool for StrictArgsTool {
+    const NAME: &'static str = "post_status";
+    type Error = StrictToolError;
+    type Args = StrictStatusArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
+        panic!(
+            "the tool must not run on unparseable arguments; it parsed report_type {:?} and findings {:?}",
+            args.report_type, args.findings
+        );
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct DescribeArgs {
+    tool_name: String,
+}
+
+pub struct DescribeTool {
+    pub panic_on_call: bool,
+}
+
+impl Tool for DescribeTool {
+    const NAME: &'static str = "describe_tool";
+    type Error = StrictToolError;
+    type Args = DescribeArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
+        if self.panic_on_call {
+            panic!(
+                "the tool must not run on non-object arguments; it parsed tool_name {:?}",
+                args.tool_name
+            );
+        }
+        Ok(format!("described:{}", args.tool_name))
+    }
+}
+
+pub struct SuccessfulProbe {
+    pub name: &'static str,
+    pub calls: Arc<AtomicUsize>,
+}
+
+impl ToolDyn for SuccessfulProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> String {
+        self.name.into()
+    }
+
+    fn emits_command_envelope(&self) -> bool {
+        true
+    }
+
+    fn footprint(&self, _args: &str, _context: &ToolCallEnvelope) -> ToolFootprint {
+        ToolFootprint::Read
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        let name = self.name.to_owned();
+        Box::pin(async move {
+            ToolDefinition {
+                name,
+                description: "Successful repetition fixture".into(),
+                parameters: serde_json::json!({"type":"object","properties":{}}),
+            }
+        })
+    }
+
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("gents_exec: {{\"ok\":true,\"duration_ms\":{call},\"hint\":\"poll {call}\"}}\nstdout:\nunchanged\nstderr:\n(empty)"))
+        })
     }
 }
 

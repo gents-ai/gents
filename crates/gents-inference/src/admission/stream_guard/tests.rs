@@ -1,23 +1,12 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::{future::BoxFuture, StreamExt};
+use futures::StreamExt;
 use rig::completion::CompletionResponse;
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use crate::llm::rig_compat::hold_stream_guard;
-
-struct DropProbe {
-    drops: Arc<AtomicUsize>,
-}
-
-impl Drop for DropProbe {
-    fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-impl super::StreamGuardLifecycle for DropProbe {}
+use crate::test_support::doubles::{AsyncFinalizeProbe, DropProbe};
 
 #[tokio::test]
 async fn holds_guard_until_stream_eof_and_preserves_final_response_metadata() {
@@ -43,27 +32,6 @@ async fn holds_guard_until_stream_eof_and_preserves_final_response_metadata() {
     let completed: CompletionResponse<Option<()>> = guarded.into();
     assert_eq!(completed.raw_response, Some(()));
     assert_eq!(completed.message_id.as_deref(), Some("msg_123"));
-}
-
-struct AsyncFinalizeProbe {
-    started: Arc<AtomicBool>,
-    finished: Arc<AtomicBool>,
-    release: tokio::sync::oneshot::Receiver<()>,
-    error: Option<&'static str>,
-}
-
-impl super::StreamGuardLifecycle for AsyncFinalizeProbe {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
-        Box::pin(async move {
-            self.started.store(true, Ordering::SeqCst);
-            let _ = self.release.await;
-            self.finished.store(true, Ordering::SeqCst);
-            match self.error {
-                Some(error) => Err(crate::admission::AdmissionError(error.to_string())),
-                None => Ok(()),
-            }
-        })
-    }
 }
 
 #[tokio::test]

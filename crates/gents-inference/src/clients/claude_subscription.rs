@@ -637,53 +637,7 @@ fn test_credential() -> OAuthCredential {
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-pub struct StaticBearer {
-    token: std::result::Result<String, String>,
-    calls: std::sync::atomic::AtomicUsize,
-    invalidations: std::sync::atomic::AtomicUsize,
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-impl StaticBearer {
-    pub fn new(token: &str) -> Self {
-        Self {
-            token: Ok(token.to_string()),
-            calls: Default::default(),
-            invalidations: Default::default(),
-        }
-    }
-
-    pub fn failing(message: &str) -> Self {
-        Self {
-            token: Err(message.to_string()),
-            calls: Default::default(),
-            invalidations: Default::default(),
-        }
-    }
-
-    pub fn bearer_calls(&self) -> usize {
-        self.calls.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    pub fn invalidations(&self) -> usize {
-        self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-impl BearerSource for StaticBearer {
-    async fn current_bearer(&self) -> Result<String> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.token
-            .clone()
-            .map_err(|message| anyhow::anyhow!(message))
-    }
-
-    async fn invalidate(&self) {
-        self.invalidations
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
+pub use crate::test_support::StaticBearer;
 
 #[cfg(test)]
 #[path = "claude_subscription/tests.rs"]

@@ -1,53 +1,5 @@
 use super::*;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolError, ToolFootprint};
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct SuccessfulProbe {
-    name: &'static str,
-    calls: Arc<AtomicUsize>,
-}
-
-impl ToolDyn for SuccessfulProbe {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.name.into()
-    }
-    fn emits_command_envelope(&self) -> bool {
-        true
-    }
-    fn footprint(
-        &self,
-        _args: &str,
-        _context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> ToolFootprint {
-        ToolFootprint::Read
-    }
-    fn definition<'a>(
-        &'a self,
-        _prompt: String,
-    ) -> BoxFuture<'a, gents_loop::tool::ToolDefinition> {
-        let name = self.name.to_owned();
-        Box::pin(async move {
-            ToolDefinition {
-                name,
-                description: "Successful repetition fixture".into(),
-                parameters: serde_json::json!({"type":"object","properties":{}}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(format!("gents_exec: {{\"ok\":true,\"duration_ms\":{call},\"hint\":\"poll {call}\"}}\nstdout:\nunchanged\nstderr:\n(empty)"))
-        })
-    }
-}
 
 fn call(index: usize, name: &str) -> RawStreamingChoice<()> {
     RawStreamingChoice::ToolCall(RawStreamingToolCall::new(

@@ -73,7 +73,7 @@ enum EnrollmentAuthorityCommand {
 }
 
 #[async_trait]
-trait EnrollmentProjectionReader: Send + Sync {
+pub(crate) trait EnrollmentProjectionReader: Send + Sync {
     async fn load_authority_projection(&self) -> Result<EnrollmentProjection>;
 }
 
@@ -229,6 +229,16 @@ impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
 pub struct EnrollmentAuthorityOwner {
     sender: watch::Sender<EnrollmentAuthorityState>,
     commands: mpsc::Receiver<EnrollmentAuthorityCommand>,
+}
+
+impl EnrollmentAuthorityOwner {
+    pub(crate) async fn serve_next_command<R>(&mut self, reader: &R)
+    where
+        R: EnrollmentProjectionReader + Sync,
+    {
+        let command = self.commands.recv().await.expect("authority command");
+        handle_authority_command(reader, &self.sender, command).await;
+    }
 }
 
 pub fn enrollment_authority_channel() -> (EnrollmentAuthorityOwner, EnrollmentAuthorityHandle) {
@@ -1452,17 +1462,9 @@ mod tests {
         assert!(desired_routes_at(&projection_with_active(expired), now).is_empty());
     }
 
-    struct CurrentProjectionReader(Arc<Mutex<EnrollmentProjection>>);
-
-    #[async_trait]
-    impl EnrollmentProjectionReader for CurrentProjectionReader {
-        async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
-            Ok(self.0.lock().unwrap().clone())
-        }
-    }
-
     #[tokio::test]
     async fn delivery_authorization_survives_transport_failure_and_stale_observations() {
+        use crate::test_support::doubles::CurrentProjectionReader;
         let active = active_enrollment(1, "2099-01-01T00:00:00Z");
         let projection = projection_with_active(active.clone());
         let expected = exact_authorization_fence(

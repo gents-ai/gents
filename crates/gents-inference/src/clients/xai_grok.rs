@@ -13,8 +13,6 @@ use rig::http_client::{HttpClientExt, LazyBody, MultipartForm};
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::Value;
 
-#[cfg(test)]
-use crate::auth::credential::BearerSource;
 use crate::auth::credential::{
     classify_oauth_auth_error, DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind,
     XAI_OAUTH_PRODUCT,
@@ -361,32 +359,11 @@ pub async fn build_chat_completions_client(
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct CountingBearer {
-        token: String,
-        calls: AtomicUsize,
-    }
-
-    impl CountingBearer {
-        fn new(token: &str) -> Arc<Self> {
-            Arc::new(Self {
-                token: token.to_string(),
-                calls: AtomicUsize::new(0),
-            })
-        }
-    }
-
-    impl BearerSource for CountingBearer {
-        async fn current_bearer(&self) -> Result<String> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.token.clone())
-        }
-    }
+    use crate::test_support::StaticBearer;
 
     #[tokio::test]
     async fn injects_fresh_bearer() {
-        let bearer = CountingBearer::new("tok-xyz");
+        let bearer = Arc::new(StaticBearer::new("tok-xyz"));
         let client = XaiGrokOAuthHttpClient::new(bearer.clone());
         let req = Request::builder()
             .method("POST")
@@ -538,7 +515,8 @@ mod tests {
     async fn send_multipart_carries_auth_and_identity_headers() {
         let inner = HeaderCapturingInner::default();
         let captured = inner.headers.clone();
-        let client = XaiGrokOAuthHttpClient::with_inner(CountingBearer::new("tok-mp"), inner);
+        let client =
+            XaiGrokOAuthHttpClient::with_inner(Arc::new(StaticBearer::new("tok-mp")), inner);
         let req = Request::builder()
             .method("POST")
             .uri("https://cli-chat-proxy.grok.com/v1/files")
@@ -572,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_injects_identity_headers_when_absent() {
-        let bearer = CountingBearer::new("tok-abc");
+        let bearer = Arc::new(StaticBearer::new("tok-abc"));
         let client = XaiGrokOAuthHttpClient::new(bearer);
         let req = Request::builder()
             .method("POST")
@@ -606,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_preserves_caller_supplied_identity_headers() {
-        let bearer = CountingBearer::new("tok-abc");
+        let bearer = Arc::new(StaticBearer::new("tok-abc"));
         let client = XaiGrokOAuthHttpClient::new(bearer);
         let req = Request::builder()
             .method("POST")
@@ -650,7 +628,7 @@ mod tests {
 
         let terminal = CountingInner::default();
         let client = XaiGrokOAuthHttpClient::with_inner(
-            CountingBearer::new("tok"),
+            Arc::new(StaticBearer::new("tok")),
             crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
         );
 

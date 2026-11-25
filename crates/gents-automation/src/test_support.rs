@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub(crate) mod doubles;
 pub mod goal_hook;
 
 use std::sync::Arc;

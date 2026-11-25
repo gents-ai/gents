@@ -7,37 +7,9 @@ use tokio::sync::{oneshot, Mutex};
 
 use super::StreamGuardLifecycle;
 use crate::llm::rig_compat::hold_stream_guard;
+use crate::test_support::doubles::{Finalizer, GuardDrop, NativeFinalizer};
 use gents_lean_vocab::families::storage_write_gate_contracts_stream_finalization as family;
 use gents_store::config_client::ConfigAccess;
-
-struct GuardDrop(Arc<AtomicUsize>);
-
-impl Drop for GuardDrop {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-struct Finalizer {
-    gate: Arc<Mutex<()>>,
-    entered: oneshot::Sender<()>,
-    storage_return: oneshot::Receiver<()>,
-    finished: Arc<AtomicBool>,
-    guard: GuardDrop,
-}
-
-impl StreamGuardLifecycle for Finalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
-        Box::pin(async move {
-            let _guard_drop = self.guard;
-            let _guard = self.gate.lock().await;
-            let _ = self.entered.send(());
-            let _ = self.storage_return.await;
-            self.finished.store(true, Ordering::SeqCst);
-            Ok(())
-        })
-    }
-}
 
 async fn gate_still_held(gate: &Mutex<()>) -> bool {
     let sibling = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
@@ -103,39 +75,6 @@ async fn observe_finalization(case: &family::FinalizationInput) -> family::Final
         gate_held,
         guard_drops: guard_drops as u64,
         finalizer_finished,
-    }
-}
-
-struct NativeFinalizer {
-    node: Arc<defra_node::Node>,
-    entered: Arc<tokio::sync::Notify>,
-    storage_return: Arc<tokio::sync::Notify>,
-}
-
-impl StreamGuardLifecycle for NativeFinalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
-        Box::pin(async move {
-            ConfigAccess::transact_local_write(
-                &self.node,
-                None,
-                "test.stream_finalization.native_owner",
-                move |txn| {
-                    let entered = self.entered.clone();
-                    let storage_return = self.storage_return.clone();
-                    Box::pin(async move {
-                        entered.notify_one();
-                        storage_return.notified().await;
-                        txn.execute(
-                            "mutation { create_StreamGateFact(input: {value: \"finalizer\"}) { _docID } }",
-                        )
-                        .await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                },
-            )
-            .await
-            .map_err(|error| crate::admission::AdmissionError(error.to_string()))
-        })
     }
 }
 

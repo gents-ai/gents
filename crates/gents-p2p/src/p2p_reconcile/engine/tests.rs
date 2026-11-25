@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use defra_node::Node as EmbeddedNode;
 use events::Bus;
 use tokio_util::sync::CancellationToken;
@@ -15,16 +14,16 @@ use super::sweep::{
 };
 use super::*;
 use crate::p2p_reconcile::templates::PairingFilters;
-use crate::p2p_reconcile::{
-    to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult,
-    RemoteReplicator,
+use crate::p2p_reconcile::RemoteReplicator;
+use crate::test_support::doubles::{
+    mock_collection_id, mock_live_filters, EnrollmentFenceStore, MockAdmin, MockStore,
+    MultiPeerStore,
 };
 use gents_store::graphql::rows;
 
 mod data_plane;
 
 include!("tests/support.rs");
-include!("tests/admin.rs");
 include!("tests/enrollment_routes.rs");
 include!("tests/sweep.rs");
 include!("tests/reconnect.rs");
