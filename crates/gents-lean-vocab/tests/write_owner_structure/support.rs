@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use syn::{Expr, ExprCall};
 
 pub(crate) fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
-        .expect("gents manifest is under <repo>/crates/gents")
+        .expect("gents-lean-vocab manifest is under <repo>/crates/gents-lean-vocab")
         .to_path_buf()
 }
 

@@ -480,7 +480,8 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
     # routed as the plan job routes this pull request.
     plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False, event="pull_request")
                         for role in GATE.WORKFLOW_ROLES},
-            "jobs": ["contract", "fmt", "lint", "lint-variants", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
+            "jobs": ["contract", "fmt", "lint", "lint-variants", "notary-control",
+                     "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
                      "test:runtime", "build:portable", "shard:portable"]}
     matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False, event="pull_request")}
               for group in GATE.GROUPS]

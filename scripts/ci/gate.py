@@ -218,6 +218,16 @@ TS_PATHS = (
     "scripts/packed-desktop-consumer/", ".github/scripts/install-browser-deps.sh",
 )
 CORE_PACK_PATHS = ("core-packs/", "crates/gents-core-packs/", "crates/gents-pack/")
+NOTARY_PATHS = (
+    ".github/scripts/notarize-staged-artifact.sh",
+    ".github/scripts/notary_json.py",
+    ".github/scripts/test-notarize-staged-artifact.py",
+    ".github/workflows/notarize-staged-artifact.yml",
+    ".github/scripts/rc1-notary-auth.sh",
+    ".github/scripts/test-rc1-notary-auth.py",
+    ".github/scripts/test-release-signing-mode.py",
+    ".github/workflows/release-macos.yml",
+)
 # Checked by the hosted control jobs, which run on every pull request.
 CONTROL_PATHS = (".github/", "scripts/")
 INERT_PATHS = ("docs/", "release/", "LICENSE", ".gitignore", ".gitattributes", ".gate/")
@@ -385,6 +395,8 @@ def classify(path, members):
         return tags | {f"crate:{owner}"}
     if under(path, TS_PATHS):
         return tags | {"ts"}
+    if under(path, NOTARY_PATHS):
+        return tags | {"notary"}
     if tags or under(path, CONTROL_PATHS) or under(path, INERT_PATHS) or ("/" not in path and path.endswith(".md")):
         return tags | {"inert"}
     return {"all"}
@@ -762,6 +774,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         # gents-loop for WASI and the desktop app's capability check.
         "lint-variants": bool(live_e2e_lint) or lint_vera or bool({"gents-loop", "gents-desktop-tauri"} & built),
         "contract": rust or ts or proofs or "contract" in tags or bool(tla),
+        "notary-control": everything or "notary" in tags,
         "ts-packages": ts,
         "ts-unit": ts,
         "ts-browser": ts,
@@ -862,9 +875,9 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         "shards": shards,
         "desktop_ui": desktop_ui,
         "contract": {
-            # write_owner_structure scans every crate's sources but is a
-            # gents test target, which the runtime group runs when selected.
-            "ratchets": rust and "gents" not in tested,
+            # write_owner_structure scans every crate's sources from
+            # gents-lean-vocab, which the foundation group runs when selected.
+            "ratchets": rust and "gents-lean-vocab" not in tested,
             "ts_lean": ts or proofs,
             # TLA+ specs whose header names a changed crate or Lean owner, or
             # whose own files or imported generated modules changed.
@@ -1141,26 +1154,37 @@ def run_lint_variants(selection):
         sh(["./scripts/check-native-e2e-capabilities.sh"])
 
 
+def run_notary_control():
+    if sys.platform != "darwin":
+        print(f"gate: notary-control runs only on macOS; skipping on {sys.platform}")
+        return
+    python = os.environ.get("PYTHON") or sys.executable
+    sh(["bash", "-n", ".github/scripts/notarize-staged-artifact.sh"])
+    sh([python, ".github/scripts/test-notarize-staged-artifact.py"])
+    sh([python, ".github/scripts/test-rc1-notary-auth.py"])
+    sh([python, ".github/scripts/test-release-signing-mode.py"])
+
+
 def run_contract(selection):
     proofs = ROOT / PROOFS
     lake = os.environ.get("LAKE", "lake")
     sh(r"! grep -rn -E '(^|[^[:alnum:]_])sorry([^[:alnum:]_]|$)' --include='*.lean' --exclude-dir=.lake .", cwd=proofs)
     sh("python3 .github/scripts/test-lean-import-closure.py")
-    sh([lake, "build", "importClosure"], cwd=proofs)
     sh("python3 .github/scripts/test-lean-import-layers.py")
-    sh([lake, "build", "importLayers"], cwd=proofs)
+    # lakefile.lean marks importClosure, importLayers, canonicalOutputMap and Proofs as default targets.
     sh([lake, "build"], cwd=proofs)
     sh("python3 .github/scripts/test-canonical-output-map.py && "
        "python3 .github/scripts/check-canonical-output-map.py --check-export")
     sh("python3 .github/scripts/test-lean-rust-decoders.py && python3 .github/scripts/check-lean-rust-decoders.py")
     # Generated decoders, the family schema and the one-consumer-per-family scan.
-    cargo_test("gents-lean-vocab", ["-p", "gents-lean-vocab"])
+    cargo_test("gents-lean-vocab", ["-p", "gents-lean-vocab", "--lib", "--examples"])
     # The `cargo test` above already built this example; under `dev` it would
     # build its dependencies again.
     sh(["cargo", "run", *(profile_flags() or ["--profile", "test"]), "-p", "gents-lean-vocab", "--example",
         "regenerate_household_policy", "--", "--check"])
     if selection["contract"]["ratchets"]:
-        cargo_test("gents write_owner_structure", ["-p", "gents", "--test", "write_owner_structure"])
+        cargo_test("gents-lean-vocab write_owner_structure",
+                   ["-p", "gents-lean-vocab", "--test", "write_owner_structure"])
     tla = selection["contract"].get("tla", [])
     if tla:
         sh(["python3", str(TLA_CHECK), "check-headers"])
@@ -1729,7 +1753,7 @@ def side_tree_env(name):
     """
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
-        return {"CARGO_INCREMENTAL": "1"}
+        return {"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
     return {"CARGO_TARGET_DIR": str(Path(target) / name), "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
 
 
@@ -1773,6 +1797,8 @@ def run(selection, job):
         run_lint_variants(selection)
     elif job == "contract":
         run_contract(selection)
+    elif job == "notary-control":
+        run_notary_control()
     elif job in TS_JOBS:
         run_ts(job)
     elif job.startswith("test:"):
@@ -1788,12 +1814,12 @@ def run(selection, job):
 # The workflow job that runs each plan job, and the jobs every event runs.
 WORKFLOW_JOBS = {
     "fmt": "fmt", "lint": "lint", "lint-variants": "lint-variants", "contract": "contract",
-    "ts-packages": "desktop-packages", "ts-unit": "desktop-ui", "ts-browser": "desktop-ui",
-    "ts-fuzz": "desktop-ui-bombadil",
+    "notary-control": "notary-control-tests", "ts-packages": "desktop-packages",
+    "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
 }
 # Matrix jobs: a plan job `<prefix>:<name>` runs in the workflow job `<prefix>`.
 MATRIX_JOBS = ("test", "build", "shard")
-ALWAYS = ("plan", "repository-guard", "publish-control-tests", "triage-hygiene", "notary-control-tests")
+ALWAYS = ("plan", "repository-guard", "publish-control-tests", "triage-hygiene")
 
 
 def workflow_job(job):
@@ -1840,8 +1866,11 @@ def reuse_units(selection):
         units.append({"unit": "lint-variants", "job": "lint-variants", "slice": variants, "closure": "gated",
                       "runs_on": routed("lint-variants")})
     if "contract" in jobs:
-        units.append({"unit": "contract", "job": "contract", "slice": selection["contract"], "closure": "tree",
+        units.append({"unit": "contract", "job": "contract", "slice": selection["contract"], "closure": "gated",
                       "runs_on": routed("contract")})
+    if "notary-control" in jobs:
+        units.append({"unit": "notary-control", "job": "notary-control", "slice": {}, "closure": "notary",
+                      "runs_on": routed("notary-control")})
     for job in ("ts-packages", "ts-fuzz"):
         if job in jobs:
             units.append({"unit": job, "job": job, "slice": {}, "closure": "ts", "runs_on": routed(job)})
@@ -1861,14 +1890,16 @@ def reuse_units(selection):
 def reaches(closure, tags, reach):
     """Whether a file with these classify() tags and scope() is in a unit's
     closure: `tree` holds every file, `gated` every file the gate does not
-    classify inert, `fmt` the crates' files and `ts` the frontend's (each with
-    the paths that select everything)."""
+    classify inert, `fmt` the crates' files, `notary` the notarization scripts
+    and `ts` the frontend's (each with the paths that select everything)."""
     if closure == "tree":
         return True
     if closure == "gated":
         return tags != {"inert"}
     if closure == "fmt":
         return bool(reach["changed"])
+    if closure == "notary":
+        return "notary" in tags or "all" in tags
     return reach["ts"]
 
 

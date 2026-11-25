@@ -26,7 +26,9 @@ identity.workspace = true
 prettyplease = "0.2"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
+regex = "1"
 sha2.workspace = true
+tempfile = "3"
 
 [[example]]
 name = "decoders_from_snapshot"

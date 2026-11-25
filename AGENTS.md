@@ -115,7 +115,7 @@ wall-clock budget.
 
 ## Enforced rules
 
-Unless noted, the rules are tests in `crates/gents/tests/write_owner_structure/`;
+Unless noted, the rules are tests in `crates/gents-lean-vocab/tests/write_owner_structure/`;
 an exception names its file, its exact count and its reason.
 
 | Rule | Enforced by |

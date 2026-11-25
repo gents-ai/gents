@@ -63,7 +63,7 @@ const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
-    ("gents", 54, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents", 53, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-automation", 21, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-client-host", 29, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
@@ -74,6 +74,7 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents-host", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-inference", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-lean-contract", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-lean-vocab", 1, "the sleep-call token matcher literal in fixtures.rs"),
     ("gents-loop", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-media-host", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-p2p", 8, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),

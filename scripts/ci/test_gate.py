@@ -95,7 +95,8 @@ class Selection(unittest.TestCase):
         self.assertEqual(set(selected), {"store", "session", "runtime", "cli", "desktop", "native", gate.MACOS_ONLY})
         self.assertEqual(selected["store"], gate.GROUPS[1].packages)
         self.assertNotIn("gents-protocol", selection["affected"])
-        self.assertFalse(selection["contract"]["ratchets"])
+        self.assertTrue(selection["contract"]["ratchets"])
+        self.assertFalse(select("crates/gents-lean-vocab/src/lib.rs")["contract"]["ratchets"])
 
     def test_proofs_replay_every_consumer_without_relinting(self):
         selection = select("crates/gents/proofs/Proofs/Request/CausalHop.lean")
@@ -147,6 +148,9 @@ class Selection(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
             self.assertEqual(gate.side_tree_env("live-e2e"), {"CARGO_TARGET_DIR": "/cache/runner-a/live-e2e",
                                                               "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CARGO_TARGET_DIR", None)
+            self.assertEqual(gate.side_tree_env("live-e2e"), {"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
 
     def test_the_live_suites_are_linted_only_when_they_or_their_crates_changed(self):
         self.assertEqual(select("crates/gents-store/src/graphql.rs")["live_e2e_lint"], ["gents", "gents-cli"])
@@ -184,9 +188,12 @@ class Selection(unittest.TestCase):
         self.assertFalse(select("crates/gents-cli/src/lib.rs")["core_packs"])
 
     def test_a_workflow_only_change_runs_only_the_jobs_every_event_runs(self):
-        selection = select(".github/workflows/core-packs.yml", ".github/scripts/test-release-signing-mode.py")
+        selection = select(".github/workflows/core-packs.yml")
         self.assertEqual(selection["jobs"], [])
         self.assertFalse(selection["everything"])
+        notary = select(".github/scripts/test-release-signing-mode.py")
+        self.assertEqual(notary["jobs"], ["notary-control"])
+        self.assertFalse(notary["everything"])
 
     def test_scripts_the_selected_jobs_run_are_never_inert(self):
         # A path that classifies as inert runs only the always-on jobs, so every
@@ -1369,7 +1376,7 @@ class ContractBuilds(unittest.TestCase):
                            if isinstance(call.args[0], list) and "regenerate_household_policy" in call.args[0])
             self.assertEqual(example[2:6], [*expected, "-p", "gents-lean-vocab"], profile)
             tested = [call.args for call in cargo_test.call_args_list if call.args[0] == "gents-lean-vocab"]
-            self.assertEqual(tested, [("gents-lean-vocab", ["-p", "gents-lean-vocab"])])
+            self.assertEqual(tested, [("gents-lean-vocab", ["-p", "gents-lean-vocab", "--lib", "--examples"])])
 
 
 class TlaStructure(unittest.TestCase):
@@ -1649,12 +1656,12 @@ class ReuseKeys(unittest.TestCase):
         self.assertLessEqual(self.TS | self.RUST | {"contract"}, changed)
         self.assertNotIn("fmt", changed)
 
-    def test_an_inert_change_keeps_every_key_but_the_whole_tree_contracts(self):
+    def test_an_inert_change_keeps_every_key(self):
         inert = [path for path, _, _ in TREE if gate.classify(path, MEMBERS) == {"inert"}]
         self.assertTrue(inert)
         for path in (inert[0], next(path for path in inert if path.startswith(".github/scripts/test-"))):
             with self.subTest(path=path):
-                self.assertEqual(self.changed_units(path), {"contract"})
+                self.assertEqual(self.changed_units(path), set())
 
     def test_build_inputs_and_the_gates_own_files_change_every_key(self):
         units = set(keys_of(self.SELECTION))
@@ -1703,6 +1710,8 @@ class ReuseKeys(unittest.TestCase):
         keys = gate.unit_keys(select(everything=True), MEMBERS, TREE)
         self.assertEqual(keys["lint"]["platform"], "Linux/X64")
         self.assertEqual(keys["lint-variants"]["platform"], "Linux/X64")
+        self.assertEqual(keys["contract"]["platform"], "Linux/X64")
+        self.assertEqual(keys["notary-control"]["platform"], "macOS/ARM64")
         self.assertEqual(keys["fmt"]["platform"], "Linux/X64")
         self.assertEqual(keys["ts-unit"]["platform"], "Linux/X64")
         self.assertEqual(keys["test:native"]["platform"], "macOS/ARM64")
