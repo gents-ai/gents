@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
+    builder_actors, fixture_agent, runtime_builder, submit_request,
 };
 use crate::support::interrupt::{
-    wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
+    spawn_runtime, wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
 };
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
@@ -2573,9 +2573,7 @@ impl OwnedCaptureFixture {
             .expect("build real capture runtime")
         };
         let node_did = root.did().to_owned();
-        let (tx, rx) = tokio::sync::watch::channel(false);
-        let handle = tokio::spawn(agent.run(rx));
-        let runtime = BootedAgent::new(tx, handle, node_did.clone());
+        let runtime = spawn_runtime(&db, agent).await;
         Self {
             _db: db,
             node: node.clone(),

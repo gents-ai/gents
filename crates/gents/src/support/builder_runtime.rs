@@ -6,7 +6,6 @@
 use gents::{AgentBuilder, Gents, GentsBuilder};
 
 use super::agent_requests::{canonical_now, RequestActors, RequestSeed};
-use super::interrupt::{wait_for_runtime_ready, BootedAgent};
 use gents_store::test_support::TestStore;
 
 /// Enrols the fixture User, its Node and one Agent, then binds that Agent to
@@ -91,14 +90,6 @@ pub fn fixture_agent(builder: GentsBuilder, actors: &RequestActors, name: &str) 
     builder
         .agent(name)
         .identity_binding(actors.fixture.binding.clone())
-}
-
-pub async fn spawn_runtime(db: &TestStore, runtime: Gents) -> BootedAgent {
-    let node_did = runtime.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(runtime.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
 /// Seeds one pending request in an Agent-owned, already titled session, so no

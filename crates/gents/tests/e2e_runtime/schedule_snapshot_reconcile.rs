@@ -1,5 +1,5 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use gents::{DocumentRuntimeOptions, Gents};
+use gents::DocumentRuntimeOptions;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_tools::surface::ToolCeiling;
@@ -254,22 +254,20 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         "default",
     )
     .await;
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    let (running, agent) = gents::runtime::embedded::boot_runtime(
+        &db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let node_did = agent.node_did().to_string();
+    let node_did = running.node_did;
     let default_agent_did = agent.default_agent_did().to_string();
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    let shutdown_tx = running.shutdown;
+    let handle = running.handle;
 
     let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
@@ -382,22 +380,20 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         "default",
     )
     .await;
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    let (running, agent) = gents::runtime::embedded::boot_runtime(
+        &db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let node_did = agent.node_did().to_string();
+    let node_did = running.node_did;
     let default_agent_did = agent.default_agent_did().to_string();
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    let shutdown_tx = running.shutdown;
+    let handle = running.handle;
 
     let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)

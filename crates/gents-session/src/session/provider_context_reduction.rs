@@ -566,8 +566,7 @@ pub fn stage(input: NewProviderContextReduction<'_>) -> Result<StagedProviderCon
 }
 
 #[cfg(test)]
-#[path = "../../../gents/tests/conformance/durable_reduction.rs"]
-mod durable_reduction_conformance;
+mod durable_reduction_tests;
 
 pub fn stage_exact(
     input: NewExactProviderContextReduction<'_>,

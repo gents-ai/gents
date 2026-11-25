@@ -55,11 +55,6 @@ pub(super) async fn install_default_agent(
     did
 }
 
-pub(super) fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct EchoArgs {
     pub(super) value: String,

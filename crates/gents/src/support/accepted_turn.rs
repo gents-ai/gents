@@ -386,13 +386,9 @@ pub async fn boot_prepared_accepted_turn(
     prepared: PreparedAcceptedTurn,
     agent: Gents,
 ) -> AcceptedTurnRuntime {
-    let node_did = agent.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handle = tokio::spawn(agent.run(shutdown_rx));
-    super::interrupt::wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle)
-        .await;
+    let runtime = super::interrupt::spawn_runtime(db, agent).await;
     AcceptedTurnRuntime {
-        runtime: BootedAgent::new(shutdown_tx, handle, node_did),
+        runtime,
         backend: prepared.backend,
     }
 }
@@ -404,17 +400,13 @@ pub async fn boot_accepted_turn(
 ) -> AcceptedTurnRuntime {
     let prepared = prepare_accepted_turn(db, spec).await;
     let identity: std::sync::Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
-            ..runtime_options
-        },
-    )
-    .await
-    .expect("build accepted-turn runtime");
-    boot_prepared_accepted_turn(db, prepared, agent).await
+    let (running, _agent) = gents::runtime::embedded::boot_runtime(db, identity, runtime_options)
+        .await
+        .expect("boot accepted-turn runtime");
+    AcceptedTurnRuntime {
+        runtime: BootedAgent::from_running(running),
+        backend: prepared.backend,
+    }
 }
 
 pub async fn boot_accepted_turn_with_backend_capacity(

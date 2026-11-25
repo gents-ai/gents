@@ -226,6 +226,7 @@ where
     assert_eq!(all.len(), lean.len(), "vocabulary {key} repeats a value");
 }
 
+#[must_use = "each conformance case must be checked with `.check(...)`"]
 pub struct Case<I, O> {
     pub input: I,
     key: String,
@@ -248,6 +249,7 @@ where
     }
 }
 
+#[must_use = "conformance cases must be iterated and verified with `.check(...)`"]
 pub fn cases<I, O>(key: &str) -> Vec<Case<I, O>>
 where
     I: DeserializeOwned,
@@ -347,6 +349,7 @@ where
 /// the shards of one family partition its cases: every case lands in exactly
 /// one shard. A generated family too large to replay within one test's hang
 /// ceiling runs as one test per shard; its consumer stays one file.
+#[must_use = "sharded conformance cases must be iterated and verified with `.check(...)`"]
 pub fn shard<T>(cases: Vec<T>, shard: usize, of: usize) -> Vec<T> {
     assert!(shard < of, "shard {shard} of {of}");
     cases

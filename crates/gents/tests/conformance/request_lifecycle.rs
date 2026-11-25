@@ -1909,10 +1909,11 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
     {
         let db = trial_store("terminal-repair-scope").await;
         let actors = support::agent_requests::RequestActors::new(&db).await;
-        let foreign =
-            tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-owner"))
-                .await
-                .unwrap();
+        let foreign = tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("foreign-owner")
+        })
+        .await
+        .unwrap();
         let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
         let live = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         let mut docs = Vec::new();
