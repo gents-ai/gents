@@ -6,7 +6,8 @@ namespace Hooks
 cannot reach. `claim` is the pending to claimed compare-and-set with every
 guard core keeps (queue order, the session stop latch, client authorization);
 `none` means it affected no row. `retire` and `reject` are the shared pending
-terminal paths (superseded, failed) with their dependents; `retire` records
+terminal paths (superseded; failed, or dead for a passed TTL by
+`RequestContext.pendingDisposition`) with their dependents; `retire` records
 the successor the verdict names on the superseded row. -/
 structure ClaimCore (Core : Type) where
   claim : Core → Option Core
