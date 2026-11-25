@@ -114,25 +114,23 @@ impl Fixture {
     }
 
     async fn question(&self) -> Request {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let Some(question) = approval::pending(self.home.path()).unwrap().pop() {
-                    return question;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        approval::testing::wait_for_question(
+            self.home.path(),
+            true,
+            Duration::from_secs(10),
+            "file operation did not request consent",
+        )
         .await
-        .expect("file operation did not request consent")
     }
 
     async fn pending_question(&self) {
-        loop {
-            if !approval::pending(self.home.path()).unwrap().is_empty() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        approval::testing::wait_for_question(
+            self.home.path(),
+            true,
+            Duration::from_secs(10),
+            "file operation did not request consent",
+        )
+        .await;
     }
 
     fn assert_clear(&self) {

@@ -139,3 +139,41 @@ impl crate::plugin_host::PluginHost for HomePluginHost {
             .plugin_tool(plugin, read_root, own_folder, node, node_did, agent_did)
     }
 }
+
+/// Wait until `read(path)` returns `Some(value)`, waking on filesystem events
+/// in `path`'s parent directory, or panic after `timeout` with `what`.
+pub async fn watch_path_until<T>(
+    path: &std::path::Path,
+    timeout: std::time::Duration,
+    what: &str,
+    mut read: impl FnMut(&std::path::Path) -> Option<T>,
+) -> T {
+    use notify::Watcher as _;
+    let parent = path.parent().expect("watched path has a parent directory");
+    std::fs::create_dir_all(parent).expect("create watched parent directory");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })
+    .expect("create filesystem watcher");
+    watcher
+        .watch(parent, notify::RecursiveMode::NonRecursive)
+        .expect("watch parent directory");
+    tokio::time::timeout(timeout, async {
+        loop {
+            if let Some(value) = read(path) {
+                return value;
+            }
+            if rx.recv().await.is_none() {
+                panic!("{what}: watcher closed before {path:?} was ready");
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}: timed out waiting for {path:?}"))
+}
+
+/// Wait until `path` exists, waking on filesystem events in its parent directory.
+pub async fn wait_for_path(path: &std::path::Path, timeout: std::time::Duration, what: &str) {
+    watch_path_until(path, timeout, what, |path| path.exists().then_some(())).await;
+}

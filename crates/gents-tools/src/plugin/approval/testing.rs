@@ -1,10 +1,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::task::{Context, Poll};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -12,15 +9,19 @@ use anyhow::{Context as _, Result};
 use super::Answer;
 use gents_store::drop_cleanup::DropCleanup;
 
+enum ObserveWake {
+    Fs,
+    Stop,
+}
+
 /// The simulated external operator stays ready while a guest occupies its test
-/// task. Its answer wait starts when polled, after guest preparation. Cleanup
+/// task. Its answer wait starts when awaited, after guest preparation. Cleanup
 /// stops the worker and hands its join to the runtime bound at construction.
 pub struct Operator {
-    stop: Arc<AtomicBool>,
+    stop: mpsc::Sender<ObserveWake>,
     worker: Option<tokio::task::JoinHandle<Result<ObservedQuestion>>>,
     cleanup: DropCleanup,
     wait: Duration,
-    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
     observation: QuestionObservation,
 }
 
@@ -64,17 +65,16 @@ impl Operator {
         tokio::task::spawn_blocking(move || super::mark_listening(&ready_home))
             .await
             .context("preparing the test approval operator")??;
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopping = stop.clone();
-        let worker = tokio::task::spawn_blocking(move || observe(home, answer, &stopping));
+        let (tx, rx) = mpsc::channel();
+        let fs_tx = tx.clone();
+        let worker = tokio::task::spawn_blocking(move || observe(home, answer, rx, fs_tx));
         let observation = QuestionObservation(Arc::new(Mutex::new(None)));
         Ok((
             Self {
-                stop,
+                stop: tx,
                 worker: Some(worker),
                 cleanup: DropCleanup::current(),
                 wait,
-                deadline: None,
                 observation: observation.clone(),
             },
             observation,
@@ -82,60 +82,108 @@ impl Operator {
     }
 }
 
-/// The file-based queue has no asynchronous receiver. Its external operator
-/// polls on a blocking worker so guest scheduling cannot stop the heartbeat.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the test operator owns a spawn_blocking worker while polling the native filesystem queue"
-)]
-fn observe(home: PathBuf, answer: Answer, stop: &AtomicBool) -> Result<ObservedQuestion> {
-    while !stop.load(Ordering::Acquire) {
+/// Wait until a pending approval request appears on `home`, waking on
+/// filesystem events in the approval queue directories.
+pub async fn wait_for_question(
+    home: &Path,
+    advertise_listener: bool,
+    ceiling: Duration,
+    what: &str,
+) -> super::Request {
+    use notify::Watcher as _;
+    super::prepare_listener(home).expect("prepare approval queue watch");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })
+    .expect("create approval queue watcher");
+    for dir in super::queue_dirs(home) {
+        watcher
+            .watch(&dir, notify::RecursiveMode::NonRecursive)
+            .expect("watch approval queue directory");
+    }
+    tokio::time::timeout(ceiling, async {
+        loop {
+            let mut requests = if advertise_listener {
+                super::pending(home)
+            } else {
+                super::pending_requests(home)
+            }
+            .expect("read pending approval requests");
+            if let Some(request) = requests.pop() {
+                return request;
+            }
+            if rx.recv().await.is_none() {
+                panic!("{what}: approval queue watcher closed");
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}"))
+}
+
+fn observe(
+    home: PathBuf,
+    answer: Answer,
+    rx: mpsc::Receiver<ObserveWake>,
+    fs_tx: mpsc::Sender<ObserveWake>,
+) -> Result<ObservedQuestion> {
+    use notify::Watcher as _;
+    let mut watcher = notify::recommended_watcher(move |_| {
+        let _ = fs_tx.send(ObserveWake::Fs);
+    })?;
+    for dir in super::queue_dirs(&home) {
+        watcher.watch(&dir, notify::RecursiveMode::NonRecursive)?;
+    }
+    loop {
         if let Some(request) = super::pending(&home)?.into_iter().next() {
             let id = request.id.clone();
             let prompt = request.prompt();
             super::decide(&home, &id, answer)?;
             return Ok(ObservedQuestion { id, prompt });
         }
-        std::thread::sleep(Duration::from_millis(5));
+        match rx.recv_timeout(super::LISTENER_FRESH / 2) {
+            Ok(ObserveWake::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                anyhow::bail!("the test operator was stopped before answering");
+            }
+            Ok(ObserveWake::Fs) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
-    anyhow::bail!("the test operator was stopped before answering")
 }
 
-impl Future for Operator {
+impl std::future::IntoFuture for Operator {
     type Output = Result<String>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        let worker = this
-            .worker
-            .as_mut()
-            .expect("operator polled after completion");
-        if let Poll::Ready(reply) = Pin::new(worker).poll(cx) {
-            this.worker.take();
-            let question =
-                reply.context("the test approval operator stopped without a result")??;
-            *this
+    fn into_future(mut self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let reply = tokio::time::timeout(
+                self.wait,
+                self.worker
+                    .as_mut()
+                    .expect("operator awaited after completion"),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "the test operator observed no approval question before its wait ended"
+                )
+            })?
+            .context("the test approval operator stopped without a result")??;
+            self.worker.take();
+            *self
                 .observation
                 .0
                 .lock()
-                .expect("approval observation lock") = Some(question.id);
-            return Poll::Ready(Ok(question.prompt));
-        }
-        let deadline = this
-            .deadline
-            .get_or_insert_with(|| Box::pin(tokio::time::sleep(this.wait)));
-        if deadline.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Err(anyhow::anyhow!(
-                "the test operator observed no approval question before its wait ended"
-            )));
-        }
-        Poll::Pending
+                .expect("approval observation lock") = Some(reply.id);
+            Ok(reply.prompt)
+        })
     }
 }
 
 impl Drop for Operator {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        let _ = self.stop.send(ObserveWake::Stop);
         if let Some(worker) = self.worker.take() {
             worker.abort();
             self.cleanup.spawn(async move {

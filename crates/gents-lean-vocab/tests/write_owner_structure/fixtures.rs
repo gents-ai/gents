@@ -75,7 +75,7 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents-session", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-store", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-toolcalls", 20, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-tools", 44, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-tools", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
 ];
 
 struct Source {

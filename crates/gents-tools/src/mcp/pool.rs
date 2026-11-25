@@ -54,13 +54,13 @@ struct McpConnection {
     trace_context_headers: RapidHashMap<String, String>,
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
-    last_used: std::sync::Mutex<std::time::Instant>,
+    last_used: std::sync::Mutex<tokio::time::Instant>,
     resume_policy: Arc<SessionResumePolicy>,
 }
 
 impl McpConnection {
     fn touch(&self) {
-        *self.last_used.lock().expect("last_used lock") = std::time::Instant::now();
+        *self.last_used.lock().expect("last_used lock") = tokio::time::Instant::now();
     }
 
     fn idle_longer_than(&self, ttl: std::time::Duration) -> bool {
@@ -72,8 +72,8 @@ impl McpConnection {
     }
 }
 
-fn fresh_last_used() -> std::sync::Mutex<std::time::Instant> {
-    std::sync::Mutex::new(std::time::Instant::now())
+fn fresh_last_used() -> std::sync::Mutex<tokio::time::Instant> {
+    std::sync::Mutex::new(tokio::time::Instant::now())
 }
 
 fn wrap_connection<S>(

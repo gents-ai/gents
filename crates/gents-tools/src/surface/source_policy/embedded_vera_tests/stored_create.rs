@@ -332,8 +332,8 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
     .mint_with_lifetime_for_test(&user.0, &audience, lifetime)?;
     let created = stage(&node, &agent, &prepared, &credentials, || async {
         let lapsed = minted + lifetime + Duration::from_secs(2);
-        while SystemTime::now() <= lapsed {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+        while let Ok(wait) = lapsed.duration_since(SystemTime::now()) {
+            tokio::time::sleep(wait + Duration::from_millis(10)).await;
         }
     })
     .await?

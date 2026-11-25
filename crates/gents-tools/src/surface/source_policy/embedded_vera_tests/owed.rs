@@ -29,8 +29,8 @@ pub(super) fn endpoint_for(
 
 async fn lapse(lifetime: Duration, minted: SystemTime) {
     let lapsed = minted + lifetime + Duration::from_secs(2);
-    while SystemTime::now() <= lapsed {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(wait) = lapsed.duration_since(SystemTime::now()) {
+        tokio::time::sleep(wait + Duration::from_millis(10)).await;
     }
 }
 

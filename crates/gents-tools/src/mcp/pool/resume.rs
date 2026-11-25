@@ -22,6 +22,23 @@ pub struct McpResumeStats {
     pub sessions_poisoned: AtomicU64,
     pub session_reinits: AtomicU64,
     pub connect_failures: AtomicU64,
+    #[cfg(test)]
+    poisoned_notify: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl McpResumeStats {
+    pub(crate) async fn wait_poisoned(&self) {
+        loop {
+            let notified = self.poisoned_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.sessions_poisoned.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -70,6 +87,8 @@ impl SessionResumePolicy {
     fn poison(&self, reason: &str) {
         if !self.poisoned.swap(true, Ordering::AcqRel) {
             self.stats.sessions_poisoned.fetch_add(1, Ordering::Relaxed);
+            #[cfg(test)]
+            self.stats.poisoned_notify.notify_waiters();
             tracing::warn!(
                 service_id = %self.service_id,
                 reason,

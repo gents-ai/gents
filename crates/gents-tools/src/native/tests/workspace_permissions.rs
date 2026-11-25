@@ -77,17 +77,13 @@ impl Fixture {
 
     #[cfg(target_os = "macos")]
     async fn question(&self) -> Request {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if let Some(question) = approval::pending_requests(self.home.path()).unwrap().pop()
-                {
-                    return question;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        approval::testing::wait_for_question(
+            self.home.path(),
+            false,
+            Duration::from_secs(3),
+            "the command never requested consent",
+        )
         .await
-        .expect("the command never requested consent")
     }
 
     fn marker(&self) -> String {
