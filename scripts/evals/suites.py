@@ -145,7 +145,7 @@ def listing(root, trials):
         lines.append(f"{found['id']:<20} {splits['train']:>5} {splits['validation']:>5} {splits['held_out']:>5} {len(stages):>6} {sum(len(s['checks']) for s in stages):>6}  {', '.join(found['coverage'])}")
         if "blocked_reason" in found:
             lines.append("  " + found["blocked_reason"])
-    lines.append(f"Stage/check totals include held-out cases; each selected case runs {trials} trials. The capstone configures, then runs one request.")
+    lines.append(f"Stage/check totals include held-out cases; each selected case runs {trials} trials.")
     return "\n".join(lines)
 
 

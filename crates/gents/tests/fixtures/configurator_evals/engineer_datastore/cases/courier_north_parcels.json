@@ -1,0 +1,190 @@
+{
+  "case_id": "courier-north-parcels",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "parcels.json",
+        "contents": "[\n  {\n    \"code\": \"P-31\",\n    \"route\": \"North\",\n    \"address\": \"4 Quay Lane\"\n  },\n  {\n    \"code\": \"P-32\",\n    \"route\": \"North\",\n    \"address\": \"9 Mill Street\"\n  },\n  {\n    \"code\": \"P-33\",\n    \"route\": \"South\",\n    \"address\": \"2 Ferry Road\"\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "set_up",
+      "settle": true,
+      "prompt": "Put the parcels in parcels.json into Parcel records. Then create a Courier agent that may read only the North route's parcels.",
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Parcel",
+          "filter": {
+            "code": {
+              "_eq": "P-33"
+            }
+          },
+          "fields": [
+            "code"
+          ]
+        }
+      ],
+      "checks": []
+    },
+    {
+      "stage_id": "ask",
+      "settle": true,
+      "prompt": "Ask the Courier which parcels it can see.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_p31",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcourier\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%Quay Lane%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_p32",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcourier\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%Mill Street%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "read_p33",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)\\bcourier\\b"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "payload": {
+              "_ilike": "%Ferry Road%"
+            }
+          },
+          "fields": [
+            "_docID",
+            "request_doc_id",
+            "source"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "read_p31",
+                "min": 1
+              },
+              {
+                "capture": "read_p32",
+                "min": 1
+              },
+              {
+                "capture": "read_p33",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "P-31"
+              },
+              {
+                "matches": "P-32"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -9,7 +9,10 @@ case grades what the recipient sees: how many items there are, their titles,
 notes, choices, kind, action and status. The Engineer cannot read them back,
 so a repeated turn is graded on the items the operator sees. The surface files
 one notice per request, and a question is its own item. No check names a tool;
-a case that says not to file grades that no item appeared.
+a case that says not to file grades that no item appeared. A run an automation
+started files for the Node's owner, which in a trial is the evaluator, so a
+record the evaluator seeds reaches the operator's inbox only through the
+automation the Engineer built.
 
 ## Cases
 
@@ -22,6 +25,7 @@ a case that says not to file grades that no item appeared.
 | freezer-breach-sustained | train | flag a breach, and don't re-flag it when it persists | one flag, nothing new on a later turn | one item "F2 (-12)" after both turns |
 | blocked-order-escalation | train | do the work that needs no sign-off, escalate the rest | files plus one flag | invoices for the four approved orders with their totals, none for A-111 and A-114, orders unchanged; one item "A-111, A-114" |
 | kiln-flag-and-question | train | a flag and an optional question in one turn | flag and ask kinds, optional questions | two items: the K3 flag with its note, and the glaze question with both choices and optional set |
+| big-order-inbox-note | train | a note in my inbox for each new order over $500, none for smaller ones | an automation whose run files for the Node's owner | the $120 order the user adds gets no item; the seeded $870 order ORD-1044 gets exactly one item for the operator naming it |
 | cooler-boundary-silent | validation | flag only if a reading left an inclusive range | staying silent at a boundary | no item |
 | boiler-new-breach | validation | flag a breach, then only the newly breaching boiler | a second flag on a later turn | "B2 (13 bar)" then a second item "B3 (14 bar)" |
 | tank-two-low-readings | validation | flag only after two low readings in a row, once | state kept across turns however the Engineer keeps it | no item after 41 and 27; one item after 26; still one after 24 |
