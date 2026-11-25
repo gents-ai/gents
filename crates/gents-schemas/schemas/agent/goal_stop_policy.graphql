@@ -1,0 +1,12 @@
+type GoalStopPolicy @policy(id: "$household", resource: "goal_policies", parentField: "agent_doc_id") {
+    goal_doc_id: String @index(unique: true) @immutable
+    agent_doc_id: String @index @immutable
+    session_doc_id: String @index @immutable
+    agent_did: String @index @immutable
+    node_did: String @index @immutable
+    on_blocked: String
+    token_ceiling: Int
+    turn_ceiling: Int
+    lifted: Boolean
+    updated_at: String
+}

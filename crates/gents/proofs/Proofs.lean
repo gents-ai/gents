@@ -70,6 +70,8 @@ import Proofs.Documents.Operations
 import Proofs.Documents.ScopeTemplates
 import Proofs.Automation.Triggers
 import Proofs.Automation.Goals
+import Proofs.Automation.GoalProgress
+import Proofs.Automation.GoalStopPolicy
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Automation.GoalAutomation.Operations

@@ -539,6 +539,7 @@ async fn stage_goal_and_claim_typed(
             auto_resume_at_reset: None,
             created_at: Some(now.to_string()),
             updated_at: Some(now.to_string()),
+            progress_record: None,
         },
     };
     Ok(staged)

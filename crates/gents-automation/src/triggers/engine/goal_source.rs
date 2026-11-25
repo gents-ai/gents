@@ -476,11 +476,13 @@ impl GoalSource {
             }
         }
 
-        let (has_activity, control_unavailable) = if terminal == GoalRequestTerminal::Completed {
-            self.request_activity(actor, &latest).await?
-        } else {
-            (true, false)
-        };
+        let (has_activity, control_unavailable, turn) =
+            if terminal == GoalRequestTerminal::Completed {
+                let (activity, unavailable, turn) = self.request_activity(actor, &latest).await?;
+                (activity, unavailable, Some(turn))
+            } else {
+                (true, false, None)
+            };
         let cause = if control_unavailable {
             GoalFailureCause::GoalControlUnavailable
         } else {
@@ -505,9 +507,12 @@ impl GoalSource {
                 wrapup_completed: goal.wrapup_completed.unwrap_or(false),
                 max_infrastructure_retries: goal.max_infrastructure_retries(),
             };
-        let persisted_budget_reached = crate::goal::goal_budget_reached(
+        let policy = self.stop_policy(actor, &goal).await?;
+        let persisted_budget_reached = crate::goal::stop_policy::goal_limit_reached(
+            &policy,
             goal.token_budget,
             goal.tokens_used.unwrap_or_default(),
+            goal.continuation_sequence(),
         );
         if gate_goal_continuation(
             agent.observation,
@@ -539,7 +544,12 @@ impl GoalSource {
             return Ok(None);
         }
         goal = refreshed_goal;
-        let budget_reached = crate::goal::goal_budget_reached(goal.token_budget, tokens_used);
+        let budget_reached = crate::goal::stop_policy::goal_limit_reached(
+            &policy,
+            goal.token_budget,
+            tokens_used,
+            goal.continuation_sequence(),
+        );
         let status = goal
             .parsed_status()
             .context("refreshed Goal candidate has an unknown status")?;
@@ -593,6 +603,11 @@ impl GoalSource {
                 return Ok(None);
             }
             GoalDecision::Continue | GoalDecision::Wrapup => {
+                if let (GoalDecision::Continue, Some(turn)) = (decision, turn.as_ref()) {
+                    if !self.record_progress(actor, &mut goal, status, turn).await? {
+                        return Ok(None);
+                    }
+                }
                 let waited = goal
                     .last_failure
                     .as_deref()
@@ -825,7 +840,7 @@ impl GoalSource {
         &self,
         actor: &identity::Did,
         request: &AgentRequestRow,
-    ) -> Result<(bool, bool)> {
+    ) -> Result<(bool, bool, crate::goal::progress::TurnObservation)> {
         let physical_id = request
             .doc_id
             .as_deref()
@@ -858,6 +873,9 @@ impl GoalSource {
                     limit: 1
                 ) {{ call_id }}
                 AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{ _docID }}
+                turn_calls: AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{
+                    _docID tool_name tool_call_id lifecycle_state deadline_at terminal_output
+                }}
                 unavailable_controls: AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }},
                     node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{requester}" }}, session_id: {{ _eq: "{session}" }},
                     tool_name: {{ _in: ["create_goal", "get_goal", "update_goal"] }},
@@ -896,9 +914,16 @@ impl GoalSource {
                         if scope.kind == gents_protocol::rendered_request::CaptureScopeKind::Inference)
                 && !row.segment.payload.trim().is_empty()
         });
+        let turn_calls = data
+            .get("turn_calls")
+            .and_then(|value| value.as_array())
+            .context("goal activity query omitted the turn's tool calls")?;
+        let segment_rows: Vec<_> = segments.iter().map(|row| row.segment.clone()).collect();
+        let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
         Ok((
             has_rows("InferenceCall")? || has_rows("AgentToolCall")? || provider_output,
             has_rows("unavailable_controls")?,
+            crate::goal::progress::observe_turn(turn_calls, &segment_rows, now),
         ))
     }
 
@@ -988,6 +1013,80 @@ impl GoalSource {
         Ok(())
     }
 
+    /// The Goal's stop policy as its working Agent reads it (`reader`), or
+    /// the default when the Goal has none.
+    async fn stop_policy(
+        &self,
+        actor: &identity::Did,
+        goal: &GoalDocument,
+    ) -> Result<gents_protocol::goal::GoalStopPolicy> {
+        let goal_doc_id = goal.doc_id.clone();
+        ConfigAccess::transact_local_readonly(
+            &self.node,
+            Some(actor.clone()),
+            "goal.stop_policy",
+            move |txn| {
+                let goal_doc_id = goal_doc_id.clone();
+                Box::pin(async move {
+                    crate::goal::stop_policy::load_goal_stop_policy_in_txn(txn, &goal_doc_id).await
+                })
+            },
+        )
+        .await
+    }
+
+    /// Lean `GoalProgress.step` over the finished goal turn: writes the new
+    /// record on the Goal, compare-and-set on the status it was decided from,
+    /// or pauses the Goal with reason `no_progress`. False when the Goal
+    /// paused or changed underneath.
+    async fn record_progress(
+        &self,
+        actor: &identity::Did,
+        goal: &mut GoalDocument,
+        status: GoalStatus,
+        turn: &crate::goal::progress::TurnObservation,
+    ) -> Result<bool> {
+        let record: crate::goal::progress::ProgressRecord = goal
+            .progress_record
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        let goal_now = serde_json::json!([goal.objective, goal.token_budget]).to_string();
+        let changed =
+            turn.goal_state_changed || (!record.goal.is_empty() && record.goal != goal_now);
+        let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
+        let (mut next, pause) = crate::goal::progress::progress_step(
+            &record,
+            turn.calls.clone(),
+            changed,
+            turn.live_deadline,
+            now,
+        );
+        next.goal = goal_now;
+        if pause {
+            self.pause_goal(actor, goal, status, NO_PROGRESS_REASON)
+                .await?;
+            return Ok(false);
+        }
+        let json = serde_json::to_string(&next)?;
+        let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
+        if !update_goal_fields_if_status_from_access(
+            &self.agent_access(actor)?,
+            goal,
+            status,
+            &format!(
+                r#"progress_record: "{}", updated_at: "{updated_at}""#,
+                escape_graphql_string(&json)
+            ),
+        )
+        .await?
+        {
+            return Ok(false);
+        }
+        goal.progress_record = Some(json);
+        Ok(true)
+    }
+
     async fn pause_goal(
         &self,
         actor: &identity::Did,
@@ -1004,12 +1103,16 @@ impl GoalSource {
             goal,
             expected_status,
             &format!(
-                r#"status: "paused", active_time_seconds: {active_time}, active_started_at: null, last_failure: "{reason}", updated_at: "{updated_at}""#
+                r#"status: "paused", active_time_seconds: {active_time}, active_started_at: null, last_failure: "{reason}", progress_record: null, updated_at: "{updated_at}""#
             ),
         )
         .await
     }
 }
+
+/// The pause reason of a Goal the harness paused after
+/// `GoalProgress.noProgressLimit` goal turns without progress.
+pub const NO_PROGRESS_REASON: &str = "no_progress";
 
 fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {
     request.caused_by_trigger_kind.as_deref() == Some(gents_protocol::goal_names::GOAL_TRIGGER_KIND)

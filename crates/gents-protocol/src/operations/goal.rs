@@ -183,6 +183,39 @@ impl GoalSetInput {
     }
 }
 
+/// What a person supplies to change a Goal's stop policy. `Some(None)`
+/// removes a ceiling; an absent field keeps what the policy holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalStopPolicyInput {
+    pub on_blocked: Option<crate::goal::OnBlocked>,
+    pub token_ceiling: Option<Option<i64>>,
+    pub turn_ceiling: Option<Option<i64>>,
+    pub lifted: Option<bool>,
+}
+
+impl GoalStopPolicyInput {
+    /// The policy after this change, from the one stored (the default when the
+    /// Goal has none).
+    pub fn apply(
+        &self,
+        stored: &crate::goal::GoalStopPolicy,
+    ) -> Result<crate::goal::GoalStopPolicy, GoalOperationError> {
+        if self == &Self::default() {
+            return Err(GoalOperationError::NothingToChange);
+        }
+        let positive = |value: Option<i64>| value.is_none_or(|value| value > 0);
+        if !positive(self.token_ceiling.flatten()) || !positive(self.turn_ceiling.flatten()) {
+            return Err(GoalOperationError::InvalidCeiling);
+        }
+        Ok(crate::goal::GoalStopPolicy {
+            on_blocked: self.on_blocked.unwrap_or(stored.on_blocked),
+            token_ceiling: self.token_ceiling.unwrap_or(stored.token_ceiling),
+            turn_ceiling: self.turn_ceiling.unwrap_or(stored.turn_ceiling),
+            lifted: self.lifted.unwrap_or(stored.lifted),
+        })
+    }
+}
+
 /// What a caller supplies to start a session's Goal; the client signs the
 /// first request that carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,11 +245,17 @@ pub enum GoalOperationError {
     InvalidObjective,
     #[error("goal token budget must be positive")]
     InvalidBudget,
+    #[error("a goal policy ceiling must be a positive whole number")]
+    InvalidCeiling,
+    #[error("your user asked to confirm a block once: the report is recorded and the goal stays active. Check once more that you cannot go on without the user; if you still cannot, report blocked again and the goal pauses for the user")]
+    ConfirmBlocked,
+    #[error("your user asked you to keep trying: the report is recorded for them and the goal stays active. Continue with another approach; the goal pauses on its own if turns stop making progress")]
+    KeepTrying,
     #[error("provide objective, token_budget, status or auto_resume to change the goal")]
     NothingToChange,
     #[error("usage_limited and budget_limited are set by the runtime when a limit is reached")]
     RuntimeOnly,
-    #[error("only a person may pause, stop, clear the budget or choose reset resume")]
+    #[error("only a person may pause, stop or choose reset resume")]
     PersonOnly,
     #[error("objective and token_budget can only be edited while status is active")]
     FieldsNeedKeep,
@@ -297,6 +336,11 @@ impl GoalOperationError {
             | Self::Passthrough(_) => NextCall::VerbHelp {
                 resource: "goal",
                 verb: "set",
+            },
+            Self::ConfirmBlocked | Self::KeepTrying => NextCall::Inspect { resource: "goal" },
+            Self::InvalidCeiling => NextCall::VerbHelp {
+                resource: "goal",
+                verb: "policy",
             },
         }
     }

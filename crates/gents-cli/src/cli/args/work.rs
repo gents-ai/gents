@@ -147,6 +147,10 @@ pub(crate) enum GoalCommand {
     Start(GoalStartArgs),
     #[command(about = "Update the durable goal for a session")]
     Set(GoalSetArgs),
+    #[command(
+        about = "Set what a blocked report does and the goal's ceilings; the goal's Agent cannot change these"
+    )]
+    Policy(GoalPolicyArgs),
     #[command(about = "Resume a goal and atomically enqueue its continuation")]
     ResumeRequest(GoalResumeArgs),
     #[command(
@@ -261,6 +265,66 @@ pub(crate) struct GoalSetArgs {
         help = "Resume a usage-limited goal by itself at the reset the provider reported"
     )]
     pub(crate) auto_resume: Option<bool>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum OnBlockedArg {
+    /// One blocked report pauses the goal (the default).
+    StopFirst,
+    /// The first report gets one confirmation turn; a second pauses the goal.
+    ConfirmOnce,
+    /// Reports are kept for you and the goal continues; it still pauses when
+    /// turns stop making progress or a limit is reached.
+    KeepTrying,
+}
+
+impl From<OnBlockedArg> for gents_protocol::goal::OnBlocked {
+    fn from(value: OnBlockedArg) -> Self {
+        match value {
+            OnBlockedArg::StopFirst => Self::StopFirst,
+            OnBlockedArg::ConfirmOnce => Self::ConfirmOnce,
+            OnBlockedArg::KeepTrying => Self::KeepTrying,
+        }
+    }
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalPolicyArgs {
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(
+        long,
+        value_enum,
+        help = "What one blocked report from the goal's Agent does"
+    )]
+    pub(crate) on_blocked: Option<OnBlockedArg>,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(i64).range(1..),
+        conflicts_with = "clear_token_ceiling",
+        help = "Charged tokens the goal may spend, whatever budget its Agent sets"
+    )]
+    pub(crate) token_ceiling: Option<i64>,
+    #[arg(long)]
+    pub(crate) clear_token_ceiling: bool,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(i64).range(1..),
+        conflicts_with = "clear_turn_ceiling",
+        help = "Goal turns the goal may take before its wrap-up turn"
+    )]
+    pub(crate) turn_ceiling: Option<i64>,
+    #[arg(long)]
+    pub(crate) clear_turn_ceiling: bool,
+    #[arg(
+        long,
+        value_name = "on|off",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Lift both ceilings without forgetting them"
+    )]
+    pub(crate) lifted: Option<bool>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }
