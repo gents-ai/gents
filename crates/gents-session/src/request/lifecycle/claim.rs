@@ -1,3 +1,4 @@
+use super::pending_settlement::PendingDisposition;
 use super::*;
 use anyhow::Context;
 
@@ -78,7 +79,19 @@ async fn reject_pending_admission_in_txn(
     request: &AgentRequest,
     reason: &str,
     terminalized_at: &str,
-) -> Result<bool> {
+) -> Result<Option<PendingDisposition>> {
+    match super::pending_settlement::settle_pending_in_txn(
+        txn,
+        &request.doc_id,
+        &request.node_did,
+        None,
+        terminalized_at,
+    )
+    .await?
+    {
+        Some(PendingDisposition::Open) => {}
+        settled => return Ok(settled),
+    }
     let doc = escape_graphql_string(&request.doc_id);
     let node = escape_graphql_string(&request.node_did);
     let reason_gql = escape_graphql_string(reason);
@@ -126,7 +139,7 @@ async fn reject_pending_admission_in_txn(
         super::materialize::project_refused_request_session_in_txn(txn, request, terminalized_at)
             .await?;
     }
-    Ok(updated)
+    Ok(updated.then_some(PendingDisposition::Open))
 }
 
 /// What `request.claim.gate` decided for a request and what core did about
@@ -137,7 +150,7 @@ pub enum ClaimGate {
     Queued,
     /// Core superseded the pending request.
     Retired,
-    /// Core failed the pending request; `applied` is whether its row was still pending.
+    /// Core refused the pending request; `applied` is whether its row was still pending.
     Rejected {
         applied: bool,
     },
@@ -178,7 +191,9 @@ pub async fn claim_gate_in_txn(
             Ok(ClaimGate::Retired)
         }
         ClaimVerdict::Reject { reason } => Ok(ClaimGate::Rejected {
-            applied: reject_pending_admission_in_txn(txn, request, &reason, claimed_at).await?,
+            applied: reject_pending_admission_in_txn(txn, request, &reason, claimed_at)
+                .await?
+                .is_some(),
         }),
     }
 }
@@ -303,7 +318,7 @@ where
                             let rejected = reject_pending_admission_in_txn(
                                 txn, request, "request authorization denied", claimed_at,
                             ).await?;
-                            return Ok(rejected.then_some(Err(ClaimRefused::AuthorizationDenied)));
+                            return Ok(rejected.is_some().then_some(Err(ClaimRefused::AuthorizationDenied)));
                         }
                     },
                     None if client => return Ok(None),
@@ -848,79 +863,23 @@ impl RequestLifecycle {
 
     pub async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
-        let transition =
-            RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Dead)?;
-        let mutation = {
-            use gents_protocol::document_query::{
-                fields::agent_request as fields, Filter, Input, Selection, Update,
-            };
-            Update::doc(
-                &self.request.doc_id,
-                Input::new()
-                    .set(fields::LIFECYCLE_STATE, transition.to().as_str())
-                    .set(fields::FAILURE_REASON, "Stale")
-                    .set(fields::TERMINALIZED_AT, terminalized_at.as_str())
-                    .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
-            )
-            .filter(Filter::eq(fields::DOC_ID, &self.request.doc_id))
-            .filter(Filter::eq(fields::NODE_DID, &self.request.node_did))
-            .filter(Filter::eq(
-                fields::LIFECYCLE_STATE,
-                transition.from().as_str(),
-            ))
-            .returning(
-                Selection::doc_id()
-                    .field(fields::REQUEST_ID)
-                    .field(fields::WORKSPACE_ID)
-                    .field(fields::WORKSPACE_OWNER_NODE_DID),
-            )
-            .render()
-        };
         let request = &self.request;
-        let resp = self
+        let expired = self
             .access()?
             .transact_idempotent(
                 gents_store::config_client::IdempotentTransactionRetry::Standard,
                 "expire_stale",
                 |txn| {
-                    let mutation = &mutation;
-                    let terminalized_at = &terminalized_at;
-                    Box::pin(async move {
-                        let response = txn.run_local_response(mutation).await?;
-                        if let Some(rows) = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data.get("update_AgentRequest"))
-                            .and_then(serde_json::Value::as_array)
-                            .filter(|rows| !rows.is_empty())
-                        {
-                            for row in rows {
-                                crate::request::workspace_binding::release_terminal_writer_binding(
-                                    txn, row,
-                                )
-                                .await?;
-                            }
-                            crate::request::hooks::points::request_terminal(
-                                txn,
-                                &request.node_did,
-                                &request.request_id,
-                                transition.to(),
-                                "Stale",
-                                terminalized_at,
-                            )
-                            .await?;
-                        }
-                        Ok::<_, anyhow::Error>(response)
-                    })
+                    Box::pin(super::pending_settlement::expire_pending_in_txn(
+                        txn,
+                        &request.doc_id,
+                        &request.node_did,
+                        &terminalized_at,
+                    ))
                 },
             )
             .await?;
-        if !resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents)
-        {
+        if !expired {
             let request_view = self.request_view().await?;
             if request_view
                 .as_ref()
@@ -947,7 +906,7 @@ impl RequestLifecycle {
         let reason_text = reason.to_owned();
         let terminalized_at = chrono::Utc::now().to_rfc3339();
         let request = &self.request;
-        let updated = self
+        let written = self
             .access()?
             .transact_idempotent(
                 gents_store::config_client::IdempotentTransactionRetry::Standard,
@@ -963,27 +922,47 @@ impl RequestLifecycle {
             )
             .await?;
 
-        if !updated {
-            let request_view = self.request_view().await?;
-            if !request_view.as_ref().is_some_and(|row| {
-                row.lifecycle_state == Some(RequestLifecycleState::Failed)
-                    && row.failure_reason.as_deref() == Some(reason_text.as_str())
-                    && row.terminal_output
-                        == Some(gents_protocol::output::TerminalOutput::NoMessage)
-            }) {
-                anyhow::bail!(
-                    "request {} could not reject admission from lifecycle_state={}",
-                    self.request.request_id,
-                    request_view
-                        .as_ref()
-                        .and_then(|row| row.lifecycle_state)
-                        .map(RequestLifecycleState::as_str)
-                        .unwrap_or("missing")
-                );
+        let disposition = match written {
+            Some(disposition) => disposition,
+            None => {
+                let request_view = self.request_view().await?;
+                match request_view.as_ref() {
+                    Some(row)
+                        if row.lifecycle_state == Some(RequestLifecycleState::Failed)
+                            && row.failure_reason.as_deref() == Some(reason_text.as_str())
+                            && row.terminal_output
+                                == Some(gents_protocol::output::TerminalOutput::NoMessage) =>
+                    {
+                        PendingDisposition::Open
+                    }
+                    Some(row)
+                        if row.lifecycle_state == Some(RequestLifecycleState::Dead)
+                            && row.failure_reason.as_deref() == Some("Stale") =>
+                    {
+                        PendingDisposition::Expired
+                    }
+                    _ => anyhow::bail!(
+                        "request {} could not reject admission from lifecycle_state={}",
+                        self.request.request_id,
+                        request_view
+                            .as_ref()
+                            .and_then(|row| row.lifecycle_state)
+                            .map(RequestLifecycleState::as_str)
+                            .unwrap_or("missing")
+                    ),
+                }
+            }
+        };
+        match disposition {
+            PendingDisposition::Expired => {
+                self.failure_reason = Some("Stale".to_string());
+                self.state = LocalLifecycleState::Dead;
+            }
+            PendingDisposition::Open => {
+                self.failure_reason = Some(reason_text);
+                self.state = LocalLifecycleState::Failed;
             }
         }
-        self.failure_reason = Some(reason_text);
-        self.state = LocalLifecycleState::Failed;
         Ok(())
     }
 
