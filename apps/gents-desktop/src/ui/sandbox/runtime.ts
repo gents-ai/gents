@@ -182,6 +182,8 @@ export function createSandboxRuntime(
     selectedDeployment: null,
     selectedSessionId: null,
   };
+  /* the node the page last heard of as the selection */
+  let announcedNode: string | null = null;
   let storage: Record<string, unknown> = {};
   const callbacks = new Map<string, (...args: unknown[]) => unknown>();
   const dataWatches = new Map<string, (event: UxDataWatchEvent) => void>();
@@ -508,6 +510,8 @@ export function createSandboxRuntime(
       case "init": {
         storage = message.storage;
         shell = message.shell;
+        announcedNode =
+          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
         applyTheme(message.theme);
         if (message.css && doc) {
           const el = doc.createElement("style");
@@ -596,12 +600,13 @@ export function createSandboxRuntime(
         dataWatchStops.get(message.id)?.();
         return;
       case "shell": {
-        const previous =
-          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
         shell = message.shell;
         const current =
           (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
-        if (previous !== current) {
+        /* a selection briefly empty while the shell rebuilds is no change:
+           the page hears of another node, not of the gap */
+        if (current !== null && current !== announcedNode) {
+          announcedNode = current;
           const event = { type: "shell-changed", payload: { nodeDid: current } };
           for (const type of ["shell-changed", "*"]) {
             eventListeners.get(type)?.forEach((listener) => {

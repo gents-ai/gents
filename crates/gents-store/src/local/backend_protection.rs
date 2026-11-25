@@ -14,18 +14,12 @@ use super::{
 };
 use crate::identity::NodeIdentity;
 
-/// The store's lineage marker. Its version names the node grants and the
-/// Household policy a store was created under as well as its format: v2 began
-/// when the Agent baseline gained `get-collection` (gents#3747, Lean
-/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`); v3 when
-/// `agent_manager` came to take only the Node administrators' userset under
-/// the same policy ID (gents#3794,
-/// `Identity.Household.catalog_restriction_keeps_policy_id`). The policy ID
-/// does not change, so only this marker tells a v2 store's earlier policy from
-/// this one before DefraDB refuses to register it. A store without this
-/// version's marker is reported as made by an older version and is never
-/// opened, so nothing in it changes; there is no conversion.
+/// This build's lineage marker (Lean `BackendPreflight.markerPrefix`):
+/// [`MARKER_PREFIX`] followed by [`VERSION`]. A new lineage bumps this name,
+/// [`VERSION`] and [`DOMAIN`] together.
 const MARKER: &str = ".gents-private-backend-v3";
+const MARKER_PREFIX: &str = ".gents-private-backend-v";
+const VERSION: u64 = 3;
 pub const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v3\0";
 type MarkerMac = Hmac<Sha256>;
@@ -47,6 +41,14 @@ pub enum BackendProtectionError {
          up a fresh one. To keep anything, export it first with the release that created it."
     )]
     MissingProvenance,
+    /// An existing store carries a later lineage's marker, or one whose
+    /// version this release cannot read, and not this version's: a newer
+    /// release made it and may still want it.
+    #[error(
+        "this home was created by a newer Gents version, which this release cannot open. \
+         Nothing in it was changed. Open it with that newer version of Gents."
+    )]
+    NewerLineage,
     #[error("legacy backend policy binding is missing or incompatible")]
     InvalidBinding,
     /// Decided on a copy before the store itself was opened, so nothing in
@@ -121,27 +123,53 @@ impl BackendProtectionError {
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
 
-/// Refuses a store that carries an earlier lineage's marker and not this
-/// version's, by reading the directory's names only. It runs before the
-/// store lock is taken, because taking the lock rewrites the lock file and a
-/// refused older home is left byte-identical. Only a positively earlier
-/// marker is refused here: a store with no marker at all may be one another
-/// process is still initializing, which the lock decides.
-pub fn refuse_earlier_lineage(data: &Path) -> Result<()> {
-    let prefix = MARKER.rsplit_once('v').map_or(MARKER, |(prefix, _)| prefix);
-    let mut earlier = false;
-    for entry in std::fs::read_dir(data)? {
-        let name = entry?.file_name();
-        let name = name.to_string_lossy();
-        if name == MARKER {
-            return Ok(());
+/// Lean `BackendPreflight.refusal` of `BackendPreflight.lineage`: what the
+/// lineage markers among a store directory's `names` refuse it as, for a build
+/// of lineage `current`, read before the store lock (`before_lock`) or not.
+pub(crate) fn lineage_refusal(
+    current: u64,
+    names: &[String],
+    before_lock: bool,
+) -> Option<BackendProtectionError> {
+    let (mut marked, mut newer) = (false, false);
+    for suffix in names
+        .iter()
+        .filter_map(|name| name.strip_prefix(MARKER_PREFIX))
+    {
+        match suffix
+            .parse::<u64>()
+            .ok()
+            .filter(|version| version.to_string() == suffix)
+        {
+            Some(version) if version == current => return None,
+            Some(version) => newer |= version > current,
+            None => newer = true,
         }
-        earlier |= name.starts_with(prefix);
+        marked = true;
     }
-    if earlier {
-        return Err(BackendProtectionError::MissingProvenance);
+    if newer {
+        Some(BackendProtectionError::NewerLineage)
+    } else if marked || !before_lock {
+        Some(BackendProtectionError::MissingProvenance)
+    } else {
+        None
     }
-    Ok(())
+}
+
+/// Refuses the store at `data` by its lineage markers, reading the
+/// directory's names only.
+pub(crate) fn refuse_lineage(data: &Path, before_lock: bool) -> Result<()> {
+    let names = std::fs::read_dir(data)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    lineage_refusal(VERSION, &names, before_lock).map_or(Ok(()), Err)
+}
+
+/// Refuses a store that carries another lineage's marker and not this
+/// version's. It runs before the store lock is taken, because taking the lock
+/// rewrites the lock file and a refused home is left byte-identical.
+pub fn refuse_other_lineage(data: &Path) -> Result<()> {
+    refuse_lineage(data, true)
 }
 
 fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
@@ -459,13 +487,11 @@ pub struct ProtectedBackendStore<'a> {
 impl<'a> ProtectedBackendStore<'a> {
     pub async fn open(data: &Path, key: &StoreKey, lock: &'a StoreLock) -> Result<Self> {
         let data = check_lock(data, lock).await?;
-        let bytes =
-            tokio::fs::read(data.join(MARKER))
-                .await
-                .map_err(|error| match error.kind() {
-                    std::io::ErrorKind::NotFound => BackendProtectionError::MissingProvenance,
-                    _ => BackendProtectionError::InvalidProvenance,
-                })?;
+        let listed = data.clone();
+        tokio::task::spawn_blocking(move || refuse_lineage(&listed, false)).await??;
+        let bytes = tokio::fs::read(data.join(MARKER))
+            .await
+            .map_err(|_| BackendProtectionError::InvalidProvenance)?;
         if bytes.len() != DOMAIN.len() + 16 + 32 || !bytes.starts_with(DOMAIN) {
             return Err(BackendProtectionError::InvalidProvenance);
         }

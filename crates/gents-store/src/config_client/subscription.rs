@@ -15,9 +15,11 @@ type Events = Pin<
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a subscription authorized by a locally minted bearer is kept
-/// before it re-authenticates: half the bearer lifetime
-/// (`RuntimeConnectionObservation.renewalPeriodMs`).
+/// How long a subscription authorized by a locally minted bearer of the
+/// default lifetime is kept before it re-authenticates: half the bearer
+/// lifetime (`RuntimeConnectionObservation.renewalPeriodMs`). An endpoint with
+/// another bearer lifetime renews at half of its own
+/// ([`super::GraphqlEndpoint::subscription_renewal_period`]).
 pub const SUBSCRIPTION_RENEWAL_PERIOD: Duration =
     Duration::from_secs(crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() / 2);
 
@@ -25,9 +27,11 @@ pub const SUBSCRIPTION_RENEWAL_PERIOD: Duration =
 /// (`RuntimeConnectionObservation.StreamEnd`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscriptionEnd {
-    /// Half the locally minted bearer lifetime elapsed. The pinned DefraDB
-    /// HTTP server authenticates a subscription only at its handshake, so the
-    /// stream ends to re-authenticate; it is not a transport failure.
+    /// Half the locally minted bearer lifetime elapsed, or the runtime ended
+    /// the stream at its bearer's expiry (`gents-end: expired`). The pinned
+    /// DefraDB HTTP server authenticates a subscription only at its
+    /// handshake, so the stream ends to re-authenticate; it is not a transport
+    /// failure.
     RenewalDue,
     /// The runtime sent `complete` or closed the response.
     Completed,
@@ -43,6 +47,8 @@ pub enum SubscriptionEnd {
 pub struct GraphqlSubscription {
     events: Option<Events>,
     renew_at: Option<Instant>,
+    /// Half the lifetime of the bearer the stream was opened with.
+    renewal: Duration,
     ended: Option<SubscriptionEnd>,
 }
 
@@ -50,11 +56,13 @@ impl GraphqlSubscription {
     /// Takes re-authentication from this stream: it no longer ends at its
     /// renewal deadline, and the returned period (`None` for a delegated
     /// credential) is how long the caller may keep it before re-subscribing.
-    /// The pinned DefraDB HTTP server authorizes a subscription only at its
-    /// handshake, so a stream kept past the deadline keeps delivering; a
-    /// caller can therefore arm the replacement before dropping this one.
+    /// The runtime ends a stream only at its bearer's expiry, a full lifetime
+    /// after the handshake, so a stream kept past the renewal deadline keeps
+    /// delivering until then; a caller can therefore arm the replacement
+    /// before dropping this one.
     pub fn take_renewal(&mut self) -> Option<Duration> {
-        self.renew_at.take().map(|_| SUBSCRIPTION_RENEWAL_PERIOD)
+        let renewal = self.renewal;
+        self.renew_at.take().map(|_| renewal)
     }
 
     /// How the stream ended, once `recv` has returned `Ok(None)`.
@@ -95,6 +103,24 @@ impl GraphqlSubscription {
                 self.ended = Some(SubscriptionEnd::Completed);
                 Ok(None)
             }
+            /* the runtime ended the stream and says why (Lean
+            `SubscriptionStream.step` on `expiredEnd` and `revokedEnd`) */
+            "gents-end" => {
+                self.events = None;
+                let reason = serde_json::from_str::<Value>(&event.data).ok();
+                match reason
+                    .as_ref()
+                    .and_then(|value| value.get("reason"))
+                    .and_then(Value::as_str)
+                {
+                    Some("revoked") => Err(ConfigClientError::SubscriptionRevoked),
+                    Some("expired") => {
+                        self.ended = Some(SubscriptionEnd::RenewalDue);
+                        Ok(None)
+                    }
+                    _ => Err(ConfigClientError::SubscriptionEvent(event.event)),
+                }
+            }
             "next" => {
                 let value: Value = serde_json::from_str(&event.data)?;
                 if super::graphql::graphql_response_has_errors(&value) {
@@ -129,7 +155,7 @@ impl ConfigAccess {
         let started_at = Instant::now();
         let handshake = endpoint.send_resolving(|endpoint| {
             Ok(endpoint
-                .authorize(client.post(endpoint.url()))?
+                .authorize_subscription(client.post(endpoint.url()))?
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&serde_json::json!({"query": query})))
         });
@@ -153,10 +179,11 @@ impl ConfigAccess {
         let renew_at = endpoint
             .delegated_authorization
             .is_none()
-            .then(|| started_at + SUBSCRIPTION_RENEWAL_PERIOD);
+            .then(|| started_at + endpoint.subscription_renewal_period());
         Ok(GraphqlSubscription {
             events: Some(Box::pin(response.bytes_stream().eventsource())),
             renew_at,
+            renewal: endpoint.subscription_renewal_period(),
             ended: None,
         })
     }
