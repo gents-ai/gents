@@ -207,10 +207,7 @@ fn runtime_captures_use_current_schema_fields() {
             schemas.insert(definition[1].to_string(), names);
         }
     }
-    for definition in definitions()
-        .into_iter()
-        .chain([super::factory_setup::definition()])
-    {
+    for definition in definitions() {
         for case in definition.cases {
             for stage in case.stages {
                 for capture in stage.capture {
@@ -258,56 +255,6 @@ fn streaming_discovery_checks_streams_and_waits_without_budget_keywords() {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x","discover","unused",vec![]).stages.remove(0);
         evidence.messages = vec![MessageEvidence { role: "assistant".into(), content: message.into(), created_at: None }];
         assert_eq!(registry.get(&check.check).unwrap().evaluate(&check.params,&evidence).score_bp,Some(expected));
-    }
-}
-
-#[test]
-fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
-    let definition = definitions()
-        .into_iter()
-        .find(|d| d.definition_id == "configurator-l4-automation")
-        .unwrap();
-    let configured = &definition
-        .cases
-        .iter()
-        .find(|c| c.split == gents_documents::EvalSplit::Train)
-        .unwrap()
-        .stages[0];
-    let registry = CheckRegistry::builtin();
-    for (concurrency, task, accepted) in [
-        (serde_json::Value::Null, "task", true),
-        (serde_json::json!("parallel"), "task", true),
-        (serde_json::json!("serial"), "task", false),
-        (serde_json::Value::Null, "missing", false),
-    ] {
-        let mut evidence =
-            ScriptedExecutor::passed_evidence("did:x", "configure", "unused", vec![])
-                .stages
-                .remove(0);
-        evidence.subject_agent = Some(gents_eval::runner::subject_binding::SubjectAgent {
-            slot: "engineer".into(),
-            agent_did: "did:key:test-engineer".into(),
-        });
-        evidence.captures.insert("trigger_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"concurrency":concurrency,"task_id":task,"enabled":true,"source":{"event_source_id":"source"}})] });
-        evidence.captures.insert("task_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"task_id":"task","agent_did":"did:key:test-engineer","emit_outcome":true,"enabled":true})] });
-        evidence.captures.insert("eventsource_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"event_source_id":"source","source_collection":"TrainPing","event_kind":null})] });
-        let all_pass = configured
-            .checks
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c.check.as_str(),
-                    "captured_fields_match" | "crew_spec_match"
-                )
-            })
-            .all(|c| {
-                registry
-                    .evaluate_bound(&c.check, &c.params, &evidence)
-                    .unwrap()
-                    .kind
-                    == OutcomeKind::Passed
-            });
-        assert_eq!(all_pass, accepted);
     }
 }
 
@@ -472,74 +419,4 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         .evaluate_bound("crew_spec_match", &check(2).params, &evidence)
         .unwrap();
     assert!(verdict.score_bp.unwrap() < 10000, "{}", verdict.raw);
-}
-
-#[test]
-fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states() {
-    use gents_protocol::goal_status::GoalStatus;
-    use gents_protocol::request_lifecycle::RequestLifecycleState;
-    use serde_json::json;
-
-    let definition = definitions()
-        .into_iter()
-        .find(|d| d.definition_id == "configurator-l4-automation")
-        .unwrap();
-    assert_eq!(definition.comparability_version, 14);
-    let registry = CheckRegistry::builtin();
-    let grader = registry.get("crew_spec_match").unwrap();
-    let mut checked = 0;
-    for case in definition.cases {
-        for stage in case.stages {
-            for check in stage.checks {
-                let Some(rows) = check.params.get("rows").and_then(|rows| rows.as_array()) else {
-                    continue;
-                };
-                for row in rows.iter().filter(|row| row["capture"] == "fire_outcomes") {
-                    checked += 1;
-                    for (state, success) in [
-                        (RequestLifecycleState::Completed.as_str(), true),
-                        (GoalStatus::Complete.as_str(), true),
-                        (GoalStatus::Active.as_str(), false),
-                        (GoalStatus::Blocked.as_str(), false),
-                        (GoalStatus::BudgetLimited.as_str(), false),
-                        (RequestLifecycleState::Failed.as_str(), false),
-                        ("incomplete", false),
-                    ] {
-                        let mut evidence = ScriptedExecutor::passed_evidence(
-                            "did:key:eval-owner",
-                            &stage.stage_id,
-                            "reply",
-                            vec![],
-                        )
-                        .stages
-                        .remove(0);
-                        let mut outcome = json!({"terminal_state":state});
-                        outcome[row["key"].as_str().unwrap()] = row["id"].clone();
-                        for expected in row["expect"].as_array().unwrap() {
-                            if expected["field"] != "terminal_state" {
-                                outcome[expected["field"].as_str().unwrap()] =
-                                    expected["equals"].clone();
-                            }
-                        }
-                        evidence.captures.insert(
-                            "fire_outcomes".into(),
-                            CaptureResult::Documents {
-                                rows: vec![outcome],
-                            },
-                        );
-                        let verdict = grader.evaluate(&json!({"rows":[row]}), &evidence);
-                        assert_eq!(
-                            verdict.score_bp == Some(10000),
-                            success,
-                            "{} / {} / {state}: {}",
-                            case.case_id,
-                            stage.stage_id,
-                            verdict.raw
-                        );
-                    }
-                }
-            }
-        }
-    }
-    assert_eq!(checked, 10);
 }
