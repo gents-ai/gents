@@ -34,7 +34,7 @@ impl ConfigCommandTool {
             .iter()
             .any(|word| matches!(word.as_str(), "--help" | "-h"))
         {
-            return Ok(HELP.to_owned());
+            return Ok(self.append_skill_pointer(HELP.to_owned(), "page", &["preview"]));
         }
         anyhow::ensure!(
             self.core.held_grants().pack_install || self.categories.contains("tools"),

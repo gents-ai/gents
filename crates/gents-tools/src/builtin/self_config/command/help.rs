@@ -127,14 +127,23 @@ impl ConfigCommandTool {
         let Some(resource) = resource else {
             return Ok(page);
         };
+        Ok(self.append_skill_pointer(page, resource, &words))
+    }
+
+    pub(super) fn append_skill_pointer(
+        &self,
+        page: String,
+        resource: &str,
+        words: &[&str],
+    ) -> String {
         let path = [CONFIG_TOOL_NAME, help_resource(resource)]
             .into_iter()
-            .chain(words)
+            .chain(words.iter().copied())
             .collect::<Vec<_>>();
-        Ok(match self.skill_pointers.help(&path) {
+        match self.skill_pointers.help(&path) {
             Some(line) => format!("{page}\n{line}"),
             None => page,
-        })
+        }
     }
 
     fn help_index(&self, enabled: &[&str]) -> String {

@@ -51,6 +51,10 @@ use contracts::help_patch_contracts;
 use grants::model_resources;
 use observe::{append_receipt, log_config_call, observed_call};
 
+pub fn help_resources() -> impl Iterator<Item = &'static str> {
+    HELP_INDEX.iter().map(|(resource, _)| *resource)
+}
+
 const HELP_INDEX: &[(&str, &str)] = &[
     (
         "agent",
@@ -581,7 +585,6 @@ impl ConfigCommandTool {
         }
         match command {
             "batch" => self.batch(argv).await,
-            "help" => self.help(argv.get(1).map(String::as_str), Vec::new()),
             "get" => {
                 let (agent_did, rest) = extract_agent_target(&argv[1..])?;
                 if !rest.is_empty() {
