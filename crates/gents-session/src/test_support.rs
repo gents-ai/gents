@@ -1,5 +1,7 @@
 mod agent_home;
 mod claimed_request;
+#[cfg(test)]
+pub(crate) mod doubles;
 pub mod lineage_fixtures;
 
 pub use agent_home::AgentHome;

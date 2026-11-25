@@ -46,18 +46,12 @@ const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[
 const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
     ("gents", 43, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-automation", 15, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-cli", 2, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-desktop-bridge", 4, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-eval", 23, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-inference", 17, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-loop", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-p2p", 9, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-pack", 5, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-service", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-session", 8, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-store", 10, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-toolcalls", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-tools", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
 ];
 
 /// `sleep(` calls in test code, per crate.

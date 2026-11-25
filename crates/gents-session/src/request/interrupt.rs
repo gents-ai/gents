@@ -738,7 +738,7 @@ impl WatchedRequest {
     }
 }
 
-trait InterruptChangeFeed: Send {
+pub(crate) trait InterruptChangeFeed: Send {
     fn recv(
         &mut self,
     ) -> impl std::future::Future<Output = Option<events::DocumentChangeBatch>> + Send;

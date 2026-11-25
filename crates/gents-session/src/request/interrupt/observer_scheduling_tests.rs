@@ -5,9 +5,8 @@ use std::time::Duration;
 use events::{DocumentChange, DocumentChangeBatch};
 use tokio::sync::{oneshot, watch, Mutex};
 
-use super::{
-    observe_request_interrupt, InterruptChangeFeed, InterruptIntent, OBSERVER_POLL_INTERVAL,
-};
+use super::{observe_request_interrupt, InterruptIntent, OBSERVER_POLL_INTERVAL};
+use crate::test_support::doubles::TestInterruptFeed;
 
 const REQUEST: &str = "bae-request";
 const AT: &str = "2026-09-23T03:03:34Z";
@@ -24,40 +23,6 @@ fn batch(doc_id: &str) -> DocumentChangeBatch {
     }
 }
 
-struct Flood {
-    delivered: Arc<AtomicUsize>,
-    limit: usize,
-}
-
-impl InterruptChangeFeed for Flood {
-    async fn recv(&mut self) -> Option<DocumentChangeBatch> {
-        if self.delivered.fetch_add(1, Ordering::SeqCst) >= self.limit {
-            return None;
-        }
-        Some(batch("bae-unrelated"))
-    }
-}
-
-struct AdvancingFlood;
-
-impl InterruptChangeFeed for AdvancingFlood {
-    async fn recv(&mut self) -> Option<DocumentChangeBatch> {
-        tokio::time::advance(Duration::from_millis(100)).await;
-        Some(batch("bae-unrelated"))
-    }
-}
-
-struct Once(Option<oneshot::Receiver<DocumentChangeBatch>>);
-
-impl InterruptChangeFeed for Once {
-    async fn recv(&mut self) -> Option<DocumentChangeBatch> {
-        match self.0.take() {
-            Some(rx) => rx.await.ok(),
-            None => std::future::pending().await,
-        }
-    }
-}
-
 #[tokio::test(start_paused = true)]
 async fn initial_read_is_not_starved_by_an_always_ready_feed() {
     let delivered = Arc::new(AtomicUsize::new(0));
@@ -65,9 +30,10 @@ async fn initial_read_is_not_starved_by_an_always_ready_feed() {
     let (_shutdown_tx, mut shutdown) = watch::channel(false);
     observe_request_interrupt(
         REQUEST,
-        Some(Flood {
+        Some(TestInterruptFeed::Flood {
             delivered: delivered.clone(),
             limit: 1000,
+            doc_id: "bae-unrelated",
         }),
         || async { Some(AT.to_string()) },
         &tx,
@@ -87,7 +53,7 @@ async fn fallback_tick_reads_while_unrelated_changes_keep_arriving() {
     let counter = reads.clone();
     observe_request_interrupt(
         REQUEST,
-        Some(AdvancingFlood),
+        Some(TestInterruptFeed::AdvancingFlood("bae-unrelated")),
         move || {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             async move { (n > 0).then(|| AT.to_string()) }
@@ -111,7 +77,7 @@ async fn a_change_to_this_request_is_read_before_the_fallback_tick() {
     let observer = tokio::spawn(async move {
         observe_request_interrupt(
             REQUEST,
-            Some(Once(Some(change_rx))),
+            Some(TestInterruptFeed::Once(Some(change_rx))),
             move || {
                 let reader = reader.clone();
                 async move { reader.lock().await.clone() }

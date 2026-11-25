@@ -1,12 +1,12 @@
 use super::{home, planning, service};
 use crate::native_service::{
-    CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
-    ServiceHolder, ServiceRecord, SERVICE_LABEL, SYSTEMD_UNIT,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceHolder, ServiceRecord,
+    SERVICE_LABEL, SYSTEMD_UNIT,
 };
+use crate::test_support::{HeldManager, Steps};
 use gents_lean_vocab::families;
 use gents_protocol::operations::install_repair::{HomeState, RepairObservation};
 use serde_json::json;
-use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 #[test]
@@ -112,91 +112,6 @@ impl HeldMachine {
             stderr_path: None,
         };
         NativeServiceManager::with_runner(config, platform, HeldManager::new(self.record.clone()))
-    }
-}
-
-/// launchd and systemd as they report `record`: `launchctl print` and
-/// `systemctl --user show` render it the way the managers do.
-struct HeldManager {
-    record: Option<ServiceRecord>,
-    unloaded: std::cell::Cell<bool>,
-    calls: std::cell::RefCell<Vec<Vec<String>>>,
-}
-
-impl HeldManager {
-    fn new(record: Option<ServiceRecord>) -> Self {
-        Self {
-            record,
-            unloaded: std::cell::Cell::new(false),
-            calls: Default::default(),
-        }
-    }
-
-    fn print(&self) -> Option<String> {
-        let record = self.record.as_ref().filter(|_| !self.unloaded.get())?;
-        let path = record
-            .definition
-            .as_ref()
-            .map(|path| format!("\tpath = {}\n", path.display()))
-            .unwrap_or_default();
-        let home = record.home.as_ref().unwrap().display();
-        Some(format!(
-            "gui/501/{SERVICE_LABEL} = {{\n\tactive count = 1\n{path}\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = /opt/gents/gents\n\targuments = {{\n\t\t/opt/gents/gents\n\t\tserver\n\t\t--home\n\t\t{home}\n\t\t--system-log\n\t}}\n\n\tstdout path = /dev/null\n\tpid = 4242\n}}"
-        ))
-    }
-
-    fn show(&self) -> String {
-        match &self.record {
-            None => "LoadState=not-found\nFragmentPath=\nExecStart=".to_owned(),
-            Some(record) => format!(
-                "ExecStart={{ path=/usr/bin/env ; argv[]=/usr/bin/env -- /opt/gents/gents server --home {} --system-log ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nFragmentPath={}\nLoadState=loaded",
-                record.home.as_ref().unwrap().display(),
-                record.definition.as_ref().unwrap().display()
-            ),
-        }
-    }
-
-    fn changed(&self) -> bool {
-        self.calls.borrow().iter().any(|call| {
-            matches!(
-                call.get(1).map(String::as_str),
-                Some("bootout" | "bootstrap" | "kickstart" | "enable" | "disable")
-            ) || call
-                .iter()
-                .any(|arg| matches!(arg.as_str(), "stop" | "start" | "enable" | "disable"))
-        })
-    }
-}
-
-impl CommandRunner for HeldManager {
-    fn run(&self, program: &OsStr, args: &[OsString]) -> anyhow::Result<CommandOutput> {
-        let mut call = vec![program.to_string_lossy().into_owned()];
-        call.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
-        self.calls.borrow_mut().push(call.clone());
-        let output = |success: bool, stdout: String, stderr: &str| CommandOutput {
-            success,
-            stdout,
-            stderr: stderr.to_owned(),
-        };
-        Ok(match (call[0].as_str(), call.get(1).map(String::as_str)) {
-            ("/usr/bin/id", _) => output(true, "501".to_owned(), ""),
-            ("launchctl", Some("print")) => match self.print() {
-                Some(print) => output(true, print, ""),
-                None => output(false, String::new(), "Could not find service"),
-            },
-            ("launchctl", Some("bootout")) => {
-                self.unloaded.set(true);
-                output(true, String::new(), "")
-            }
-            ("systemctl", _) if call.iter().any(|arg| arg == "show") => {
-                output(true, self.show(), "")
-            }
-            _ => output(true, String::new(), ""),
-        })
-    }
-
-    fn elapse(&self, delay: std::time::Duration) -> std::time::Duration {
-        delay
     }
 }
 
@@ -316,20 +231,6 @@ fn install_repair_service_plans_match_lean() {
         };
         let actual = wire(service::plan_service(&facts, &home));
         case.check(serde_json::from_value(json!(actual)).unwrap());
-    }
-}
-
-pub(super) struct Steps(pub(super) Vec<gents_protocol::operations::install_repair::RepairStep>);
-
-impl super::Progress for Steps {
-    fn finding(&mut self, _: &gents_protocol::operations::install_repair::Finding) {}
-    fn step(
-        &mut self,
-        _: usize,
-        _: usize,
-        step: gents_protocol::operations::install_repair::RepairStep,
-    ) {
-        self.0.push(step);
     }
 }
 

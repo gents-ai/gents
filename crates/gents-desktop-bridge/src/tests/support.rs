@@ -561,52 +561,6 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
     }
 }
 
-pub struct CountingRead {
-    inner: gents_store::config_client::ConfigAccess,
-    queries: std::sync::atomic::AtomicUsize,
-}
-
-impl CountingRead {
-    pub fn new(inner: gents_store::config_client::ConfigAccess) -> Self {
-        Self {
-            inner,
-            queries: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    pub fn queries(&self) -> usize {
-        self.queries.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
-#[async_trait::async_trait]
-impl gents_store::config_client::ConfigRead for CountingRead {
-    fn reader_did(&self) -> Option<String> {
-        self.inner.reader_did()
-    }
-
-    async fn execute_read(
-        &self,
-        document: &str,
-    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-        self.queries
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner.execute_read(document).await
-    }
-
-    async fn execute_read_with_variables(
-        &self,
-        document: &str,
-        variables: &serde_json::Value,
-    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-        self.queries
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner
-            .execute_read_with_variables(document, variables)
-            .await
-    }
-}
-
 pub async fn refresh_request_and_assert_fresh_projection(
     core: &ClientRuntime,
     node_did: &str,

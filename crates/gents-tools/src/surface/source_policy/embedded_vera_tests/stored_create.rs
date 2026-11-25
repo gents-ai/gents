@@ -8,26 +8,21 @@ use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use gents_store::config_client::owed::settle_owed_while_online;
 use gents_store::config_client::user_write::UserWriteRefusal;
 use gents_store::config_client::{
-    ClientSigningCapability, ConfigAccess, ConfigClientError, IdempotentTransactionRetry,
-    NodePermission, StoredCreateCommands,
+    ConfigAccess, IdempotentTransactionRetry, NodePermission, StoredCreateCommands,
 };
-use gents_store::identity::{IdentityError, NodeIdentity, ServiceAccount};
+use gents_store::identity::NodeIdentity;
 use gents_store::local::backend_protection::FreshBackendStore;
 use gents_store::local::document_acp::DocumentAcp;
 
-use super::owed::{endpoint_for, InProcessPass};
+use super::owed::endpoint_for;
 use super::{client_key, home, start, Home};
+use crate::test_support::vera_test_home::{
+    ClientUser, InProcessPass, NodeStatusAudience as NodeStatus,
+};
 
 const REQUEST_RESOURCE: &str = "delivered_requests";
 const SESSION_DOC: &str = "bae-stored-create-session";
 const AGENT_DOC: &str = "bae-stored-create-agent";
-
-/// The User as its client holds it: a key in a signing capability that
-/// DefraDB never holds.
-pub(super) struct ClientUser(
-    pub(super) ClientSigningCapability,
-    pub(super) identity::RawIdentity,
-);
 
 async fn client_user(root: &std::path::Path, name: &str) -> anyhow::Result<ClientUser> {
     let capability = client_key(root, name).await?;
@@ -37,40 +32,6 @@ async fn client_user(root: &std::path::Path, name: &str) -> anyhow::Result<Clien
     })
     .await??;
     Ok(ClientUser(capability, raw))
-}
-
-#[async_trait::async_trait]
-impl NodeIdentity for ClientUser {
-    fn did(&self) -> &str {
-        self.0.did()
-    }
-
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
-        use identity::FullIdentity as _;
-        self.1
-            .sign(payload)
-            .map_err(|source| IdentityError::SignPayload {
-                did: self.did().to_owned(),
-                source,
-            })
-    }
-
-    async fn verify(
-        &self,
-        did: &str,
-        payload: &[u8],
-        signature: &[u8],
-    ) -> Result<bool, IdentityError> {
-        gents_store::identity::verify_did_signature(did, payload, signature)
-    }
-
-    fn service_account(&self) -> Option<&ServiceAccount> {
-        None
-    }
-
-    fn client_signing_capability(&self) -> Result<ClientSigningCapability, ConfigClientError> {
-        Ok(self.0.clone())
-    }
 }
 
 async fn request(
@@ -401,31 +362,6 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
 
     node.shutdown().await?;
     Ok(())
-}
-
-/// What the runtime's public status reports of its node now, signed by its
-/// node key.
-struct NodeStatus(Arc<defra_node::Node>, Arc<dyn NodeIdentity>);
-
-impl gents_store::config_client::ResolveAudience for NodeStatus {
-    fn resolve<'a>(
-        &'a self,
-        nonce: &'a gents_protocol::home_attestation::HomeNonce,
-    ) -> futures::future::BoxFuture<'a, Option<serde_json::Value>> {
-        Box::pin(async move {
-            Some(
-                gents_store::test_support::signed_home_status(
-                    self.1.as_ref(),
-                    &gents_protocol::delegation_audience::ReportedDelegationAudience::Named(
-                        gents_store::local::document_acp::node_delegation_audience(&self.0)?,
-                    ),
-                    gents_store::local::document_acp::node_provider_time(&self.0),
-                    nonce,
-                )
-                .await,
-            )
-        })
-    }
 }
 
 fn skewed(seconds: i64) -> Arc<dyn Fn() -> u64 + Send + Sync> {

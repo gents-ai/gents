@@ -86,7 +86,7 @@ async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
         placement_entry("fork-copy", None),
         placement_entry("unwritten", Some("gone")),
     ];
-    let reads = crate::tests::support::CountingRead::new(access.clone());
+    let reads = crate::test_support::CountingRead::new(access.clone());
     let starts =
         load_compaction_request_starts(&reads, "node", "session", Some("reader"), &entries)
             .await
@@ -108,7 +108,7 @@ async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
             placement_entry(&format!("{request}-start"), Some(&request))
         })
         .collect::<Vec<_>>();
-    let reads = crate::tests::support::CountingRead::new(access.clone());
+    let reads = crate::test_support::CountingRead::new(access.clone());
     let starts = load_compaction_request_starts(&reads, "node", "session", Some("reader"), &many)
         .await
         .unwrap();

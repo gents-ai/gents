@@ -7,7 +7,7 @@ use gents_store::local::store_key::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum PreflightError {
+pub(crate) enum PreflightError {
     #[error("candidate preflight could not complete; runtime and service unchanged")]
     Observation(#[source] PassedThrough),
     #[error("candidate preflight returned invalid metadata; runtime and service unchanged")]
@@ -43,7 +43,7 @@ pub(super) fn check_store_key(
     check_store_key_with(home, encryption, StoreEncryption::load)
 }
 
-pub(super) fn check_store_key_with(
+pub(crate) fn check_store_key_with(
     home: &Path,
     encryption: Option<&StoreEncryption>,
     read: impl FnOnce(&StoreEncryption, &Path, &Path) -> std::result::Result<StoreKey, StoreKeyError>,

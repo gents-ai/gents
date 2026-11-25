@@ -285,3 +285,156 @@ pub fn skill_only_core_pack_archives() -> Vec<(String, Vec<u8>)> {
         })
         .collect()
 }
+
+#[cfg(test)]
+pub(crate) struct StaticLookup(
+    pub(crate) Vec<std::net::IpAddr>,
+    pub(crate) std::sync::Arc<std::sync::atomic::AtomicUsize>,
+);
+
+#[cfg(test)]
+impl crate::plugin::http_calls::Lookup for StaticLookup {
+    fn lookup(
+        &self,
+        _: String,
+    ) -> futures::future::BoxFuture<'static, std::io::Result<Vec<std::net::IpAddr>>> {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let addrs = self.0.clone();
+        Box::pin(async move { Ok(addrs) })
+    }
+}
+
+/// The held User's approver: it signs each proposed effect with its own
+/// key and finishes only when it holds a plan for the install.
+pub struct HeldUserApprover {
+    pub actor: gents_store::config_client::ClientSigningCapability,
+    pub scope: gents_store::config_client::PackApprovalScope,
+    pub plan: bool,
+}
+
+#[async_trait::async_trait]
+impl gents_store::config_client::PackEffectApprover for HeldUserApprover {
+    async fn approve_graph(
+        &self,
+        txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        mutation: &gents_store::config_client::PackMutation,
+        history: Option<serde_json::Value>,
+    ) -> std::result::Result<
+        gents_store::config_client::PackEvidence,
+        gents_store::config_client::PackApprovalError,
+    > {
+        let ids = txn.home_policy_ids().await.map_err(|error| {
+            gents_store::config_client::PackApprovalError::Refused(error.to_string())
+        })?;
+        gents_store::config_client::prepare_pack_evidence_from_history(
+            &self.actor,
+            &self.scope,
+            mutation,
+            history,
+            ids,
+        )
+        .await
+        .map_err(|error| gents_store::config_client::PackApprovalError::Refused(error.to_string()))
+    }
+
+    async fn approve_relationship(
+        &self,
+        _txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        relationship: &gents_store::config_client::PackRelationship,
+    ) -> std::result::Result<
+        gents_store::config_client::PackRelationshipEvidence,
+        gents_store::config_client::PackApprovalError,
+    > {
+        gents_store::config_client::prepare_pack_relationship(
+            &self.actor,
+            &self.scope,
+            relationship,
+        )
+        .await
+        .map_err(|error| gents_store::config_client::PackApprovalError::Refused(error.to_string()))
+    }
+
+    async fn next_timestamp(
+        &self,
+        _txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        _kind: &'static str,
+    ) -> std::result::Result<String, gents_store::config_client::PackApprovalError> {
+        Ok(gents_store::config_client::mint_recreate_identity_timestamp())
+    }
+
+    async fn graph_applied(
+        &self,
+        _result: &serde_json::Value,
+    ) -> std::result::Result<(), gents_store::config_client::PackApprovalError> {
+        Ok(())
+    }
+
+    async fn relationship_applied(
+        &self,
+    ) -> std::result::Result<(), gents_store::config_client::PackApprovalError> {
+        Ok(())
+    }
+
+    async fn client_finished(
+        &self,
+        _txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    ) -> std::result::Result<(), gents_store::config_client::PackApprovalError> {
+        if self.plan {
+            Ok(())
+        } else {
+            Err(gents_store::config_client::PackApprovalError::Refused(
+                "client aborted pack installation".into(),
+            ))
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RefusingCompiler {
+    called: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RefusingCompiler {
+    pub fn new() -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            Self {
+                called: called.clone(),
+            },
+            called,
+        )
+    }
+}
+
+impl crate::pack::authoring::build::PluginCompiler for RefusingCompiler {
+    fn load_and_validate(&self, _owner: &str, _dir: &std::path::Path) -> anyhow::Result<()> {
+        self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("no compiler in this test")
+    }
+
+    fn compile(
+        &self,
+        _owner: &str,
+        _dir: &std::path::Path,
+        _out_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        unreachable!("load_and_validate refuses first")
+    }
+}
+
+pub struct NoPlugins;
+
+impl crate::pack::authoring::build::PluginCompiler for NoPlugins {
+    fn load_and_validate(&self, _owner: &str, _dir: &std::path::Path) -> anyhow::Result<()> {
+        unreachable!("an assets pack has no plugin to build")
+    }
+
+    fn compile(
+        &self,
+        _owner: &str,
+        _dir: &std::path::Path,
+        _out_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        unreachable!("an assets pack has no plugin to build")
+    }
+}
