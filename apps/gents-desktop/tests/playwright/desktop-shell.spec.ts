@@ -7,6 +7,7 @@ import {
   openChat,
   openConfig,
   openConfigSection,
+  openNodes,
   OWN_VIEWPORT,
   primarySurfaceCount,
   sendButton,
@@ -217,11 +218,31 @@ test.describe("kit shell", () => {
     await expect(composer(page)).toBeEditable();
   });
 
-  test("session filters stay visible and can be reset", async ({ page }) => {
+  test("session filters are reachable and can be reset", async ({ page }) => {
     await gotoHarness(page);
-    const filters = page.getByLabel("Session filters");
     const session = page.getByRole("link", { name: /introduction-and-greetings/ });
     const narrowed = page.getByTestId("sessions-narrowed");
+    if (test.info().project.name === "chromium-narrow") {
+      /* a narrow window gathers them behind one button, in a sheet */
+      await page.getByRole("button", { name: "Filter sessions" }).click();
+      const sheet = page.getByRole("dialog", { name: "Filter sessions" });
+      await expect(sheet).toBeVisible();
+      await expect(narrowed).toHaveCount(0);
+      await expect(sheet.getByRole("button", { name: /Ops$/ })).toBeVisible();
+      await sheet.getByRole("button", { name: /Default\s*1$/ }).click();
+      await expect(narrowed).toHaveText(/1 of 1 session/);
+      const failed = sheet
+        .getByRole("group", { name: "State" })
+        .getByRole("button", { name: /Failed/ });
+      await expect(failed).toHaveAttribute("aria-pressed", "true");
+      await sheet.getByRole("button", { name: "Reset filters" }).click();
+      await expect(narrowed).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(sheet).toHaveCount(0);
+      await expect(session).toBeVisible();
+      return;
+    }
+    const filters = page.getByLabel("Session filters");
     await expect(filters).toBeVisible();
     await expect(filters.getByRole("button", { name: "State" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
@@ -250,7 +271,7 @@ test.describe("kit shell", () => {
 
   test("agents and configuration are reachable", async ({ page }) => {
     await gotoHarness(page);
-    await page.getByRole("link", { name: "Nodes" }).first().click();
+    await openNodes(page);
     await expect(page.getByTestId("agents-screen")).toBeVisible();
     await expect(
       page
@@ -266,6 +287,10 @@ test.describe("kit shell", () => {
   test("closing sync diagnostics does not stack with the add agent dialog", async ({
     page,
   }) => {
+    test.skip(
+      test.info().project.name === "chromium-narrow",
+      "A narrow window's sync details unfold in its menu, not a popover",
+    );
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
     const sync = page.getByRole("button", { name: /^Connected/ });
@@ -285,6 +310,29 @@ test.describe("kit shell", () => {
 
   test("the agent filter and sync health never stack as dialogs", async ({ page }) => {
     await gotoHarness(page);
+    if (test.info().project.name === "chromium-narrow") {
+      /* a narrow window's filters are a sheet, and its sync status is in
+         the menu: the menu waits for the filter sheet to close */
+      const filter = page.getByRole("dialog", { name: "Filter sessions" });
+      const menu = page.getByRole("dialog", { name: "Sidebar", exact: true });
+      await startDialogObservation(page);
+      await page.getByRole("button", { name: "Filter sessions" }).click();
+      await expect(filter).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Menu", exact: true }).click();
+      await expect(menu).toBeVisible();
+      await expect(filter).toHaveCount(0);
+      await menu.getByRole("button", { name: /^Connected/ }).click();
+      await expect(
+        menu.getByRole("region", { name: "Connection details" }),
+      ).toBeVisible();
+
+      await page.waitForTimeout(200);
+      const observed = await finishDialogObservation(page);
+      expect(observed.max).toBe(1);
+      expect(observed.overlapping).toEqual([]);
+      return;
+    }
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
     const sync = page.getByRole("dialog", { name: "Connection details" });
@@ -464,10 +512,18 @@ test.describe("kit shell", () => {
       .getByTestId("context-details")
       .evaluate((element) => getComputedStyle(element).animationDuration);
     expect(closingDuration).toBe("0.6s");
-    await page.getByRole("button", { name: /^Connected/ }).click();
-    await expect(
-      page.getByRole("dialog", { name: "Connection details" }),
-    ).toBeVisible();
+    if (test.info().project.name === "chromium-narrow") {
+      /* a narrow window's sync status is in the menu */
+      await page.getByRole("button", { name: "Menu", exact: true }).click();
+      await expect(
+        page.getByRole("dialog", { name: "Sidebar", exact: true }),
+      ).toBeVisible();
+    } else {
+      await page.getByRole("button", { name: /^Connected/ }).click();
+      await expect(
+        page.getByRole("dialog", { name: "Connection details" }),
+      ).toBeVisible();
+    }
     await page.waitForTimeout(200);
 
     const observed = await finishDialogObservation(page);
@@ -611,9 +667,13 @@ test.describe("kit shell", () => {
     page,
   }) => {
     await gotoHarness(page, "discovery-offline");
+    const narrow = test.info().project.name === "chromium-narrow";
+    /* a narrow window's sync status is in the menu */
+    if (narrow) await page.getByRole("button", { name: "Menu", exact: true }).click();
     await expect(
       page.getByRole("button", { name: /^Connected\./ }).first(),
     ).toBeVisible();
+    if (narrow) await page.keyboard.press("Escape");
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /introduction-and-greetings/ })

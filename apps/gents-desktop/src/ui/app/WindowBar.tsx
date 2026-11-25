@@ -7,6 +7,7 @@ import {
   type TouchEvent,
 } from "react";
 import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
+import { projectSyncOperationalStatus } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -31,9 +32,10 @@ import { useSidebarMode } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
+import { useNavFooter } from "./navLayout";
 import { SidebarModeItems } from "./sidebarModes";
 import { NavPanel } from "./RailFlyout";
-import { SyncHealth } from "./SyncHealth";
+import { syncDotClass } from "./SyncHealth";
 import type { ShellLayout } from "./useShellLayout";
 import { WindowControls } from "./WindowControls";
 import { ActiveNodeLabel } from "./ActiveNodeLabel";
@@ -195,9 +197,21 @@ function useSwipeToClose() {
   };
 }
 
-function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
+/* the narrow window's menu also holds what its bar has no room for: the
+   mark, history and the sync status, whose dot rides on the menu button */
+function NavSheet({
+  route,
+  settings,
+  history,
+}: {
+  route: Route;
+  settings: ReactNode;
+  history?: History;
+}) {
   const sheet = useExclusivePopover();
   const drag = useSwipeToClose();
+  const sync = projectSyncOperationalStatus(useSyncHealth());
+  const showsStatus = useNavFooter().status;
   return (
     <Sheet
       open={sheet.open}
@@ -209,12 +223,23 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 md:hidden"
+            className="relative shrink-0 md:hidden"
             aria-label="Menu"
           />
         }
       >
         <Menu />
+        {showsStatus && (
+          <span
+            aria-hidden
+            data-testid="menu-sync-dot"
+            data-state={sync.kind}
+            className={cn(
+              "absolute top-1 right-1 size-2 rounded-full ring-2 ring-background",
+              syncDotClass(sync),
+            )}
+          />
+        )}
       </SheetTrigger>
       <SheetContent
         ref={sheet.popupRef}
@@ -230,10 +255,19 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
         onTouchEnd={() => drag.end(() => sheet.onOpenChange(false))}
         onTouchCancel={() => drag.end(() => {})}
         onClickCapture={(e) => {
-          if ((e.target as HTMLElement).closest("a[href]")) sheet.onOpenChange(false);
+          if (
+            (e.target as HTMLElement).closest(
+              'a[href], [data-testid="history-nav"] button',
+            )
+          )
+            sheet.onOpenChange(false);
         }}
       >
         <SheetTitle className="sr-only">Sidebar</SheetTitle>
+        <div className="mx-3 flex h-8 items-center gap-1">
+          <MarkLink current={route.name === "agents" || route.name === "nodes"} />
+          {history && <HistoryNav history={history} />}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -245,7 +279,7 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
           <Search className="size-4" />
           <span className="flex-1 text-start">Search</span>
         </button>
-        <NavPanel route={route} settings={settings} syncRow />
+        <NavPanel route={route} settings={settings} syncRow syncInline />
       </SheetContent>
     </Sheet>
   );
@@ -268,7 +302,6 @@ export function WindowBar({
   /* an expanded nav's column has room for the page's own controls, so they
      sit over it, by the mark, rather than out past its edge */
   const navHoldsHistory = wide && drawnNav === "expanded" && !navHidden;
-  const syncHealth = useSyncHealth();
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
   const { paneHidden, toEnd } = divider;
@@ -313,16 +346,14 @@ export function WindowBar({
         aria-hidden={paneHidden || undefined}
         data-tauri-drag-region={drag}
       >
-        <NavSheet route={route} settings={settings} />
+        <NavSheet route={route} settings={settings} history={history} />
         {wide && !navHoldsHistory && <SidebarToggle />}
-        <MarkLink className="md:hidden" current={onNodes} />
-        {history && !navHoldsHistory && <HistoryNav history={history} />}
+        {wide && history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />
         <div
           ref={onPaneBar}
           className="flex h-full min-w-0 flex-1 items-center gap-2"
         />
-        {!wide && <SyncHealth syncHealth={syncHealth} compact />}
       </div>
       {docked && (
         <div

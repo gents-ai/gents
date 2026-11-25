@@ -1,4 +1,11 @@
-import { expect, gotoHarness, OWN_VIEWPORT, test, type Page } from "./desktopTest";
+import {
+  expect,
+  goBack,
+  gotoHarness,
+  OWN_VIEWPORT,
+  test,
+  type Page,
+} from "./desktopTest";
 
 async function openMailbox(page: Page) {
   const link = page.getByRole("link", { name: /^Mailbox(?:\s+\d+)?$/ });
@@ -36,7 +43,7 @@ test("works through the mailbox in its dialog, and keeps the place across a sess
   await dialog.getByText("Open session", { exact: true }).click();
   await expect(page.getByTestId("session-screen")).toBeVisible();
   await expect(dialog).toHaveCount(0);
-  await page.getByRole("button", { name: "Back" }).first().click();
+  await goBack(page);
   await expect(page.getByTestId("mailbox-screen")).toBeVisible();
   await expect(dialog).toContainText("Where should this run?");
 

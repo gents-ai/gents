@@ -1,5 +1,12 @@
 import { readFileSync } from "node:fs";
-import { expect, gotoHarness, seedLocalStorage, test, type Page } from "./desktopTest";
+import {
+  expect,
+  goBack,
+  gotoHarness,
+  seedLocalStorage,
+  test,
+  type Page,
+} from "./desktopTest";
 
 /* The webview enforces the app's CSP, which the harness server does not
    send; a highlighter the policy blocks would leave the panel blank in the
@@ -207,7 +214,7 @@ test("a file marked viewed folds away with a check, stays folded, and opens agai
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
   }
-  await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
+  await goBack(page);
   await expect(page.getByTestId("sessions-screen")).toBeVisible();
   await expect(page.locator("diffs-container")).toHaveCount(0);
   await page.reload();
