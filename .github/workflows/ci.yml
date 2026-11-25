@@ -551,7 +551,7 @@ jobs:
       RUST_TEST_THREADS: "8"
       PROFILE: ci-native
       TLA_JOBS: "2"
-      TLA_HEAP: "2g"
+      TLA_HEAP: "4g"
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -1077,10 +1077,7 @@ jobs:
             "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
             python="${RUNNER_TEMP}/yaml-venv/bin/python"
           fi
-          bash -n .github/scripts/notarize-staged-artifact.sh
-          "${python}" .github/scripts/test-notarize-staged-artifact.py
-          "${python}" .github/scripts/test-rc1-notary-auth.py
-          "${python}" .github/scripts/test-release-signing-mode.py
+          PYTHON="${python}" make gate-run JOB=notary-control
 
       - name: Record the pass
         if: success()

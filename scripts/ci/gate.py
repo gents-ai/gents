@@ -1158,10 +1158,11 @@ def run_notary_control():
     if sys.platform != "darwin":
         print(f"gate: notary-control runs only on macOS; skipping on {sys.platform}")
         return
+    python = os.environ.get("PYTHON") or sys.executable
     sh(["bash", "-n", ".github/scripts/notarize-staged-artifact.sh"])
-    sh([sys.executable, ".github/scripts/test-notarize-staged-artifact.py"])
-    sh([sys.executable, ".github/scripts/test-rc1-notary-auth.py"])
-    sh([sys.executable, ".github/scripts/test-release-signing-mode.py"])
+    sh([python, ".github/scripts/test-notarize-staged-artifact.py"])
+    sh([python, ".github/scripts/test-rc1-notary-auth.py"])
+    sh([python, ".github/scripts/test-release-signing-mode.py"])
 
 
 def run_contract(selection):
