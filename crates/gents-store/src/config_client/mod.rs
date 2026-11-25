@@ -233,53 +233,74 @@ pub struct GraphqlEndpoint {
     delegation_audience: held_audience::HeldAudienceCell,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
-    /// What this endpoint's answers said of gzip request bodies, shared by
-    /// the endpoint's clones (Lean `RequestEncoding`).
-    request_encoding: RequestEncodingCell,
-    /// How long a bearer this endpoint mints lives, in seconds (kept small:
-    /// `ConfigAccess` holds an endpoint inline). A subscription is renewed at
-    /// half of it and the runtime ends it at its expiry.
-    bearer_lifetime_secs: u32,
-    /// The bearer this endpoint last minted for a request, shared by its
-    /// clones.
-    bearer: HeldBearer,
+    /// What this endpoint learned from its answers and the bearer it holds,
+    /// shared by its clones. One cell, because `ConfigAccess` holds an
+    /// endpoint inline.
+    memory: EndpointMemory,
 }
 
-/// What an endpoint learned from its answers. It is not part of which
-/// endpoint this is, so two endpoints compare equal whatever they learned.
-#[derive(Clone, Debug, Default)]
-struct RequestEncodingCell(Arc<gents_protocol::graphql::RequestEncoding>);
+/// What an endpoint learned and holds: what its answers said of gzip request
+/// bodies (Lean `RequestEncoding`), how long a bearer it mints lives, and the
+/// bearer it last minted for a request. None of it is part of which endpoint
+/// this is, so two endpoints compare equal whatever they hold.
+#[derive(Clone, Default)]
+struct EndpointMemory(Arc<Memory>);
 
-impl PartialEq for RequestEncodingCell {
-    fn eq(&self, _: &Self) -> bool {
-        true
+struct Memory {
+    request_encoding: gents_protocol::graphql::RequestEncoding,
+    /// In seconds. A subscription is renewed at half of it and the runtime
+    /// ends it at its expiry.
+    bearer_lifetime_secs: u32,
+    /// A request bearer and when it was minted. Minting derives a public key
+    /// and signs a token, both elliptic-curve work, and a client makes about
+    /// a request a second, so a bearer is reused until half its lifetime has
+    /// passed: every request still carries one with at least half its life
+    /// left. DefraDB bearers carry no nonce, so a captured one is usable for
+    /// its whole lifetime either way.
+    bearer: std::sync::Mutex<Option<(std::time::Instant, String)>>,
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Self::with_bearer_lifetime_secs(crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32)
     }
 }
 
-impl Eq for RequestEncodingCell {}
+impl Memory {
+    fn with_bearer_lifetime_secs(bearer_lifetime_secs: u32) -> Self {
+        Self {
+            request_encoding: gents_protocol::graphql::RequestEncoding::default(),
+            bearer_lifetime_secs,
+            bearer: std::sync::Mutex::new(None),
+        }
+    }
+}
 
-/// A request bearer and when it was minted. Minting derives a public key and
-/// signs a token, both elliptic-curve work, and a client makes about a
-/// request a second, so a bearer is reused until half its lifetime has
-/// passed: every request still carries one with at least half its life left.
-/// DefraDB bearers carry no nonce, so a captured one is usable for its whole
-/// lifetime either way. What an endpoint holds is not part of which endpoint
-/// it is, so two endpoints compare equal whatever they hold.
-#[derive(Clone, Default)]
-struct HeldBearer(Arc<std::sync::Mutex<Option<(std::time::Instant, String)>>>);
+impl EndpointMemory {
+    /// A fresh memory whose bearers live `bearer_lifetime_secs`: nothing
+    /// learned and no bearer held.
+    fn starting_over(bearer_lifetime_secs: u32) -> Self {
+        Self(Arc::new(Memory::with_bearer_lifetime_secs(
+            bearer_lifetime_secs,
+        )))
+    }
 
-impl HeldBearer {
-    fn reuse_or_mint(
-        &self,
-        lifetime: std::time::Duration,
-        mint: impl FnOnce() -> Result<String>,
-    ) -> Result<String> {
+    fn request_encoding(&self) -> &gents_protocol::graphql::RequestEncoding {
+        &self.0.request_encoding
+    }
+
+    fn bearer_lifetime(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.0.bearer_lifetime_secs))
+    }
+
+    fn reuse_or_mint(&self, mint: impl FnOnce() -> Result<String>) -> Result<String> {
         let mut held = self
             .0
+            .bearer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((minted, bearer)) = held.as_ref() {
-            if minted.elapsed() < lifetime / 2 {
+            if minted.elapsed() < self.bearer_lifetime() / 2 {
                 return Ok(bearer.clone());
             }
         }
@@ -289,19 +310,21 @@ impl HeldBearer {
     }
 }
 
-impl std::fmt::Debug for HeldBearer {
+impl std::fmt::Debug for EndpointMemory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("HeldBearer")
+        f.debug_struct("EndpointMemory")
+            .field("bearer_lifetime_secs", &self.0.bearer_lifetime_secs)
+            .finish_non_exhaustive()
     }
 }
 
-impl PartialEq for HeldBearer {
+impl PartialEq for EndpointMemory {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl Eq for HeldBearer {}
+impl Eq for EndpointMemory {}
 
 impl GraphqlEndpoint {
     pub fn anonymous(url: impl Into<String>) -> Self {
@@ -317,9 +340,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
-            request_encoding: RequestEncodingCell::default(),
-            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
-            bearer: HeldBearer::default(),
+            memory: EndpointMemory::default(),
         }
     }
 
@@ -340,9 +361,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
-            request_encoding: RequestEncodingCell::default(),
-            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
-            bearer: HeldBearer::default(),
+            memory: EndpointMemory::default(),
         }
     }
 
@@ -369,9 +388,7 @@ impl GraphqlEndpoint {
             delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
-            request_encoding: RequestEncodingCell::default(),
-            bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
-            bearer: HeldBearer::default(),
+            memory: EndpointMemory::default(),
         })
     }
 
@@ -398,13 +415,14 @@ impl GraphqlEndpoint {
     /// seconds this way instead of the default minute.
     /// Whole seconds; at least one.
     pub fn with_bearer_lifetime(mut self, lifetime: std::time::Duration) -> Self {
-        self.bearer_lifetime_secs = u32::try_from(lifetime.as_secs()).unwrap_or(u32::MAX).max(1);
-        self.bearer = HeldBearer::default();
+        self.memory = EndpointMemory::starting_over(
+            u32::try_from(lifetime.as_secs()).unwrap_or(u32::MAX).max(1),
+        );
         self
     }
 
     fn bearer_lifetime(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(u64::from(self.bearer_lifetime_secs))
+        self.memory.bearer_lifetime()
     }
 
     /// How long a subscription authorized by this endpoint's own bearer is
@@ -431,7 +449,7 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         self.client_signing_capability = Some(capability);
-        self.bearer = HeldBearer::default();
+        self.memory = EndpointMemory::starting_over(self.memory.0.bearer_lifetime_secs);
         Ok(self)
     }
 
@@ -566,7 +584,7 @@ impl GraphqlEndpoint {
             ),
             None => {
                 let audience = self.audience()?;
-                self.bearer.reuse_or_mint(self.bearer_lifetime(), || {
+                self.memory.reuse_or_mint(|| {
                     Ok(crate::identity::mint_defradb_bearer(
                         did,
                         &audience,

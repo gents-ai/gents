@@ -175,7 +175,7 @@ async fn send_query(
 ) -> Result<Value> {
     let authorization = endpoint.authorization()?;
     Ok(gents_protocol::graphql::execute_graphql_encoded(
-        &endpoint.request_encoding.0,
+        endpoint.memory.request_encoding(),
         endpoint.url(),
         authorization.as_deref(),
         query,
