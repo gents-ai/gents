@@ -57,7 +57,12 @@ fn placement_messages(
 
 #[tokio::test]
 async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
-    let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        gents_store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();

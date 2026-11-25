@@ -366,10 +366,11 @@ async fn interrupt_request_follows_the_lean_drain_model() {
         let db = trial_store("interrupt-drain-wakeups").await;
         let actors = support::agent_requests::RequestActors::new(&db).await;
         let session_id = "interrupt-drain-session";
-        let foreign =
-            tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-drain"))
-                .await
-                .unwrap();
+        let foreign = tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("foreign-drain")
+        })
+        .await
+        .unwrap();
         let foreign_node_did = gents_store::identity::NodeIdentity::did(&foreign).to_owned();
         let wakeup_input = format!(
             r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#

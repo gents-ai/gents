@@ -13,7 +13,9 @@ use gents_tools::surface::ToolCeiling;
 #[tokio::test]
 async fn document_constructor_rejects_node_without_signing_did_before_migrations() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let identity = Arc::new(test_identity("document-constructor-unsigned-node"));
+    let identity = Arc::new(gents_store::test_support::test_identity(
+        "document-constructor-unsigned-node",
+    ));
 
     let error = match Gents::from_default_agent_documents(
         node,

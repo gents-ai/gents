@@ -1,15 +1,5 @@
 use serde_json::Value;
 
-pub fn node_builder() -> defra_node::NodeBuilder {
-    use gents_store::identity::NodeIdentity as _;
-
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
-            .unwrap();
-    defra_node::Node::builder().with_node_identity_did(identity.did())
-}
-
 /// A node served as a home's runtime serves it, and the signed endpoint of the User who owns its
 /// household and wrote its config.
 pub struct Served {
