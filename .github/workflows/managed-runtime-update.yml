@@ -2,28 +2,10 @@ name: Managed runtime update
 
 on:
   workflow_dispatch:
-  # Nightly on main catches what the path filter leaves out (dependency,
-  # toolchain and shared-crate changes) without holding up those PRs.
+  # Nightly on main exercises the real service manager end-to-end without
+  # blocking or flaking pull requests on slow hosted macOS VMs.
   schedule:
     - cron: "43 6 * * *"
-  # Pull requests run it only when they change the service install, update
-  # or onboarding owners this job drives under a real service manager.
-  pull_request:
-    paths:
-      - '.github/workflows/managed-runtime-update.yml'
-      - '.github/scripts/test-managed-self-update.py'
-      - 'crates/gents-service/src/native_service.rs'
-      - 'crates/gents-service/src/native_service/**'
-      - 'crates/gents-service/src/service_update.rs'
-      - 'crates/gents-service/src/service_update/**'
-      - 'crates/gents-service/src/repair/**'
-      - 'crates/gents-service/src/lifecycle.rs'
-      - 'crates/gents-cli/src/commands/prepare_runtime.rs'
-      - 'crates/gents-cli/src/commands/start*'
-      - 'crates/gents-cli/src/commands/start/**'
-      - 'crates/gents-cli/src/commands/init.rs'
-      - 'crates/gents-cli/tests/suites/cli_onboarding_live.rs'
-      - 'crates/gents-cli/tests/suites/cli_onboarding_live/**'
 
 permissions:
   contents: read
