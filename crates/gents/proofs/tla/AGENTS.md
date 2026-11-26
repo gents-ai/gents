@@ -89,3 +89,22 @@ because a long left-nested chain overflows TLC's stack), and `<name>(...)`,
 its lookup. These files are regenerated, never edited;
 `generated_tla_modules_are_current` in `gents-lean-vocab` fails when one is
 stale.
+
+## Trace replay
+
+Run `make tla-traces` to regenerate the participating specs' counterexamples
+in `generated/traces/`. The pinned TLC rejects `-dumpTrace`. Its `-tool`
+state messages carry the numbered full snapshots and named actions. The
+generator drops source locations, recovers the client actor from the changed
+queue entry and compares two fresh runs byte for byte. The vocabulary tests
+regenerate the files and check that each has one replay consumer.
+
+Give each disjunct of `Next` a named operator, including its quantifier.
+Add the spec to `traces` in `tla_check.py`. In its e2e test, load each trace,
+check the constants with Rust counterparts and map each action to a writer,
+a held commit or an internal step. `SpecTraceMap::drive` runs the pending
+writers before forwarding the next commit. Read the durable rows and the
+operation receipt. A defect replay satisfies the named property, a premise
+replay exhibits its violation, and a witness reaches the state its invariant
+excludes. Client draft and deadline steps run through the desktop delivery
+owner with its clock under test control.

@@ -628,6 +628,43 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn every_generated_trace_has_one_replay_consumer() {
+        let workspace = workspace();
+        let compiled = crate::module_tree::module_tree(&workspace).compiled;
+        let mut files = Vec::new();
+        for root in SOURCE_ROOTS {
+            source_files(&workspace.join(root), &mut files);
+        }
+        let imports: Vec<_> = files
+            .iter()
+            .filter(|path| {
+                (compiled.contains(*path) && path.components().any(|c| c.as_os_str() == "tests"))
+                    || path.to_string_lossy().ends_with(".test.ts")
+            })
+            .flat_map(|path| {
+                fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .filter_map(|line| {
+                        let (_, tail) = line.trim().split_once("/proofs/tla/generated/traces/")?;
+                        let (file, _) = tail.split_once('"')?;
+                        Some((file.to_owned(), path))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for entry in crate::tla::generated_dir()
+            .join("traces")
+            .read_dir()
+            .unwrap()
+        {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            let consumers: Vec<_> = imports.iter().filter(|(file, _)| file == &name).collect();
+            assert_eq!(consumers.len(), 1, "{name} replay consumers: {consumers:?}");
+        }
+    }
+
     const PREMISE_PREFIX: &str = "boundary.";
 
     /// Each name is an emitted family that no native test replays. The list

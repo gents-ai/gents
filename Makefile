@@ -251,6 +251,10 @@ gate-run:
 gate-selftest:
 	python3 scripts/ci/test_gate.py
 
+.PHONY: tla-traces
+tla-traces:
+	python3 crates/gents/proofs/tla/scripts/tla_check.py traces
+
 lean-regen:
 	$(CARGO) run -q -p gents-lean-vocab $(CARGO_PROFILE_FLAG) --example decoders_from_snapshot -- --regenerate $(if $(FORCE),--force,)
 

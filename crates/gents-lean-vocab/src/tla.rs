@@ -510,6 +510,20 @@ mod tests {
     }
 
     #[test]
+    fn generated_tla_traces_are_current() {
+        let output = std::process::Command::new("python3")
+            .arg(tla_dir().join("scripts/tla_check.py"))
+            .args(["traces", "--check"])
+            .output()
+            .expect("run the pinned TLC trace generator");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn generated_tla_modules_are_current() {
         let snapshot = crate::lean_contract_snapshot();
         let owners = named_owners(&tla_dir()).unwrap();

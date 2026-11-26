@@ -64,7 +64,7 @@ impl TransactionMode {
     const fn max_attempts(self) -> u32 {
         match self {
             Self::ConflictRetry | Self::SignedConflictRebuild => {
-                retry::TRANSACT_CONFLICT_MAX_RETRIES + 1
+                crate::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1
             }
             Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),

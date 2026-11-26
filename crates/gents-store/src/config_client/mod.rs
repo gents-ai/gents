@@ -89,6 +89,8 @@ mod pairing_reader;
 mod query_tests;
 mod relationships;
 mod retry;
+
+pub const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 mod schema_contract;
 mod schema_install;
 pub mod schema_introspection;
