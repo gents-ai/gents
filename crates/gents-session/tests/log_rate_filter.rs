@@ -112,10 +112,25 @@ fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
     );
 
     CLOCK_OFFSET_MS.store(120_000, Ordering::SeqCst);
+    const SLOW_WORKER_TASK: &str = "log_rate_filter::idle_query";
+    // Mimic an unrelated slow-task diagnostic emitted elsewhere in the same
+    // process (e.g. another runtime worker): global subscriber capture sees it,
+    // so the assertions below must filter on this test's own task marker and
+    // callsite line rather than counting every `workers::worker` warning.
+    tracing::warn!(
+        target: "workers::worker",
+        task = "unrelated background task",
+        worker = 99,
+        elapsed_ms = 25,
+        limit_ms = 10,
+        "a task held its worker past the limit; move blocking work to spawn_blocking"
+    );
+    let mut slow_worker_line = 0u32;
     for _ in 0..=120 {
+        slow_worker_line = line!() + 1;
         tracing::warn!(
             target: "workers::worker",
-            task = "idle query",
+            task = SLOW_WORKER_TASK,
             worker = 2,
             elapsed_ms = 13,
             limit_ms = 10,
@@ -123,20 +138,30 @@ fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
         );
         CLOCK_OFFSET_MS.fetch_add(500, Ordering::SeqCst);
     }
+    assert!(
+        output
+            .lines()
+            .iter()
+            .any(|line| line.contains("task=\"unrelated background task\"")),
+        "unrelated worker warning should reach the global subscriber so marker isolation is exercised"
+    );
     let worker_lines: Vec<_> = output
         .lines()
         .into_iter()
-        .filter(|line| line.contains("a task held its worker past the limit"))
+        .filter(|line| {
+            line.contains("a task held its worker past the limit")
+                && line.contains(&format!("task=\"{SLOW_WORKER_TASK}\""))
+        })
         .collect();
     assert_eq!(worker_lines.len(), 2, "one diagnostic per minute");
     for line in worker_lines {
         for context in [
-            "task=\"idle query\"",
-            "worker=2",
-            "elapsed_ms=13",
-            "limit_ms=10",
+            format!("task=\"{SLOW_WORKER_TASK}\""),
+            "worker=2".to_owned(),
+            "elapsed_ms=13".to_owned(),
+            "limit_ms=10".to_owned(),
         ] {
-            assert!(line.contains(context), "missing {context}: {line}");
+            assert!(line.contains(&context), "missing {context}: {line}");
         }
     }
     for _ in 0..10 {
@@ -174,6 +199,7 @@ fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
         );
     }
 
+    let expected_original_line = format!("original_line={slow_worker_line}");
     let summary_seen = output.wait_for(Duration::from_secs(10), |bytes| {
         let text = String::from_utf8_lossy(bytes);
         text.lines()
@@ -183,7 +209,8 @@ fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
                     && line.contains("suppressed=119")
                     && line.contains("original_target=workers::worker")
                     && line.contains("original_file=")
-                    && line.contains("original_line=")
+                    && line.contains("log_rate_filter.rs")
+                    && line.contains(&expected_original_line)
             })
     });
     assert!(
