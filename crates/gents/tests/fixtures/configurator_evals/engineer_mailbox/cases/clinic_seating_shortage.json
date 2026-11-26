@@ -77,7 +77,7 @@
   "stages": [
     {
       "stage_id": "review",
-      "prompt": "Which open clinic wings are short of seats this shift? Add up ClinicQueue.ready per wing and take away that wing's ClinicWing.available_now; closed wings don't count. If any are short, put one item in my inbox titled \"Clinic seating\" listing each as Wing (+N), alphabetical, comma-separated, and tell me which wings.",
+      "prompt": "Which open clinic wings are short of seats? Subtract ClinicWing.available_now from total ClinicQueue.ready per open wing (ignore closed wings). If any are short, flag my inbox once titled \"Clinic seating\" listing them alphabetically as \"Wing (+N)\", comma-separated, and tell me which.",
       "capture": [
         {
           "kind": "documents",

@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Set up an automation for new PackingSlip records: each one gets a run that replies PACKED and the slip. Once that run has finished for a slip whose handoff_id starts with cold-, start a follow-up run that replies CHILL and the handoff_id. Other slips get no follow-up. Set it up now; slips come in later.",
+      "prompt": "Automate new PackingSlip records: each gets a run replying PACKED and its slip. After that run finishes for a slip whose handoff_id starts with cold-, start a follow-up run replying CHILL and the handoff_id. Other slips get no follow-up. Set it up now; slips come later.",
       "checks": [],
       "capture": []
     },

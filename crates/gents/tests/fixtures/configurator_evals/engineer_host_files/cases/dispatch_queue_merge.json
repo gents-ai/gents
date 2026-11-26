@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "merge",
-      "prompt": "Build the current dispatch queue from dispatch/manual.jsonl and dispatch/import.jsonl. The two feeds stamp updated_at in different time zones. For each job use its latest entry, and if both feeds have an entry at the same moment the manual one wins. Drop jobs whose latest entry is cancelled and save the rest to dispatch/queue.json as a JSON array of the original records, sorted by job_id.",
+      "prompt": "Merge dispatch/manual.jsonl and dispatch/import.jsonl (updated_at uses mixed time zones). Keep each job's latest entry (manual wins ties), drop jobs whose latest state is cancelled, and save the remaining original records as a JSON array sorted by job_id to dispatch/queue.json. Don't edit inputs.",
       "capture": [
         {
           "kind": "file",

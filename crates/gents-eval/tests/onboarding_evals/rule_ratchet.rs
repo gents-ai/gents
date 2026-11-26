@@ -19,53 +19,13 @@ const ENGINEER_TOOLS_ID: &str = "engineer-tools";
 #[rustfmt::skip]
 const ENGINEER_PIN: &[(&str, usize)] = &[];
 #[rustfmt::skip]
-const LONG_PROMPT: &[(&str, usize)] = &[
-    ("engineer_automation_graphs/cases/cold_packing_chain.json", 1),
-    ("engineer_automation_graphs/cases/redline_follow_up.json", 1),
-    ("engineer_goals/cases/blocked_manifest.json", 1),
-    ("engineer_goals/cases/points_partial_blocked.json", 1),
-    ("engineer_goals/cases/queue_one_per_turn.json", 1),
-    ("engineer_host_files/cases/beacon_live_minutes.json", 1),
-    ("engineer_host_files/cases/berth_overlap_pairs.json", 1),
-    ("engineer_host_files/cases/dispatch_queue_merge.json", 1),
-    ("engineer_host_files/cases/heron_current_decisions.json", 1),
-    ("engineer_host_files/cases/retry_callers_audit.json", 1),
-    ("engineer_mailbox/cases/blocked_order_escalation.json", 1),
-    ("engineer_mailbox/cases/clinic_seating_shortage.json", 1),
-    ("engineer_mailbox/cases/kiln_flag_and_question.json", 1),
-    ("engineer_mailbox/cases/tank_two_low_readings.json", 1),
-    ("engineer_pack_authoring/cases/parts_desk_app_pack.json", 1),
-    ("engineer_pages/cases/add_chart_keep_css.json", 1),
-    ("engineer_pages/cases/clear_lint_finding.json", 1),
-    ("engineer_pages/cases/fix_stale_calibrations.json", 1),
-    ("engineer_pages/cases/rename_read_tool.json", 1),
-    ("engineer_pages/cases/restore_my_holdings.json", 1),
-    ("engineer_script/cases/lab_lock_audit.json", 1),
-    ("engineer_skills/cases/plan_before_build.json", 1),
-    ("engineer_workflows/cases/calibration_review.json", 1),
-    ("engineer_workflows/cases/west_loading_reconcile.json", 1),
-];
+const LONG_PROMPT: &[(&str, usize)] = &[];
 #[rustfmt::skip]
-const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[
-    ("engineer_pages/cases/add_chart_keep_css.json", 1),
-    ("engineer_pages/cases/clear_lint_finding.json", 1),
-    ("engineer_pages/cases/fix_stale_calibrations.json", 1),
-    ("engineer_pages/cases/rename_read_tool.json", 1),
-    ("engineer_pages/cases/restore_my_holdings.json", 1),
-];
+const PROMPT_NAMES_TOOL: &[(&str, usize)] = &[];
 #[rustfmt::skip]
-const ROUTE: &[(&str, usize)] = &[
-    ("engineer_pages/cases/add_chart_keep_css.json", 1),
-    ("engineer_pages/cases/clear_lint_finding.json", 1),
-    ("engineer_pages/cases/fix_stale_calibrations.json", 1),
-    ("engineer_pages/cases/rename_read_tool.json", 1),
-    ("engineer_pages/cases/restore_my_holdings.json", 1),
-];
+const ROUTE: &[(&str, usize)] = &[];
 #[rustfmt::skip]
-const UNEXERCISED: &[(&str, usize)] = &[
-    ("engineer_pages/cases/fix_stale_calibrations.json", 1),
-    ("engineer_pages/cases/restore_my_holdings.json", 1),
-];
+const UNEXERCISED: &[(&str, usize)] = &[];
 
 const OPEN: [(Rule, &[(&str, usize)]); 5] = [
     (Rule::EngineerPin, ENGINEER_PIN),
