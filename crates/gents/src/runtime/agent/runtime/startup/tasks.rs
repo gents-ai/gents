@@ -564,6 +564,7 @@ pub(super) fn spawn_control_watcher(
     reconcile_tx: &mpsc::Sender<ResolvedRuntimeSnapshot>,
     control_tool_runtime: ToolRuntimeContext,
     backend_health_events_rx: mpsc::Receiver<()>,
+    placement_resolves: tokio::sync::watch::Receiver<u64>,
 ) {
     let StartupTasks {
         agent,
@@ -599,6 +600,7 @@ pub(super) fn spawn_control_watcher(
                         proposals_tx: control_tx,
                         runtime_status: control_runtime_status,
                         health_events_rx: backend_health_events_rx,
+                        placement_resolves,
                         shutdown: control_shutdown,
                     },
                 )

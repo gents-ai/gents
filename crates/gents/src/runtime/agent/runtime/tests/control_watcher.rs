@@ -254,6 +254,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
             health_events_rx: mpsc::channel::<()>(1).1,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         })
         .with_subscriber(subscriber),
@@ -395,6 +396,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: mpsc::channel::<()>(1).1,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {
@@ -509,6 +511,7 @@ async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: mpsc::channel::<()>(1).1,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         timing,
@@ -618,6 +621,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         })
         .with_subscriber(subscriber),
@@ -746,6 +750,7 @@ async fn control_watcher_recovers_after_resolve_error() {
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
             health_events_rx: mpsc::channel::<()>(1).1,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         })
         .with_subscriber(subscriber),
@@ -823,6 +828,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
         health_events_rx: mpsc::channel::<()>(1).1,
+        placement_resolves: tokio::sync::watch::channel(0).1,
         shutdown: shutdown_rx,
     }));
 
@@ -1025,6 +1031,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
         health_events_rx: mpsc::channel::<()>(1).1,
+        placement_resolves: tokio::sync::watch::channel(0).1,
         shutdown: shutdown_rx,
     }));
 
@@ -1178,6 +1185,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         proposals_tx: proposal_tx,
         runtime_status,
         health_events_rx: mpsc::channel::<()>(1).1,
+        placement_resolves: tokio::sync::watch::channel(0).1,
         shutdown: shutdown_rx,
     }));
     tokio::task::yield_now().await;
@@ -1322,6 +1330,7 @@ async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         }));
 

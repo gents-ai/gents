@@ -14,6 +14,7 @@ fn routed_snapshot(
 ) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
     Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
             generation,
             node: None,
             local_did: String::new(),
@@ -567,6 +568,7 @@ fn router_snapshot(
 ) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
     Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
             generation,
             node: None,
             local_did: String::new(),
@@ -681,6 +683,7 @@ async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) 
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
     let initial_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: input.pre_router_generation,
         node: None,
         local_did: String::new(),
@@ -706,6 +709,7 @@ async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) 
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
     let updated_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: input.pre_active_generation,
         node: None,
         local_did: String::new(),

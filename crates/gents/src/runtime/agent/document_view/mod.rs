@@ -46,6 +46,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) backend_observations: RapidHashMap<String, InferenceBackendObservation>,
     pub(crate) unknown_kind_backends: RapidHashMap<String, String>,
     pub(crate) oauth_accounts: NodeOAuthAccounts,
+    pub(crate) placement_floors: gents_store::config_client::placement_fence::PlacementFloors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +82,19 @@ impl DocumentRuntimeView {
             &self.node.value.node_did,
             gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
+    }
+
+    pub(crate) fn placement_basis(
+        &self,
+    ) -> gents_store::config_client::placement_fence::PlacementBasis {
+        gents_store::config_client::placement_fence::PlacementBasis {
+            floors: self.placement_floors.clone(),
+            agent_documents: self
+                .agents
+                .iter()
+                .map(|(agent_did, record)| (agent_did.clone(), record.doc_id.clone()))
+                .collect(),
+        }
     }
 
     pub(crate) fn has_unresolved_agent_references(&self) -> bool {

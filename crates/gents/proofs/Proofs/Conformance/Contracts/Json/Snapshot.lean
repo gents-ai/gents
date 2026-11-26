@@ -164,6 +164,7 @@ import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.DecisionRead
 import Proofs.Conformance.AssignmentReceiver
+import Proofs.Conformance.Placement
 import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases

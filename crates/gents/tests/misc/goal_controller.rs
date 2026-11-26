@@ -62,6 +62,7 @@ async fn load_goal_as(
 
 fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: local_did.to_string(),

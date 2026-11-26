@@ -403,6 +403,7 @@ fn status_test_snapshot(
     dispatcher: mpsc::Sender<gents_protocol::row::AgentRequest>,
 ) -> ActiveRuntimeSnapshot {
     ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation,
         node: None,
         local_did: String::new(),
@@ -525,6 +526,7 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
             generation: 1,
             node: None,
             local_did: String::new(),
@@ -574,6 +576,7 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
 
     let (tx, _rx) = mpsc::channel(2);
     let snapshot = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -619,6 +622,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -638,6 +642,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         agent_executor_queue_capacities: RapidHashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 2,
         node: None,
         local_did: String::new(),
@@ -687,6 +692,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
 fn reconcile_snapshot(generation: u64) -> ActiveRuntimeSnapshot {
     ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation,
         node: None,
         local_did: String::new(),
