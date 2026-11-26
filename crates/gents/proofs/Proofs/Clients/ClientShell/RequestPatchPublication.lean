@@ -11,6 +11,12 @@ def publish (state : CacheState) (accepted : Bool) : CacheState :=
 def reusable (state : CacheState) (sameSignature fenceAccepted rowsCurrent : Bool) : Bool :=
   state == .memoized && sameSignature && fenceAccepted && rowsCurrent
 
+/-- `rejectCandidate` publishes nothing and leaves the patch to be read again.
+It asks the observer for no read: every step that rejects a patch
+(`ClientDataPublication.reach`) is an event that queued its own read or a
+publication of rows newer than the patch's. Asking for the node instead keeps
+rejecting the patches in flight when that reload publishes (`SessionPatchFence`
+TLA, `Resync`). -/
 inductive FreshReadAction where
   | mergeFresh
   | rejectCandidate
