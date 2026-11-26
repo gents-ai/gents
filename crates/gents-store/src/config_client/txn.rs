@@ -62,7 +62,10 @@ use super::write_telemetry::WriteOperation;
 #[cfg(test)]
 use apply_txn::{EmbeddedTransactionPurpose, TxnBackend};
 #[cfg(test)]
-use fault_injection::{EmbeddedFinalizationBoundary, EMBEDDED_FINALIZATION_PAUSE};
+use fault_injection::{
+    BoundaryPause, EmbeddedFinalizationBoundary, EmbeddedFinalizationLifecycle,
+    EMBEDDED_FINALIZATION_LIFECYCLE, EMBEDDED_FINALIZATION_PAUSE,
+};
 #[cfg(test)]
 use gate::{
     existing_mutation_write_gate, mutation_write_gate, MutationWriteGate, MutationWriteGuard,
