@@ -117,9 +117,12 @@ def output_limit():
     if code != 0:
         fail(f"output limit: exit {code}: {err.strip()[-300:]}")
     else:
-        r = json.loads(out)
-        compact = len(json.dumps(r, separators=(",", ":"), ensure_ascii=False).encode())
-        if compact > OUTPUT_LIMIT:
+        raw = json.loads(out)
+        r = raw["response"]
+        compact = len(json.dumps(raw, separators=(",", ":"), ensure_ascii=False).encode())
+        if list(raw.keys()) != ["response"]:
+            fail(f"output limit: unexpected top-level keys {list(raw.keys())}")
+        elif compact > OUTPUT_LIMIT:
             fail(f"output limit: {compact} bytes")
         elif not r["rows"] or "next" not in r:
             fail("output limit: expected a full first page with a cursor")
@@ -131,7 +134,7 @@ def wide_table():
     code, out, err, secs = run(os.path.join(FIXTURES, "wide"), {"sql": "SELECT * FROM ok"})
     if code != 0:
         fail(f"wide table: exit {code}: {err.strip()[:200]}")
-    elif len(json.loads(out)["columns"]) != 2000:
+    elif len(json.loads(out)["response"]["columns"]) != 2000:
         fail("wide table: expected 2000 columns")
     elif secs > 120:
         fail(f"wide table: SELECT * took {secs:.0f}s")
@@ -160,7 +163,7 @@ def workbooks():
     code, out, err, secs = run(d, {"sql": "SELECT * FROM small"})
     if code != 0:
         fail(f"workbooks: exit {code}: {err.strip()[:200]}")
-    elif json.loads(out)["rows"] != [[1], [2]]:
+    elif json.loads(out)["response"]["rows"] != [[1], [2]]:
         fail("workbooks: wrong rows")
     elif secs > 60:
         fail(f"workbooks: a query on the CSV took {secs:.0f}s")
@@ -185,10 +188,74 @@ def saves():
     shutil.rmtree(d)
 
 
+def shared_shape_with_charts():
+    """Live cross-pack check: data_tables and charts share the response envelope, and a live
+    data_tables result passed unchanged as charts data draws."""
+    charts_dir = os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "charts")
+    )
+    if not os.path.isfile(os.path.join(charts_dir, "manifest.json")):
+        fail(f"shared shape: sibling charts pack not found at {charts_dir}")
+        return
+    d = tempfile.mkdtemp()
+    charts_home = tempfile.mkdtemp()
+    try:
+        open(os.path.join(d, "sales.csv"), "w").write("region,units\nnorth,15\nsouth,10\n")
+        code, out, err, _ = run(d, {"sql": "SELECT region, units FROM sales ORDER BY region"})
+        if code != 0:
+            fail(f"shared shape: data_tables exit {code}: {err.strip()[-200:]}")
+            return
+        dt_out = json.loads(out)
+        if sorted(dt_out.keys()) != ["response"] or not isinstance(dt_out["response"], dict):
+            fail(f"shared shape: data_tables top-level keys {sorted(dt_out.keys())}")
+            return
+        if not os.path.isfile(os.path.join(charts_dir, "plugins", "charts.afb")):
+            b = subprocess.run(
+                [GENTS, "config", "pack", "build", charts_dir, "--out", os.path.join(charts_home, "charts.pack")],
+                capture_output=True, text=True, timeout=600)
+            if b.returncode != 0:
+                fail(f"shared shape: building charts failed: {b.stderr.strip()[-200:]}")
+                return
+        init = subprocess.run([GENTS, "init", "--home", charts_home], capture_output=True, text=True, timeout=120)
+        if init.returncode != 0:
+            fail(f"shared shape: init failed: {init.stderr.strip()[-200:]}")
+            return
+        profile = json.loads(init.stdout)["inference_profile_id"]
+        inst = subprocess.run(
+            [GENTS, "config", "pack", "install", charts_dir, "--home", charts_home,
+             "--grant-authority", "--inference-slot", f"chart_maker={profile}"],
+            capture_output=True, text=True, timeout=120)
+        if inst.returncode != 0:
+            fail(f"shared shape: installing charts failed: {inst.stderr.strip()[-200:]}")
+            return
+        chart_req = {"chart": "bar", "x": "region", "y": ["units"], "data": dt_out}
+        cp = subprocess.run(
+            [GENTS, "config", "pack", "plugin", "run", "charts", "--home", charts_home,
+             "--input", json.dumps(chart_req)],
+            capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, RUST_BACKTRACE="0", RUST_LIB_BACKTRACE="0"))
+        if cp.returncode != 0:
+            fail(f"shared shape: charts exit {cp.returncode}: {cp.stderr.strip()[-200:]}")
+            return
+        ch_out = json.loads(cp.stdout)
+        if sorted(ch_out.keys()) != ["parts", "response"] or not isinstance(ch_out["response"], dict):
+            fail(f"shared shape: charts top-level keys {sorted(ch_out.keys())}")
+            return
+        s = ch_out["response"]["series"][0]
+        if (ch_out["response"]["chart"], s["points"], s["min"], s["max"]) != ("bar", 2, 10.0, 15.0):
+            fail(f"shared shape: unexpected chart series {s}")
+            return
+        print("shared shape: data_tables and charts share response envelope and chain unchanged", flush=True)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(charts_home, ignore_errors=True)
+
+
 fuzz(int(sys.argv[1]) if len(sys.argv) > 1 else 2)
 output_limit()
 wide_table()
 workbooks()
 saves()
+shared_shape_with_charts()
 print(f"{len(failures)} failures")
 sys.exit(1 if failures else 0)

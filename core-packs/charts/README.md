@@ -10,8 +10,8 @@ ships one plugin, `charts`, a WebAssembly module that draws byte-identical
 pictures on every operating system gents runs on, and a ready-made **Chart
 maker** agent that uses it.
 
-Data comes inline (the `{"columns": [...], "rows": [[...]]}` shape the
-data_tables pack returns, a list of objects, or CSV text) or from a CSV, TSV,
+Data comes inline (a `data_tables` result as it is, `{"columns": [...], "rows":
+[[...]]}`, a list of objects, or CSV text) or from a CSV, TSV,
 JSON or JSON Lines file of any size in the working folder. Empty and
 non-numeric values are drawn as gaps, never as zero, and counted in
 `warnings`.

@@ -1,34 +1,36 @@
 {
   "expect": {
-    "columns": [
-      {
-        "name": "a",
-        "type": "int64"
-      },
-      {
-        "name": "b",
-        "type": "text"
-      }
-    ],
-    "markdown": "| a | b |\n| --- | --- |\n| 1 | x |\n| NULL |  |\n| NULL | z |",
-    "offset": 0,
-    "order": "file",
-    "row_count": 3,
-    "rows": [
-      [
-        1,
-        "x"
+    "response": {
+      "columns": [
+        {
+          "name": "a",
+          "type": "int64"
+        },
+        {
+          "name": "b",
+          "type": "text"
+        }
       ],
-      [
-        null,
-        ""
+      "markdown": "| a | b |\n| --- | --- |\n| 1 | x |\n| NULL |  |\n| NULL | z |",
+      "offset": 0,
+      "order": "file",
+      "row_count": 3,
+      "rows": [
+        [
+          1,
+          "x"
+        ],
+        [
+          null,
+          ""
+        ],
+        [
+          null,
+          "z"
+        ]
       ],
-      [
-        null,
-        "z"
-      ]
-    ],
-    "warnings": []
+      "warnings": []
+    }
   },
   "input": {
     "sql": "SELECT * FROM t",

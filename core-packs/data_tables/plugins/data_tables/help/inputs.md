@@ -3,9 +3,9 @@ One JSON object. Name the data in one or both ways:
 - `path`: a data file, or a folder of them (a relative path starts at the working folder). Only that file or
   folder is readable for the call. In a folder every readable file, below subfolders too, is a table; hidden
   files are ignored. `files` lists the relative paths inside the folder to use, in that order.
-- `tables`: rows sent inline, in the shape this tool's own results have:
-  `{"name": "t", "columns": [{"name": "a", "type": "int64"}], "rows": [[1], [2]]}`. A list of such tables, one
-  table, or an object of `name: rows` is accepted. Rows are lists (by position) or objects (by key). Types are
+- `tables`: rows sent inline, either a `data_tables` result as it is (`{"response": {"columns": [...], "rows":
+  [...]}}`) or `{"name": "t", "columns": [{"name": "a", "type": "int64"}], "rows": [[1], [2]]}`. A list of such
+  tables, one table, or an object of `name: rows` is accepted. Rows are lists (by position) or objects (by key). Types are
   inferred unless a column declares one; a declared `int64` or `uint64` accepts exact integers sent as strings, and a
   declared `decimal(p,s)` is held as text (use `CAST(col AS DECIMAL(p,s))` to calculate with it).
 

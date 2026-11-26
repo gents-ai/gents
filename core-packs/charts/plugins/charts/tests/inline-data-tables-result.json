@@ -1,0 +1,64 @@
+{
+  "expect": {
+    "response": {
+      "alt": "Bar chart. 2 categories of region, from north to south. Value axis: units, from 0 to 20. 1 series. \"units\" (bar): highest 15 at north, lowest 10 at south.",
+      "chart": "bar",
+      "height": 200,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 15.0,
+          "min": 10.0,
+          "name": "units",
+          "points": 2,
+          "sum": 25.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"200\" viewBox=\"0 0 320 200\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">bar chart</title><desc id=\"chart-desc\">Bar chart. 2 categories of region, from north to south. Value axis: units, from 0 to 20. 1 series. &quot;units&quot; (bar): highest 15 at north, lowest 10 at south.</desc><rect x=\"0\" y=\"0\" width=\"320\" height=\"200\" fill=\"#ffffff\"/><line x1=\"53.24\" y1=\"82.5\" x2=\"304\" y2=\"82.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"70.79\" y=\"50.75\" width=\"90.28\" height=\"92.25\" fill=\"#0072b2\"><title>units, north: 15</title></rect><text x=\"115.93\" y=\"46.75\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">15</text><rect x=\"196.17\" y=\"81.5\" width=\"90.28\" height=\"61.5\" fill=\"#0072b2\"><title>units, south: 10</title></rect><text x=\"241.31\" y=\"77.5\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">10</text><line x1=\"53.24\" y1=\"143.5\" x2=\"304\" y2=\"143.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"20\" x2=\"52.74\" y2=\"143\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"116.5\" y1=\"143\" x2=\"116.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"115.93\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">north</text><line x1=\"241.5\" y1=\"143\" x2=\"241.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"241.31\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">south</text><line x1=\"49.24\" y1=\"143.5\" x2=\"53.24\" y2=\"143.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"147\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"82.5\" x2=\"53.24\" y2=\"82.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"85.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"49.24\" y1=\"20.5\" x2=\"53.24\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><text x=\"178.62\" y=\"180\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">region</text><text x=\"27\" y=\"81.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 81.5)\">units</text></svg>",
+      "warnings": [],
+      "width": 320
+    }
+  },
+  "input": {
+    "chart": "bar",
+    "data": {
+      "response": {
+        "columns": [
+          {
+            "name": "region",
+            "type": "text"
+          },
+          {
+            "name": "units",
+            "type": "int64"
+          }
+        ],
+        "markdown": "| region | units |\n| --- | --- |\n| north | 15 |\n| south | 10 |",
+        "offset": 0,
+        "order": "columns",
+        "row_count": 2,
+        "rows": [
+          [
+            "north",
+            15
+          ],
+          [
+            "south",
+            10
+          ]
+        ],
+        "warnings": []
+      }
+    },
+    "height": 200,
+    "output": "svg",
+    "width": 320,
+    "x": "region",
+    "y": [
+      "units"
+    ]
+  }
+}

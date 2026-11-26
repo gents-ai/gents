@@ -3,9 +3,10 @@ One JSON object. `chart` is required; everything else has a default.
 Give the data in one of two ways:
 
 - `data`: inline, up to a few thousand rows. Three shapes work: the result of
-  the `data_tables` tool as it is, `{"columns": ["month", "sales"], "rows":
-  [["Jan", 10], ["Feb", 12]]}`; a list of objects, `[{"month": "Jan", "sales":
-  10}]`; or CSV text with a header line.
+  the `data_tables` tool as it is (`{"response": {"columns": [...], "rows":
+  [[...]]}}` or bare `{"columns": ["month", "sales"], "rows": [["Jan", 10],
+  ["Feb", 12]]}`); a list of objects, `[{"month": "Jan", "sales": 10}]`; or CSV
+  text with a header line.
 - `path`: a CSV, TSV, JSON or JSON Lines file, or the folder holding it, with
   `file` naming the file inside the folder. A relative path starts at the
   working folder. Files of any size are read in one streaming pass; only the
