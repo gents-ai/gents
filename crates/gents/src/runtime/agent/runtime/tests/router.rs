@@ -476,11 +476,13 @@ async fn blocked_dispatch_follows_the_lean_model() {
         )
         .await;
         let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel();
+        let (router_stopped_tx, router_stopped_rx) = watch::channel(false);
         let runtime = BootedRuntime::boot(
             &home,
             crate::runtime::agent::DocumentRuntimeOptions {
                 tool_ceiling: ToolCeiling::meta_only(),
                 router_dispatch_probe: Some(dispatch_tx),
+                router_stopped_probe: Some(router_stopped_tx),
                 ..Default::default()
             },
         )
@@ -514,7 +516,7 @@ async fn blocked_dispatch_follows_the_lean_model() {
                     },
                 )
                 .await;
-                let router_stopped = runtime.is_finished();
+                let router_stopped = *router_stopped_rx.borrow();
                 held.release();
                 runtime.shutdown().await.expect("the runtime stops cleanly");
                 let destination = match executed_generation {
@@ -529,6 +531,7 @@ async fn blocked_dispatch_follows_the_lean_model() {
                     .shutdown()
                     .await
                     .expect("shutdown closes admission and stops the blocked router");
+                let router_stopped = *router_stopped_rx.borrow();
                 let (state, generation) =
                     read_request_state_and_generation(&user_access, target_id).await;
                 let destination = match (state.as_deref(), generation) {
@@ -537,12 +540,12 @@ async fn blocked_dispatch_follows_the_lean_model() {
                     (_, Some(gen)) if gen > 1 => "newest_executor",
                     other => panic!("unexpected target state after shutdown: {other:?}"),
                 };
-                (destination, true)
+                (destination, router_stopped)
             }
             "nothing" => {
                 let (state, generation) =
                     read_request_state_and_generation(&user_access, target_id).await;
-                let router_stopped = runtime.is_finished();
+                let router_stopped = *router_stopped_rx.borrow();
                 runtime.shutdown().await.expect("the runtime stops cleanly");
                 let destination = match (state.as_deref(), generation) {
                     (Some("pending"), None) => "undispatched",

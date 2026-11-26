@@ -460,12 +460,6 @@ impl BootedRuntime {
         &self.node_did
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.handle.is_finished())
-    }
-
     pub async fn readiness(&self) -> Option<NodeReadinessSnapshot> {
         let escaped = escape_graphql_string(&self.node_did);
         let data = self
