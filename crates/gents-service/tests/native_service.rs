@@ -399,7 +399,7 @@ fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
     Ok(())
 }
 
-/// #3737: launchd keeps and restarts a loaded job after its plist is deleted,
+/// External premise: launchd keeps and restarts a loaded job after its plist is deleted,
 /// so the job is observed and stopped through launchd, not through the file.
 #[test]
 fn mac_loaded_job_without_a_definition_is_observed_and_stopped() -> Result<()> {

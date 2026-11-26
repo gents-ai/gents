@@ -157,11 +157,8 @@ async fn prepare_staged(home: &Path, lock: &Path) -> super::RepairReceipt {
     .unwrap()
 }
 
-/// The onboarding test of #3670 ran this build on an rc2 home: the repair
-/// installed a service, the node opened the store and rewrote its manifest,
-/// and nothing said the home was older. A home an older Gents made is now
-/// refused before anything touches it, even when the user answered to set
-/// it aside.
+/// A home an older Gents made is refused before anything touches it, even when
+/// the user answered to set it aside.
 #[tokio::test]
 async fn an_older_home_is_reported_and_left_exactly_as_it_was() {
     use gents_protocol::operations::install_repair::{IncompatibleStoreKind, RepairOutcome};

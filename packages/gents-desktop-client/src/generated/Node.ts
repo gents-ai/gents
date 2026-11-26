@@ -2,7 +2,7 @@
 
 /**
  * DefraDB DID identity for the runtime node. One active instance is an
- * operating convention; runtime enforcement is deferred to #1435. No host identity.
+ * operating convention without runtime enforcement. No host identity.
  */
 export type Node = { node_did: string, display_name?: string | null,
 /**

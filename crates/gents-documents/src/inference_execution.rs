@@ -115,7 +115,7 @@ pub struct InferenceRetryPolicy {
 
 /// Largest admitted `deadline_duration_secs`: 100 years. A claim computes
 /// `now + deadline` as an RFC 3339 timestamp; the bound keeps that sum inside
-/// four-digit years (#2079).
+/// four-digit years.
 pub const MAX_DEADLINE_DURATION_SECS: i64 = 100 * 365 * 24 * 60 * 60;
 
 impl InferenceExecution {

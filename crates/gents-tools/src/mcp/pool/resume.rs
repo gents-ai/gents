@@ -95,7 +95,7 @@ impl SessionResumePolicy {
                 resume_attempts = self.stats.resume_attempts.load(Ordering::Relaxed),
                 resume_failures = self.stats.resume_failures.load(Ordering::Relaxed),
                 "MCP SSE resume is terminal for this session; the pool will \
-                 re-initialize a fresh session on next use (#639)"
+                 re-initialize a fresh session on next use"
             );
         }
     }

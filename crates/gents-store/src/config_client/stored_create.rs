@@ -221,8 +221,8 @@ fn worse(left: Verdict, right: Verdict) -> Verdict {
     }
 }
 
-/// What one request-bound credential comes to for `command`. External
-/// premise (`vera_delegation::bearer::request`, defradb.rs#2987): DefraDB sends
+/// What one request-bound credential comes to for `command`.
+/// External premise (`vera_delegation::bearer::request`): DefraDB sends
 /// `command` under `token` only when the token verifies, names the provider's
 /// worker and deployment, is current with an operation identity still open
 /// and due within `DEFAULT_OPERATION_LEAD`, names the deployment's genesis

@@ -1,4 +1,4 @@
-//! Guard for #1123/#1125: client-authored collections MUST remain fresh-apply
+//! Client-authored collections MUST remain fresh-apply
 //! compatible. `EmbeddedNode::add_collection` here and a paired client's FFI both
 //! ingest SDL into an empty store and converge on the same collection-creation
 //! path in the pinned defradb, so the genesis CIDs minted here stand in for
@@ -142,7 +142,7 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
             mismatches.push(format!(
                 "{name}: server active version {} != client fresh-apply version {} — \
                  its baseline pin is stale — client-authored collections must be pinned to \
-                 the fresh-apply CID; see #1123/#1125",
+                 the fresh-apply CID",
                 server_cv.version_id, client_cv.version_id
             ));
         }

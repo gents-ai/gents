@@ -7,8 +7,9 @@ use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
 #[serde(rename_all = "kebab-case")]
 pub enum GrantSet {
     /// Projected from each live managed Agent document, never granted directly
-    /// in production. It holds `CollectionGet` because the pinned DefraDB
-    /// checks it before every document write (defradb.rs#2744).
+    /// in production.
+    /// External premise: the pinned DefraDB checks `CollectionGet` before every
+    /// document write.
     AgentBaseline,
     /// Granted to a User admitted by verified enrollment.
     OperatorUser,

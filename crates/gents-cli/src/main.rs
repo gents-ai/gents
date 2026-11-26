@@ -1,4 +1,4 @@
-/// mimalloc: glibc arenas retained DefraDB query churn at ~2.5x live heap and memcg-OOM-killed the runtime (#2034).
+/// External premise: glibc arenas retain DefraDB query churn at ~2.5x live heap, causing memcg OOM kills.
 #[cfg(all(
     not(any(target_os = "android", target_os = "ios")),
     not(all(
