@@ -14,4 +14,6 @@ the chart: gaps, cut ranges and reduced series are said there. A failed call
 is one sentence saying what to change; fix that, do not retry the same call.
 
 Help: `{"help": "topics"}` lists the topics (inputs, types, options, formats,
-output, saving); `{"help": "<topic>"}` returns one.
+output, saving); `{"help": "<topic>"}` returns one. Check `types` or `output`
+for per-chart behavior, limits, and grouping (e.g.
+`await tools.charts({help: "types"})`).

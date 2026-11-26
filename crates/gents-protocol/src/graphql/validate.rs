@@ -43,6 +43,64 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub const DEFRADB_FILTER_OPERATORS_HELP: &str =
+    "_eq, _neq, _gt, _geq, _lt, _leq, _in, _nin, _like, _nlike, _ilike, _nilike; compose with _and, _or, _not";
+
+pub const DEFRADB_FILTER_OPERATORS: &[&str] = &[
+    "_eq",
+    "_neq",
+    "_ne",
+    "_gt",
+    "_geq",
+    "_gte",
+    "_ge",
+    "_lt",
+    "_leq",
+    "_lte",
+    "_le",
+    "_in",
+    "_nin",
+    "_like",
+    "_nlike",
+    "_ilike",
+    "_nilike",
+    "_contains",
+    "_contained_in",
+    "_has_key",
+    "_and",
+    "_or",
+    "_not",
+    "_any",
+    "_all",
+    "_none",
+];
+
+fn is_value_filter_operator(name: &str) -> bool {
+    matches!(
+        name,
+        "_eq"
+            | "_neq"
+            | "_ne"
+            | "_gt"
+            | "_geq"
+            | "_gte"
+            | "_ge"
+            | "_lt"
+            | "_leq"
+            | "_lte"
+            | "_le"
+            | "_in"
+            | "_nin"
+            | "_like"
+            | "_nlike"
+            | "_ilike"
+            | "_nilike"
+            | "_contains"
+            | "_contained_in"
+            | "_has_key"
+    )
+}
+
 /// Validate a caller-supplied GraphQL **filter-object fragment** — a value
 /// spliced into a query whole, as an event-source filter is.
 ///
@@ -58,6 +116,25 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
 /// argument list, `#` comments out the query's own tail), so they are
 /// rejected outright rather than balance-tracked.
 pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
+    graphql_filter_top_level_fields(filter).map(|_| ())
+}
+
+pub fn graphql_filter_top_level_fields(filter: &str) -> Result<Vec<String>> {
+    let trimmed = scan_filter_tokens(filter)?;
+    let mut parser = FilterParser {
+        bytes: trimmed.as_bytes(),
+        pos: 0,
+    };
+    let mut fields = Vec::new();
+    parser.parse_filter_object(&mut fields, true)?;
+    parser.skip_ws();
+    if parser.pos != parser.bytes.len() {
+        return Err(GraphqlError::FilterTrailingContent);
+    }
+    Ok(fields)
+}
+
+fn scan_filter_tokens(filter: &str) -> Result<&str> {
     let trimmed = filter.trim();
     if trimmed.is_empty() {
         return Err(GraphqlError::EmptyFilter);
@@ -137,7 +214,223 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             opener: stack.last().copied(),
         });
     }
-    Ok(())
+    Ok(trimmed)
+}
+
+struct FilterParser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> FilterParser<'a> {
+    fn skip_ws(&mut self) {
+        while self
+            .bytes
+            .get(self.pos)
+            .is_some_and(|b| b.is_ascii_whitespace())
+        {
+            self.pos += 1;
+        }
+    }
+
+    fn skip_ws_and_commas(&mut self) {
+        while self
+            .bytes
+            .get(self.pos)
+            .is_some_and(|b| b.is_ascii_whitespace() || *b == b',')
+        {
+            self.pos += 1;
+        }
+    }
+
+    fn peek(&mut self) -> Option<u8> {
+        self.skip_ws();
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn expect_byte(&mut self, expected: u8, message: &'static str) -> Result<()> {
+        if self.peek() == Some(expected) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(GraphqlError::FilterSyntax { message })
+        }
+    }
+
+    fn read_name(&mut self) -> Result<&'a str> {
+        self.skip_ws();
+        let start = self.pos;
+        match self.bytes.get(self.pos) {
+            Some(b) if b.is_ascii_alphabetic() || *b == b'_' => self.pos += 1,
+            _ => {
+                return Err(GraphqlError::FilterSyntax {
+                    message: "expected a GraphQL field or operator name",
+                });
+            }
+        }
+        while self
+            .bytes
+            .get(self.pos)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        {
+            self.pos += 1;
+        }
+        Ok(std::str::from_utf8(&self.bytes[start..self.pos]).expect("ASCII identifier"))
+    }
+
+    fn parse_filter_object(&mut self, fields: &mut Vec<String>, collect: bool) -> Result<()> {
+        self.expect_byte(b'{', "expected '{' to start filter object")?;
+        loop {
+            self.skip_ws_and_commas();
+            if self.bytes.get(self.pos) == Some(&b'}') {
+                self.pos += 1;
+                return Ok(());
+            }
+            let key = self.read_name()?;
+            self.expect_byte(b':', "expected ':' after filter key")?;
+            match key {
+                "_and" | "_or" => self.parse_filter_object_or_list(fields, collect)?,
+                "_not" => self.parse_filter_object(fields, collect)?,
+                op if op.starts_with('_') && op != "_docID" => {
+                    return Err(GraphqlError::FilterUnknownOperator {
+                        operator: op.to_owned(),
+                    });
+                }
+                field => {
+                    if collect {
+                        fields.push(field.to_owned());
+                    }
+                    self.parse_field_condition()?;
+                }
+            }
+        }
+    }
+
+    fn parse_filter_object_or_list(
+        &mut self,
+        fields: &mut Vec<String>,
+        collect: bool,
+    ) -> Result<()> {
+        if self.peek() == Some(b'[') {
+            self.pos += 1;
+            loop {
+                self.skip_ws_and_commas();
+                if self.bytes.get(self.pos) == Some(&b']') {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                self.parse_filter_object(fields, collect)?;
+            }
+        }
+        self.parse_filter_object(fields, collect)
+    }
+
+    fn parse_field_condition(&mut self) -> Result<()> {
+        if self.peek() == Some(b'{') {
+            self.parse_condition_object()
+        } else {
+            self.skip_value()
+        }
+    }
+
+    fn parse_condition_object(&mut self) -> Result<()> {
+        self.expect_byte(b'{', "expected '{' to start filter condition")?;
+        loop {
+            self.skip_ws_and_commas();
+            if self.bytes.get(self.pos) == Some(&b'}') {
+                self.pos += 1;
+                return Ok(());
+            }
+            let key = self.read_name()?;
+            self.expect_byte(b':', "expected ':' after filter operator")?;
+            match key {
+                "_and" | "_or" => self.parse_condition_object_or_list()?,
+                "_not" | "_any" | "_all" | "_none" => self.parse_field_condition()?,
+                op if is_value_filter_operator(op) => self.skip_value()?,
+                op if op.starts_with('_') && op != "_docID" => {
+                    return Err(GraphqlError::FilterUnknownOperator {
+                        operator: op.to_owned(),
+                    });
+                }
+                _ => self.parse_field_condition()?,
+            }
+        }
+    }
+
+    fn parse_condition_object_or_list(&mut self) -> Result<()> {
+        if self.peek() == Some(b'[') {
+            self.pos += 1;
+            loop {
+                self.skip_ws_and_commas();
+                if self.bytes.get(self.pos) == Some(&b']') {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                self.parse_condition_object()?;
+            }
+        }
+        self.parse_condition_object()
+    }
+
+    fn skip_value(&mut self) -> Result<()> {
+        match self.peek() {
+            Some(b'"') => {
+                self.skip_string();
+                Ok(())
+            }
+            Some(b'{') => self.skip_object(),
+            Some(b'[') => self.skip_list(),
+            Some(b) if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+' | b'.') => {
+                while self.bytes.get(self.pos).is_some_and(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+' | b'.')
+                }) {
+                    self.pos += 1;
+                }
+                Ok(())
+            }
+            _ => Err(GraphqlError::FilterSyntax {
+                message: "expected a filter value",
+            }),
+        }
+    }
+
+    fn skip_string(&mut self) {
+        self.pos += 1;
+        while let Some(&b) = self.bytes.get(self.pos) {
+            self.pos += 1;
+            if b == b'\\' {
+                self.pos += 1;
+            } else if b == b'"' {
+                break;
+            }
+        }
+    }
+
+    fn skip_object(&mut self) -> Result<()> {
+        self.pos += 1;
+        loop {
+            self.skip_ws_and_commas();
+            if self.bytes.get(self.pos) == Some(&b'}') {
+                self.pos += 1;
+                return Ok(());
+            }
+            let _ = self.read_name()?;
+            self.expect_byte(b':', "expected ':' in object literal")?;
+            self.skip_value()?;
+        }
+    }
+
+    fn skip_list(&mut self) -> Result<()> {
+        self.pos += 1;
+        loop {
+            self.skip_ws_and_commas();
+            if self.bytes.get(self.pos) == Some(&b']') {
+                self.pos += 1;
+                return Ok(());
+            }
+            self.skip_value()?;
+        }
+    }
 }
 
 pub fn escape_graphql_string(value: &str) -> String {

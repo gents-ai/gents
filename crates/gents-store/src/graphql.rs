@@ -8,8 +8,9 @@ use serde_json::Value;
 use crate::config_client::ConfigClientError;
 
 pub use gents_protocol::graphql::{
-    escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
-    validate_graphql_name,
+    escape_graphql_string, graphql_filter_top_level_fields, validate_collection_identifier,
+    validate_graphql_filter_fragment, validate_graphql_name, DEFRADB_FILTER_OPERATORS,
+    DEFRADB_FILTER_OPERATORS_HELP,
 };
 
 #[derive(Debug, thiserror::Error)]

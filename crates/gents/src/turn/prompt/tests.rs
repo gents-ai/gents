@@ -125,4 +125,9 @@ fn preamble_no_targets_block_when_empty() {
     assert!(!preamble.contains("## Agents"));
     assert!(!preamble.contains("agent_new"));
     assert!(preamble.ends_with(SOURCE_HEADER_GUIDANCE));
+    assert!(SOURCE_HEADER_GUIDANCE.contains("## Message sources"));
+    assert!(SOURCE_HEADER_GUIDANCE.contains("opening delegated assignment or a workflow task"));
+    assert!(SOURCE_HEADER_GUIDANCE
+        .contains("never call `agent_message` or `sessions` on a session that started you"));
+    assert!(!SOURCE_HEADER_GUIDANCE.contains("reply to that session with `agent_message`"));
 }

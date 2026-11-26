@@ -25,4 +25,4 @@ It sees only what you send. Tell it:
 - What not to touch.
 - What to report: what it did, what it checked, what failed.
 
-Start one with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, add an agent and an agent target to your Tools; that applies from your next turn. Tell the user what you added. Run independent helpers at once; never let two write the same file. A helper that starts helpers reports after they do. Confirm a result with one read or run before building on it.
+Start one directly with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, add an agent and an agent target to your Tools; that applies from your next turn. Tell the user what you added. When running a background `workflow`, spawn only targets in `input.ceiling.targets` (the helper granted to the workflow, such as `wf-read-only`, not an `agent_new` target like `engineer`) and read completed replies from `slots[slot].text`. Run independent helpers at once; never let two write the same file. A helper that starts helpers reports after they do. Confirm a result with one read or run before building on it.

@@ -551,3 +551,48 @@ impl EventSource {
 pub fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
     source_collection != "FireOutcome" || !emit_outcome
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_source(filter: &str) -> EventSource {
+        EventSource {
+            node_did: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+            event_source_id: "redline-outcomes".into(),
+            display_name: None,
+            source_collection: "FireOutcome".into(),
+            event_kind: Some("created".into()),
+            filter: Some(filter.into()),
+            correlation_field: None,
+            group: None,
+            workspace_authority: None,
+            created_at: None,
+            updated_at: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn event_source_filter_rejects_unknown_operator_and_guides_to_like() {
+        let error = event_source(r#"{source_handoff_id: {_starts_with: "redline-"}}"#)
+            .validate()
+            .expect_err("unknown filter operator must fail validation");
+        assert!(
+            error.to_string().contains("_starts_with") && error.to_string().contains("_like"),
+            "error should name the rejected operator and _like: {error:#}"
+        );
+    }
+
+    #[test]
+    fn event_source_filter_accepts_like_and_logical_and() {
+        event_source(r#"{source_handoff_id: {_like: "redline-%"}}"#)
+            .validate()
+            .expect("_like filter should pass");
+        event_source(
+            r#"{_and: [{terminal_state: {_eq: "completed"}}, {source_handoff_id: {_like: "redline-%"}}]}"#,
+        )
+        .validate()
+        .expect("_and with _eq and _like should pass");
+    }
+}

@@ -34,6 +34,12 @@ pub enum GraphqlError {
     FilterUnterminatedString,
     #[error("invalid filter: unclosed {opener:?}")]
     FilterUnclosed { opener: Option<char> },
+    #[error(
+        "invalid filter: unknown operator {operator:?}; supported operators: _eq, _neq, _gt, _geq, _lt, _leq, _in, _nin, _like, _nlike, _ilike, _nilike, _and, _or, _not (for prefix or pattern matching use _like with % wildcards, e.g. {{field: {{_like: \"prefix-%\"}}}})"
+    )]
+    FilterUnknownOperator { operator: String },
+    #[error("invalid filter: {message}")]
+    FilterSyntax { message: &'static str },
     #[cfg(feature = "native")]
     #[error("encoding Authorization header")]
     AuthorizationHeader(#[source] reqwest::header::InvalidHeaderValue),

@@ -27,8 +27,9 @@ pub use turn_state::{
     GraphqlSessionShape, GraphqlSubmittedRequest, GraphqlTurnState,
 };
 pub use validate::{
-    escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
-    validate_graphql_name,
+    escape_graphql_string, graphql_filter_top_level_fields, validate_collection_identifier,
+    validate_graphql_filter_fragment, validate_graphql_name, DEFRADB_FILTER_OPERATORS,
+    DEFRADB_FILTER_OPERATORS_HELP,
 };
 
 type Result<T, E = GraphqlError> = std::result::Result<T, E>;
