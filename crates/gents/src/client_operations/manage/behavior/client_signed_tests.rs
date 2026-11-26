@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use anyhow::{Context, Result};
+use gents_store::client_journal::records::publication;
 use gents_store::config_client::{
     ConfigAccess, ConfigClientError, ConfigRelationshipGrant, GraphqlEndpoint,
 };
@@ -18,8 +19,17 @@ struct Fixture {
     access: ConfigAccess,
     parent_doc: String,
     fault: Arc<AtomicBool>,
+    host_hold: Arc<Mutex<Option<HostHold>>>,
     relationships: Arc<Mutex<Vec<(String, String)>>>,
     proxy: tokio::task::JoinHandle<()>,
+}
+
+/// The next `host` relationship call never answers the client, as if the
+/// client stopped while it was in flight. `applied` forwards it to the runtime
+/// first; `reached` fires once the proxy holds it.
+struct HostHold {
+    applied: bool,
+    reached: tokio::sync::oneshot::Sender<String>,
 }
 
 impl Fixture {
@@ -61,8 +71,15 @@ impl Fixture {
             .next()
             .context("runtime address")?;
         let fault = Arc::new(AtomicBool::new(false));
+        let host_hold = Arc::new(Mutex::new(None));
         let relationships = Arc::new(Mutex::new(Vec::new()));
-        let (url, proxy) = proxy(upstream, fault.clone(), relationships.clone()).await?;
+        let (url, proxy) = proxy(
+            upstream,
+            fault.clone(),
+            host_hold.clone(),
+            relationships.clone(),
+        )
+        .await?;
         let user = runtime.user();
         let access = ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(url, user.did())
@@ -75,9 +92,69 @@ impl Fixture {
             access,
             parent_doc,
             fault,
+            host_hold,
             relationships,
             proxy,
         })
+    }
+
+    /// The desktop client's own store, whose local signer is the User, holding
+    /// its private publication journal.
+    async fn client_journal(&self) -> Result<Arc<defra_node::Node>> {
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(self.runtime.user().did())
+                .build()
+                .await?,
+        );
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        Ok(node)
+    }
+
+    fn publication(
+        &self,
+        journal: &Arc<defra_node::Node>,
+    ) -> Arc<dyn gents_store::config_client::AgentPublicationObserver> {
+        publication::Observer::new(
+            journal.clone(),
+            self.runtime.user().did().to_owned(),
+            vec![(
+                self.agent.agent_did.clone(),
+                self.runtime.node_did().to_owned(),
+            )],
+        )
+    }
+
+    /// A fresh Agent selecting the context its creation requires.
+    async fn publish(&self, journal: &Arc<defra_node::Node>) -> Result<()> {
+        self.runtime
+            .apply_as_user(
+                "test.signing.context",
+                vec![(
+                    gents_store::collection::Collection::AgentContext,
+                    json!({"node_did": self.runtime.node_did(), "context_id": "journaled",
+                        "system_prompt": "Journaled agent"}),
+                )],
+            )
+            .await;
+        super::upsert_agent_with_publication_on(
+            &self.access,
+            &self.document(Some("journaled"))?,
+            None,
+            self.publication(journal),
+        )
+        .await
+    }
+
+    async fn recovered(&self, journal: &Arc<defra_node::Node>) -> Result<()> {
+        publication::ensure_recovered(
+            journal,
+            &self.access,
+            self.runtime.user().did(),
+            self.runtime.node_did(),
+            &self.agent.agent_did,
+        )
+        .await
     }
 
     fn document(&self, context: Option<&str>) -> Result<gents_documents::Agent> {
@@ -99,6 +176,7 @@ impl Fixture {
 async fn proxy(
     upstream: std::net::SocketAddr,
     fault: Arc<AtomicBool>,
+    host_hold: Arc<Mutex<Option<HostHold>>>,
     relationships: Arc<Mutex<Vec<(String, String)>>>,
 ) -> Result<(String, tokio::task::JoinHandle<()>)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -106,6 +184,7 @@ async fn proxy(
     let task = tokio::spawn(async move {
         while let Ok((mut client, _)) = listener.accept().await {
             let fault = fault.clone();
+            let host_hold = host_hold.clone();
             let relationships = relationships.clone();
             tokio::spawn(async move {
                 let _ = async {
@@ -139,6 +218,22 @@ async fn proxy(
                         relationships.lock().unwrap().push((method, relation.clone()));
                         if relation == "executor" && fault.swap(false, Ordering::SeqCst) {
                             client.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+                            return Ok(());
+                        }
+                        let hold = if relation == "host" { host_hold.lock().unwrap().take() } else { None };
+                        if let Some(hold) = hold {
+                            let mut answer = Vec::new();
+                            if hold.applied {
+                                let mut server = tokio::net::TcpStream::connect(upstream).await?;
+                                let filtered = headers.lines().filter(|line| !line.to_ascii_lowercase().starts_with("connection:"))
+                                    .filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\r\n");
+                                server.write_all(format!("{filtered}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
+                                server.write_all(&request[header_end..]).await?;
+                                server.read_to_end(&mut answer).await?;
+                            }
+                            let _ = hold.reached.send(String::from_utf8_lossy(&answer).into_owned());
+                            let mut bytes = [0u8; 4096];
+                            while client.read(&mut bytes).await? > 0 {}
                             return Ok(());
                         }
                     }
@@ -253,5 +348,77 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
             ("POST".into(), "host".into())
         ]
     );
+    fixture.shutdown().await
+}
+
+/// Saves a new Agent with the desktop client's publication journal while the
+/// `host` grant is held, then drops the save as a client stopping there would.
+/// Returns the runtime's answer to the held grant, empty when it never got it.
+async fn save_stopped_at_host(
+    fixture: &Fixture,
+    journal: &Arc<defra_node::Node>,
+    applied: bool,
+) -> Result<String> {
+    let (reached, held) = tokio::sync::oneshot::channel();
+    *fixture.host_hold.lock().unwrap() = Some(HostHold { applied, reached });
+    let save = fixture.publish(journal);
+    tokio::select! {
+        result = save => anyhow::bail!("the save finished with its host grant held: {result:?}"),
+        answer = held => Ok(answer?),
+    }
+}
+
+async fn host_grant_unfinished(applied: bool) -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let journal = fixture.client_journal().await?;
+    let answer = save_stopped_at_host(&fixture, &journal, applied).await?;
+    assert_eq!(answer.starts_with("HTTP/1.1 200"), applied, "{answer}");
+    let rows = fixture.access.execute("{ Agent { _docID } }").await?;
+    assert_eq!(rows["data"]["Agent"].as_array().map(Vec::len), Some(1));
+    let error = fixture
+        .recovered(&journal)
+        .await
+        .expect_err("a committed Agent without a confirmed host grant is not published");
+    let message = error.to_string();
+    assert!(
+        message.contains("executor: Succeeded, host: Pending"),
+        "{message}"
+    );
+    assert!(fixture
+        .relationships
+        .lock()
+        .unwrap()
+        .contains(&("POST".to_owned(), "host".to_owned())));
+    journal.shutdown().await?;
+    fixture.shutdown().await
+}
+
+#[tokio::test]
+async fn client_stopped_before_the_host_grant_reaches_the_runtime_keeps_it_pending() -> Result<()> {
+    host_grant_unfinished(false).await
+}
+
+#[tokio::test]
+async fn client_stopped_after_the_host_grant_before_its_answer_keeps_it_pending() -> Result<()> {
+    host_grant_unfinished(true).await
+}
+
+#[tokio::test]
+async fn journaled_publication_completes_only_with_the_host_grant() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let journal = fixture.client_journal().await?;
+    fixture.publish(&journal).await?;
+    fixture.recovered(&journal).await?;
+    let relationships = fixture.relationships.lock().unwrap().clone();
+    assert_eq!(
+        relationships
+            .iter()
+            .filter(|(method, relation)| method == "POST"
+                && ["parent", "executor", "host"].contains(&relation.as_str()))
+            .map(|(_, relation)| relation.as_str())
+            .collect::<Vec<_>>(),
+        ["parent", "executor", "host"]
+    );
+    journal.shutdown().await?;
     fixture.shutdown().await
 }

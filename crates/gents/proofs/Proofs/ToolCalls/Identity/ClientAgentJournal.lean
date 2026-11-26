@@ -55,8 +55,12 @@ theorem protected_collection_plugin_write_refused
     ToolPolicy.PluginData.admitted op observation = false := by
   simp [ToolPolicy.PluginData.admitted, isProtected]
 
+/-- A client-signed Agent creation commits the document, then grants `parent`,
+`executor` and `host` in that order. `host` places the Agent on its creating
+Node; without it the Agent never runs on a Vera home, so it is a stage of its
+own rather than an unrecorded trailing grant. -/
 inductive Stage where
-  | commit | parent | executor
+  | commit | parent | executor | host
   deriving BEq, DecidableEq, Repr
 
 inductive Status where
@@ -76,6 +80,7 @@ structure Journal where
   commit : Status := .fresh
   parent : Status := .fresh
   executor : Status := .fresh
+  host : Status := .fresh
   permit : Option Stage := none
   deriving BEq, DecidableEq, Repr
 
@@ -83,12 +88,14 @@ def status (j : Journal) : Stage → Status
   | .commit => j.commit
   | .parent => j.parent
   | .executor => j.executor
+  | .host => j.host
 
 def setStatus (j : Journal) (stage : Stage) (next : Status) : Journal :=
   match stage with
   | .commit => { j with commit := next }
   | .parent => { j with parent := next }
   | .executor => { j with executor := next }
+  | .host => { j with host := next }
 
 def retryable (s : Status) : Bool := s == .fresh || s == .failed
 
@@ -99,9 +106,10 @@ def mayRecord (j : Journal) (stage : Stage) : Bool :=
   !j.client.isEmpty && !j.agentDid.isEmpty && !j.nodeDid.isEmpty &&
     !j.agentDoc.isEmpty && !j.nodeDoc.isEmpty && j.permit.isNone &&
     retryable (status j stage) && (match stage with
-      | .commit => j.parent == .fresh && j.executor == .fresh
+      | .commit => j.parent == .fresh && j.executor == .fresh && j.host == .fresh
       | .parent => j.commit == .succeeded
-      | .executor => j.commit == .succeeded && j.parent == .succeeded)
+      | .executor => j.commit == .succeeded && j.parent == .succeeded
+      | .host => j.commit == .succeeded && j.parent == .succeeded && j.executor == .succeeded)
 
 def recordAttempt (j : Journal) (stage : Stage) (durable : Bool) : Journal :=
   if durable && mayRecord j stage then
@@ -132,6 +140,12 @@ inductive RecoveryDisposition where
   | proceed | bindingMismatch | commitUnknown | explicitRepair
   deriving BEq, DecidableEq, Repr
 
+/-- The publication is complete only once every stage, `host` included,
+succeeded; a committed creation whose `host` grant is unfinished is not. -/
+def complete (j : Journal) : Bool :=
+  j.commit == .succeeded && j.parent == .succeeded && j.executor == .succeeded &&
+    j.host == .succeeded
+
 /-- A retained, committed publication with any unfinished relationship is
 not automatically resumed, even if the missing operation was never dispatched
 or its failure is known. Reconstructing authority for it requires explicit
@@ -141,8 +155,7 @@ def recoveryDisposition (actorMatches recordPresent bindingMatches : Bool)
   if !actorMatches then .bindingMismatch
   else if !recordPresent then .proceed
   else if !bindingMatches then .bindingMismatch
-  else if j.commit == .failed ||
-      (j.commit == .succeeded && j.parent == .succeeded && j.executor == .succeeded) then .proceed
+  else if j.commit == .failed || complete j then .proceed
   else if j.commit != .succeeded then .commitUnknown
   else .explicitRepair
 
@@ -155,8 +168,44 @@ theorem interrupted_failed_suffix_requires_repair :
     recoveryDisposition true true true (restart j) = .explicitRepair := by decide
 
 theorem completed_publication_needs_no_repair :
-    let j : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc", commit := .succeeded, parent := .succeeded, executor := .succeeded }
+    let j : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc", commit := .succeeded, parent := .succeeded, executor := .succeeded, host := .succeeded }
     recoveryDisposition true true true (restart j) = .proceed := by decide
+
+/-- A crash after the `executor` grant and before the `host` attempt is
+recorded leaves `host` fresh; the publication is not complete. -/
+theorem interrupted_before_host_requires_repair :
+    let j : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc", commit := .succeeded, parent := .succeeded, executor := .succeeded }
+    recoveryDisposition true true true (restart j) = .explicitRepair := by decide
+
+/-- A crash after the `host` request and before its outcome is recorded
+leaves `host` pending; the publication is not complete. -/
+theorem interrupted_host_requires_repair :
+    let j : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc", commit := .succeeded, parent := .succeeded, executor := .succeeded, host := .pending }
+    recoveryDisposition true true true (restart j) = .explicitRepair := by decide
+
+theorem status_beq_iff (a b : Status) : (a == b) = true ↔ a = b := by
+  cases a <;> cases b <;> decide
+
+theorem host_recorded_only_after_executor (j : Journal)
+    (allowed : mayRecord j .host = true) :
+    j.commit = .succeeded ∧ j.parent = .succeeded ∧ j.executor = .succeeded := by
+  simp only [mayRecord, Bool.and_eq_true, status_beq_iff] at allowed
+  exact ⟨allowed.2.1.1, allowed.2.1.2, allowed.2.2⟩
+
+theorem complete_requires_host (j : Journal) (done : complete j = true) :
+    j.host = .succeeded := by
+  simp only [complete, Bool.and_eq_true, status_beq_iff] at done
+  exact done.2
+
+theorem committed_proceed_requires_host (actorMatches bindingMatches : Bool) (j : Journal)
+    (committed : j.commit = .succeeded)
+    (proceeds : recoveryDisposition actorMatches true bindingMatches j = .proceed) :
+    j.host = .succeeded := by
+  by_cases done : complete j = true
+  · exact complete_requires_host j done
+  · cases actorMatches <;> cases bindingMatches <;>
+      simp [recoveryDisposition, committed, done] at proceeds
+    exact absurd (proceeds (by decide)) (by decide)
 
 theorem record_preserves_binding (j : Journal) (stage : Stage) (durable : Bool) :
     let next := recordAttempt j stage durable
@@ -204,27 +253,40 @@ structure RecoveryCase where
   commit : Status
   parent : Status
   executor : Status
+  host : Status
 
 def recoveryCases : List RecoveryCase :=
-  [ ⟨"no-record", true, false, true, .fresh, .fresh, .fresh⟩
-  , ⟨"wrong-actor", false, false, true, .fresh, .fresh, .fresh⟩
-  , ⟨"wrong-binding", true, true, false, .succeeded, .succeeded, .succeeded⟩
-  , ⟨"confirmed-aborted-commit", true, true, true, .failed, .fresh, .fresh⟩
-  , ⟨"unconfirmed-commit", true, true, true, .pending, .fresh, .fresh⟩
-  , ⟨"fresh-commit-record", true, true, true, .fresh, .fresh, .fresh⟩
-  , ⟨"parent-fresh", true, true, true, .succeeded, .fresh, .fresh⟩
-  , ⟨"parent-pending", true, true, true, .succeeded, .pending, .fresh⟩
-  , ⟨"parent-failed", true, true, true, .succeeded, .failed, .fresh⟩
-  , ⟨"executor-fresh", true, true, true, .succeeded, .succeeded, .fresh⟩
-  , ⟨"executor-pending", true, true, true, .succeeded, .succeeded, .pending⟩
-  , ⟨"executor-failed", true, true, true, .succeeded, .succeeded, .failed⟩
-  , ⟨"all-complete", true, true, true, .succeeded, .succeeded, .succeeded⟩ ]
+  [ ⟨"no-record", true, false, true, .fresh, .fresh, .fresh, .fresh⟩
+  , ⟨"wrong-actor", false, false, true, .fresh, .fresh, .fresh, .fresh⟩
+  , ⟨"wrong-binding", true, true, false, .succeeded, .succeeded, .succeeded, .succeeded⟩
+  , ⟨"confirmed-aborted-commit", true, true, true, .failed, .fresh, .fresh, .fresh⟩
+  , ⟨"unconfirmed-commit", true, true, true, .pending, .fresh, .fresh, .fresh⟩
+  , ⟨"fresh-commit-record", true, true, true, .fresh, .fresh, .fresh, .fresh⟩
+  , ⟨"parent-fresh", true, true, true, .succeeded, .fresh, .fresh, .fresh⟩
+  , ⟨"parent-pending", true, true, true, .succeeded, .pending, .fresh, .fresh⟩
+  , ⟨"parent-failed", true, true, true, .succeeded, .failed, .fresh, .fresh⟩
+  , ⟨"executor-fresh", true, true, true, .succeeded, .succeeded, .fresh, .fresh⟩
+  , ⟨"executor-pending", true, true, true, .succeeded, .succeeded, .pending, .fresh⟩
+  , ⟨"executor-failed", true, true, true, .succeeded, .succeeded, .failed, .fresh⟩
+  , ⟨"host-fresh", true, true, true, .succeeded, .succeeded, .succeeded, .fresh⟩
+  , ⟨"host-pending", true, true, true, .succeeded, .succeeded, .succeeded, .pending⟩
+  , ⟨"host-failed", true, true, true, .succeeded, .succeeded, .succeeded, .failed⟩
+  , ⟨"all-complete", true, true, true, .succeeded, .succeeded, .succeeded, .succeeded⟩ ]
 
 def commitSuccess : List Action := [.record .commit true, .dispatch .commit, .finish .commit true false]
 def parentSuccess : List Action := [.record .parent true, .dispatch .parent, .finish .parent true false]
+def executorSuccess : List Action :=
+  [.record .executor true, .dispatch .executor, .finish .executor true false]
 def cases : List (String × List Action) :=
-  [("complete", commitSuccess ++ parentSuccess ++ [.record .executor true, .dispatch .executor,
-      .finish .executor true false]),
+  [("complete", commitSuccess ++ parentSuccess ++ executorSuccess ++
+      [.record .host true, .dispatch .host, .finish .host true false]),
+   ("host-before-executor-refused", commitSuccess ++ parentSuccess ++
+      [.record .host true, .dispatch .host]),
+   ("unknown-host-no-replay", commitSuccess ++ parentSuccess ++ executorSuccess ++
+      [.record .host true, .dispatch .host, .restart, .record .host true, .dispatch .host]),
+   ("failed-host-retry", commitSuccess ++ parentSuccess ++ executorSuccess ++
+      [.record .host true, .dispatch .host, .finish .host false true,
+       .record .executor true, .record .host true, .dispatch .host, .finish .host true false]),
    ("unknown-commit-no-replay", [.record .commit true, .dispatch .commit, .restart,
       .record .commit true, .dispatch .commit]),
    ("recorded-before-dispatch-no-replay", [.record .commit true, .restart,

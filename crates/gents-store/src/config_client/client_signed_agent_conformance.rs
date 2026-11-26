@@ -89,6 +89,7 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
             commit: journal.commit,
             parent: journal.parent,
             executor: journal.executor,
+            host: journal.host,
             permit: journal.permit,
         }
     }
@@ -142,6 +143,7 @@ fn modeled_publication_recovery_drives_the_native_disposition() {
         journal.commit = i.commit;
         journal.parent = i.parent;
         journal.executor = i.executor;
+        journal.host = i.host;
         recovery_disposition(
             i.actor_matches,
             i.record_present.then_some(&journal),
