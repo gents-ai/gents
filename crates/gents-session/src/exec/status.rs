@@ -23,3 +23,8 @@ pub fn active_native_executors() -> Vec<NativeExecutorStatus> {
         })
         .collect()
 }
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn active_executors_notified() -> tokio::sync::futures::Notified<'static> {
+    crate::exec::process::active_executors_notified()
+}

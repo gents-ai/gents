@@ -394,6 +394,27 @@ pub(crate) async fn process_command(
     doc_id: &str,
     agent_identity: &dyn NodeIdentity,
 ) -> Result<Option<DateTime<Utc>>> {
+    process_command_with_now(node, identity, doc_id, agent_identity, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn process_command_at(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn NodeIdentity>,
+    doc_id: &str,
+    agent_identity: &dyn NodeIdentity,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    process_command_with_now(node, identity, doc_id, agent_identity, Some(now)).await
+}
+
+async fn process_command_with_now(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn NodeIdentity>,
+    doc_id: &str,
+    agent_identity: &dyn NodeIdentity,
+    now_override: Option<DateTime<Utc>>,
+) -> Result<Option<DateTime<Utc>>> {
     use gents_protocol::document_query::{
         fields::agent_session_input_edit as edit_fields, Filter, Input, Query, Selection, Update,
     };
@@ -471,7 +492,7 @@ pub(crate) async fn process_command(
                             // A terminal removal does not name the command that caused it.
                             return Ok(None);
                         }
-                        let now = Utc::now();
+                        let now = now_override.unwrap_or_else(Utc::now);
                         let issued_at = DateTime::parse_from_rfc3339(&command.issued_at)?.with_timezone(&Utc);
                         if now < issued_at { return Ok(Some(issued_at)); }
                         let rejection = if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {

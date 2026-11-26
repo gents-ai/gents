@@ -455,10 +455,19 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         ),
         None,
     );
+    let base = std::time::Instant::now();
+    let offset_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let clock_offset = Arc::clone(&offset_ms);
+    let advance_offset = Arc::clone(&offset_ms);
     let plugin = gents_toolcalls::plugin::tool::PluginTool::resolve(
-        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
-            Some(home.path().to_owned()),
-        )),
+        Arc::new(
+            gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()))
+                .with_clock_for_test(Arc::new(move || {
+                    base + std::time::Duration::from_millis(
+                        clock_offset.load(std::sync::atomic::Ordering::Acquire),
+                    )
+                })),
+        ),
         &gents_documents::PluginToolRef {
             tool_calls: true,
             plugin: "team/plugin".into(),
@@ -471,8 +480,22 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     .unwrap();
     let tools: Vec<Box<dyn ToolDyn>> = vec![
         Box::new(plugin),
-        Box::new(ComposedChild { name: "slow" }),
-        Box::new(ComposedChild { name: "late" }),
+        Box::new(ComposedChild {
+            name: "slow",
+            on_slow: Some(Arc::new(move || {
+                let step = u64::try_from(
+                    (gents_pack::plugin::PluginBudget::default().wall_clock
+                        + std::time::Duration::from_secs(1))
+                    .as_millis(),
+                )
+                .expect("wall clock advance fits in u64 ms");
+                advance_offset.fetch_add(step, std::sync::atomic::Ordering::AcqRel);
+            })),
+        }),
+        Box::new(ComposedChild {
+            name: "late",
+            on_slow: None,
+        }),
     ];
     let mut config = owned_config(4);
     config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(

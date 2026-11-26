@@ -413,11 +413,7 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
         DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
             .unwrap()
             .with_timezone(&Utc);
-    let until_expired = (deadline - Utc::now() + chrono::Duration::milliseconds(50))
-        .to_std()
-        .unwrap_or(Duration::ZERO);
-    tokio::time::sleep(until_expired).await;
-    let observed_now = Utc::now();
+    let observed_now = deadline + chrono::Duration::milliseconds(50);
     assert!(observed_now >= deadline);
 
     assert_eq!(
@@ -437,10 +433,11 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
         lease_tuple(&before)
     );
     assert_eq!(
-        RequestLifecycle::recover_all_with_identities(
+        RequestLifecycle::recover_all_with_identities_at(
             &node,
             identity.did(),
-            &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()]
+            &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+            observed_now,
         )
         .await
         .unwrap()

@@ -57,6 +57,34 @@ pub fn mint_with_lifetime_for_test(
     mint_for(capability, audience, lifetime)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn mint_expired_for_test(
+    capability: &ClientSigningCapability,
+    audience: &DelegationAudience,
+) -> Result<String, DelegationError> {
+    let signer = signer_of(capability)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| {
+            DelegationError::Mint(vera_delegation::BearerError::Time(error.to_string()))
+        })?
+        .as_secs();
+    let issued_at = now.saturating_sub(3600);
+    vera_delegation::bearer::create_scoped_bearer_token_at(
+        &signer,
+        &vera_delegation::did_spelling::wire(signer.did()),
+        &audience.worker,
+        audience.deployment,
+        60,
+        vera_delegation::DelegationScope::PolicyCommands,
+        issued_at,
+    )
+    .now_or_never()
+    .ok_or(DelegationError::Pending)?
+    .map_err(DelegationError::Mint)
+}
+
 fn mint_for(
     capability: &ClientSigningCapability,
     audience: &DelegationAudience,

@@ -438,13 +438,7 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     .await
     .is_err());
 
-    let short = std::time::Duration::from_secs(1);
-    let expiring =
-        gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
-    let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
-    while let Ok(wait) = expired.duration_since(std::time::SystemTime::now()) {
-        tokio::time::sleep(wait + std::time::Duration::from_millis(10)).await;
-    }
+    let expiring = gents_store::config_client::mint_expired_for_test(&user, &audience)?;
     let stale = ConfigAccess::Graphql(GraphqlEndpoint::with_delegated_authorization(
         &url,
         &format!("Bearer {expiring}"),
@@ -625,13 +619,7 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
     .expect_err("a delegation for another worker writes nothing");
     assert_eq!(refusal(&refused), Some(UserWriteRefusal::DelegationRefused));
 
-    let short = std::time::Duration::from_secs(1);
-    let expiring =
-        gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
-    let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
-    while let Ok(wait) = expired.duration_since(std::time::SystemTime::now()) {
-        tokio::time::sleep(wait + std::time::Duration::from_millis(10)).await;
-    }
+    let expiring = gents_store::config_client::mint_expired_for_test(&user, &audience)?;
     let stale = create_task_in_process(
         &node,
         &home,

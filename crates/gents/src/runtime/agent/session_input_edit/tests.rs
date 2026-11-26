@@ -298,11 +298,10 @@ struct ModeledQueue {
     commands: Vec<((u64, u64), (String, SessionInputEdit))>,
     active: Option<gents_session::request::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
-    nows: Vec<u64>,
 }
 
 impl ModeledQueue {
-    async fn seed(state: &ModelState, nows: Vec<u64>) -> Self {
+    async fn seed(state: &ModelState) -> Self {
         let fixture = Fixture::empty().await;
         let mut queue = Self {
             fixture,
@@ -311,7 +310,6 @@ impl ModeledQueue {
             commands: Vec::new(),
             active: None,
             anchor: Utc::now(),
-            nows,
         };
         let did = queue.fixture.identity.did().to_owned();
         let request = |id: u64, origin: &str, arrival: usize| {
@@ -495,21 +493,7 @@ impl ModeledQueue {
 
     fn instant(&self, model: u64) -> DateTime<Utc> {
         let offset = i64::try_from(model).unwrap();
-        if self.nows.iter().all(|now| model <= *now) {
-            self.anchor - chrono::Duration::hours(1) + chrono::Duration::seconds(offset)
-        } else if self.nows.iter().all(|now| model > *now) {
-            self.anchor + chrono::Duration::hours(1) + chrono::Duration::seconds(offset)
-        } else {
-            self.anchor + chrono::Duration::seconds(3) + chrono::Duration::milliseconds(offset)
-        }
-    }
-
-    async fn wait_until(&self, now: u64) {
-        if self.nows.iter().any(|earlier| *earlier < now) {
-            if let Ok(wait) = (self.anchor + chrono::Duration::seconds(4) - Utc::now()).to_std() {
-                tokio::time::sleep(wait).await;
-            }
-        }
+        self.anchor + chrono::Duration::seconds(offset)
     }
 
     async fn intent(
@@ -645,7 +629,6 @@ impl ModeledQueue {
     }
 
     async fn process(&mut self, now: u64, model: &ModelCommand, authority: &ModelAuthority) {
-        self.wait_until(now).await;
         let doc = if let Some((_, (doc, _))) = self
             .commands
             .iter()
@@ -671,11 +654,12 @@ impl ModeledQueue {
                 doc
             }
         };
-        process_command(
+        process_command_at(
             &self.fixture.node,
             &self.fixture.identity,
             &doc,
             self.fixture.agent_identity.as_ref(),
+            self.instant(now),
         )
         .await
         .unwrap();
@@ -775,13 +759,7 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
             input.initial.receipts.is_empty(),
             "{name}: no seeded receipt"
         );
-        let mut nows = input
-            .history
-            .iter()
-            .filter_map(|step| step.now)
-            .collect::<Vec<_>>();
-        nows.push(input.now);
-        let mut queue = ModeledQueue::seed(&input.initial.queue, nows).await;
+        let mut queue = ModeledQueue::seed(&input.initial.queue).await;
         for step in &input.history {
             match step.kind.as_str() {
                 "apply" => {

@@ -1020,10 +1020,6 @@ fn provision_failed_and_sealed_rejected_remain_until_cleanup() {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the retried integration needs a later wall-clock second"
-)]
 fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     let fx = Fixture::new();
     let mut docs = MemoryWorkspaceDocuments::default();
@@ -1041,7 +1037,7 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     bind_integrate(&mut docs, "ws-crash", "req-int", &hash);
     let base = git(&fx.repo, &["rev-parse", "HEAD"]);
 
-    let first = execute_integrate_workspace_plan(
+    let first = crate::workspace::executor::integrate::execute_integrate_workspace_plan_with_commit_timestamp(
         &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
             workspace_id: "ws-crash".into(),
             produced_by_request_id: "req-int".into(),
@@ -1050,6 +1046,7 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
         }),
         &mut Vec::new(),
         &mut fx.ctx(&mut docs, integrate_caps()),
+        Some("1700000000 +0000"),
     )
     .expect("prepare integrate");
     assert!(
@@ -1064,8 +1061,7 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     assert_eq!(first.receipt.kind, "integrator");
 
     docs.receipts.remove(&first.receipt.receipt_id);
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    let second = execute_integrate_workspace_plan(
+    let second = crate::workspace::executor::integrate::execute_integrate_workspace_plan_with_commit_timestamp(
         &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
             workspace_id: "ws-crash".into(),
             produced_by_request_id: "req-int".into(),
@@ -1074,6 +1070,7 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
         }),
         &mut Vec::new(),
         &mut fx.ctx(&mut docs, integrate_caps()),
+        Some("1700000002 +0000"),
     )
     .expect("retry observes pending commit");
     assert_eq!(second.receipt.seal_hash, hash);

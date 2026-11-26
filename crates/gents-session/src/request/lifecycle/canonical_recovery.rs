@@ -191,11 +191,12 @@ pub struct RecoveryFacts {
     pub expected_outcome: Option<RequestLifecycleState>,
 }
 
-pub(super) async fn recover_expired_generation(
+pub(super) async fn recover_expired_generation_at(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
+    observed_now: DateTime<Utc>,
 ) -> Result<RecoveryResult> {
     recover_expired_generation_with_access_and_facts(
         access,
@@ -204,7 +205,7 @@ pub(super) async fn recover_expired_generation(
         expected_expiry,
         RecoveryFacts {
             fresh_generation: uuid::Uuid::new_v4().to_string(),
-            observed_now: Utc::now(),
+            observed_now,
             #[cfg(any(test, feature = "test-fixtures"))]
             selection_choice: None,
             expected_outcome: None,

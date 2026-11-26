@@ -193,7 +193,7 @@ pub use txn::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-pub use delegation::mint_with_lifetime_for_test;
+pub use delegation::{mint_expired_for_test, mint_with_lifetime_for_test};
 pub use delegation::{
     DelegationError, RequestBoundAudience, VERA_DELEGATION_LIFETIME, VERA_REQUEST_BOUND_LIFETIME,
 };

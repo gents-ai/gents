@@ -184,7 +184,7 @@ pub(crate) const FENCES: &[(&str, usize, &str)] = &[
         "SingleWriter(the runtime's MCP health checker is the one writer of a service's health state)",
     ),
     (
-        "crates/gents/src/runtime/agent/session_input_edit.rs::process_command::transact_idempotent",
+        "crates/gents/src/runtime/agent/session_input_edit.rs::process_command_with_now::transact_idempotent",
         1,
         "UniqueIndex(AgentSessionInputEdit(command_id)): no twin of the command can exist, so the twin scan only reads",
     ),

@@ -182,11 +182,13 @@ impl Sources {
         match event {
             RuntimeConnectionEvent::TransportFailed => {
                 metrics.transport_failures.fetch_add(1, Ordering::Relaxed);
+                metrics.notify_changed();
             }
             RuntimeConnectionEvent::Renewed => {
                 metrics
                     .subscription_renewals
                     .fetch_add(1, Ordering::Relaxed);
+                metrics.notify_changed();
             }
             _ => {}
         }

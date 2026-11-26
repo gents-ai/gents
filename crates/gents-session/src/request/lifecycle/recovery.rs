@@ -25,7 +25,36 @@ impl RequestLifecycle {
         node_did: &str,
         identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     ) -> Result<RecoveryReport> {
-        let active = recover_active_requests(node, node_did, identities).await?;
+        Self::recover_all_with_identities_at(node, node_did, identities, chrono::Utc::now()).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn recover_all_with_identities_at(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<RecoveryReport> {
+        let active = recover_active_requests_at(node, node_did, identities, now).await?;
+        let background_wakes_redriven =
+            Self::redrive_failed_background_wakeups_with_identities(node, node_did, identities)
+                .await?
+                .redriven;
+        Ok(RecoveryReport {
+            responses_recovered: active.responses_recovered,
+            requests_recovered: active.requests.repaired,
+            background_wakes_redriven,
+        })
+    }
+
+    #[cfg(not(test))]
+    async fn recover_all_with_identities_at(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<RecoveryReport> {
+        let active = recover_active_requests_at(node, node_did, identities, now).await?;
         let background_wakes_redriven =
             Self::redrive_failed_background_wakeups_with_identities(node, node_did, identities)
                 .await?
@@ -42,16 +71,19 @@ impl RequestLifecycle {
         node_did: &str,
         identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     ) -> Result<TerminalRepairReport> {
-        Ok(recover_active_requests(node, node_did, identities)
-            .await?
-            .requests)
+        Ok(
+            recover_active_requests_at(node, node_did, identities, chrono::Utc::now())
+                .await?
+                .requests,
+        )
     }
 }
 
-async fn recover_active_requests(
+async fn recover_active_requests_at(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<ActiveRequestRecoveryReport> {
     let accesses = configured_agent_accesses(node, node_did, identities)?;
     let mut rows = Vec::new();
@@ -101,7 +133,6 @@ async fn recover_active_requests(
             }
         }
     }
-    let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {
         requests: TerminalRepairReport {
             scanned: rows.len(),
@@ -208,11 +239,12 @@ async fn recover_active_requests(
             continue;
         }
 
-        match canonical_recovery::recover_expired_generation(
+        match canonical_recovery::recover_expired_generation_at(
             access,
             row,
             expected_generation,
             expected_expiry,
+            now,
         )
         .await
         {

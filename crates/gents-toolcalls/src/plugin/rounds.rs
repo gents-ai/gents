@@ -176,6 +176,7 @@ pub fn unserved_request(output: &Value) -> Option<Unserved> {
     })
 }
 
+#[cfg(test)]
 pub async fn drive(
     calls: HostCalls,
     input: Value,
