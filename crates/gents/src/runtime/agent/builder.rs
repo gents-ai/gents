@@ -296,6 +296,8 @@ impl GentsBuilder {
             startup_readiness: Default::default(),
             #[cfg(test)]
             router_dispatch_probe: None,
+            #[cfg(test)]
+            router_stopped_probe: None,
             rendered_request_capture_factory: self.rendered_request_capture_factory,
             enrollment_authority: Arc::default(),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),

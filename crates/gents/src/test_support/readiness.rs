@@ -332,3 +332,66 @@ impl NodeReadinessWriter for DemotionReadinessWriter {
         Ok(())
     }
 }
+
+/// Persists every readiness snapshot to DefraDB except `fail_generation`,
+/// which fails fatally so `GenerationSupervisor::apply_snapshot` takes its
+/// real rollback and error-publication path on a booted runtime.
+pub(crate) struct FailGenerationDefraWriter {
+    pub(crate) node: Arc<defra_node::Node>,
+    pub(crate) fail_generation: u64,
+}
+
+#[async_trait::async_trait]
+impl NodeReadinessWriter for FailGenerationDefraWriter {
+    async fn upsert(
+        &self,
+        node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
+        updated_at: &str,
+    ) -> Result<()> {
+        if snapshot.active_generation == self.fail_generation {
+            return Err(FatalNodeReadinessWrite.into());
+        }
+        crate::runtime::node_readiness_publisher::upsert_node_readiness(
+            &self.node, node_did, snapshot, updated_at,
+        )
+        .await
+    }
+}
+
+/// Persists every readiness snapshot to DefraDB, holding the router's
+/// acknowledgement of `router_generation` until `release` grants a permit so
+/// a test can observe the window where `active_generation > router_generation`
+/// on the real runtime.
+pub(crate) struct GatedRouterGenerationDefraWriter {
+    pub(crate) node: Arc<defra_node::Node>,
+    pub(crate) router_generation: u64,
+    pub(crate) gated: AtomicBool,
+    pub(crate) entered: Arc<Notify>,
+    pub(crate) release: Arc<Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl NodeReadinessWriter for GatedRouterGenerationDefraWriter {
+    async fn upsert(
+        &self,
+        node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
+        updated_at: &str,
+    ) -> Result<()> {
+        if snapshot.router_generation == self.router_generation
+            && self.gated.swap(false, Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            self.release
+                .acquire()
+                .await
+                .expect("router generation gate closed")
+                .forget();
+        }
+        crate::runtime::node_readiness_publisher::upsert_node_readiness(
+            &self.node, node_did, snapshot, updated_at,
+        )
+        .await
+    }
+}

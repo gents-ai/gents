@@ -32,7 +32,7 @@ pub(in crate::runtime::agent) struct RuntimeAdmissionGate {
     #[cfg(test)]
     entered: Arc<tokio::sync::Notify>,
     #[cfg(test)]
-    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 impl RuntimeAdmissionGate {
@@ -50,7 +50,7 @@ impl RuntimeAdmissionGate {
 
     #[cfg(test)]
     pub(super) fn closed_with_dispatch_probe(
-        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Self {
         let mut gate = Self::closed();
         gate.dispatch_attempted = dispatch_attempted;
@@ -121,6 +121,20 @@ pub(super) struct RouterConfig {
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     pub(super) backend_health: gents_inference::backends::health::BackendHealthMap,
+    #[cfg(test)]
+    pub(super) router_stopped: Option<watch::Sender<bool>>,
+}
+
+#[cfg(test)]
+struct NotifyRouterStopped(Option<watch::Sender<bool>>);
+
+#[cfg(test)]
+impl Drop for NotifyRouterStopped {
+    fn drop(&mut self) {
+        if let Some(tx) = &self.0 {
+            tx.send_replace(true);
+        }
+    }
 }
 
 pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
@@ -133,7 +147,11 @@ pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
         runtime_status,
         runtime_snapshot_observer,
         backend_health,
+        #[cfg(test)]
+        router_stopped,
     } = config;
+    #[cfg(test)]
+    let _router_stopped = NotifyRouterStopped(router_stopped);
     if *shutdown.borrow() {
         return Ok(());
     }
@@ -348,7 +366,7 @@ where
                 );
                 #[cfg(test)]
                 if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
-                    let _ = dispatch_attempted.send(());
+                    let _ = dispatch_attempted.send(request.request_id.clone());
                 }
                 let permit = tokio::select! {
                     biased;

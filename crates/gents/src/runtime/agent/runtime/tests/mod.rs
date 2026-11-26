@@ -4,6 +4,7 @@ mod control_watcher;
 mod effective_settings_binding;
 mod plugin_publication;
 mod plugin_readmission;
+mod reconcile_conformance;
 mod router;
 mod slot_retirement;
 mod startup_recovery;

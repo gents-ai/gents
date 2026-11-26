@@ -89,55 +89,249 @@ async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
     node.shutdown().await.unwrap();
 }
 
-/// The router's admission of an explicit selection: the session's bound
-/// Agent (`resolve_agent_for_request`), then the routed generation's
-/// dispatcher and startup demotion for the requested Agent
-/// (`effective_agent_admission`). The requesting Agent is always `selected`;
-/// the routed generation dispatches it only when the case's runtime holds the
-/// requested Agent.
+/// The real runtime's router admits an explicit selection only when the
+/// session's bound Agent matches the requested one and the routed generation
+/// holds a ready executor for it: it completes requests for matching ready
+/// Agents, rejects session mismatches and startup-demoted Agents, and never
+/// falls back to the default Agent for an unknown selection.
 #[tokio::test]
 async fn explicit_agent_resolution_matches_lean_binding_cases() {
-    use gents_automation::triggers::runtime_snapshot::{
-        effective_agent_admission, EffectiveAgentAdmission,
-    };
+    use crate::test_support::running_runtime::{AgentRuntimeHome, BootedRuntime};
+    use gents_inference::test_support::scripted_backend::{ScriptedBackend, Unscripted};
+    use gents_store::test_support::read_when_changed;
+    use gents_store::test_support::snapshot_reader::SnapshotReader as _;
+
+    const DEMOTED_UNSET_ENV: &str = "GENTS_TEST_SELECTION_DEMOTED_UNSET_KEY";
+    assert!(
+        std::env::var_os(DEMOTED_UNSET_ENV).is_none(),
+        "the poison env var must remain unset for the demotion case"
+    );
+
     for case in gents_lean_vocab::families::contracts_runtime_reconcile_selection::cases() {
         let input = &case.input;
         let requested = input.requested_agent.expect("an explicit selection");
-        let fixture = PrivateSessionFixture::new().await;
-        let bound = match input.pre_session_agent {
-            Some(agent) if agent != requested => fixture.other.did(),
-            _ => fixture.selected.did(),
-        };
-        fixture.create_session("session-binding", bound, true).await;
-        let resolved = resolve_agent_for_request(
-            &fixture.db.node,
-            &fixture.request("session-binding", fixture.selected.did()),
-        )
-        .await
-        .unwrap()
-        .expect("the agent can read the session");
-        assert_eq!(resolved.agent_did, fixture.selected.did(), "{}", input.name);
-        let demoted = input.pre_startup_demoted.contains(&requested);
-        let observation =
-            crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(
-                1,
-                demoted.then(|| {
-                    (
-                        fixture.selected.did().to_owned(),
-                        "startup build failed".to_owned(),
-                    )
-                }),
-            );
-        let admission = effective_agent_admission(
-            input.pre_runnable.contains(&requested) || demoted,
+        let b_demoted = input.pre_startup_demoted.contains(&20);
+        let backend = ScriptedBackend::builder("default")
+            .unscripted(Unscripted::Reply)
+            .start()
+            .unwrap();
+        let home = AgentRuntimeHome::start(
+            &format!("selection-{}", input.name),
             None,
-            observation.demotion_reason(&resolved.agent_did),
-        );
-        fixture.db.node.shutdown().await.unwrap();
+            backend.endpoint(),
+            2,
+            gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
+        )
+        .await;
+        let a_did = home.agent.did().to_owned();
+        let b_auth = if b_demoted {
+            serde_json::json!({"kind": "environment", "variable": DEMOTED_UNSET_ENV})
+        } else {
+            serde_json::json!({"kind": "unauthenticated"})
+        };
+        let (_, agent_b) = home
+            .add_agent_with_backend(
+                "selection-agent-b-backend",
+                backend.endpoint(),
+                2,
+                b_auth,
+                gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
+            )
+            .await;
+        let b_did = agent_b.did().to_owned();
+        grant_held_agent_operations(
+            &home.home.node,
+            home.home.store.node_identity.as_ref(),
+            agent_b.as_ref(),
+        )
+        .await;
+
+        let runtime = BootedRuntime::boot(
+            &home,
+            crate::runtime::agent::DocumentRuntimeOptions {
+                tool_ceiling: ToolCeiling::meta_only(),
+                retry_policy: crate::runtime::agent::retry::RetryPolicy {
+                    max_retries: 3,
+                    base_delay_ms: 1,
+                    max_delay_ms: 5,
+                },
+                startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions {
+                    build_failure_budget: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await;
+        runtime
+            .readiness_when("both agents settle to their modeled standing", |snapshot| {
+                let a_ready = snapshot.agents.iter().any(|entry| {
+                    entry.agent_did == a_did && entry.state == AgentReadinessState::Ready
+                });
+                let b_settled = snapshot.agents.iter().any(|entry| {
+                    entry.agent_did == b_did
+                        && if b_demoted {
+                            entry.state == AgentReadinessState::Unavailable
+                                && entry.reason
+                                    == Some(AgentReadinessUnavailableReason::ExecutorStartFailed)
+                        } else {
+                            entry.state == AgentReadinessState::Ready
+                        }
+                });
+                snapshot.process_state == NodeReadinessProcessState::Ready && a_ready && b_settled
+            })
+            .await;
+
+        let session_id = format!("selection-session-{}", input.name);
+        let request_id = format!("selection-req-{}", input.name);
+        let read_state = |access: gents_store::config_client::ConfigAccess, req: String| async move {
+            let escaped = escape_graphql_string(&req);
+            let data = access
+                .read_data(&format!(
+                    r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+                ))
+                .await;
+            data["AgentRequest"][0]["lifecycle_state"]
+                .as_str()
+                .map(str::to_owned)
+        };
+
+        let legal = match (input.pre_session_agent, requested) {
+            (Some(10), 20) => {
+                create_user_agent_session(
+                    &home.home.user_access,
+                    home.home.node_did(),
+                    Some(b_did.as_str()),
+                    &session_id,
+                    &a_did,
+                    Some(b_did.as_str()),
+                )
+                .await;
+                create_held_agent_request(
+                    &home.home.node,
+                    home.home.node_did(),
+                    agent_b.as_ref(),
+                    &request_id,
+                    &session_id,
+                    "mismatched session",
+                )
+                .await;
+                let access = home.access_for_agent(agent_b.as_ref());
+                let state = read_when_changed(
+                    &access,
+                    "AgentRequest",
+                    "mismatched request reaches terminal state",
+                    async || match read_state(access.clone(), request_id.clone()).await {
+                        Some(state) if state == "completed" || state == "failed" => Ok(state),
+                        other => Err(format!("{other:?}")),
+                    },
+                )
+                .await;
+                state == "completed"
+            }
+            (_, 999) => {
+                let unknown_binding = gents_store::identity::provision_agent_identity_authorized(
+                    &home.home.node,
+                    home.home.store.node_identity.as_ref(),
+                    &home.home.user.did().parse().unwrap(),
+                )
+                .await
+                .unwrap();
+                let unknown = gents_store::identity::resolve_agent_identity(
+                    home.home.store.node_identity.as_ref(),
+                    &unknown_binding,
+                )
+                .unwrap();
+                grant_held_agent_operations(
+                    &home.home.node,
+                    home.home.store.node_identity.as_ref(),
+                    unknown.as_ref(),
+                )
+                .await;
+                create_user_agent_session(
+                    &home.home.user_access,
+                    home.home.node_did(),
+                    Some(unknown.did()),
+                    &session_id,
+                    unknown.did(),
+                    Some(unknown.did()),
+                )
+                .await;
+                create_held_agent_request(
+                    &home.home.node,
+                    home.home.node_did(),
+                    unknown.as_ref(),
+                    &request_id,
+                    &session_id,
+                    "unknown agent request",
+                )
+                .await;
+                let canary_id = format!("selection-canary-{}", input.name);
+                home.submit_request(&a_did, &canary_id, "selection-canary-session", "canary")
+                    .await;
+                let user_access = home.home.user_access.clone();
+                read_when_changed(
+                    &user_access,
+                    "AgentRequest",
+                    "default agent canary completes",
+                    async || match read_state(user_access.clone(), canary_id.clone()).await {
+                        Some(state) if state == "completed" => Ok(()),
+                        other => Err(format!("{other:?}")),
+                    },
+                )
+                .await;
+                let unknown_access = home.access_for_agent(unknown.as_ref());
+                let state = read_state(unknown_access, request_id.clone()).await;
+                assert_eq!(
+                    state.as_deref(),
+                    Some("pending"),
+                    "unknown selection must remain pending and never fall back to the default agent"
+                );
+                state.as_deref() == Some("completed")
+            }
+            (pre_session, target) => {
+                let target_did = match target {
+                    10 => a_did.as_str(),
+                    20 => b_did.as_str(),
+                    other => panic!("unexpected target agent {other}"),
+                };
+                if pre_session == Some(10) {
+                    let seed_id = format!("selection-seed-{}", input.name);
+                    home.submit_request(&a_did, &seed_id, &session_id, "seed session")
+                        .await;
+                    let user_access = home.home.user_access.clone();
+                    read_when_changed(
+                        &user_access,
+                        "AgentRequest",
+                        "seed request binds the session to agent A",
+                        async || match read_state(user_access.clone(), seed_id.clone()).await {
+                            Some(state) if state == "completed" => Ok(()),
+                            other => Err(format!("{other:?}")),
+                        },
+                    )
+                    .await;
+                }
+                home.submit_request(target_did, &request_id, &session_id, "selection request")
+                    .await;
+                let user_access = home.home.user_access.clone();
+                let state = read_when_changed(
+                    &user_access,
+                    "AgentRequest",
+                    "selection request reaches terminal state",
+                    async || match read_state(user_access.clone(), request_id.clone()).await {
+                        Some(state) if state == "completed" || state == "failed" => Ok(state),
+                        other => Err(format!("{other:?}")),
+                    },
+                )
+                .await;
+                state == "completed"
+            }
+        };
+
+        runtime.shutdown().await.expect("the runtime stops cleanly");
         case.check(
             gents_lean_vocab::families::contracts_runtime_reconcile_selection::ReconcileSelectionOutput {
-                legal: resolved.rejection_reason.is_none()
-                    && admission == EffectiveAgentAdmission::Ready,
+                legal,
             },
         );
     }
