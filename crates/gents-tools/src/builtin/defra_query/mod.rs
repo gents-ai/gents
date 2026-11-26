@@ -149,7 +149,14 @@ impl Tool for DefraQueryTool {
                 &self.node,
                 Some(actor.clone()),
                 "application_query",
-                |txn| Box::pin(command::execute_typed_command(txn, &args, &self.scope)),
+                |txn| {
+                    Box::pin(command::execute_typed_command(
+                        txn,
+                        &args,
+                        &self.scope,
+                        None,
+                    ))
+                },
             )
             .await
         } else {
@@ -157,6 +164,7 @@ impl Tool for DefraQueryTool {
                 &gents_store::config_client::ConfigAccess::local(self.node.clone()),
                 &args,
                 &self.scope,
+                None,
             )
             .await
         };
