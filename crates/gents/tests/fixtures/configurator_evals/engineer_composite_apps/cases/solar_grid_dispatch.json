@@ -12,7 +12,7 @@
         "collection": "ArrayMeter",
         "document": {
           "site": "mesa",
-          "kw": 28.0,
+          "kw": 28,
           "hour": "09:00"
         }
       }
@@ -196,7 +196,7 @@
         "collection": "ArrayMeter",
         "document": {
           "site": "ridge",
-          "kw": 15.0,
+          "kw": 15,
           "hour": "10:00"
         }
       },

@@ -14,7 +14,7 @@
         "document": {
           "lot": "L-10",
           "origin": "Antwerp",
-          "weight": 1400.0
+          "weight": 1400
         }
       }
     ]
@@ -215,7 +215,7 @@
         "document": {
           "lot": "L-21",
           "origin": "Cork",
-          "weight": 2000.0
+          "weight": 2000
         }
       },
       "expect_fire": false,
@@ -247,7 +247,7 @@
         "document": {
           "lot": "L-22",
           "origin": "Busan",
-          "weight": 3400.0
+          "weight": 3400
         }
       },
       "deadline_secs": 300,

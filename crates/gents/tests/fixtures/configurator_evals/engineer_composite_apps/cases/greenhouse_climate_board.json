@@ -13,7 +13,7 @@
         "document": {
           "bay": "North",
           "celsius": 23.5,
-          "humidity": 62.0,
+          "humidity": 62,
           "hour": "08:00"
         }
       },
@@ -21,8 +21,8 @@
         "collection": "BayReading",
         "document": {
           "bay": "South",
-          "celsius": 26.0,
-          "humidity": 58.0,
+          "celsius": 26,
+          "humidity": 58,
           "hour": "09:00"
         }
       }
@@ -202,8 +202,8 @@
         "collection": "BayReading",
         "document": {
           "bay": "East",
-          "celsius": 32.0,
-          "humidity": 60.0,
+          "celsius": 32,
+          "humidity": 60,
           "hour": "10:00"
         }
       },
@@ -236,7 +236,7 @@
         "document": {
           "bay": "West",
           "celsius": 35.5,
-          "humidity": 41.0,
+          "humidity": 41,
           "hour": "11:00"
         }
       },

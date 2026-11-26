@@ -15,7 +15,7 @@
           "stall": "S-14",
           "vendor": "Alder Honey",
           "zone": "east",
-          "fee": 45.0
+          "fee": 45
         }
       },
       {
@@ -24,7 +24,7 @@
           "stall": "S-22",
           "vendor": "Briar Bread",
           "zone": "west",
-          "fee": 60.0
+          "fee": 60
         }
       }
     ]
