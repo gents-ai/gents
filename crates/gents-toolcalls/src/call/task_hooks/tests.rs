@@ -68,6 +68,8 @@ async fn an_interrupt_cancels_ordinary_phases_before_launch_but_not_cleanup() {
 #[cfg(unix)]
 #[tokio::test]
 async fn an_interrupt_stops_a_running_hook() {
+    use tokio::io::AsyncReadExt;
+
     let directory = tempfile::tempdir().expect("hook marker directory");
     let started = directory.path().join("started");
     let finished = directory.path().join("finished");
@@ -77,25 +79,46 @@ async fn an_interrupt_stops_a_running_hook() {
         .await
         .unwrap()
         .success());
+    // External premise: holding a companion writer open on the FIFO keeps nonblocking
+    // reads from returning EOF before sh opens it on macOS and Linux.
+    let mut pipe = tokio::net::unix::pipe::OpenOptions::new()
+        .open_receiver(&started)
+        .unwrap();
+    let _keep_open = tokio::net::unix::pipe::OpenOptions::new()
+        .open_sender(&started)
+        .unwrap();
     let cancellation = TaskHookCancellation::default();
     let exec = ManagedTaskHookExec::new(directory.path().to_path_buf(), cancellation.clone());
-    let script = format!(
-        ": > {}; sleep 30; touch {}",
-        started.display(),
-        finished.display()
+    let started_arg = started.to_string_lossy().into_owned();
+    let finished_arg = finished.to_string_lossy().into_owned();
+    let held = hook(
+        "held",
+        &[
+            "sh",
+            "-c",
+            "printf x > \"$1\"; sleep 30; touch \"$2\"",
+            "sh",
+            &started_arg,
+            &finished_arg,
+        ],
+        Some(60),
     );
-    let interrupt = async {
-        let mut pipe = tokio::net::unix::pipe::OpenOptions::new()
-            .open_receiver(&started)
-            .unwrap();
-        let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf)
-            .await
-            .unwrap();
-        cancellation.interrupt();
-    };
-    let held = hook("held", &["sh", "-c", &script], Some(60));
-    let (attempt, ()) = tokio::join!(exec.attempt(&held), interrupt);
+    let exec_fut = exec.attempt(&held);
+    tokio::pin!(exec_fut);
+
+    let mut byte = [0u8; 1];
+    tokio::select! {
+        read = pipe.read_exact(&mut byte) => {
+            read.expect("hook should signal start on fifo");
+        }
+        attempt = &mut exec_fut => {
+            panic!("hook exited before signaling start: {:?}", attempt.result);
+        }
+    }
+    cancellation.interrupt();
+    let attempt = tokio::time::timeout(gents_store::test_support::STALL_CEILING, exec_fut)
+        .await
+        .expect("interrupted hook should exit before stall ceiling");
     assert_eq!(attempt.result, HookCommandResult::Interrupted);
     assert!(!finished.exists());
 }
