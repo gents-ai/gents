@@ -197,7 +197,7 @@ fn selected(selection: Selection, total: usize, scroll: usize, area: Rect, buf: 
 
 /// The column each of your messages' rows starts at: the least indented row of its bubble, so
 /// its blank and indented rows keep the bubble's edge. Other rows get 0.
-fn bubble_edges(rows: &[(String, Tone)]) -> Vec<usize> {
+pub(crate) fn bubble_edges(rows: &[(String, Tone)]) -> Vec<usize> {
     let indent = |row: &str| row.len() - row.trim_start().len();
     let mut edges = vec![0; rows.len()];
     let mut at = 0;

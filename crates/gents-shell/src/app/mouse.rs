@@ -219,7 +219,12 @@ impl App {
             return;
         }
         let rows = self.conversation_rows(self.conversation_area(panes.agent).width);
-        self.clipboard = Some(selection.text(&rows));
+        let text = selection.text(&rows);
+        if text.trim().is_empty() {
+            self.selection = None;
+            return;
+        }
+        self.clipboard = Some(text);
         self.notice = Some("copied the selection".to_string());
     }
 
@@ -641,6 +646,38 @@ mod tests {
         assert!(app.selection.is_some());
         press(&mut app, "j");
         assert_eq!(app.selection, None);
+    }
+
+    #[test]
+    fn a_drag_over_blank_space_copies_nothing() {
+        let mut app = session_app(132, 36);
+        let (start, _) = reply_ends(&app);
+        let blank = (start.0 + 1, start.1 + 80);
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            blank.1,
+            blank.0,
+        );
+        let further = (blank.1 + 4, blank.0);
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            further.0,
+            further.1,
+        );
+        assert!(app.selection.is_some(), "the press started a selection");
+        mouse(
+            &mut app,
+            MouseEventKind::Up(MouseButton::Left),
+            further.0,
+            further.1,
+        );
+        let notice = app.notice.clone();
+        assert_eq!(
+            (app.take_clipboard(), notice, app.selection),
+            (None, None, None)
+        );
     }
 
     #[test]
