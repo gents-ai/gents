@@ -405,9 +405,9 @@ async fn a_computing_background_guest_stops_at_its_declared_allowance() {
         "{cancelled}"
     );
     executions.wait_for_completion(&id).await;
-    // The allowance is counted in wake-ups of the WASM host's epoch ticker,
-    // which a loaded host delays without bound (Lean `allowanceTicks`), so
-    // the stop is awaited, not timed.
+    // The WASM host's catch-up epoch ticker stops the guest within its
+    // declared allowance plus one late wake (TLA `MCGuestAllowance`);
+    // await the release event rather than asserting a wall-clock budget.
     guest_released(&digest).await;
     fixture.db.node.shutdown().await.unwrap();
 }
