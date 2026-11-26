@@ -18,6 +18,11 @@ enable_goal_creation?: boolean | null,
  */
 enable_session_history_tool?: boolean | null,
 /**
+ * The `memory` tool and its automatic context injection. Unset is
+ * enabled; a tool-less agent sets this to false.
+ */
+enable_memory_tool?: boolean | null,
+/**
  * Node-wide schema administration, independent of config and document access.
  * DefraDB remains the schema authorization owner. Unset is disabled.
  * Tools writers may configure this capability like other built-ins; an
