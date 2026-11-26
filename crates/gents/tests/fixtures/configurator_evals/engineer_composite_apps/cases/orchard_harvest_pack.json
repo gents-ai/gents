@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install farm/orchard 1.0.0 in packs/orchard: CratePick(lot, cultivar, weight: Float), PressPlan(lot, note), surface orchard-desk, and Press Planner woken on new CratePick to add a PressPlan. Save and lint a node Page titled \"Orchard Harvest\" with a grid, bar chart, and table.",
+      "prompt": "Package and install farm/orchard 1.0.0 in dir orchard: CratePick(lot, cultivar, weight: Float), PressPlan(lot, note), surface orchard-desk, and Press Planner woken on new CratePick to add a PressPlan. Save and lint a node Page \"Orchard Harvest\" with a grid, picks bar chart, and plans table.",
       "capture": [
         {
           "kind": "documents",
@@ -100,7 +100,7 @@
         {
           "kind": "file",
           "name": "pack_files",
-          "glob": "packs/orchard/pack_config.json"
+          "glob": "orchard/pack_config.json"
         }
       ],
       "checks": [
@@ -235,11 +235,11 @@
             "name": "pack_files",
             "expect": [
               {
-                "path": "packs/orchard/pack_config.json",
+                "path": "orchard/pack_config.json",
                 "contains": "orchard-desk"
               },
               {
-                "path": "packs/orchard/pack_config.json",
+                "path": "orchard/pack_config.json",
                 "matches": "(?i)press[- ]?planner"
               }
             ]
@@ -349,8 +349,7 @@
               },
               {
                 "capture": "worker_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "plans",

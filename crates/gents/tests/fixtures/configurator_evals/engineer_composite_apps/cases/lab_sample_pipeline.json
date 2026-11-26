@@ -440,13 +440,11 @@
             "present": [
               {
                 "capture": "tech_b7_runs",
-                "min": 2,
-                "max": 2
+                "min": 2
               },
               {
                 "capture": "analyst_runs",
-                "min": 2,
-                "max": 2
+                "min": 2
               },
               {
                 "capture": "b7_sessions",

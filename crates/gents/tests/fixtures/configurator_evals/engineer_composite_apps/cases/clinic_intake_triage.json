@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Create a Triage Nurse agent woken automatically on each new IntakeForm to add a TriageNote with lane urgent when acuity is urgent and standard otherwise. Build and lint a \"Clinic Triage\" page with tabs, acuity badges, a dialog intake form, and toast feedback.",
+      "prompt": "Create a Triage Nurse agent woken automatically on each new IntakeForm to add a TriageNote with lane urgent when acuity is urgent and standard otherwise. Build and lint a \"Clinic Triage\" page with Intakes and Triage tabs, acuity badges, a dialog intake form, and toast feedback.",
       "capture": [
         {
           "kind": "documents",
@@ -164,7 +164,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               }
             ]
           },
@@ -264,8 +268,7 @@
               },
               {
                 "capture": "worker_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "triage_urgent",

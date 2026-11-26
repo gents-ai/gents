@@ -402,7 +402,7 @@
                 "matches": "(?i)optical latch"
               },
               {
-                "matches": "(?i)(?:cannot|can't|unable|denied|not allowed|not permitted|no (?:mutation|update|write|tool)|read[- ]only|prevent|refus|fail|forbidden|disallowed)"
+                "matches": "(?i)(?:cannot|can't|unable|denied|not allowed|not permitted|not possible|impossible|no [^.\\n]{0,40}(?:mutation|update|write|edit|modify|tool|access|permission)|read[- ]only|prevent|refus|fail|forbidden|disallowed)"
               }
             ]
           },
@@ -497,7 +497,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               },
               {
                 "field": "css",

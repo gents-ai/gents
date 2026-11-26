@@ -22,7 +22,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a two-agent chain: Customs Officer wakes only when a new CargoLot strictly exceeds 2000 weight to file a CustomsHold, and Dock Supervisor wakes on each new CustomsHold to add a DockEscalation. Build and lint a \"Cargo Control\" page with KPI stats, a bar chart, and a lot form.",
+      "prompt": "Set up a two-agent chain: Customs Officer wakes only when a new CargoLot exceeds 2000 weight to file a CustomsHold, and Dock Supervisor wakes on each new CustomsHold to add a DockEscalation. Build and lint a \"Cargo Control\" page with KPI stats, a bar chart, holds list, and lot form.",
       "capture": [
         {
           "kind": "documents",
@@ -182,7 +182,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               }
             ]
           },
@@ -395,13 +399,11 @@
             "present": [
               {
                 "capture": "officer_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "supervisor_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "light_holds",

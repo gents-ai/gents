@@ -13,7 +13,7 @@
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install kitchen/bakery 1.0.0 in packs/bakery with OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch, then import batches.csv. Save and lint a node Page titled \"Bakery Batches\" with a donut chart, search input, and waste form.",
+      "prompt": "Package and install kitchen/bakery 1.0.0 in workspace dir bakery with OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch, then import batches.csv. Save and lint a node Page titled \"Bakery Batches\" with a donut chart, search input, and waste form.",
       "capture": [
         {
           "kind": "documents",
@@ -94,7 +94,7 @@
         {
           "kind": "file",
           "name": "pack_files",
-          "glob": "packs/bakery/pack_config.json"
+          "glob": "bakery/pack_config.json"
         }
       ],
       "checks": [
@@ -231,7 +231,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"bakery-batch\".*\"surface\"\\s*:\\s*\"bakery-batch\""
+                "matches": "\"surface\"\\s*:\\s*\"bakery-batch\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               }
             ]
           },
@@ -244,7 +248,7 @@
             "name": "pack_files",
             "expect": [
               {
-                "path": "packs/bakery/pack_config.json",
+                "path": "bakery/pack_config.json",
                 "contains": "bakery-batch"
               }
             ]

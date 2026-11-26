@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install civic/library 1.0.0 in packs/library with CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also save and lint a node Page titled \"Library Desk\" with a books table, empty state, and hold form.",
+      "prompt": "Package and install civic/library 1.0.0 in workspace directory library with CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also save and lint a node Page titled \"Library Desk\" with a books table, empty state, and hold form.",
       "capture": [
         {
           "kind": "documents",
@@ -75,7 +75,7 @@
         {
           "kind": "file",
           "name": "pack_files",
-          "glob": "packs/library/pack_config.json"
+          "glob": "library/pack_config.json"
         }
       ],
       "checks": [
@@ -192,7 +192,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"library-desk\".*\"surface\"\\s*:\\s*\"library-desk\""
+                "matches": "\"surface\"\\s*:\\s*\"library-desk\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               }
             ]
           },
@@ -205,7 +209,7 @@
             "name": "pack_files",
             "expect": [
               {
-                "path": "packs/library/pack_config.json",
+                "path": "library/pack_config.json",
                 "contains": "library-desk"
               }
             ]

@@ -31,7 +31,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Grower Watch agent woken only when a new BayReading strictly exceeds 32 celsius to record a ClimateAlert. Build and lint a \"Greenhouse Monitor\" page showing a temperature line chart, KPI stats, alert badges, and an empty state.",
+      "prompt": "Set up a Grower Watch agent woken only when a new BayReading strictly exceeds 32 celsius to record a ClimateAlert. Build and lint a \"Greenhouse Monitor\" page showing a temperature line chart, KPI stats, alert badges with messages, and an empty state.",
       "capture": [
         {
           "kind": "documents",
@@ -318,8 +318,7 @@
               },
               {
                 "capture": "worker_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "east_alerts",

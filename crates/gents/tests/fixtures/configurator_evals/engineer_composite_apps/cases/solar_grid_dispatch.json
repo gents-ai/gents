@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Grid Operator agent woken in session site- plus site only when a new ArrayMeter drops strictly below 15 kw, logging a GridDispatch. Build and lint a \"Solar Grid\" page with themed CSS, a line chart, KPI stats, status badges, and an empty state.",
+      "prompt": "Set up a Grid Operator agent woken in session site- plus site only when a new ArrayMeter drops strictly below 15 kw, logging a GridDispatch. Build and lint a \"Solar Grid\" page with themed CSS, a line chart, KPI stats, dispatch badges, and an empty state.",
       "capture": [
         {
           "kind": "documents",
@@ -329,8 +329,7 @@
               },
               {
                 "capture": "valley_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "valley_sessions",

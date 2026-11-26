@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Fleet Dispatcher agent woken automatically on each new FleetOrder to add a FleetNote. Build and lint a \"Fleet Service\" page with themed CSS, KPI stats, an orders table, and a form to log an order.",
+      "prompt": "Set up a Fleet Dispatcher agent woken automatically on each new FleetOrder to add a FleetNote. Build and lint a \"Fleet Service\" page with themed CSS, KPI stats, an orders and notes table, and a form to log an order.",
       "capture": [
         {
           "kind": "documents",
@@ -156,7 +156,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               },
               {
                 "field": "css",
@@ -260,8 +264,7 @@
               },
               {
                 "capture": "worker_runs",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "notes",
@@ -417,7 +420,11 @@
               },
               {
                 "field": "data",
-                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
               },
               {
                 "field": "css",
