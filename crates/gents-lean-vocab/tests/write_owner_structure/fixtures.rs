@@ -1,5 +1,6 @@
-use super::support::{cfg_test, item_cfg_test, named_exceptions, repo_root, Workspace};
-use quote::ToTokens;
+use super::support::{
+    cfg_test, item_cfg_test, macro_expressions, named_exceptions, repo_root, Workspace,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
@@ -26,65 +27,46 @@ const FIXTURE_NAMES: &[&str] = &[
 /// Names defined more than once, with the count of definitions; each only
 /// shrinks as its callers move to the standard fixture.
 #[rustfmt::skip]
-const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
-    ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
-    ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
-    ("node_builder", 3, "raw-node builders in gents-store, gents-host and gents-desktop-bridge; callers move to TestStore"),
-    ("spawn_runtime", 2, "two root copies of the runtime boot; they move to the running-runtime fixture"),
-    ("test_identity", 7, "key-file identities written per crate; callers move to gents_store::test_support::test_identity"),
-];
+const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[];
 
 /// `src` files that compile a `tests/` file into the library.
 #[rustfmt::skip]
-const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[
-    ("crates/gents-session/src/session/provider_context_reduction.rs", 1, "a durable-reduction conformance consumer kept in the root tests directory; it moves beside its owner in gents-session"),
-];
+const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 
 /// Test-only implementations of production traits outside a `src/test_support`
 /// module, per crate.
 #[rustfmt::skip]
 const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
-    ("gents", 43, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-automation", 15, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-cli", 2, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-desktop-bridge", 4, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-eval", 23, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-inference", 17, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-loop", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-p2p", 9, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-pack", 5, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-service", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-session", 8, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-store", 10, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
     ("gents-toolcalls", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-tools", 7, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
 ];
 
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents", 53, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-automation", 21, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-automation", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-client-host", 29, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-desktop-bridge", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-client-host", 2, "cross-process IPC/HTTP readiness where no OS notification seam exists (local listener connect and Windows ConPTY runtime status)"),
     ("gents-desktop-tauri", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-eval", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-fs-runner", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-host", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-inference", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-lean-contract", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-lean-vocab", 1, "the sleep-call token matcher literal in fixtures.rs"),
     ("gents-loop", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-media-host", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-p2p", 8, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-pack", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-protocol", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-service", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-session", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-store", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-toolcalls", 20, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-tools", 44, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-tools", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
 ];
 
 struct Source {
@@ -466,38 +448,103 @@ fn production_traits_have_test_implementations_only_in_test_support() {
     );
 }
 
-/// The token text of a source's test code: a whole test file, or each
-/// outermost test-only item of a production file.
-fn test_code(source: &Source) -> Vec<String> {
-    fn items(within: &[syn::Item], output: &mut Vec<String>) {
-        for item in within {
-            if item_cfg_test(item) {
-                output.push(item.to_token_stream().to_string());
-            } else if let syn::Item::Mod(syn::ItemMod {
-                content: Some((_, inner)),
-                ..
-            }) = item
-            {
-                items(inner, output);
-            }
+struct SleepCalls {
+    in_test: bool,
+    found: usize,
+}
+
+fn is_sleep_call(call: &syn::ExprCall) -> bool {
+    let syn::Expr::Path(path) = call.func.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "sleep")
+}
+
+impl Visit<'_> for SleepCalls {
+    fn visit_item(&mut self, item: &syn::Item) {
+        let entered = !self.in_test && item_cfg_test(item);
+        if entered {
+            self.in_test = true;
+        }
+        if self.in_test || matches!(item, syn::Item::Mod(_)) {
+            visit::visit_item(self, item);
+        }
+        if entered {
+            self.in_test = false;
         }
     }
-    if !source.production {
-        return vec![source.syntax.to_token_stream().to_string()];
+
+    fn visit_expr_call(&mut self, call: &syn::ExprCall) {
+        if self.in_test && is_sleep_call(call) {
+            self.found += 1;
+        }
+        visit::visit_expr_call(self, call);
     }
-    let mut output = Vec::new();
-    items(&source.syntax.items, &mut output);
-    output
+
+    fn visit_expr_method_call(&mut self, call: &syn::ExprMethodCall) {
+        if self.in_test && call.method == "sleep" {
+            self.found += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &syn::Macro) {
+        if !self.in_test {
+            return;
+        }
+        let mut parsed = Vec::new();
+        let mut loose = Vec::new();
+        macro_expressions(mac.tokens.clone(), &mut parsed, &mut loose);
+        for expr in &parsed {
+            self.visit_expr(expr);
+        }
+    }
+}
+
+fn count_test_sleeps(source: &Source) -> usize {
+    let mut visitor = SleepCalls {
+        in_test: !source.production,
+        found: 0,
+    };
+    visitor.visit_file(&source.syntax);
+    visitor.found
+}
+
+#[test]
+fn sleep_visitor_ignores_literals_and_counts_calls() {
+    let syntax = syn::parse_file(
+        r#"
+        fn test_body() {
+            let _ = "sleep (";
+            tokio::time::sleep(d);
+            std::thread::sleep(d);
+            time::sleep(d);
+            sleep(d);
+            clock.sleep(d);
+            tokio::select! {
+                _ = tokio::time::sleep(d) => {}
+            }
+        }
+        "#,
+    )
+    .expect("parse snippet");
+    let source = Source {
+        package: String::new(),
+        relative: String::new(),
+        syntax,
+        production: false,
+    };
+    assert_eq!(count_test_sleeps(&source), 6);
 }
 
 #[test]
 fn test_sleeps_only_shrink() {
     let mut counts = BTreeMap::new();
     for source in workspace_sources() {
-        let found: usize = test_code(&source)
-            .iter()
-            .map(|tokens| tokens.matches("sleep (").count())
-            .sum();
+        let found = count_test_sleeps(&source);
         if found > 0 {
             *counts.entry(source.package.clone()).or_default() += found;
         }

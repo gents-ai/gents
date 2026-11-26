@@ -16,8 +16,8 @@ use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::mock_subscription::MockUpdateSubscriptionSource;
 use crate::support::trial_store;
+use gents::test_support::subscription::MockUpdateSubscriptionSource;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;

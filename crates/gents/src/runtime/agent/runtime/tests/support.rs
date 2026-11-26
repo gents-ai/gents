@@ -1,5 +1,5 @@
 use super::super::*;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
 pub(super) use crate::test_support::running_runtime::AgentRuntimeHome;
@@ -12,11 +12,6 @@ pub(super) use gents_protocol::row::AgentRequest;
 pub(super) use gents_store::graphql::escape_graphql_string;
 pub(super) use gents_tools::surface::ToolCeiling;
 pub(super) use serde_json::Value;
-
-pub(super) fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
 
 pub(super) struct PluginRuntimeFixture {
     pub db: gents_store::test_support::TestStore,
@@ -47,7 +42,7 @@ pub(super) async fn plugin_runtime_fixture(
     let db = crate::support::trial_store(name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
-    let user = test_identity(&format!("{name}-user"));
+    let user = gents_store::test_support::test_identity(&format!("{name}-user"));
     let user_did = identity::Did::new(user.did())?;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     GrantSet::OperatorUser.grant(&admin, &user_did).await?;
@@ -621,20 +616,6 @@ pub(super) async fn wait_for_runtime_process_state(
     }
 }
 
-#[derive(Default)]
-pub(super) struct RecordingObserver {
-    pub(super) states: std::sync::Mutex<Vec<crate::runtime::agent::ProcessLifecycleState>>,
-}
-
-impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
-    fn on_process_state_change(&self, state: crate::runtime::agent::ProcessLifecycleState) {
-        self.states
-            .lock()
-            .expect("recording observer mutex poisoned")
-            .push(state);
-    }
-}
-
 pub(super) async fn update_backend_probe_status(
     node: &Arc<defra_node::Node>,
     node_did: &str,
@@ -651,14 +632,4 @@ pub(super) async fn update_backend_probe_status(
     )
     .await
     .unwrap();
-}
-
-pub(super) struct ScriptedWatcher {
-    pub(super) rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
-}
-
-impl Watcher for ScriptedWatcher {
-    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
-        self.rx.recv().await
-    }
 }

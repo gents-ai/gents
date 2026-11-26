@@ -225,8 +225,36 @@ async fn until_expiry(expiry: Option<Instant>) {
 pub(crate) async fn watch_queue(
     home: PathBuf,
     heartbeat_interval: Duration,
+    subscriptions: watch::Receiver<bool>,
+    observed: impl FnMut(bool) + Send,
+) {
+    watch_queue_inner(home, heartbeat_interval, subscriptions, observed, || {}).await;
+}
+
+#[cfg(test)]
+pub(crate) async fn watch_queue_with_ticks(
+    home: PathBuf,
+    heartbeat_interval: Duration,
+    subscriptions: watch::Receiver<bool>,
+    observed: impl FnMut(bool) + Send,
+    on_heartbeat: impl FnMut() + Send,
+) {
+    watch_queue_inner(
+        home,
+        heartbeat_interval,
+        subscriptions,
+        observed,
+        on_heartbeat,
+    )
+    .await;
+}
+
+async fn watch_queue_inner(
+    home: PathBuf,
+    heartbeat_interval: Duration,
     mut subscriptions: watch::Receiver<bool>,
     mut observed: impl FnMut(bool) + Send,
+    mut on_heartbeat: impl FnMut() + Send,
 ) {
     let (send, mut receive) = mpsc::channel(1);
     let mut heartbeat = tokio::time::interval(heartbeat_interval);
@@ -247,29 +275,30 @@ pub(crate) async fn watch_queue(
                 }
             }
             _ = heartbeat.tick() => {
-                if !*subscriptions.borrow() {
-                    continue;
-                }
-                if watcher.is_none() {
-                    match QueueWatch::start(&home, send.clone()) {
-                        Ok(watch) => {
-                            if let Err(error) = approval::pending_requests(&home) {
-                                tracing::warn!(%error, "validating the plugin approval queue");
-                                continue;
+                if *subscriptions.borrow() {
+                    if watcher.is_none() {
+                        match QueueWatch::start(&home, send.clone()) {
+                            Ok(watch) => {
+                                if let Err(error) = approval::pending_requests(&home) {
+                                    tracing::warn!(%error, "validating the plugin approval queue");
+                                } else {
+                                    watcher = Some(watch);
+                                    let _ = send.try_send(());
+                                }
                             }
-                            watcher = Some(watch);
-                            let _ = send.try_send(());
+                            Err(error) => {
+                                tracing::warn!(%error, "starting plugin approval filesystem watch");
+                            }
                         }
-                        Err(error) => {
-                            tracing::warn!(%error, "starting plugin approval filesystem watch");
-                            continue;
+                    }
+                    if watcher.is_some() {
+                        if let Err(error) = renew_listener(&home, &subscriptions) {
+                            tracing::warn!(%error, "refreshing the plugin approval listener");
+                            watcher = None;
                         }
                     }
                 }
-                if let Err(error) = renew_listener(&home, &subscriptions) {
-                    tracing::warn!(%error, "refreshing the plugin approval listener");
-                    watcher = None;
-                }
+                on_heartbeat();
             }
             _ = receive.recv() => {
                 if !*subscriptions.borrow() {

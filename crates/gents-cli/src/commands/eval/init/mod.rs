@@ -453,8 +453,8 @@ mod tests {
 
     use gents_eval::authoring::fixtures::{dossier, good, OWNER};
 
-    use super::turn::ScriptedTurn;
     use super::*;
+    use crate::test_support::ScriptedTurn;
 
     pub(crate) fn draft_block(cases: &[serde_json::Value]) -> String {
         format!(

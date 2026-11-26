@@ -73,6 +73,11 @@ async fn approved_enrollment_does_not_open_peer_request_replication() {
         "AgentToolCall".to_owned(),
         equality_filter("requester_did", &coordinator_did),
     );
+    let mut arrivals = gents_store::subscription_source::subscribe_collections(
+        &host,
+        ["AgentRequest", "AgentToolCall"],
+    )
+    .unwrap();
     for (admin, addresses) in [
         (&host_admin, &coordinator_addresses),
         (&coordinator_admin, &host_addresses),
@@ -95,7 +100,12 @@ async fn approved_enrollment_does_not_open_peer_request_replication() {
             .unwrap()
             .is_empty());
     }
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), arrivals.recv())
+            .await
+            .is_err(),
+        "no addressed request or tool row may replicate to the enrolled host"
+    );
     assert!(
         collection_values(&host, "AgentRequest", "request_id")
             .await

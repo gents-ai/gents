@@ -2,7 +2,7 @@ use gents_session::request::lifecycle::write_manual_agent_request;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::support::{managed_agent, trial_store};
+use crate::support::{managed_agent_fixture, trial_store};
 
 fn actor(did: &str) -> identity::Did {
     identity::Did::new(did.to_owned()).expect("fixture creator DID")
@@ -69,7 +69,7 @@ async fn count_manual_agent_requests(access: &gents_store::config_client::Config
 #[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = trial_store("manual-run-event-scope").await;
-    let agent = managed_agent(&db).await;
+    let agent = managed_agent_fixture(&db).await.agent;
 
     let doc_id = write_manual_agent_request(
         &db.node,
@@ -105,7 +105,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
 #[tokio::test]
 async fn manual_run_render_failure_materializes_no_request() {
     let db = trial_store("manual-run-render-err").await;
-    let agent = managed_agent(&db).await;
+    let agent = managed_agent_fixture(&db).await.agent;
 
     let error = write_manual_agent_request(
         &db.node,

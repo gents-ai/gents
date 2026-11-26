@@ -34,15 +34,16 @@ async fn a_stalled_client_start_keeps_the_store_locked_until_its_core_closes() {
     assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
     assert!(error.message.contains("embedded_node"), "{}", error.message);
 
-    let init = tokio::spawn({
+    let mut init = tokio::spawn({
         let lifecycle = Arc::clone(&lifecycle);
         async move {
             let _guard = lifecycle.lock().await;
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        !init.is_finished(),
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut init)
+            .await
+            .is_err(),
         "the store is still owned by the late start"
     );
 
@@ -244,16 +245,17 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
 
     let (progress, _) = watch::channel(ClientStartProgress::Pending);
     state.bridge.lock().unwrap().start_inflight = Some(progress.clone());
-    let excluding = {
+    let mut excluding = {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let guard = exclude_client(&state).await.expect("exclude");
             drop(guard);
         })
     };
-    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
-        !excluding.is_finished(),
+        tokio::time::timeout(Duration::from_millis(50), &mut excluding)
+            .await
+            .is_err(),
         "an in-flight start is drained first"
     );
     state.bridge.lock().unwrap().start_inflight = None;
@@ -266,7 +268,7 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
     let guard = exclude_client(&state).await.expect("exclude");
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let starter = {
+    let mut starter = {
         let state = Arc::clone(&state);
         let barrier = Arc::clone(&barrier);
         let opened = Arc::clone(&opened);
@@ -277,7 +279,12 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
         })
     };
     barrier.wait().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut starter)
+            .await
+            .is_err(),
+        "no start opens client state during retirement"
+    );
     assert!(
         !opened.load(std::sync::atomic::Ordering::SeqCst),
         "no start opens client state during retirement"

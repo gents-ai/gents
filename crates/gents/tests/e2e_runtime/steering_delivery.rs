@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use gents::test_support::tools::HeldTool;
 use gents::Gents;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
@@ -18,11 +18,9 @@ use tokio::sync::Notify;
 use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
-use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime,
-};
+use crate::support::builder_runtime::{builder_actors, fixture_agent, runtime_builder};
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::spawn_runtime;
 use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
@@ -31,40 +29,6 @@ use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";
-
-#[derive(Clone)]
-struct HeldTool {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-impl ToolDyn for HeldTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "held_probe".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "held_probe".into(),
-                description: "Wait for the caller to release the tool".into(),
-                parameters: serde_json::json!({"type":"object","properties":{}}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            self.entered.notify_one();
-            self.release.notified().await;
-            Ok("held tool settled".into())
-        })
-    }
-}
 
 async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
     crate::support::live_inference::wait_for_request_terminal(access, request_id).await
@@ -133,10 +97,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .build()
         .await
         .unwrap();
-    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(&db.node, did).await;
-    let runtime = BootedAgent::new(shutdown, handle, did.into());
+    let runtime = spawn_runtime(&db, agent).await;
     backend.wait_for_chunks(name, 1).await;
     assert_eq!(
         row_as(&fixture, &active).await["lifecycle_state"],
@@ -345,10 +306,14 @@ fn held_runtime(
         .model_name(MODEL)
         .stream_batch_ms(0)
         .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
-        .custom_tool(HeldTool {
-            entered: entered.clone(),
-            release: release.clone(),
-        })
+        .custom_tool(HeldTool::notified(
+            "held_probe",
+            "Wait for the caller to release the tool",
+            serde_json::json!({"type":"object","properties":{}}),
+            "held tool settled",
+            entered.clone(),
+            release.clone(),
+        ))
         .done()
         .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
 }

@@ -284,7 +284,7 @@ def loosely_equal(left, right):
 def evaluate(expression, context):
     """Evaluate the subset of GitHub expression syntax the trust condition and
     the gate's job conditions use: comparisons, &&, ||, contains, startsWith and fromJSON."""
-    tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|\.?[A-Za-z_][A-Za-z0-9_.-]*", expression)
+    tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|\.?[A-Za-z_][A-Za-z0-9_.*-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression syntax: {expression}")
     position = 0
@@ -322,7 +322,19 @@ def evaluate(expression, context):
                     value = value.get(part) if isinstance(value, dict) else None
             return value
         value = context
-        for part in token.split("."):
+        parts = token.split(".")
+        for index, part in enumerate(parts):
+            if part == "*":
+                if not isinstance(value, list):
+                    return []
+                rest = parts[index + 1:]
+                projected = []
+                for item in value:
+                    cur = item
+                    for sub in rest:
+                        cur = cur.get(sub) if isinstance(cur, dict) else None
+                    projected.append(cur)
+                return projected
             value = value.get(part) if isinstance(value, dict) else None
         return value
 
@@ -473,7 +485,7 @@ def gate_module():
 GATE = gate_module()
 
 
-def pull_request_context(head_repository, repository="gents-ai/gents"):
+def pull_request_context(head_repository, repository="gents-ai/gents", labels=("ci:run",)):
     head = {"repo": {"full_name": head_repository} if head_repository else None}
     fork = (head_repository or "").lower() != repository.lower()
     # A gate plan that selects every job, so only the trust rule can skip one,
@@ -490,6 +502,7 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
                        "repository": repository,
                        "event": {"label": {"name": "adapter-interop"},
                                  "pull_request": {"draft": False, "stack": None,
+                                                  "labels": [{"name": name} for name in labels],
                                                   "head": head}}},
             "inputs": {}, "vars": {}, "needs": {"plan": {"outputs": outputs}},
             "matrix_entries": matrix}
@@ -524,6 +537,11 @@ class SelfHostedRoutingTests(unittest.TestCase):
             ran = {(workflow, job) for workflow, job, condition, _ in self.routed(context)
                    if job_runs(condition, context)}
             self.assertFalse(ran & self.BUILDS, head)
+
+    def test_unlabeled_pull_requests_skip_plan(self):
+        context = pull_request_context("gents-ai/gents", labels=())
+        routed = {(workflow, job): condition for workflow, job, condition, _ in self.routed(context)}
+        self.assertFalse(job_runs(routed[("ci.yml", "plan")], context))
 
     def test_pull_requests_from_this_repository_run_on_our_runners(self):
         context = pull_request_context("gents-ai/gents")

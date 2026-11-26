@@ -151,6 +151,7 @@ fn main() {
             "    pub fn replay<{parameters}>(run: impl Fn(&{input}) -> {output})\n    where\n        \
              {input}: serde::de::DeserializeOwned,\n        {output}: serde::Serialize,\n    {{\n        \
              crate::family::replay({key:?}, run)\n    }}\n    \
+             #[must_use = \"conformance cases must be iterated and verified with `.check(...)`\"]\n    \
              pub fn cases<{parameters}>() -> {cases}\n    where\n        \
              {input}: serde::de::DeserializeOwned,\n    {{\n        \
              crate::family::cases({key:?})\n    }}\n}}",

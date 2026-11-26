@@ -55,6 +55,8 @@ pub struct ScheduleSource {
     node: Arc<EmbeddedNode>,
     tick_every: Duration,
     cancel: CancellationToken,
+    #[cfg(test)]
+    idle_ticks_tx: Option<watch::Sender<usize>>,
 }
 
 impl ScheduleSource {
@@ -68,12 +70,20 @@ impl ScheduleSource {
             node,
             tick_every: Duration::from_secs(1),
             cancel,
+            #[cfg(test)]
+            idle_ticks_tx: None,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn with_tick_every(mut self, tick_every: Duration) -> Self {
         self.tick_every = tick_every;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_idle_tick_signal(mut self, tx: watch::Sender<usize>) -> Self {
+        self.idle_ticks_tx = Some(tx);
         self
     }
 }
@@ -342,6 +352,10 @@ impl TriggerSource for ScheduleSource {
                             }),
                         });
                     }
+                }
+                #[cfg(test)]
+                if let Some(tx) = &self.idle_ticks_tx {
+                    tx.send_modify(|ticks| *ticks += 1);
                 }
             }
         })

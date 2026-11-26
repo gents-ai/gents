@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
-use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents::test_support::observers::RuntimeEventObserver;
+use gents::{DocumentRuntimeOptions, ProcessLifecycleState};
 use gents_store::config_client::ConfigAccess;
 use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
@@ -13,40 +13,6 @@ use crate::support::{managed_agent_fixture, trial_store};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
-
-struct RuntimeEventObserver {
-    process_state_tx: watch::Sender<ProcessLifecycleState>,
-    generation_tx: watch::Sender<u64>,
-    event_sources_tx: watch::Sender<Option<(u64, String)>>,
-}
-
-impl ProcessLifecycleObserver for RuntimeEventObserver {
-    fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        self.process_state_tx.send_replace(state);
-    }
-}
-
-impl RuntimeSnapshotObserver for RuntimeEventObserver {
-    fn on_event_sources_reconciled(
-        &self,
-        generation: u64,
-        fingerprint: &str,
-        result: Result<(), &str>,
-    ) {
-        assert!(result.is_ok(), "subscription seeding failed: {result:?}");
-        self.event_sources_tx
-            .send_replace(Some((generation, fingerprint.to_owned())));
-    }
-
-    fn on_generation_published(
-        &self,
-        generation: u64,
-        _configuration_fingerprint: &str,
-        _runnable_agent_dids: &[String],
-    ) {
-        self.generation_tx.send_replace(generation);
-    }
-}
 
 async fn wait_for_observed<T>(
     receiver: &mut watch::Receiver<T>,
@@ -127,16 +93,15 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         watch::channel(ProcessLifecycleState::Uninitialized);
     let (generation_tx, mut generation_rx) = watch::channel(0);
     let (event_sources_tx, mut event_sources_rx) = watch::channel(None);
-    let observer = Arc::new(RuntimeEventObserver {
+    let observer = Arc::new(RuntimeEventObserver::new(
         process_state_tx,
         generation_tx,
         event_sources_tx,
-    });
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
+    ));
+    let (running, agent) = gents::runtime::embedded::boot_runtime(
+        &db,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             runtime_snapshot_observer: Some(observer),
@@ -145,11 +110,10 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await
     .unwrap();
-    let node_did = agent.node_did().to_string();
+    let node_did = running.node_did;
     let default_agent_did = agent.default_agent_did().to_string();
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.clone().run(shutdown_rx));
+    let shutdown_tx = running.shutdown;
+    let handle = running.handle;
 
     wait_for_observed(
         &mut process_state_rx,

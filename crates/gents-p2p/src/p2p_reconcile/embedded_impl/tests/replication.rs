@@ -1226,6 +1226,11 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
         "AgentToolCall".to_string(),
         equality_filter("requester_did", "did:key:host"),
     );
+    let mut arrivals = gents_store::subscription_source::subscribe_collections(
+        &receiver,
+        ["AgentRequest", "AgentToolCall"],
+    )
+    .unwrap();
     let receiver_refused = receiver_admin
         .add_replicator(&sender_addresses, &collections, &filters)
         .await;
@@ -1254,7 +1259,12 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
             .unwrap()
             .is_empty());
     }
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), arrivals.recv())
+            .await
+            .is_err(),
+        "runtime-local requests must not replicate over P2P"
+    );
     assert!(
         collection_values(&receiver, "AgentRequest", "request_id")
             .await

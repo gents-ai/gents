@@ -1,11 +1,11 @@
 mod authority;
 mod connect;
-mod launch;
+pub(crate) mod launch;
 pub(crate) mod native;
 pub(super) mod pairing;
 mod port;
 mod preference;
-mod readiness;
+pub(crate) mod readiness;
 pub(super) mod repair;
 pub(super) mod reset;
 mod start;

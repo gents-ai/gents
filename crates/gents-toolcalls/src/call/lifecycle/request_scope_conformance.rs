@@ -1,9 +1,8 @@
 use super::AwaitMode;
 use crate::call::lifecycle::admission_fixture::{
-    claimed_signed_request, complete_child_managed_verified, materialize_session_message,
+    complete_child_managed_verified, materialize_session_message,
     publish_accepted_on_claimed_request, AcceptedFixtureCall,
 };
-use std::sync::Arc;
 
 /// The parent request's Agent owns the session's requests and tool rows;
 /// ACP hides them from any other reader.
@@ -60,22 +59,20 @@ async fn queue_snapshot(
 async fn generated_background_completion_queue_case_uses_accepted_session_messages() {
     for case in gents_lean_vocab::families::contracts_queue_deadline_completion_delivery::cases() {
         let input = &case.input;
-        let db = gents_store::test_support::TestStore::start(
-            "queue-scope",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = db.node.clone();
-        let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-        let node_did = db.node_identity.did();
-        gents_inference::test_support::install_test_agent(&node, node_did, "general").await;
+        let home = gents_session::test_support::AgentHome::start("queue-scope").await;
+        let node = home.node.clone();
+        let node_did = home.node_did();
         let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
         let session_id = input.session_id.to_string();
-        let mut parent =
-            claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
+        let claimed =
+            gents_session::test_support::ClaimedRequest::client_signed(&home, &home.binding)
+                .ids(&parent_id, &session_id)
+                .drive(gents_session::test_support::Stage::Claimed)
+                .await;
+        let mut parent = claimed.lifecycle;
         let parent_doc_id = parent.request().doc_id.clone();
         let queue_key = input.queue_key.as_deref();
-        let owner = parent.access().unwrap();
+        let owner = claimed.agent_access;
         let pre = queue_snapshot(&owner, &session_id, queue_key).await;
         assert_eq!(
             pre.0.len(),
@@ -125,9 +122,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
                 caused_request_id,
                 &format!("child {} complete", index + 1),
                 &agent_signer,
-                Arc::new(gents_store::test_support::held_runtime_identity(
-                    db.node_identity.did(),
-                )),
+                home.node_identity.clone(),
             )
             .await;
         }

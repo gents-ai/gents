@@ -52,6 +52,8 @@ pub(crate) use principal_assembly::assemble_node_and_agents;
 pub(crate) use principal_assembly::AgentBuildError;
 #[cfg(test)]
 pub(crate) use reconcile::next_generation;
+#[cfg(test)]
+pub(crate) use reconcile::SlotFailurePolicy;
 
 pub(crate) use builder::AgentFactory;
 #[cfg(test)]

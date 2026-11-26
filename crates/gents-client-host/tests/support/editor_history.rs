@@ -257,7 +257,7 @@ pub async fn populate(
                     Some("loading") => last = output,
                     _ => anyhow::bail!("history request did not complete normally: {output}"),
                 }
-                tokio::time::sleep(Duration::from_millis(25)).await;
+                client.wait_for_update().await?;
             }
         })
         .await

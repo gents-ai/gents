@@ -35,6 +35,10 @@ impl BootedAgent {
         }
     }
 
+    pub fn from_running(running: gents::runtime::embedded::RunningRuntime) -> Self {
+        Self::new(running.shutdown, running.handle, running.node_did)
+    }
+
     pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         let Some(handle) = self.handle.take() else {
@@ -115,11 +119,14 @@ pub async fn spawn_runtime(
     db: &gents_store::test_support::TestStore,
     runtime: gents::Gents,
 ) -> BootedAgent {
-    let node_did = runtime.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handle = tokio::spawn(runtime.run(shutdown_rx));
-    wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
+    let running = gents::runtime::embedded::start_running_within(
+        db.node.as_ref(),
+        runtime,
+        TEST_RUNTIME_READY_TIMEOUT,
+    )
+    .await
+    .expect("runtime becomes ready");
+    BootedAgent::from_running(running)
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {

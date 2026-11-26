@@ -445,37 +445,10 @@ pub async fn claimed_signed_request(
     identity: &dyn NodeIdentity,
     created_at: Option<&str>,
 ) -> RequestLifecycle {
-    claimed_signed_request_with_trigger(node, request_id, session_id, identity, created_at, None)
-        .await
-}
-
-pub(crate) async fn claimed_signed_request_with_trigger(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    identity: &dyn NodeIdentity,
-    created_at: Option<&str>,
-    trigger_id: Option<&str>,
-) -> RequestLifecycle {
-    claimed_signed_request_with_trigger_correlation(
-        node, request_id, session_id, identity, created_at, trigger_id, None,
-    )
-    .await
-}
-
-pub(crate) async fn claimed_signed_request_with_trigger_correlation(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    identity: &dyn NodeIdentity,
-    created_at: Option<&str>,
-    trigger_id: Option<&str>,
-    correlation: Option<&str>,
-) -> RequestLifecycle {
     let now = created_at
         .map(str::to_owned)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         gents_protocol::request_admission::RequestScope::new(
@@ -489,11 +462,6 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
         now,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    if let Some(trigger_id) = trigger_id {
-        create.caused_by_trigger_id = Some(trigger_id.to_owned());
-        create.caused_by_trigger_kind = Some("schedule".to_owned());
-    }
-    create.caused_by_correlation = correlation.map(str::to_owned);
     claimed_signed_request_create(node, identity, create).await
 }
 
@@ -588,10 +556,10 @@ pub async fn published_admission_with_owner(
         .await?;
     let signed_home = gents_documents::test_support::SignedHome::enroll(db, &name).await;
     let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, owner) = signed_home.into_parts();
-    let node = db.node.clone();
-    let runtime = db.node_identity.clone();
-    let node_did = runtime.did().to_owned();
+    let node_did = signed_home.node_did().to_owned();
+    let created_at = options
+        .request_created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let paired = if options.paired_client {
         let paired_name = format!("{name}-paired-client");
         Some(
@@ -603,12 +571,9 @@ pub async fn published_admission_with_owner(
     } else {
         None
     };
-    if let Some(paired) = &paired {
+    let (claimed, client, requester_identity) = if let Some(paired) = paired {
         use gents_store::config_client::NodePermission;
-        let admin = gents_store::config_client::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(&node_did)?,
-        );
+        let admin = signed_home.node_access();
         let actor = identity::Did::new(paired.did())?;
         for permission in [
             NodePermission::DocumentRead,
@@ -618,7 +583,10 @@ pub async fn published_admission_with_owner(
         ] {
             admin.grant_node_permission(&actor, permission).await?;
         }
-        let response = owner.execute("{ Agent { _docID agent_did } }").await?;
+        let response = signed_home
+            .user_access
+            .execute("{ Agent { _docID agent_did } }")
+            .await?;
         let agent_doc = response["data"]["Agent"]
             .as_array()
             .and_then(|rows| {
@@ -627,80 +595,73 @@ pub async fn published_admission_with_owner(
             })
             .and_then(|row| row["_docID"].as_str())
             .ok_or_else(|| anyhow::anyhow!("fixture Agent not visible to User"))?;
-        owner
+        signed_home
+            .user_access
             .add_actor_relationship("Agent", agent_doc, "session_writer", &actor)
             .await?;
-    }
-    let requester: &dyn NodeIdentity = paired.as_ref().map_or(&user, |identity| identity);
-    let client = if paired.is_some() {
-        db.client_access(requester)
+        let client = signed_home.store.client_access(&paired);
+        let create = gents_session::request::lifecycle::build_signed_client_request(
+            &client,
+            gents_session::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                gents_session::request::lifecycle::RequestIdentity {
+                    request_id: format!("request-{name}"),
+                    node_did: node_did.clone(),
+                    requester_did: Some(paired.did().to_owned()),
+                    agent_did: binding.agent_did.clone(),
+                    session_id: format!("session-{name}"),
+                    content: "spawn".into(),
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at,
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                    paired.did(),
+                ),
+            ),
+            gents_session::request::lifecycle::RequestSigner::Identity(&paired),
+        )
+        .await?;
+        gents_session::request::lifecycle::submit_client_request(&client, &create).await?;
+        let request_id = gents_store::graphql::escape_graphql_string(&create.request_id);
+        let response = signed_home
+            .agent_access(&binding)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ _docID }} }}"#
+            ))
+            .await?;
+        let doc_id = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("paired fixture request has no document id"))?
+            .to_owned();
+        let claimed =
+            gents_session::test_support::ClaimedRequest::existing(&signed_home, &binding, &doc_id)
+                .deadline_secs(FIXTURE_DEADLINE_SECS)
+                .batch_interval(Duration::from_millis(1))
+                .drive(gents_session::test_support::Stage::Executing)
+                .await;
+        let requester_identity: Arc<dyn NodeIdentity> = Arc::new(paired);
+        (claimed, Some(client), Some(requester_identity))
     } else {
-        owner
+        let claimed =
+            gents_session::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+                .ids(&format!("request-{name}"), &format!("session-{name}"))
+                .content("spawn")
+                .created_at(&created_at)
+                .deadline_secs(FIXTURE_DEADLINE_SECS)
+                .batch_interval(Duration::from_millis(1))
+                .drive(gents_session::test_support::Stage::Executing)
+                .await;
+        (claimed, None, None)
     };
-    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did())?,
-        agent.as_ref(),
-    )?;
-    let created_at = options
-        .request_created_at
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let create = gents_session::request::lifecycle::build_signed_client_request(
-        &client,
-        gents_session::request::lifecycle::RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            gents_session::request::lifecycle::RequestIdentity {
-                request_id: format!("request-{name}"),
-                node_did: node_did.clone(),
-                requester_did: Some(requester.did().to_owned()),
-                agent_did: binding.agent_did.clone(),
-                session_id: format!("session-{name}"),
-                content: "spawn".into(),
-                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at,
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(requester.did()),
-        ),
-        gents_session::request::lifecycle::RequestSigner::Identity(requester),
-    )
-    .await?;
-    gents_session::request::lifecycle::submit_client_request(&client, &create).await?;
-    let requester_identity: Arc<dyn NodeIdentity> = Arc::new(paired.unwrap_or(user));
-    let request_id = gents_store::graphql::escape_graphql_string(&create.request_id);
-    let response = agent_access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await?;
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
-    let request = row.try_into()?;
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
-        node.clone(),
-        runtime.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-        .await?;
-    anyhow::ensure!(
-        admission.is_some(),
-        "fixture client request lacks native claim admission"
-    );
-    let mut request =
-        RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
-    request.bind_managed_agent(agent.as_ref())?;
-    request.set_client_claim_admission(admission);
-    anyhow::ensure!(
-        request.claim_with_identity().await? == ClaimOutcome::Claimed,
-        "fixture client request was not claimed"
-    );
-    let writer =
-        DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))?;
-    request.begin_owned_execution(&writer).await?;
+    let (db, user, owner) = signed_home.into_parts();
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let client = client.unwrap_or(owner);
+    let requester_identity = requester_identity.unwrap_or_else(|| Arc::new(user));
+    let agent = claimed.agent;
+    let writer = claimed.writer.expect("executing request has its writer");
+    let request = claimed.lifecycle;
     writer
         .start_provider_attempt(
             &request.request().doc_id,

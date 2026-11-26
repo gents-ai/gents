@@ -32,7 +32,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
         .identity_binding(binding)
         .backend_id("builder-backend")
         .system_prompt("You manage policies.")
-        .custom_tool(EchoTool)
+        .custom_tool(crate::test_support::tools::EchoTool)
         .done()
         .build()
         .await

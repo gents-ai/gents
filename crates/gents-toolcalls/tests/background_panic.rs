@@ -40,51 +40,23 @@ impl ToolDyn for PanickingTool {
 
 #[tokio::test]
 async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-
     let signed_home = gents_documents::test_support::SignedHome::start(
         "hook-background-panic",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
     let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, owner) = signed_home.into_parts();
-    let node = db.node.clone();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
     let session_id = "background-panic-session";
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "request-background-panic",
-        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session_id),
-        "spawn",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let mut lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &node,
-            &owner,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
+    let claimed =
+        gents_session::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
+            .ids("request-background-panic", session_id)
+            .content("spawn")
+            .drive(gents_session::test_support::Stage::Claimed)
+            .await;
+    let (db, user, _owner) = signed_home.into_parts();
+    let node = db.node.clone();
+    let agent = claimed.agent;
+    let agent_access = claimed.agent_access;
     let executions = BackgroundExecutionRegistry::default();
     let hook = DefraSessionHook::resume_with_actor_policy(
         node.clone(),
@@ -103,7 +75,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         &["panicking_tool".into()],
     ))
     .with_background_execution_registry(executions.clone());
-    bind_claimed_hook_request(&hook, lifecycle).await;
+    bind_claimed_hook_request(&hook, claimed.lifecycle).await;
     hook.on_completion_call(&user_text_message("run tool"), &[])
         .await;
     let args = r#"{"tool_name":"panicking_tool","args":{}}"#;

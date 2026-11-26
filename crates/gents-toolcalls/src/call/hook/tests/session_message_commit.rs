@@ -3,13 +3,6 @@ use crate::test_support::enable_agents_tools_with_access;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::NodeIdentity;
 
-async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &str) {
-    let owner = node.node_identity_did().unwrap();
-    let access =
-        gents_store::config_client::ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
-    enable_agents_tools_with_access(&access, did, agent_did).await;
-}
-
 async fn rows(
     access: &gents_store::config_client::ConfigAccess,
     query: &str,
@@ -119,35 +112,32 @@ async fn dispatch_with_lost_receipt(
 
 #[tokio::test]
 async fn agent_new_inherits_the_signed_caller_directory() {
-    let db = gents_store::test_support::TestStore::start(
-        "agent-new-cwd",
-        gents_session::test_support::no_lifecycle_plugins(),
+    let home = gents_session::test_support::AgentHome::start("agent-new-cwd").await;
+    let node = home.node.clone();
+    let did = home.node_did().to_owned();
+    let session = format!("session-{}", uuid::Uuid::new_v4());
+    let claimed = gents_session::test_support::ClaimedRequest::client_signed(&home, &home.binding)
+        .ids("cwd-parent", &session)
+        .input(gents_protocol::request_input::RequestInput {
+            cwd: Some(home.data_path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .drive(gents_session::test_support::Stage::Claimed)
+        .await;
+    let hook = DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        &session,
+        &did,
+        Some(home.user.did()),
+        home.agent_did().parse().unwrap(),
+        FailurePolicy::default(),
     )
-    .await;
-    let node = db.node.clone();
-    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let did = identity.did().to_owned();
-    let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    let session = hook.session_id().await.unwrap();
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "cwd-parent",
-        gents_protocol::request_admission::RequestScope::new(&did, &did, "general", &session),
-        "start agents",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-    );
-    create.input.cwd = Some(db.data_path().to_string_lossy().into_owned());
-    let lifecycle = crate::call::lifecycle::admission_fixture::claimed_signed_request_create(
-        &node, &identity, create,
-    )
-    .await;
-    let agent_signer = lifecycle.managed_agent_signer().unwrap();
-    hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
-    hook = hook.with_managed_identity(&agent_signer).unwrap();
-    enable_agents_tools(&node, &did, agent_signer.did()).await;
-    bind_claimed_hook_request(&hook, lifecycle).await;
+    .await
+    .unwrap()
+    .with_managed_identity(home.agent_identity.as_ref())
+    .unwrap();
+    enable_agents_tools_with_access(&home.user_access, &did, home.agent_did()).await;
+    bind_claimed_hook_request(&hook, claimed.lifecycle).await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
     let (_, caused) = dispatch_with_lost_receipt(
@@ -160,36 +150,36 @@ async fn agent_new_inherits_the_signed_caller_directory() {
     .await;
     assert_eq!(
         caused["input"]["cwd"],
-        db.data_path().to_string_lossy().as_ref()
+        home.data_path().to_string_lossy().as_ref()
     );
     node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
-    let db = gents_store::test_support::TestStore::start(
-        "lost-commit-receipt",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = db.node.clone();
-    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let did = identity.did().to_owned();
-    let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    let session = hook.session_id().await.unwrap();
-    let lifecycle = crate::call::lifecycle::admission_fixture::claimed_signed_request(
-        &node,
-        "request-commit-receipt-loss",
+    let home = gents_session::test_support::AgentHome::start("lost-commit-receipt").await;
+    let node = home.node.clone();
+    let did = home.node_did().to_owned();
+    let session = format!("session-{}", uuid::Uuid::new_v4());
+    let claimed = gents_session::test_support::ClaimedRequest::client_signed(&home, &home.binding)
+        .ids("request-commit-receipt-loss", &session)
+        .drive(gents_session::test_support::Stage::Claimed)
+        .await;
+    let agent_signer = claimed.lifecycle.managed_agent_signer().unwrap();
+    let hook = DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
         &session,
-        &identity,
-        None,
+        &did,
+        Some(home.user.did()),
+        home.agent_did().parse().unwrap(),
+        FailurePolicy::default(),
     )
-    .await;
-    let agent_signer = lifecycle.managed_agent_signer().unwrap();
-    hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
-    hook = hook.with_managed_identity(&agent_signer).unwrap();
-    enable_agents_tools(&node, &did, agent_signer.did()).await;
-    bind_claimed_hook_request(&hook, lifecycle).await;
+    .await
+    .unwrap()
+    .with_managed_identity(home.agent_identity.as_ref())
+    .unwrap();
+    enable_agents_tools_with_access(&home.user_access, &did, home.agent_did()).await;
+    bind_claimed_hook_request(&hook, claimed.lifecycle).await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
 
@@ -213,9 +203,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         &caused_row.request_id,
         "done",
         &agent_signer,
-        Arc::new(gents_store::test_support::held_runtime_identity(
-            db.node_identity.did(),
-        )),
+        home.node_identity.clone(),
     )
     .await;
     for expected in [1, 0] {

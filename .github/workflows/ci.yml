@@ -18,8 +18,11 @@ name: CI
 # dispatch look nothing up, so a cached pass cannot hide an intermittent
 # failure past a day; every same-repository pass records its key.
 on:
+  # Pull requests are opt-in: add the `ci:run` label when a branch is ready
+  # for the gate. Unlabeled pushes never touch self-hosted runners, while
+  # merge_group and nightly schedule always run automatically.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    types: [labeled, synchronize, reopened]
   merge_group:
     types: [checks_requested]
   # A daily run of main: the archived test groups ignoring the test-result
@@ -102,6 +105,7 @@ jobs:
   # reserved runners to the merge queue. The plan itself cannot read the plan,
   # so its labels are the inventory's `linux` role (test_gate.py keeps them equal).
   plan:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:run')
     runs-on: >-
       ${{ ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository) ||
@@ -1112,6 +1116,12 @@ jobs:
       'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
+      - name: Require ci:run label on pull requests
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:run')
+        run: |
+          echo "::notice::CI on pull requests is opt-in; add the 'ci:run' label when this branch is ready for the gate."
+          exit 1
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

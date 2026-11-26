@@ -1,44 +1,10 @@
 use super::*;
-use crate::runtime::agent::ProcessLifecycleObserver;
 use crate::runtime::agent::ProcessLifecycleState;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use crate::test_support::observers::RecordingProcessObserver;
+use crate::test_support::readiness::{AcceptingReadinessWriter, PendingReadyWriter};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tokio::sync::{Notify, Semaphore};
-
-#[derive(Default)]
-struct RecordingObserver {
-    states: StdMutex<Vec<ProcessLifecycleState>>,
-}
-impl ProcessLifecycleObserver for RecordingObserver {
-    fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        self.states.lock().unwrap().push(state);
-    }
-}
-struct PendingReadyWriter {
-    retry_first: AtomicBool,
-    entered: Notify,
-    release: Semaphore,
-}
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for PendingReadyWriter {
-    async fn upsert(
-        &self,
-        _: &str,
-        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _: &str,
-    ) -> Result<()> {
-        if snapshot.process_state
-            == gents_protocol::node_readiness::NodeReadinessProcessState::Ready
-        {
-            if self.retry_first.swap(false, Ordering::SeqCst) {
-                anyhow::bail!("injected readiness retry");
-            }
-            self.entered.notify_one();
-            self.release.acquire().await.unwrap().forget();
-        }
-        Ok(())
-    }
-}
 
 #[tokio::test]
 async fn generated_startup_admission_opens_only_after_a_durable_ready() {
@@ -63,7 +29,7 @@ async fn generated_startup_admission_opens_only_after_a_durable_ready() {
         );
         status.initialize_startup("general").await.unwrap();
         let gate = super::super::router::RuntimeAdmissionGate::closed();
-        let observer = Arc::new(RecordingObserver::default());
+        let observer = Arc::new(RecordingProcessObserver::default());
         let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(
             gate.clone(),
             status.clone(),
@@ -98,9 +64,7 @@ async fn generated_startup_admission_opens_only_after_a_durable_ready() {
                 .as_str()
                 .into(),
             notifications: observer
-                .states
-                .lock()
-                .unwrap()
+                .states()
                 .iter()
                 .map(|state| state.as_str().to_owned())
                 .collect(),
@@ -109,19 +73,6 @@ async fn generated_startup_admission_opens_only_after_a_durable_ready() {
         coordinator.finish_shutdown().await.unwrap();
         status_owner.close().await.unwrap();
         db.node.shutdown().await.unwrap();
-    }
-}
-
-struct AcceptWriter;
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptWriter {
-    async fn upsert(
-        &self,
-        _: &str,
-        _: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _: &str,
-    ) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -151,12 +102,12 @@ async fn the_durable_process_state_and_the_observer_tell_the_same_story() {
         let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
             db.node.clone(),
             "did:test:process-lifecycle",
-            Arc::new(AcceptWriter),
+            Arc::new(AcceptingReadinessWriter),
             std::time::Duration::from_millis(1),
             crate::runtime::storage_fault::StorageFaultObservation::new(),
         );
         status.initialize_startup("general").await.unwrap();
-        let observer = Arc::new(RecordingObserver::default());
+        let observer = Arc::new(RecordingProcessObserver::default());
         let coordinator = RuntimeLifecycleCoordinator::new(
             super::super::router::RuntimeAdmissionGate::closed(),
             status.clone(),
@@ -211,7 +162,7 @@ async fn the_durable_process_state_and_the_observer_tell_the_same_story() {
             durable,
             "{run:?}"
         );
-        assert_eq!(*observer.states.lock().unwrap(), story, "{run:?}");
+        assert_eq!(observer.states(), story, "{run:?}");
         status_owner.close().await.unwrap();
     }
     db.node.shutdown().await.unwrap();

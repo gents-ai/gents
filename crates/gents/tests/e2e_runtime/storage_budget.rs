@@ -1,16 +1,16 @@
 use std::path::Path;
 use std::time::Instant;
 
+use gents::test_support::tools::FixedOutputTool;
 use gents_inference::compaction::CompactionStrategy;
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
+    builder_actors, fixture_agent, runtime_builder, submit_request,
 };
-use crate::support::interrupt::BootedAgent;
+use crate::support::interrupt::{spawn_runtime, BootedAgent};
 use crate::support::live_inference::{request_lifecycle, request_terminal_rows};
 use crate::support::{trial_store, ManagedAgentFixture};
 use gents_inference::test_support::scripted_backend::{
@@ -268,47 +268,23 @@ fn dir_bytes(path: &Path) -> std::io::Result<u64> {
     })
 }
 
-#[derive(Clone)]
-struct AuditProbe;
-
-impl ToolDyn for AuditProbe {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        TOOL.to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: TOOL.to_string(),
-                description: "Audits one module and reports its findings".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": { "note": { "type": "string" } },
-                    "required": ["note"]
-                }),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let note = serde_json::from_str::<Value>(&args)
+async fn boot_agent(db: &TestStore, actors: &RequestActors) -> BootedAgent {
+    let audit_probe = FixedOutputTool::with_call(
+        TOOL,
+        "Audits one module and reports its findings",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "note": { "type": "string" } },
+            "required": ["note"]
+        }),
+        |args| {
+            let note = serde_json::from_str::<Value>(args)
                 .ok()
                 .and_then(|value| value["note"].as_str().map(ToOwned::to_owned))
                 .unwrap_or_default();
-            Ok(tool_result(&note))
-        })
-    }
-}
-
-async fn boot_agent(db: &TestStore, actors: &RequestActors) -> BootedAgent {
+            tool_result(&note)
+        },
+    );
     let runtime = fixture_agent(
         runtime_builder(db, actors).tool_ceiling(ToolCeiling::meta_only()),
         actors,
@@ -320,7 +296,7 @@ async fn boot_agent(db: &TestStore, actors: &RequestActors) -> BootedAgent {
     .context_window(CONTEXT_WINDOW)
     .compaction_threshold(COMPACTION_THRESHOLD)
     .compaction_strategy(CompactionStrategy::StripToolResults)
-    .custom_tool(AuditProbe)
+    .custom_tool(audit_probe)
     .done()
     .build()
     .await

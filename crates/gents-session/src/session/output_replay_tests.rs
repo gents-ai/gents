@@ -1,7 +1,7 @@
 use super::output::replay_candidates::load_canonical_assistant_candidates;
-use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
 use super::provider_context_reduction::capture_source_boundary;
+use crate::test_support::doubles::{CountingRequests, FaultingRequests, RequestFault};
 use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayTag, ReplayWire, TaggedAssistantRow,
 };
@@ -13,13 +13,6 @@ use gents_protocol::output::rows::{
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::RenderedRequestSource;
 use gents_protocol::transcript::SourceBoundary;
-
-#[derive(Clone, Copy, Debug)]
-enum RequestFault {
-    Missing,
-    RowsReadFails,
-    CommitsReadFails,
-}
 
 use super::output_replay_fixture::*;
 
@@ -538,18 +531,6 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
             .all(|block| !matches!(block, AssistantContent::Reasoning(_))));
         assert!(!selected[0].content.is_empty(), "ordinary blocks stay");
     }
-}
-
-struct FaultingRequests<'a> {
-    access: &'a gents_store::config_client::ConfigAccess,
-    request_doc_id: &'a str,
-    fault: Option<RequestFault>,
-}
-
-struct CountingRequests<'a> {
-    access: &'a gents_store::config_client::ConfigAccess,
-    rows: std::sync::atomic::AtomicUsize,
-    commits: std::sync::atomic::AtomicUsize,
 }
 
 #[tokio::test]
@@ -1135,48 +1116,5 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 "the healthy turn {turn_index} still replays its captured body"
             );
         }
-    }
-}
-
-#[async_trait::async_trait]
-impl ReplayRequestReader for CountingRequests<'_> {
-    async fn request_facts(
-        &self,
-        ids: &[String],
-    ) -> anyhow::Result<
-        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
-    > {
-        self.commits
-            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
-        self.rows
-            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
-        self.access.request_facts(ids).await
-    }
-}
-
-#[async_trait::async_trait]
-impl ReplayRequestReader for FaultingRequests<'_> {
-    async fn request_facts(
-        &self,
-        request_doc_ids: &[String],
-    ) -> anyhow::Result<
-        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
-    > {
-        if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
-            match self.fault {
-                Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
-                Some(RequestFault::CommitsReadFails) => {
-                    anyhow::bail!("injected composite commit read")
-                }
-                _ => {}
-            }
-        }
-        let mut facts = self.access.request_facts(request_doc_ids).await?;
-        if matches!(self.fault, Some(RequestFault::Missing)) {
-            if let Some(request) = facts.get_mut(self.request_doc_id) {
-                request.rows.clear();
-            }
-        }
-        Ok(facts)
     }
 }

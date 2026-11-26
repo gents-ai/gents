@@ -1,15 +1,5 @@
 use serde_json::Value;
 
-pub fn node_builder() -> defra_node::NodeBuilder {
-    use gents_store::identity::NodeIdentity as _;
-
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
-            .unwrap();
-    defra_node::Node::builder().with_node_identity_did(identity.did())
-}
-
 /// A node served as a home's runtime serves it, and the signed endpoint of the User who owns its
 /// household and wrote its config.
 pub struct Served {
@@ -850,5 +840,38 @@ impl crate::serve::ServeClient for TestServeClient {
             "no desired-state root is bound in tests: {}",
             root.display()
         )
+    }
+}
+
+pub struct ReportingServeClient(pub tokio::sync::mpsc::UnboundedSender<serde_json::Value>);
+
+#[async_trait::async_trait]
+impl crate::serve::ServeClient for ReportingServeClient {
+    fn report(&self, report: &serde_json::Value) -> anyhow::Result<()> {
+        let _ = self.0.send(report.clone());
+        Ok(())
+    }
+
+    fn start_failure_hint(&self, home_dir: &std::path::Path) -> String {
+        TestServeClient.start_failure_hint(home_dir)
+    }
+
+    fn version(&self) -> crate::http::version::VersionResponse {
+        TestServeClient.version()
+    }
+
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        TestServeClient.host_executable()
+    }
+
+    async fn bound_root_agents(
+        &self,
+        root: &std::path::Path,
+        home_dir: &std::path::Path,
+        access: &gents_store::config_client::ConfigAccess,
+    ) -> anyhow::Result<crate::serve::BoundRootAgents> {
+        TestServeClient
+            .bound_root_agents(root, home_dir, access)
+            .await
     }
 }

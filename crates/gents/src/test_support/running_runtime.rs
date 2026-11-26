@@ -209,34 +209,52 @@ impl AgentRuntimeHome {
 /// has joined.
 pub struct BootedRuntime {
     node: Arc<defra_node::Node>,
-    runtime: RunningRuntime,
+    node_did: String,
+    runtime: Option<RunningRuntime>,
+    signal_shutdown_on_drop: bool,
     retired_slots: mpsc::UnboundedReceiver<(String, u64)>,
 }
 
 impl BootedRuntime {
-    pub async fn boot(home: &AgentRuntimeHome, mut options: DocumentRuntimeOptions) -> Self {
+    pub async fn boot(home: &AgentRuntimeHome, options: DocumentRuntimeOptions) -> Self {
+        Self::boot_with_home(
+            &home.home.store,
+            home.home.store.node_identity.clone(),
+            options,
+        )
+        .await
+    }
+
+    pub async fn boot_with_home(
+        home: &gents_store::local::home::ServedHome,
+        identity: Arc<dyn NodeIdentity>,
+        mut options: DocumentRuntimeOptions,
+    ) -> Self {
         let (retired_tx, retired_slots) = mpsc::unbounded_channel();
         assert!(
             options.runtime_snapshot_observer.is_none(),
             "the booted runtime observes its own snapshot owner"
         );
         options.runtime_snapshot_observer = Some(Arc::new(RetiredSlots(retired_tx)));
-        let (runtime, _agent) = boot_runtime(
-            &home.home.store,
-            home.home.store.node_identity.clone(),
-            options,
-        )
-        .await
-        .expect("the runtime becomes ready");
+        let (runtime, _agent) = boot_runtime(home, identity, options)
+            .await
+            .expect("the runtime becomes ready");
+        let node_did = runtime.node_did.clone();
         Self {
-            node: home.home.store.node.clone(),
-            runtime,
+            node: home.node.clone(),
+            node_did,
+            runtime: Some(runtime),
+            signal_shutdown_on_drop: true,
             retired_slots,
         }
     }
 
+    pub fn node_did(&self) -> &str {
+        &self.node_did
+    }
+
     pub async fn readiness(&self) -> Option<NodeReadinessSnapshot> {
-        let escaped = escape_graphql_string(&self.runtime.node_did);
+        let escaped = escape_graphql_string(&self.node_did);
         let data = self
             .node
             .read_data(&format!(
@@ -288,10 +306,37 @@ impl BootedRuntime {
         }
     }
 
-    pub async fn shutdown(self) -> Result<()> {
-        tokio::time::timeout(STALL_CEILING, self.runtime.shutdown())
+    pub async fn shutdown(mut self) -> Result<()> {
+        let Some(runtime) = self.runtime.take() else {
+            return Ok(());
+        };
+        tokio::time::timeout(STALL_CEILING, runtime.shutdown())
             .await
             .context("the runtime stops on shutdown")?
+    }
+
+    pub async fn crash(mut self) {
+        self.signal_shutdown_on_drop = false;
+        let Some(runtime) = self.runtime.take() else {
+            return;
+        };
+        runtime.handle.abort();
+        let error = runtime
+            .handle
+            .await
+            .expect_err("aborted runtime task must be cancelled");
+        assert!(error.is_cancelled(), "aborted runtime task: {error}");
+    }
+}
+
+impl Drop for BootedRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            if self.signal_shutdown_on_drop {
+                let _ = runtime.shutdown.send(true);
+            }
+            runtime.handle.abort();
+        }
     }
 }
 

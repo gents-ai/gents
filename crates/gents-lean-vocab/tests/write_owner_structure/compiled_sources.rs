@@ -8,16 +8,7 @@ use std::path::{Path, PathBuf};
 /// another package, such as a fixture a test builds. The list only shrinks: wire each file into
 /// its module tree or delete it.
 #[rustfmt::skip]
-const UNCOMPILED: &[&str] = &[
-    "crates/gents-cli/src/desired_state/validate/storage.rs",
-    "crates/gents-cli/tests/suites/cli_config_apply_order.rs",
-    "crates/gents-documents/src/event_group_validation_tests.rs",
-    "crates/gents-documents/src/projection_acp/tests.rs",
-    "crates/gents-documents/src/schedule_cadence_tests.rs",
-    "crates/gents-documents/src/task_validation/tests.rs",
-    "crates/gents-tools/src/mcp/registry/tests.rs",
-    "crates/gents/src/runtime/agent/retry/tests.rs",
-];
+const UNCOMPILED: &[&str] = &[];
 
 fn rust_files(directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {

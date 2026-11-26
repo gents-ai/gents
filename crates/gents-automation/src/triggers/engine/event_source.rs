@@ -139,6 +139,11 @@ pub struct EventSource {
     group_recovery_page_queries: AtomicUsize,
     #[cfg(test)]
     group_membership_queries: AtomicUsize,
+    #[cfg(test)]
+    seed_failure_tx: Option<watch::Sender<usize>>,
+    #[cfg(test)]
+    idle_listen_tx: Option<watch::Sender<usize>>,
+    unacknowledged_cleanup: gents_store::drop_cleanup::CleanupTracker,
     /// Periodic live rescan that closes the lossy-subscription gap; the
     /// interval is stored so busy `next_fire()` calls do not reset the cadence.
     rescan_tick: tokio::time::Interval,
@@ -275,6 +280,11 @@ impl EventSource {
             group_recovery_page_queries: AtomicUsize::new(0),
             #[cfg(test)]
             group_membership_queries: AtomicUsize::new(0),
+            #[cfg(test)]
+            seed_failure_tx: None,
+            #[cfg(test)]
+            idle_listen_tx: None,
+            unacknowledged_cleanup: gents_store::drop_cleanup::CleanupTracker::new(),
             rescan_tick: event_source_rescan_tick(EVENT_SOURCE_RESCAN_INTERVAL),
             rescan_interval: EVENT_SOURCE_RESCAN_INTERVAL,
         }
@@ -295,6 +305,23 @@ impl EventSource {
             self.rescan_interval = interval;
         }
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_seed_failure_signal(mut self, tx: watch::Sender<usize>) -> Self {
+        self.seed_failure_tx = Some(tx);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_idle_listen_signal(mut self, tx: watch::Sender<usize>) -> Self {
+        self.idle_listen_tx = Some(tx);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unacknowledged_cleanup(&self) -> &gents_store::drop_cleanup::CleanupTracker {
+        &self.unacknowledged_cleanup
     }
 
     #[cfg(test)]
@@ -677,7 +704,13 @@ impl EventSource {
                 .await
             {
                 Ok(()) => return Ok(()),
-                Err(error) => last_error = Some(error),
+                Err(error) => {
+                    last_error = Some(error);
+                    #[cfg(test)]
+                    if let Some(tx) = &self.seed_failure_tx {
+                        tx.send_modify(|failures| *failures += 1);
+                    }
+                }
             }
             if attempt < SEEN_DOCS_SEED_MAX_ATTEMPTS {
                 tokio::select! {
@@ -1922,13 +1955,14 @@ impl UnacknowledgedGuard {
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
+        tracker: &gents_store::drop_cleanup::CleanupTracker,
     ) -> Self {
         Self {
             node,
             node_did,
             trigger_id,
             source_doc_id,
-            runtime: gents_store::drop_cleanup::DropCleanup::current(),
+            runtime: gents_store::drop_cleanup::DropCleanup::tracked(tracker),
             armed: std::cell::Cell::new(true),
         }
     }
@@ -2010,6 +2044,10 @@ impl TriggerSource for EventSource {
                 let mut dropped = 0;
                 let mut subscription_closed = false;
                 let rescan_due = {
+                    #[cfg(test)]
+                    if let Some(tx) = &self.idle_listen_tx {
+                        tx.send_modify(|n| *n += 1);
+                    }
                     let subscription = self
                         .subscription
                         .as_mut()

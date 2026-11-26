@@ -20,9 +20,9 @@ impl PrivateSessionFixture {
     async fn new() -> Self {
         let db = crate::support::trial_store("private-session-selection").await;
         let runtime = db.node_identity.clone();
-        let user = test_identity("selection-user");
-        let selected = test_identity("selection-agent");
-        let other = test_identity("selection-other-agent");
+        let user = gents_store::test_support::test_identity("selection-user");
+        let selected = gents_store::test_support::test_identity("selection-agent");
+        let other = gents_store::test_support::test_identity("selection-other-agent");
         let admin = ConfigAccess::local_as(db.node.clone(), runtime.did().parse().unwrap());
         GrantSet::OperatorUser
             .grant(&admin, &identity::Did::new(user.did()).unwrap())

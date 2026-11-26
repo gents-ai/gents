@@ -1,10 +1,5 @@
 use std::sync::Arc;
 
-use gents_loop::tool::Tool;
-use gents_loop::tool::ToolDefinition;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-
 use super::super::*;
 use gents_store::identity::KeyIdentity;
 
@@ -53,56 +48,6 @@ pub(super) async fn install_default_agent(
     let did = install_agent(node, identity, owner, "Default fixture agent").await;
     gents_documents::test_support::set_test_default_agent_as(owner, identity.did(), &did).await;
     did
-}
-
-pub(super) fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct EchoArgs {
-    pub(super) value: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("echo tool error")]
-pub(super) struct EchoToolError;
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct EchoTool;
-
-impl Tool for EchoTool {
-    const NAME: &'static str = "echo_value";
-
-    type Error = EchoToolError;
-    type Args = EchoArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Echo a value back".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "value": {
-                        "type": "string",
-                        "description": "Value to echo"
-                    }
-                },
-                "required": ["value"]
-            }),
-        }
-    }
-
-    async fn call(
-        &self,
-        args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> Result<Self::Output, Self::Error> {
-        Ok(args.value)
-    }
 }
 
 pub(super) async fn insert_backend(

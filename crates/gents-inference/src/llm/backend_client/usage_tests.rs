@@ -101,8 +101,14 @@ async fn usage_wiring_backend_without_id_has_no_reporter() {
     .await
     .expect("client");
 
+    let mut records = cache.subscribe_records();
     one_openai_completion(client).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), records.changed())
+            .await
+            .is_err(),
+        "a backend without an id must not record usage"
+    );
 
     assert!(crate::usage_observation::UsageAccount::for_agent(&behavior).is_none());
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::test_support::tools::HeldTool;
 use tokio::sync::{watch, Notify};
 
 use crate::support::agent_requests::{submit_user_request, RequestActors};
@@ -11,45 +11,6 @@ use crate::support::live_inference::{
 };
 use crate::support::trial_store;
 use gents_store::test_support::TestStore;
-
-#[derive(Clone)]
-struct Gate {
-    entered: Arc<Notify>,
-    release: watch::Sender<bool>,
-}
-
-impl ToolDyn for Gate {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "hold_turn".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "hold_turn".into(),
-                description: "Wait for the user to finish submitting messages.".into(),
-                parameters: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            self.entered.notify_one();
-            self.release
-                .subscribe()
-                .wait_for(|open| *open)
-                .await
-                .expect("queue gate owner");
-            Ok("The user has finished submitting messages. Acknowledge briefly; do not call hold_turn again.".into())
-        })
-    }
-}
 
 pub(crate) struct HeldTurn {
     entered: Arc<Notify>,
@@ -98,10 +59,14 @@ pub(crate) async fn boot_held_turn(
         .system_prompt(
             "Answer briefly. Call hold_turn only when the user explicitly asks you to call it.",
         )
-        .custom_tool(Gate {
-            entered: entered.clone(),
-            release: release.clone(),
-        })
+        .custom_tool(HeldTool::watched(
+            "hold_turn",
+            "Wait for the user to finish submitting messages.",
+            serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            "The user has finished submitting messages. Acknowledge briefly; do not call hold_turn again.",
+            entered.clone(),
+            release.clone(),
+        ))
         .done()
         .build()
         .await

@@ -1,4 +1,4 @@
-use super::support::{request, test_identity};
+use super::support::request;
 use crate::runtime::agent::PendingAgent;
 use gents_documents::inference_defaults::ReasoningEffort;
 use gents_inference::resolved::{ResolvedAgent, ServiceTier};
@@ -11,8 +11,8 @@ fn staged_slot(
     effort: Option<ReasoningEffort>,
     tier: Option<ServiceTier>,
 ) -> ResolvedAgent {
-    let mut configured =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity(name));
+    let mut configured = PendingAgent::new("general")
+        .build_with_identity_for_test(gents_store::test_support::test_identity(name));
     let agent = std::sync::Arc::make_mut(&mut configured.agent);
     agent.backend_id = Some(backend_id.to_owned());
     agent.model_name = model_name.to_owned();

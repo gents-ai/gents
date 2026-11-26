@@ -433,13 +433,12 @@ mod tests {
             .env_vars
             .insert("GENTS_READY".into(), ready.display().to_string());
         let cancellation = tokio::spawn(async move {
-            tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                while !ready.exists() {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .expect("command must write output before cancellation");
+            crate::test_support::wait_for_path(
+                &ready,
+                std::time::Duration::from_secs(10),
+                "command must write output before cancellation",
+            )
+            .await;
             cancel.cancel();
         });
         let scope_call =

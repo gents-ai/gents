@@ -338,19 +338,16 @@ pub async fn boot_runtime(
 /// is stopped before the readiness error is reported. That stop is bounded, so
 /// a runtime that does not answer its shutdown signal cannot turn a reported
 /// failure into a hang.
-pub async fn boot_runtime_within(
-    home: &ServedHome,
-    identity: Arc<dyn NodeIdentity>,
-    mut options: DocumentRuntimeOptions,
+pub async fn start_running_within(
+    node: &EmbeddedNode,
+    agent: Gents,
     ready_timeout: Duration,
-) -> Result<(RunningRuntime, Gents)> {
-    options.backend_admission = Some(home.backend_admission());
-    let agent = Gents::from_default_agent_documents(home.node.clone(), identity, options).await?;
+) -> Result<RunningRuntime> {
     let node_did = agent.node_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
-    let mut handle = tokio::spawn(agent.clone().run(shutdown_rx));
+    let mut handle = tokio::spawn(agent.run(shutdown_rx));
     let ready = tokio::select! {
-        ready = wait_for_runtime_ready_within(home.node.as_ref(), &node_did, ready_timeout) => ready,
+        ready = wait_for_runtime_ready_within(node, &node_did, ready_timeout) => ready,
         stopped = &mut handle => {
             return Err(match stopped {
                 Ok(Ok(())) => anyhow!("the runtime stopped before it became ready"),
@@ -380,6 +377,18 @@ pub async fn boot_runtime_within(
         }
         return Err(error);
     }
+    Ok(runtime)
+}
+
+pub async fn boot_runtime_within(
+    home: &ServedHome,
+    identity: Arc<dyn NodeIdentity>,
+    mut options: DocumentRuntimeOptions,
+    ready_timeout: Duration,
+) -> Result<(RunningRuntime, Gents)> {
+    options.backend_admission = Some(home.backend_admission());
+    let agent = Gents::from_default_agent_documents(home.node.clone(), identity, options).await?;
+    let runtime = start_running_within(home.node.as_ref(), agent.clone(), ready_timeout).await?;
     Ok((runtime, agent))
 }
 

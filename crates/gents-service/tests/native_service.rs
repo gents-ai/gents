@@ -1,94 +1,17 @@
-use std::collections::VecDeque;
-use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents_service::native_service::{
-    runtime_error_log, wait_for_process_exit, BackgroundItemStatus, CommandOutput, CommandRunner,
-    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceRecord, StartOutcome,
-    SYSTEMD_UNIT,
+    runtime_error_log, wait_for_process_exit, BackgroundItemStatus, CommandOutput,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, StartOutcome, SYSTEMD_UNIT,
 };
+use gents_service::test_support::ScriptedRunner;
 
 #[cfg(target_os = "macos")]
 #[path = "native_service/supervision.rs"]
 mod supervision;
-
-#[derive(Clone, Default)]
-struct ScriptedRunner {
-    outputs: Arc<Mutex<VecDeque<CommandOutput>>>,
-    repeating: Arc<Mutex<Option<CommandOutput>>>,
-    calls: Arc<Mutex<Vec<Vec<String>>>>,
-    background_item: BackgroundItemStatus,
-    elapsed: Arc<Mutex<Vec<Duration>>>,
-}
-
-impl ScriptedRunner {
-    fn with_outputs(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
-        Self {
-            outputs: Arc::new(Mutex::new(outputs.into_iter().collect())),
-            repeating: Arc::new(Mutex::new(None)),
-            calls: Arc::new(Mutex::new(Vec::new())),
-            background_item: BackgroundItemStatus::default(),
-            elapsed: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    /// Answer every command after the script with `output`, so a test can pin
-    /// a bound without writing out its probes.
-    fn then_repeat(self, output: CommandOutput) -> Self {
-        *self.repeating.lock().expect("repeating mutex") = Some(output);
-        self
-    }
-
-    fn calls(&self) -> Vec<Vec<String>> {
-        self.calls.lock().expect("calls mutex").clone()
-    }
-
-    fn elapsed(&self) -> Vec<Duration> {
-        self.elapsed.lock().expect("elapsed mutex").clone()
-    }
-
-    fn total_elapsed(&self) -> Duration {
-        self.elapsed().into_iter().sum()
-    }
-}
-
-impl CommandRunner for ScriptedRunner {
-    fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
-        let mut call = vec![program.to_string_lossy().into_owned()];
-        call.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
-        self.calls.lock().expect("calls mutex").push(call);
-        if let Some(output) = self.outputs.lock().expect("outputs mutex").pop_front() {
-            return Ok(output);
-        }
-        match self.repeating.lock().expect("repeating mutex").as_ref() {
-            Some(repeating) => Ok(output(
-                repeating.success,
-                &repeating.stdout,
-                &repeating.stderr,
-            )),
-            None => Err(anyhow!("unexpected native supervisor command")),
-        }
-    }
-
-    fn elapse(&self, delay: Duration) -> Duration {
-        self.elapsed.lock().expect("elapsed mutex").push(delay);
-        delay
-    }
-
-    fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
-        self.background_item
-    }
-
-    /// The scripts hold this config's own job, if any; whose job the manager
-    /// holds is replayed against the model in the repair conformance.
-    fn service_record(&self, _platform: NativeServicePlatform) -> Result<Option<ServiceRecord>> {
-        Ok(None)
-    }
-}
 
 fn output(success: bool, stdout: &str, stderr: &str) -> CommandOutput {
     CommandOutput {
@@ -861,10 +784,8 @@ fn a_start_macos_withholds_is_an_approval_wait_and_other_failures_stay_errors() 
         ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
     )
     .install()?;
-    let withheld = ScriptedRunner {
-        background_item: BackgroundItemStatus::RequiresApproval,
-        ..ScriptedRunner::default()
-    };
+    let withheld =
+        ScriptedRunner::default().with_background_item(BackgroundItemStatus::RequiresApproval);
     assert!(matches!(
         manager(mac, NativeServicePlatform::Macos, withheld.clone()).start_or_approval(false)?,
         StartOutcome::ApprovalPending { detail: Some(_) }

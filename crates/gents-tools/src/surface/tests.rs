@@ -1,9 +1,4 @@
 use super::*;
-use crate::plugin_host::{NoPluginHost, PluginHost};
-use gents_documents::PluginToolRef;
-use gents_pack::plugin::store::InstalledPlugin;
-use gents_pack::plugin::PluginOutcome;
-use identity::Did;
 
 async fn selected_surface_runtime() -> (gents_store::test_support::TestStore, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
@@ -3124,66 +3119,6 @@ fn provider_limits_is_available_under_an_agent_self_config_grant() {
         .any(|name| name == "provider_limits"));
 }
 
-/// A host that carries a home and delegates everything else, so a test sees the
-/// runtime's home reach the guard exactly as `serve` gives it.
-struct HomePluginHost(NoPluginHost, std::path::PathBuf);
-
-#[async_trait::async_trait]
-impl PluginHost for HomePluginHost {
-    fn home(&self) -> Option<&std::path::Path> {
-        Some(&self.1)
-    }
-    fn installed(&self) -> anyhow::Result<Vec<InstalledPlugin>> {
-        PluginHost::installed(&self.0)
-    }
-    fn installed_record(&self, coordinate: &str) -> anyhow::Result<InstalledPlugin> {
-        PluginHost::installed_record(&self.0, coordinate)
-    }
-    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> anyhow::Result<InstalledPlugin> {
-        PluginHost::resolve(&self.0, coordinate, pinned)
-    }
-    async fn call_outcome(
-        &self,
-        record: &InstalledPlugin,
-        input: serde_json::Value,
-        context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> anyhow::Result<PluginOutcome> {
-        PluginHost::call_outcome(&self.0, record, input, context).await
-    }
-    async fn run_plugin_once(
-        self: std::sync::Arc<Self>,
-        coordinate: &str,
-        selected: &[PluginToolRef],
-        agent: crate::plugin_host::PluginRunAgent<'_>,
-        input: serde_json::Value,
-        context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> anyhow::Result<(serde_json::Value, Option<String>, Option<String>)> {
-        std::sync::Arc::new(NoPluginHost)
-            .run_plugin_once(coordinate, selected, agent, input, context)
-            .await
-    }
-    fn application_write_tool(
-        &self,
-        access: gents_store::config_client::ConfigAccess,
-        collections: std::collections::BTreeSet<String>,
-        actor: Option<Did>,
-    ) -> anyhow::Result<Box<dyn ToolDyn>> {
-        PluginHost::application_write_tool(&self.0, access, collections, actor)
-    }
-    fn plugin_tool(
-        self: std::sync::Arc<Self>,
-        plugin: &PluginToolRef,
-        read_root: Option<std::path::PathBuf>,
-        own_folder: Option<std::path::PathBuf>,
-        node: std::sync::Arc<defra_node::Node>,
-        node_did: &str,
-        agent_did: Option<&str>,
-    ) -> anyhow::Result<Box<dyn ToolDyn>> {
-        std::sync::Arc::new(NoPluginHost)
-            .plugin_tool(plugin, read_root, own_folder, node, node_did, agent_did)
-    }
-}
-
 /// `build_tools` copies the runtime's home onto the guard before it validates,
 /// so the refusal the operator reads carries this node's `--home` — the fact a
 /// grant run against another node's home gets wrong.
@@ -3230,7 +3165,7 @@ async fn build_tools_passes_the_nodes_home_into_the_refusal() {
         .await
         .unwrap();
     // Exactly what `serve` does: the plugin host carries the node's home.
-    runtime.plugins = std::sync::Arc::new(HomePluginHost(
+    runtime.plugins = std::sync::Arc::new(crate::test_support::HomePluginHost(
         crate::plugin_host::NoPluginHost,
         home.clone(),
     ));

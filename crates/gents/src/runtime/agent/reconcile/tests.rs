@@ -26,11 +26,6 @@ async fn test_node() -> gents_store::test_support::TestStore {
     .await
 }
 
-fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
-
 fn stub_runtime_node() -> Arc<RuntimeNode> {
     let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
@@ -48,29 +43,12 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
     })
 }
 
-/// The readiness DB sink needs a verified native Node owner, which these fixtures do not
-/// provision. The assertions here read the runtime status row and the apply sequence, so
-/// readiness is accepted without persistence.
-struct AcceptingReadinessWriter;
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptingReadinessWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        _snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
-}
-
 /// Runtime status rows are keyed by the node's own identity, so fixtures pass it here.
 fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusHandle {
     let (_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         node_did,
-        Arc::new(AcceptingReadinessWriter),
+        Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
         Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
@@ -86,7 +64,8 @@ struct AgentLineage {
 
 impl AgentLineage {
     fn provision(name: &str) -> Self {
-        let root: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(test_identity(name));
+        let root: Arc<dyn gents_store::identity::NodeIdentity> =
+            Arc::new(gents_store::test_support::test_identity(name));
         let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
         Self { root, binding }
     }
@@ -227,8 +206,9 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
 async fn reconcile_install_applies_added_agent() {
     let db = test_node().await;
     let node = db.node.clone();
-    let agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-install"));
+    let agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("pairing-contract-install"),
+    );
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
@@ -254,8 +234,9 @@ async fn reconcile_install_applies_added_agent() {
 async fn reconcile_teardown_applies_removed_agent() {
     let db = test_node().await;
     let node = db.node.clone();
-    let agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
+    let agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("pairing-contract-teardown"),
+    );
     let current_resolved = snapshot_for_agents(&node, "general", vec![agent_config]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
@@ -281,8 +262,9 @@ async fn reconcile_teardown_applies_removed_agent() {
 async fn slot_panic_restarts_agent() {
     let db = test_node().await;
     let node = db.node.clone();
-    let agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-slot-crash"));
+    let agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("pairing-contract-slot-crash"),
+    );
     let tool_surface = Arc::new(
         agent_config
             .tools
@@ -369,8 +351,9 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
 
     let db = test_node().await;
     let node = db.node.clone();
-    let agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("slot-abort-on-owner-drop"));
+    let agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("slot-abort-on-owner-drop"),
+    );
     let tool_surface = Arc::new(
         agent_config
             .tools
@@ -683,8 +666,8 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
 
-    let mut agent_config =
-        PendingAgent::new("general").build_with_identity_for_test(test_identity("switch-general"));
+    let mut agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(gents_store::test_support::test_identity("switch-general"));
     let agent_did = agent_config.agent.agent_did.clone();
     Arc::make_mut(&mut agent_config.agent).backend_id = Some("claude".to_string());
     Arc::make_mut(&mut agent_config.agent).backend_auth =
@@ -884,8 +867,9 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
             agent_config.sampling.reasoning_effort = settings.reasoning_effort;
             agent_config.service_tier = settings.service_tier;
         };
-        let mut agent_config = PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity(&format!("settings-{changed}")));
+        let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(
+            gents_store::test_support::test_identity(&format!("settings-{changed}")),
+        );
         let agent_did = agent_config.agent.agent_did.clone();
         Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
         apply(Arc::make_mut(&mut agent_config.agent), ORIGINAL);
@@ -1039,24 +1023,6 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
     }
 }
 
-#[derive(Default)]
-struct CapturingReadinessWriter(
-    StdMutex<Vec<gents_protocol::node_readiness::NodeReadinessSnapshot>>,
-);
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for CapturingReadinessWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> Result<()> {
-        self.0.lock().unwrap().push(snapshot.clone());
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn published_readiness_carries_the_generations_effective_inference() {
     use gents_documents::inference_defaults::ReasoningEffort;
@@ -1071,7 +1037,7 @@ async fn published_readiness_carries_the_generations_effective_inference() {
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
-    let writer = Arc::new(CapturingReadinessWriter::default());
+    let writer = Arc::new(crate::test_support::readiness::CapturingReadinessWriter::default());
     let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         &node_did,
@@ -1080,8 +1046,9 @@ async fn published_readiness_carries_the_generations_effective_inference() {
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
 
-    let mut agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("readiness-effective-inference"));
+    let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("readiness-effective-inference"),
+    );
     let agent_did = agent_config.agent.agent_did.clone();
     Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
     Arc::make_mut(&mut agent_config.agent).model_name = "model-a".to_string();
@@ -1125,9 +1092,7 @@ async fn published_readiness_carries_the_generations_effective_inference() {
         .unwrap();
 
     let published = writer
-        .0
-        .lock()
-        .unwrap()
+        .snapshots()
         .last()
         .cloned()
         .expect("the publisher wrote a snapshot");
@@ -1588,115 +1553,6 @@ async fn generation_supervisor_refuses_a_snapshot_missing_a_dependency() {
     }
 }
 
-struct FailGenerationSourceWriter {
-    fatal_attempted: Arc<Notify>,
-    fatal_release: Arc<Semaphore>,
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for FailGenerationSourceWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> Result<()> {
-        if snapshot.active_generation == 2 {
-            self.fatal_attempted.notify_one();
-            self.fatal_release.acquire().await.unwrap().forget();
-            return Err(crate::runtime::node_readiness_publisher::FatalNodeReadinessWrite.into());
-        }
-        Ok(())
-    }
-}
-
-struct GateGenerationSourceWriter {
-    attempted: Arc<Notify>,
-    release: Arc<Semaphore>,
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for GateGenerationSourceWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> Result<()> {
-        if snapshot.active_generation == 2 {
-            self.attempted.notify_one();
-            self.release.acquire().await.unwrap().forget();
-        }
-        Ok(())
-    }
-}
-
-struct PublisherBackedSlotFailurePolicy {
-    runtime_status: RuntimeStatusHandle,
-}
-
-#[async_trait::async_trait]
-impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
-    fn build_failure_budget(&self) -> u32 {
-        1
-    }
-
-    async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()> {
-        self.runtime_status
-            .readiness()
-            .register_slot(agent_did, generation)
-            .await
-            .context("register test slot standing")?;
-        Ok(())
-    }
-
-    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
-        self.runtime_status
-            .readiness()
-            .demote_slot(agent_did, generation, error.to_string())
-            .await
-            .context("demote test slot")
-    }
-
-    async fn on_slot_retired(&self, agent_did: &str, generation: u64, _recreated: bool) {
-        self.runtime_status
-            .readiness()
-            .retire_slot(agent_did, generation)
-            .await
-            .expect("retire test slot");
-    }
-}
-
-struct FailSecondRegistrationPolicy {
-    registrations: AtomicUsize,
-    retired: StdMutex<Vec<(String, u64)>>,
-}
-
-#[async_trait::async_trait]
-impl SlotFailurePolicy for FailSecondRegistrationPolicy {
-    fn build_failure_budget(&self) -> u32 {
-        1
-    }
-
-    async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
-        if self.registrations.fetch_add(1, Ordering::SeqCst) == 1 {
-            anyhow::bail!("injected slot registration failure");
-        }
-        Ok(())
-    }
-
-    async fn try_demote(&self, _agent_did: &str, _generation: u64, _error: &str) -> Result<bool> {
-        Ok(false)
-    }
-
-    async fn on_slot_retired(&self, agent_did: &str, generation: u64, _recreated: bool) {
-        self.retired
-            .lock()
-            .unwrap()
-            .push((agent_did.to_string(), generation));
-    }
-}
-
 #[tokio::test]
 async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns() {
     let db = test_node().await;
@@ -1706,8 +1562,9 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let initial = lineage.revision("general");
     let mut changed = lineage.revision("general");
     Arc::make_mut(&mut changed.agent).system_prompt = "changed".to_string();
-    let added = PendingAgent::new("second")
-        .build_with_identity_for_test(test_identity("register-failure-second"));
+    let added = PendingAgent::new("second").build_with_identity_for_test(
+        gents_store::test_support::test_identity("register-failure-second"),
+    );
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial]).await;
     let replacement_snapshot = snapshot_for_agents(&node, &agent_did, vec![changed, added]).await;
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
@@ -1730,7 +1587,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
         node.clone(),
         node.node_identity_did()
             .expect("fixture node has an identity"),
-        Arc::new(AcceptingReadinessWriter),
+        Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
         Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
@@ -1750,7 +1607,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     )
     .await
     .unwrap();
-    let policy = Arc::new(FailSecondRegistrationPolicy {
+    let policy = Arc::new(crate::test_support::runtime::FailSecondRegistrationPolicy {
         registrations: AtomicUsize::new(0),
         retired: StdMutex::new(Vec::new()),
     });
@@ -1789,8 +1646,9 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let db = test_node().await;
     let node = db.node.clone();
     let runtime_node = stub_runtime_node();
-    let initial = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("retired-drain-failure"));
+    let initial = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("retired-drain-failure"),
+    );
     let agent_did = initial.agent.agent_did.clone();
     let mut replacement = initial.clone();
     Arc::make_mut(&mut replacement.agent).system_prompt = "replacement generation".to_string();
@@ -1802,7 +1660,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
         node.clone(),
         node.node_identity_did()
             .expect("fixture node has an identity"),
-        Arc::new(AcceptingReadinessWriter),
+        Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
         Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
@@ -1892,10 +1750,14 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let generation_one_exit = Arc::new(Semaphore::new(0));
     let generation_two_exit = Arc::new(Semaphore::new(0));
     let generation_two_waiting_exit = Arc::new(Notify::new());
-    let writer = Arc::new(FailGenerationSourceWriter {
-        fatal_attempted: fatal_attempted.clone(),
-        fatal_release: fatal_release.clone(),
-    });
+    let writer = Arc::new(
+        crate::test_support::readiness::GatedGenerationSourceWriter::new(
+            2,
+            fatal_attempted.clone(),
+            fatal_release.clone(),
+            true,
+        ),
+    );
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         "did:test:source-failure-rollback",
@@ -1904,9 +1766,11 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status.initialize_startup(&agent_did).await.unwrap();
-    let slot_failure_policy = Arc::new(PublisherBackedSlotFailurePolicy {
-        runtime_status: runtime_status.clone(),
-    });
+    let slot_failure_policy = Arc::new(
+        crate::test_support::runtime::PublisherBackedSlotFailurePolicy {
+            runtime_status: runtime_status.clone(),
+        },
+    );
     let runner = {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
@@ -2035,10 +1899,14 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         "did:test:closed-active-watch",
-        Arc::new(GateGenerationSourceWriter {
-            attempted: source_attempted.clone(),
-            release: source_release.clone(),
-        }),
+        Arc::new(
+            crate::test_support::readiness::GatedGenerationSourceWriter::new(
+                2,
+                source_attempted.clone(),
+                source_release.clone(),
+                false,
+            ),
+        ),
         Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
@@ -2167,7 +2035,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         .node_identity_did()
         .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
-    let identity = Arc::new(test_identity("tool-surface-general"));
+    let identity = Arc::new(gents_store::test_support::test_identity(
+        "tool-surface-general",
+    ));
     let runtime_node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity: identity.clone(),
@@ -2341,38 +2211,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
 
 #[tokio::test]
 async fn retiring_a_slot_notifies_the_failure_policy() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct RecordingPolicy {
-        retired: std::sync::Mutex<Vec<(String, bool)>>,
-        demote_calls: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl slot::SlotFailurePolicy for RecordingPolicy {
-        fn build_failure_budget(&self) -> u32 {
-            3
-        }
-        async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
-            Ok(())
-        }
-
-        async fn try_demote(
-            &self,
-            _agent_did: &str,
-            _generation: u64,
-            _error: &str,
-        ) -> Result<bool> {
-            self.demote_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(false)
-        }
-        async fn on_slot_retired(&self, agent_did: &str, _generation: u64, recreated: bool) {
-            self.retired
-                .lock()
-                .expect("retired mutex")
-                .push((agent_did.to_string(), recreated));
-        }
-    }
+    use std::sync::atomic::AtomicUsize;
 
     let db = test_node().await;
     let node = db.node.clone();
@@ -2381,8 +2220,9 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         node.node_identity_did()
             .expect("fixture node has an identity"),
     );
-    let agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("policy-retirement-559"));
+    let agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("policy-retirement-559"),
+    );
     let agent_did = agent_config.agent.agent_did.clone();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![agent_config.clone()]).await;
     let runner = |_agent: AgentWithTools,
@@ -2395,7 +2235,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         Ok(())
     };
 
-    let policy = Arc::new(RecordingPolicy {
+    let policy = Arc::new(crate::test_support::runtime::RecordingSlotFailurePolicy {
         retired: std::sync::Mutex::new(Vec::new()),
         demote_calls: AtomicUsize::new(0),
     });
@@ -2419,8 +2259,9 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
-    let replacement = PendingAgent::new("replacement")
-        .build_with_identity_for_test(test_identity("policy-replacement-559"));
+    let replacement = PendingAgent::new("replacement").build_with_identity_for_test(
+        gents_store::test_support::test_identity("policy-replacement-559"),
+    );
     let replacement_did = replacement.agent.agent_did.clone();
     let replacement_snapshot =
         snapshot_for_agents(&node, &replacement_did, vec![replacement]).await;
@@ -2458,8 +2299,9 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 async fn plugin_resolution_surfaces(
     node: &Arc<defra_node::Node>,
 ) -> (AgentWithTools, Arc<ToolSurface>, Arc<ToolSurface>) {
-    let mut agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
+    let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(
+        gents_store::test_support::test_identity("plugin-resolution-fingerprint"),
+    );
     let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": format!("{}:tools", agent_config.agent.agent_did),
         "node_did": agent_config.agent.node_did(),

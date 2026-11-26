@@ -305,21 +305,9 @@ async fn assert_current_router_dispatch(
 ) {
     use super::super::router::{RouterInputs, RuntimeAdmissionGate};
     use super::support::{create_user_agent_session, RuntimeStatusHandle};
+    use crate::test_support::runtime::ScriptedWatcher;
     use std::time::Duration;
     use tokio::sync::{mpsc, watch};
-
-    struct ObservedWatcher {
-        requests: mpsc::Receiver<anyhow::Result<gents_protocol::row::AgentRequest>>,
-        waiting: mpsc::UnboundedSender<()>,
-    }
-    impl gents_session::request::watcher::Watcher for ObservedWatcher {
-        async fn next_request(
-            &mut self,
-        ) -> Option<anyhow::Result<gents_protocol::row::AgentRequest>> {
-            self.waiting.send(()).unwrap();
-            self.requests.recv().await
-        }
-    }
 
     let node = selection(&old.configuration).node.clone();
     let session = uuid::Uuid::new_v4().to_string();
@@ -368,10 +356,7 @@ async fn assert_current_router_dispatch(
         super::super::router::run_router_with_watcher(RouterInputs {
             node,
             node_did: router_owner,
-            watcher: ObservedWatcher {
-                requests: request_rx,
-                waiting: waiting_tx,
-            },
+            watcher: ScriptedWatcher::new(request_rx).with_waiting(waiting_tx),
             active_snapshot_rx: active_rx,
             shutdown: shutdown_rx,
             admission_gate: gate,

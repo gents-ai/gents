@@ -17,16 +17,6 @@ pub fn runtime_handle() -> tokio::runtime::Handle {
     tokio::runtime::Handle::current()
 }
 
-pub fn node_builder() -> gents::defra_node::NodeBuilder {
-    use gents_store::identity::NodeIdentity as _;
-
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
-            .unwrap();
-    gents::defra_node::Node::builder().with_node_identity_did(identity.did())
-}
-
 pub async fn boot_core() -> (Arc<ClientRuntime>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let paths = DesktopPaths::from_root(tempdir.path());
@@ -239,18 +229,24 @@ impl RunningDesktop {
     ) -> serde_json::Value {
         let access = self.runtime.user_access();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut updates = self
+            .runtime
+            .node()
+            .subscribe(&[gents::defra_node::EventName::Update]);
         loop {
             let data = access.execute(query).await.unwrap()["data"].clone();
             if ready(&data) {
                 return data;
             }
-            if tokio::time::Instant::now() >= deadline {
+            if !matches!(
+                tokio::time::timeout_at(deadline, updates.recv()).await,
+                Ok(Some(_))
+            ) {
                 let state = access
                     .execute("{ AgentRequest { request_id session_id requester_did lifecycle_state failure_reason caused_by_parent_tool_call_id } AgentToolCall { tool_call_id tool_name lifecycle_state status } AgentOutputSegment { payload } }")
                     .await;
                 panic!("timed out waiting for {what}: {data}; runtime state: {state:?}");
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 
@@ -558,52 +554,6 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
         tags: Vec::new(),
         provenance: None,
         observation: None,
-    }
-}
-
-pub struct CountingRead {
-    inner: gents_store::config_client::ConfigAccess,
-    queries: std::sync::atomic::AtomicUsize,
-}
-
-impl CountingRead {
-    pub fn new(inner: gents_store::config_client::ConfigAccess) -> Self {
-        Self {
-            inner,
-            queries: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    pub fn queries(&self) -> usize {
-        self.queries.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
-#[async_trait::async_trait]
-impl gents_store::config_client::ConfigRead for CountingRead {
-    fn reader_did(&self) -> Option<String> {
-        self.inner.reader_did()
-    }
-
-    async fn execute_read(
-        &self,
-        document: &str,
-    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-        self.queries
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner.execute_read(document).await
-    }
-
-    async fn execute_read_with_variables(
-        &self,
-        document: &str,
-        variables: &serde_json::Value,
-    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
-        self.queries
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner
-            .execute_read_with_variables(document, variables)
-            .await
     }
 }
 

@@ -4,7 +4,7 @@ use std::time::Duration;
 use gents_documents::TaskHookPhase;
 use gents_toolcalls::call::task_hooks::{
     effective_timeout_secs, run_task_hooks, HookAttempt, HookCommandResult, HookPrimaryError,
-    ManagedTaskHookExec, TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
+    ManagedTaskHookExec, TaskAgentResult, TaskHookCancellation, TaskHookOutcome,
 };
 
 fn agent_result(name: &str) -> TaskAgentResult {
@@ -167,36 +167,6 @@ fn invocation(
     }
 }
 
-struct RevokingExec<'a> {
-    managed: ManagedTaskHookExec,
-    access: gents_store::config_client::ConfigAccess,
-    request_doc_id: &'a str,
-    revoked: &'a [String],
-}
-
-#[async_trait::async_trait]
-impl TaskHookExec for RevokingExec<'_> {
-    async fn attempt(&self, hook: &gents_documents::TaskHook) -> HookAttempt {
-        if self.revoked.contains(&hook.hook_id) {
-            let response = self.access.write(
-                "test.task_hook_launch_revocation",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "revoked-generation" }}) {{ _docID }} }}"#,
-                    gents_store::graphql::escape_graphql_string(self.request_doc_id),
-                ),
-            ).await.unwrap();
-            assert_eq!(
-                response["data"]["update_AgentRequest"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                1
-            );
-        }
-        self.managed.attempt(hook).await
-    }
-}
-
 #[tokio::test]
 async fn generated_task_hook_run_cases_drive_real_host_commands() {
     let fixture = super::task_hook_recovery_tests::Fixture::new().await;
@@ -245,7 +215,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
             cancellation.clone(),
         ));
         let lifecycle = fixture.claimed(Duration::from_secs(120)).await;
-        let exec = RevokingExec {
+        let exec = crate::test_support::runtime::RevokingTaskHookExec {
             managed: ManagedTaskHookExec::new(dir.path().to_path_buf(), cancellation)
                 .with_execution_lease(
                     fixture.node.clone(),

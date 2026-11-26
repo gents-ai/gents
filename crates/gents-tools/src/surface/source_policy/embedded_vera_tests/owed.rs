@@ -2,65 +2,17 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gents_protocol::delegation_audience::ReportedDelegationAudience;
-use gents_store::config_client::owed::{settle_owed_while_online, OwedPass, OwedStanding};
+use gents_store::config_client::owed::settle_owed_while_online;
 use gents_store::config_client::user_write::{PresentedDelegation, RefreshRefused};
 use gents_store::config_client::{
     prepare_pack_evidence_from_history, ClientSigningCapability, ConfigAccess, ConfigClientError,
     GraphqlEndpoint, PackApprovalScope, PackMutation,
 };
-use gents_store::identity::RemoteAgentProvisionError;
 use gents_store::local::backend_protection::FreshBackendStore;
 use gents_store::local::document_acp::DocumentAcp;
 
 use super::{client_key, home, owner_on_vera, presented, start, tasks, Home};
-
-/// The client's settlement passes, asked in this process of the store owner
-/// the runtime's route calls, each under a delegation the client's endpoint
-/// mints at its one minting point.
-pub(super) struct InProcessPass {
-    node: Arc<defra_node::Node>,
-    endpoint: GraphqlEndpoint,
-    passes: std::sync::atomic::AtomicUsize,
-}
-
-impl InProcessPass {
-    pub(super) fn new(node: Arc<defra_node::Node>, endpoint: GraphqlEndpoint) -> Self {
-        Self {
-            node,
-            endpoint,
-            passes: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl OwedPass for InProcessPass {
-    async fn pass(&self) -> Result<Vec<OwedStanding>, RemoteAgentProvisionError> {
-        self.passes
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let caller = self
-            .endpoint
-            .held_client_signing_capability()?
-            .did()
-            .to_owned();
-        let authorization = self
-            .endpoint
-            .authorization()?
-            .expect("a client endpoint authorizes its requests");
-        let token = authorization
-            .strip_prefix("Bearer ")
-            .expect("a bearer")
-            .to_owned();
-        let context = defra_core::RequestContext::default()
-            .with_identity(Some(caller.clone()))
-            .with_bearer(Some(caller.clone()), Some(token));
-        Ok(
-            gents_store::config_client::owed::settle_pass(&self.node, &context, &caller)
-                .await
-                .expect("the runtime serves a pass for its caller's own delegation"),
-        )
-    }
-}
+use crate::test_support::vera_test_home::InProcessPass;
 
 pub(super) fn endpoint_for(
     node: &defra_node::Node,
@@ -77,8 +29,8 @@ pub(super) fn endpoint_for(
 
 async fn lapse(lifetime: Duration, minted: SystemTime) {
     let lapsed = minted + lifetime + Duration::from_secs(2);
-    while SystemTime::now() <= lapsed {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(wait) = lapsed.duration_since(SystemTime::now()) {
+        tokio::time::sleep(wait + Duration::from_millis(10)).await;
     }
 }
 

@@ -1248,7 +1248,7 @@ pub(crate) mod tests {
             60,
         );
         lifecycle
-            .bind_managed_agent(managed_agent().as_ref())
+            .bind_managed_agent(agent_identity().as_ref())
             .unwrap();
         assert_eq!(
             lifecycle.claim().await.unwrap(),
@@ -1528,7 +1528,7 @@ pub(crate) mod tests {
         gents_store::identity::provision_agent_identity(node_identity()).unwrap()
     }
 
-    pub(crate) fn managed_agent() -> &'static Arc<dyn gents_store::identity::NodeIdentity> {
+    pub(crate) fn agent_identity() -> &'static Arc<dyn gents_store::identity::NodeIdentity> {
         static AGENT: std::sync::OnceLock<Arc<dyn gents_store::identity::NodeIdentity>> =
             std::sync::OnceLock::new();
         AGENT.get_or_init(|| {
@@ -1538,7 +1538,7 @@ pub(crate) mod tests {
 
     /// The fixture Agent's own access, which reads and writes the rows it owns.
     pub(crate) fn agent_access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-        ConfigAccess::local_managed_agent(node.clone(), agent_actor(), managed_agent().as_ref())
+        ConfigAccess::local_managed_agent(node.clone(), agent_actor(), agent_identity().as_ref())
             .unwrap()
     }
 
@@ -1548,7 +1548,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn agent_did() -> &'static str {
-        managed_agent().did()
+        agent_identity().did()
     }
 
     pub(crate) fn agent_actor() -> identity::Did {
@@ -1711,7 +1711,7 @@ pub(crate) mod tests {
         );
         create.input.cwd = request_cwd.map(str::to_owned);
         gents_session::request::admission::sign_agent_request_create(
-            managed_agent().as_ref(),
+            agent_identity().as_ref(),
             &mut create,
         )
         .await
@@ -1735,7 +1735,7 @@ pub(crate) mod tests {
         let mut request =
             RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
         request
-            .bind_managed_agent(managed_agent().as_ref())
+            .bind_managed_agent(agent_identity().as_ref())
             .unwrap();
         assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
         let runtime = JobRuntime {
@@ -1748,7 +1748,7 @@ pub(crate) mod tests {
         };
         runtime
             .bind_snapshot(crate::test_support::FixedAgentIdentities::boxed(vec![
-                managed_agent().clone(),
+                agent_identity().clone(),
             ]))
             .unwrap();
         Job {

@@ -22,7 +22,7 @@ mod diff;
 mod slot;
 
 use diff::diff_counts;
-pub(in crate::runtime::agent) use slot::SlotFailurePolicy;
+pub(crate) use slot::SlotFailurePolicy;
 use slot::{
     spawn_slot_with_layout, spawn_slots, AgentSlot, AgentSlotState, SlotConfig, WorkerLayout,
 };

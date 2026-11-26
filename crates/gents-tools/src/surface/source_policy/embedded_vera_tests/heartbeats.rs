@@ -80,6 +80,10 @@ async fn publish(document_acp: DocumentAcp) -> anyhow::Result<Published> {
         )
         .await?;
 
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &node,
+        ["PeerRegistry", "NodeDirectoryEntry"],
+    )?;
     let cancel = CancellationToken::new();
     let loops = [
         tokio::spawn(gents_p2p::p2p_reconcile::run_registry_heartbeat(
@@ -105,13 +109,25 @@ async fn publish(document_acp: DocumentAcp) -> anyhow::Result<Published> {
     ];
 
     let mut registry_updates: Vec<Vec<String>> = Vec::new();
-    let started = Instant::now();
-    while started.elapsed() < OBSERVED {
+    let deadline = tokio::time::Instant::now() + OBSERVED;
+    loop {
         let updates = stored(&node, &home.owner, "PeerRegistry", "updated_at").await?;
         if registry_updates.last() != Some(&updates) {
             registry_updates.push(updates);
         }
-        tokio::time::sleep(INTERVAL / 4).await;
+        if document_acp == DocumentAcp::Local
+            && registry_updates
+                .iter()
+                .filter(|rows| !rows.is_empty())
+                .count()
+                >= 2
+        {
+            break;
+        }
+        match tokio::time::timeout_at(deadline, changes.recv()).await {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
     }
     let directory_entries = stored(&node, &home.owner, "NodeDirectoryEntry", "node_did")
         .await?

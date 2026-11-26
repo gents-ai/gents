@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::codec::LengthDelimitedCodec;
 
+use crate::support;
 use crate::support::homes;
 
 async fn script(extension: &Path, root: &Path, name: &str) -> Result<()> {
@@ -25,15 +26,9 @@ async fn script(extension: &Path, root: &Path, name: &str) -> Result<()> {
     let ready = async {
         let paths = DesktopPaths::from_root(root.join("client"));
         tokio::time::timeout(Duration::from_secs(30), async {
-            while !root.join(format!("cache-{name}-ui.json")).exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            let stream = loop {
-                match local::connect(&paths).await {
-                    Ok(stream) => break stream,
-                    Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
-                }
-            };
+            support::wait_for_file(&root.join(format!("cache-{name}-ui.json"))).await?;
+            support::wait_for_listener(&paths, || Ok(())).await?;
+            let stream = local::connect(&paths).await?;
             let mut frames = LengthDelimitedCodec::builder()
                 .max_frame_length(protocol::MAX_FRAME_BYTES)
                 .new_framed(stream);

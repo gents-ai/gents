@@ -10,14 +10,14 @@ use gents_protocol::output::{OutputSource, OutputWriter, SourceClose, StreamPayl
 use gents_protocol::rendered_request::CaptureScope;
 
 use super::{auxiliary, DefraStreamWriter};
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::RequestLifecycle;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_store::config_client::ConfigAccess;
 
 struct TitleFixture {
-    _db: gents_store::test_support::TestStore,
+    _home: gents_documents::test_support::SignedHome,
     node: Arc<EmbeddedNode>,
-    identity: gents_store::identity::KeyIdentity,
+    node_did: String,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
     agent_access: ConfigAccess,
     lifecycle: RequestLifecycle,
@@ -26,112 +26,41 @@ struct TitleFixture {
 
 /// A claimed title request whose owned execution has begun.
 async fn claimed_title_fixture() -> TitleFixture {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_store::identity::NodeIdentity;
+    use gents_protocol::request_admission::RequestPurpose;
 
-    let db = gents_store::test_support::TestStore::start(
+    let home = gents_documents::test_support::SignedHome::start(
         "claimed-title-fixture-node",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let node = db.node.clone();
-    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let root_did = gents_store::graphql::escape_graphql_string(identity.did());
-    ConfigAccess::local(node.clone())
-        .write("test.title.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#))
-        .await.unwrap();
-    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
-    gents_inference::test_support::install_test_agent_binding(
-        &node,
-        identity.did(),
-        "title fixture",
-        &binding,
-    )
-    .await;
-    let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let signer = agent.managed_agent_signer().unwrap();
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        uuid::Uuid::new_v4().to_string(),
-        RequestScope::new(
-            identity.did(),
-            identity.did(),
-            agent.did(),
-            uuid::Uuid::new_v4().to_string(),
-        ),
-        "Name this conversation",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(identity.did()),
-    );
-    let agent_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    crate::test_support::create_agent_owned_session_at(
-        &agent_access,
-        identity.did(),
-        &create.session_id,
-        Some(identity.did()),
-        "2026-01-01T00:00:00Z",
-    )
-    .await;
-    crate::request::admission::sign_agent_request_create(&identity, &mut create)
-        .await
-        .unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let created = access
-        .write(
-            "test.title_flush_parent",
-            &create.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
-    let parent_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    ConfigAccess::local_as(node.clone(), identity.did().parse().unwrap())
-        .add_actor_relationship(
-            "AgentRequest",
-            &parent_doc,
-            "working_agent",
-            &agent.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
-    let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc)
-        .await
-        .unwrap();
+    let binding = gents_inference::test_support::default_agent(&home).await;
+    let parent = crate::test_support::ClaimedRequest::self_signed(&home, &binding)
+        .content("Name this conversation")
+        .drive(crate::test_support::Stage::Submitted)
+        .await;
     let title = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
-        &node,
-        &parent,
+        &home.store.node,
+        parent.lifecycle.request(),
         RequestPurpose::TitleAudit,
-        parent.content.clone(),
+        parent.lifecycle.request().content.clone(),
         None,
-        &signer,
+        &parent.agent.managed_agent_signer().unwrap(),
     )
     .await
     .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), title, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = Arc::new(
-        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
-            .unwrap(),
-    );
-    lifecycle
-        .begin_owned_execution(writer.as_ref())
-        .await
-        .unwrap();
+    let mut claimed = crate::test_support::ClaimedRequest::existing(&home, &binding, &title.doc_id)
+        .drive(crate::test_support::Stage::Executing)
+        .await;
+    let node = home.store.node.clone();
+    let node_did = home.node_did().to_owned();
+    let writer = Arc::new(claimed.writer.take().unwrap());
     TitleFixture {
-        _db: db,
+        _home: home,
         node,
-        identity,
-        agent,
-        agent_access,
-        lifecycle,
+        node_did,
+        agent: claimed.agent,
+        agent_access: claimed.agent_access,
+        lifecycle: claimed.lifecycle,
         writer,
     }
 }
@@ -140,12 +69,11 @@ async fn claimed_title_fixture() -> TitleFixture {
 async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     use gents_protocol::output::OutputOutcome;
     use gents_store::config_client::ConfigApplyTxn;
-    use gents_store::identity::NodeIdentity;
 
     let TitleFixture {
-        _db,
+        _home,
         node,
-        identity,
+        node_did,
         agent,
         agent_access,
         lifecycle,
@@ -225,8 +153,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         .unwrap();
     let expected_signer =
         gents_store::identity::commit_signer_identity_for_did(agent.did()).unwrap();
-    let node_signer =
-        gents_store::identity::commit_signer_identity_for_did(identity.did()).unwrap();
+    let node_signer = gents_store::identity::commit_signer_identity_for_did(&node_did).unwrap();
     for row in &rows {
         let response = agent_access.execute(&format!(
             r#"{{ _commits(docID: "{}") {{ cid height fieldName signature {{ identity type }} }} }}"#,
@@ -278,7 +205,7 @@ async fn shutdown_close_replays_a_dropped_complete_title_closure() {
     use gents_store::config_client::ConfigApplyTxn;
 
     let TitleFixture {
-        _db,
+        _home,
         node,
         agent_access,
         lifecycle,

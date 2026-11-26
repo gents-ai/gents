@@ -1,65 +1,8 @@
 use super::*;
 use crate::native::session_history::context_calls::CONTEXT_CALL_LIMIT;
-use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct MeasuredRead<'a> {
-    access: &'a gents_store::config_client::ConfigAccess,
-    queries: AtomicUsize,
-    max_bytes: AtomicUsize,
-    total_bytes: AtomicUsize,
-}
-
-impl<'a> MeasuredRead<'a> {
-    fn new(access: &'a gents_store::config_client::ConfigAccess) -> Self {
-        Self {
-            access,
-            queries: AtomicUsize::new(0),
-            max_bytes: AtomicUsize::new(0),
-            total_bytes: AtomicUsize::new(0),
-        }
-    }
-
-    fn record_input(&self, bytes: usize) {
-        self.queries.fetch_add(1, Ordering::Relaxed);
-        self.max_bytes.fetch_max(bytes, Ordering::Relaxed);
-        self.total_bytes.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    fn snapshot(&self) -> Value {
-        json!({
-            "queries": self.queries.load(Ordering::Relaxed),
-            "max_query_bytes": self.max_bytes.load(Ordering::Relaxed),
-            "total_query_bytes": self.total_bytes.load(Ordering::Relaxed),
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl gents_store::config_client::ConfigRead for MeasuredRead<'_> {
-    async fn execute_read(
-        &self,
-        document: &str,
-    ) -> Result<Value, gents_store::config_client::ConfigClientError> {
-        self.record_input(document.len());
-        self.access.execute(document).await
-    }
-
-    fn reader_did(&self) -> Option<String> {
-        self.access.actor_did()
-    }
-
-    async fn execute_read_with_variables(
-        &self,
-        document: &str,
-        variables: &Value,
-    ) -> Result<Value, gents_store::config_client::ConfigClientError> {
-        self.record_input(document.len() + variables.to_string().len());
-        self.access
-            .execute_with_variables(document, variables)
-            .await
-    }
-}
+use crate::test_support::MeasuredRead;
+use serde_json::json;
+use std::sync::atomic::Ordering;
 
 async fn seed_unrelated_completed_requests(
     access: &gents_store::config_client::ConfigAccess,
