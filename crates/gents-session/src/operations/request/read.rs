@@ -1,6 +1,6 @@
 use gents_protocol::document_query::fields::agent_request::{self as fields, Doc};
 use gents_protocol::document_query::{
-    get as field, rows, session_scope, Collection, Filter, Query, Rendered, Selection,
+    rows, session_scope, Collection, Filter, Query, Rendered, Selection,
 };
 use gents_protocol::operations::request::{RequestOperationError, RequestReceipt};
 use gents_protocol::request_admission::{AgentRequestCreate, SIGNED_REQUEST_FIELDS};
@@ -129,27 +129,10 @@ pub(super) async fn latest_session_request(
     session_id: &str,
     requester_did: &str,
 ) -> Result<Option<String>, RequestOperationError> {
-    let query = Query::select(
-        Selection::new()
-            .field(fields::REQUEST_ID)
-            .field(fields::CREATED_AT),
-    )
-    .filter(session_scope(node_did, session_id, Some(requester_did)))
-    .render();
-    let response = access
-        .read(&query)
+    crate::session::load_latest_request(access, node_did, session_id, Some(Some(requester_did)))
         .await
-        .map_err(RequestOperationError::passthrough_error)?;
-    Ok(rows(&response, Doc::NAME)
-        .iter()
-        .filter_map(|row| {
-            Some((
-                field(row, fields::CREATED_AT).unwrap_or_default(),
-                field(row, fields::REQUEST_ID)?,
-            ))
-        })
-        .max()
-        .map(|(_, request_id)| request_id.to_owned()))
+        .map(|fact| fact.map(|fact| fact.observed.request_id))
+        .map_err(RequestOperationError::passthrough)
 }
 
 pub(super) async fn ensure_request_id_fresh(

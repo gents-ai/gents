@@ -125,7 +125,9 @@ example : (advance session [finishedPredecessor, sameSecondClaim] sameSecondClai
     some sameSecondClaim.observed := by decide
 
 def titleRequest := { request 3 99 with purpose := .titleAudit }
+def accessReviewRequest := { request 4 99 with purpose := .accessReview }
 example : latest [old, titleRequest] scope.node scope.session none = some old := by decide
+example : latest [old, accessReviewRequest] scope.node scope.session (some scope.requester) = some old := by decide
 example : advance session [old, titleRequest] titleRequest "title" 100 = session := by decide
 example : observedRequest [titleRequest] titleRequest.observed = none := by decide
 
@@ -421,6 +423,19 @@ def RetryStateWire.ofModel (failedId newId : Nat) (s : SessionState) : RetryStat
       { requestId := id, state := r.state, origin := r.origin, retryCount := r.retryCount
         retryParent := if id = newId then some failedId else none } }
 
+def sameSecondEarlierTerminal : RequestFact :=
+  { request 2 2 with observed := ⟨102, 2, .completed⟩, terminalizedAt := some 2100 }
+def sameSecondFailedAfterPredecessor : RequestFact :=
+  { old with terminalizedAt := some 2600 }
+def sameSecondLiveSmallerId : RequestFact :=
+  { request 0 2 with observed := ⟨100, 0, .claimed⟩ }
+
+example : SessionState.retryFromRows? retryState indexed [old, sameSecondLiveSmallerId] 101 1 3 = none := by
+  rfl
+example : (SessionState.retryFromRows? retryState indexed
+    [sameSecondEarlierTerminal, sameSecondFailedAfterPredecessor] 101 1 3).isSome = true := by
+  native_decide
+
 /-- A retry rechecks the session's stored request rows: the parent must be the
 session's newest row and the successor's id unused; the successor is stored
 pending, linked to its parent with the next retry count, and becomes the
@@ -431,6 +446,9 @@ def retry : Family RetryInput (Option RetryStateWire) where
   inputs :=
     [ ("exact_parent", [old]), ("newer_authoritative_row", [old, newerRequest])
     , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate])
+    , ("same_second_live_blocks_retry", [old, sameSecondLiveSmallerId])
+    , ("same_second_earlier_terminal_allows_retry",
+        [sameSecondEarlierTerminal, sameSecondFailedAfterPredecessor])
     ].map fun (name, rows) =>
       { name, rows := rows.map RowWire.ofModel, parentDoc := old.observed.docId
         failedId := 1, newId := 3 }
