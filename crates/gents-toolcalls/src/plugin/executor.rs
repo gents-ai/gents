@@ -294,6 +294,7 @@ pub struct PluginExecutor {
     admitted_bytes: AtomicU64,
     services: super::service::Services,
     release: allowed::ReleaseDigests,
+    clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
 }
 
 impl std::fmt::Debug for PluginExecutor {
@@ -348,7 +349,17 @@ impl PluginExecutor {
             admitted_bytes: AtomicU64::new(0),
             services: super::service::Services::default(),
             release: allowed::ReleaseDigests::embedded(),
+            clock: Arc::new(std::time::Instant::now),
         }
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_clock_for_test(
+        mut self,
+        clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
+    ) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Replaces the core pack digests of this build, which decide whose
@@ -1014,7 +1025,18 @@ impl PluginExecutor {
                 calls.tools.is_some(),
             ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
-            let outcome = drive_with_calls(&coordinate, admitted.runner.clone(), bound, calls, input, budget, admitted.budget.wall_clock)
+            let outcome = drive_with_calls(
+                &coordinate,
+                admitted.runner.clone(),
+                bound,
+                calls,
+                input,
+                DriveTiming {
+                    budget,
+                    declared_wall_clock: admitted.budget.wall_clock,
+                    clock: &self.clock,
+                },
+            )
             .await
             .inspect_err(|error| {
                 if gents_pack::plugin::GuestTrap::raised_by(error) {
@@ -1235,7 +1257,27 @@ async fn drive(
         jobs: None,
     };
     let declared = budget.wall_clock;
-    drive_with_calls(coordinate, runner, bound, calls, input, budget, declared).await
+    let clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync> =
+        Arc::new(std::time::Instant::now);
+    drive_with_calls(
+        coordinate,
+        runner,
+        bound,
+        calls,
+        input,
+        DriveTiming {
+            budget,
+            declared_wall_clock: declared,
+            clock: &clock,
+        },
+    )
+    .await
+}
+
+struct DriveTiming<'a> {
+    budget: PluginBudget,
+    declared_wall_clock: std::time::Duration,
+    clock: &'a Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
 }
 
 /// The round of an artifact: the compiled `.afb` over its bound directory.
@@ -1252,16 +1294,15 @@ async fn drive_with_calls(
     bound: Option<BoundDir>,
     calls: HostCalls,
     input: serde_json::Value,
-    budget: PluginBudget,
-    declared_wall_clock: std::time::Duration,
+    timing: DriveTiming<'_>,
 ) -> Result<PluginOutcome> {
     if runner.definition().imports_host_call() {
         return super::host_calls::run(
             runner,
             bound,
             input,
-            budget,
-            declared_wall_clock,
+            timing.budget,
+            timing.declared_wall_clock,
             calls.tools,
         )
         .await
@@ -1269,10 +1310,11 @@ async fn drive_with_calls(
     }
     let round = artifact_round(runner, bound);
     if calls.is_empty() {
-        tokio::task::spawn_blocking(move || round(input, budget))
+        tokio::task::spawn_blocking(move || round(input, timing.budget))
             .await
             .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))?
     } else {
-        rounds::drive(calls, input, budget, round).await
+        let clock = Arc::clone(timing.clock);
+        rounds::drive_with_clock(calls, input, timing.budget, round, move || clock()).await
     }
 }

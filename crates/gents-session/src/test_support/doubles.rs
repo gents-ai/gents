@@ -395,3 +395,51 @@ impl ReplayRequestReader for FaultingRequests<'_> {
         Ok(facts)
     }
 }
+
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct WatchAppender {
+    buffer: Mutex<String>,
+    tx: tokio::sync::watch::Sender<String>,
+}
+
+#[cfg(windows)]
+impl WatchAppender {
+    pub(crate) fn new() -> (Arc<Self>, tokio::sync::watch::Receiver<String>) {
+        let (tx, rx) = tokio::sync::watch::channel(String::new());
+        (
+            Arc::new(Self {
+                buffer: Mutex::new(String::new()),
+                tx,
+            }),
+            rx,
+        )
+    }
+}
+
+#[cfg(windows)]
+impl gents_loop::live_output::CanonicalOutputAppender for WatchAppender {
+    fn append<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<std::ops::Range<u64>, gents_loop::live_output::LiveOutputError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let mut buffer = self
+                .buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let start = buffer.len() as u64;
+            buffer.push_str(text);
+            let end = buffer.len() as u64;
+            self.tx.send_replace(buffer.clone());
+            Ok(start..end)
+        })
+    }
+}

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::super::action_plan::{ActionPlan, HostAction, IntegrateWorkspaceAction};
 use super::super::adapter::{
     absolute_git_dir, advance_trunk_to_integrate_commit, capture_seal_snapshot, commit_exists,
-    prepare_integrate_commit,
+    prepare_integrate_commit_with_timestamp,
 };
 use super::super::documents::{
     integrator_receipt_id, writer_receipt_id, IsolatedWorkspaceDoc, WorkspaceDocuments,
@@ -30,6 +30,25 @@ pub fn execute_integrate_workspace_plan(
     plan: &ActionPlan,
     journal: &mut Vec<ActionJournalEntry>,
     ctx: &mut HostExecutorContext<'_>,
+) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
+    execute_integrate_with_commit_timestamp(plan, journal, ctx, None)
+}
+
+#[cfg(test)]
+pub(crate) fn execute_integrate_workspace_plan_with_commit_timestamp(
+    plan: &ActionPlan,
+    journal: &mut Vec<ActionJournalEntry>,
+    ctx: &mut HostExecutorContext<'_>,
+    commit_timestamp: Option<&str>,
+) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
+    execute_integrate_with_commit_timestamp(plan, journal, ctx, commit_timestamp)
+}
+
+fn execute_integrate_with_commit_timestamp(
+    plan: &ActionPlan,
+    journal: &mut Vec<ActionJournalEntry>,
+    ctx: &mut HostExecutorContext<'_>,
+    commit_timestamp: Option<&str>,
 ) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
     if !journal::action_journal_prefix_legal(journal) {
         return Err(HostExecuteError::denied("illegal action journal prefix"));
@@ -59,13 +78,14 @@ pub fn execute_integrate_workspace_plan(
     if journal::current_state(journal, 0).is_none() {
         journal::advance(journal, 0, ActionJournalState::Validated);
     }
-    integrate_workspace_action(action, journal, ctx)
+    integrate_workspace_action(action, journal, ctx, commit_timestamp)
 }
 
 fn integrate_workspace_action(
     action: &IntegrateWorkspaceAction,
     journal: &mut Vec<ActionJournalEntry>,
     ctx: &mut HostExecutorContext<'_>,
+    commit_timestamp: Option<&str>,
 ) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
     let trunk = ctx.repository.host_path.clone();
 
@@ -293,12 +313,13 @@ fn integrate_workspace_action(
             pending_head: true,
         }
     } else {
-        prepare_integrate_commit(
+        prepare_integrate_commit_with_timestamp(
             &trunk,
             &dest_canon,
             &seal_hash,
             &workspace.base_sha,
             snapshot,
+            commit_timestamp,
         )
         .map_err(|err| {
             HostExecuteError::failed(

@@ -24,6 +24,7 @@ pub struct ObserverMetrics {
     pub subscription_renewals: AtomicU64,
     /// Sources ended and scheduled to reconnect.
     pub reconnects: AtomicU64,
+    changed: tokio::sync::Notify,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +63,14 @@ impl ObserverMetrics {
             subscription_renewals: self.subscription_renewals.load(Ordering::Relaxed),
             reconnects: self.reconnects.load(Ordering::Relaxed),
         }
+    }
+
+    pub(super) fn notify_changed(&self) {
+        self.changed.notify_waiters();
+    }
+
+    pub(super) fn notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.changed.notified()
     }
 }
 

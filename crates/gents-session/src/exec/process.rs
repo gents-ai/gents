@@ -39,7 +39,7 @@ use registry::ActiveExecGuard;
 use spawn::spawn_child;
 
 pub(crate) use registry::active_executor_snapshots;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use registry::active_executors_notified;
 pub use registry::ManagedExecKind;
 

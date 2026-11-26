@@ -466,12 +466,13 @@ pub(crate) fn integrate_commit_message(seal_hash: &str) -> String {
 }
 
 /// Does not move trunk `HEAD` — the caller writes a durable receipt first.
-pub(crate) fn prepare_integrate_commit(
+pub(crate) fn prepare_integrate_commit_with_timestamp(
     trunk: &Path,
     worktree: &Path,
     seal_hash: &str,
     base_sha: &str,
     snapshot: SealSnapshot,
+    commit_timestamp: Option<&str>,
 ) -> Result<IntegrateEffect> {
     let trunk = fs::canonicalize(trunk)
         .with_context(|| format!("canonicalizing trunk {}", trunk.display()))?;
@@ -511,7 +512,8 @@ pub(crate) fn prepare_integrate_commit(
         return empty_diff_effect(&trunk, &worktree, seal_hash, base_sha, snapshot);
     }
     refuse_overlapping_dirty_trunk(&trunk, &snapshot.changed_files)?;
-    let commit = commit_tree_from_isolated_index(&trunk, &snapshot.diff, seal_hash)?;
+    let commit =
+        commit_tree_from_isolated_index(&trunk, &snapshot.diff, seal_hash, commit_timestamp)?;
     Ok(IntegrateEffect {
         head_sha: commit,
         changed_files: snapshot.changed_files,
@@ -715,7 +717,12 @@ fn refuse_overlapping_dirty_trunk(trunk: &Path, changed_files: &[String]) -> Res
     Ok(())
 }
 
-fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -> Result<String> {
+fn commit_tree_from_isolated_index(
+    trunk: &Path,
+    diff: &[u8],
+    seal_hash: &str,
+    commit_timestamp: Option<&str>,
+) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("gents-integrate-index")
         .tempdir()
@@ -740,6 +747,10 @@ fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -
     cmd.env("GIT_AUTHOR_EMAIL", "gents-integrator@local");
     cmd.env("GIT_COMMITTER_NAME", "gents-integrator");
     cmd.env("GIT_COMMITTER_EMAIL", "gents-integrator@local");
+    if let Some(timestamp) = commit_timestamp {
+        cmd.env("GIT_AUTHOR_DATE", timestamp);
+        cmd.env("GIT_COMMITTER_DATE", timestamp);
+    }
     git_output_inner(cmd, trunk, &["commit-tree"])
 }
 

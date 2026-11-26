@@ -41,16 +41,14 @@ const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[];
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
-    ("gents", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-automation", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents", 3, "OS thread/FD settle polls (proc_pidinfo, /dev/fd) and external Weak<defra_node::Node> drop wait in isolated node_release_tests"),
     ("gents-cli", 4, "external tiny_http port release, TCP bind readiness, startup-gate HTTP readiness, and a 2 s P2P lsof observation window"),
     ("gents-client-host", 2, "cross-process IPC/HTTP readiness where no OS notification seam exists (local listener connect and Windows ConPTY runtime status)"),
     ("gents-fs-runner", 2, "cross-process file-gate polling and wall-budget pause in the synchronous fs-runner"),
     ("gents-lean-contract", 1, "cross-process file-lock contention hold"),
     ("gents-loop", 9, "virtual-time start_paused timers, Utc::now() deadline regression polls, and ScriptedProvider Delay/Repeat steps"),
-    ("gents-session", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-store", 8, "bounded child/stdout polling, cross-process marker files, JWT real-clock second/expiry boundaries, and paused virtual-clock tests"),
-    ("gents-tools", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-tools", 2, "JWT real-clock expiry boundary waits across single transactions against VeraRsProvider::caller_of_* in embedded_vera_tests"),
 ];
 
 struct Source {

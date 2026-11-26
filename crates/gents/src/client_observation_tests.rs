@@ -76,6 +76,9 @@ async fn planned_renewal_keeps_the_runtime_connected() {
     let mut changes = store.subscribe();
     tokio::time::timeout(Duration::from_secs(45), async {
         loop {
+            let metrics_notified = handle.metrics_notified();
+            tokio::pin!(metrics_notified);
+            metrics_notified.as_mut().enable();
             let metrics = handle.metrics_snapshot();
             if metrics.subscription_renewals > before.subscription_renewals
                 || metrics.transport_failures > before.transport_failures
@@ -84,7 +87,7 @@ async fn planned_renewal_keeps_the_runtime_connected() {
             }
             tokio::select! {
                 changed = changes.changed() => changed.unwrap(),
-                () = tokio::time::sleep(Duration::from_millis(20)) => {}
+                () = &mut metrics_notified => {}
             }
             if let Some(status) = store.runtime_connection(home.node_did()) {
                 if shown.last() != Some(&status) {
