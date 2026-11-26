@@ -448,6 +448,13 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
                 &identity::Did::new(&agent_did)?,
             )
             .await?;
+            txn.add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "host",
+                &identity::Did::new(&node_did)?,
+            )
+            .await?;
         } else {
             queued_agents.insert(agent_doc.clone());
             txn.queue_relationship_grant(ConfigRelationshipGrant::Resource {
@@ -459,9 +466,15 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
             })?;
             txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
                 collection: "Agent".to_owned(),
-                doc_id: agent_doc,
+                doc_id: agent_doc.clone(),
                 relation: "executor".to_owned(),
                 target: agent_did.clone(),
+            })?;
+            txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
+                collection: "Agent".to_owned(),
+                doc_id: agent_doc,
+                relation: "host".to_owned(),
+                target: node_did.clone(),
             })?;
         }
         let bound = |collection: Collection| {

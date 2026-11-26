@@ -115,7 +115,14 @@ its owner is the session's owner. Its read is the session's read, so every
 claim and wake publication of the session reads it by id; its update is the
 session's update (the working Agent, the Agent's session administrators and,
 through them, the Node's), exactly who may update a request of the session;
-its delete is the session's delete (`Identity.SessionInterrupt`). -/
+its delete is the session's delete (`Identity.SessionInterrupt`).
+
+`host` on an Agent names the node that runs it (gents#4245,
+`RuntimeReconcile.Placement`). Its subject is the node's DID. No relation
+manages it and no permission names it, so only the Agent's owner places it and
+holding it grants nothing: the receiving node reads it only as a certified
+assignment whose creator is the issuer it trusts
+(`only_the_owner_places_an_agent`, `a_host_grants_no_permission`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -177,7 +184,7 @@ def policy : List ResourceDefinition :=
         ⟨"workspace_selected_by", ["configuration->reader", "agents->executor"], []⟩,
         ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor", "nodes->owner", "nodes->administrator"],
           ["parent", "reader", "session_writer", "administrator", "executor", "config_writer"]⟩,
-        ⟨"executor", ["actor"], []⟩, ⟨"config_writer", ["actor"], []⟩]
+        ⟨"executor", ["actor"], []⟩, ⟨"config_writer", ["actor"], []⟩, ⟨"host", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "workspace_selected_by", "session_writer", "administrator", "executor", "config_writer"] [("parent", "read")],
         permission "update" ["administrator", "config_writer"] [("parent", "update")],
         permission "delete" ["administrator"] [("parent", "delete")],
@@ -279,10 +286,14 @@ structure State where
   pendingParents : List (String × String × DID) := []
   deriving Repr
 
-/-- Managed Agent creation stages the child, Node parent, executor and Node
-manager relationships in one native transaction. A failed transaction exposes
-none of them; NAC capabilities are granted only after commit. -/
-def commitAgentCreation (state : State) (childId creator childDid nodeId : String)
+/-- Managed Agent creation stages the child, Node parent, executor, Node
+manager and placement relationships in one native transaction. A failed
+transaction exposes none of them; NAC capabilities are granted only after
+commit. Decision: the creator places the Agent on its creating node
+(`host`, subject that node's DID `nodeDid`) in the same transaction, so on a
+Vera home ownership alone never starts an Agent
+(`RuntimeReconcile.Placement.ownership_alone_starts_nothing_on_a_vera_home`). -/
+def commitAgentCreation (state : State) (childId creator childDid nodeId nodeDid : String)
     (commit : Bool) : State :=
   if commit then
     { state with
@@ -290,23 +301,35 @@ def commitAgentCreation (state : State) (childId creator childDid nodeId : Strin
       relations := ⟨"agents", childId, "parent", .object "nodes" nodeId⟩ ::
         ⟨"agents", childId, "executor", .actor childDid⟩ ::
         ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "owner"⟩ ::
-        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ :: state.relations }
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ ::
+        ⟨"agents", childId, "host", .actor nodeDid⟩ :: state.relations }
   else state
 
 theorem aborted_agent_creation_is_unchanged (state : State)
-    (childId creator childDid nodeId : String) :
-    commitAgentCreation state childId creator childDid nodeId false = state := by rfl
+    (childId creator childDid nodeId nodeDid : String) :
+    commitAgentCreation state childId creator childDid nodeId nodeDid false = state := by rfl
 
 theorem committed_agent_creation_retains_creator_and_parent (state : State)
-    (childId creator childDid nodeId : String) :
-    (commitAgentCreation state childId creator childDid nodeId true).objects =
+    (childId creator childDid nodeId nodeDid : String) :
+    (commitAgentCreation state childId creator childDid nodeId nodeDid true).objects =
       ⟨"agents", childId, creator⟩ :: state.objects ∧
-    (commitAgentCreation state childId creator childDid nodeId true).relations =
+    (commitAgentCreation state childId creator childDid nodeId nodeDid true).relations =
       ⟨"agents", childId, "parent", .object "nodes" nodeId⟩ ::
         ⟨"agents", childId, "executor", .actor childDid⟩ ::
         ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "owner"⟩ ::
-        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ :: state.relations := by
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ ::
+        ⟨"agents", childId, "host", .actor nodeDid⟩ :: state.relations := by
   exact ⟨rfl, rfl⟩
+
+/-- A committed creation places the Agent on its creating node, written by
+the Agent's owner, the creator. -/
+theorem creation_places_the_agent_on_its_creating_node (state : State)
+    (childId creator childDid nodeId nodeDid : String) :
+    ⟨"agents", childId, "host", .actor nodeDid⟩ ∈
+      (commitAgentCreation state childId creator childDid nodeId nodeDid true).relations ∧
+    ⟨"agents", childId, creator⟩ ∈
+      (commitAgentCreation state childId creator childDid nodeId nodeDid true).objects := by
+  simp [commitAgentCreation]
 
 /-- Conditional atomic-publication contract for an implementation whose native
 transaction actually includes both the document and its relationships. ACP1
@@ -652,6 +675,38 @@ def mayManage (state : State) (actor : DID) (relation : Relation) : Bool :=
           manager.manages.contains relation.relation &&
           allowed 8 state actor relation.resource relation.id manager.name))
   | _, _ => false
+
+/-- No relation of the policy manages `host`. -/
+theorem no_relation_manages_host :
+    (policy.all fun resource => resource.relations.all fun relation =>
+      !relation.manages.contains "host") = true := by native_decide
+
+/-- No permission and no userset reads `host`, so holding it grants nothing. -/
+theorem a_host_grants_no_permission :
+    (policy.all fun resource =>
+      (resource.permissions.all fun permission => !permission.relations.contains "host") &&
+      resource.relations.all fun relation =>
+        relation.types.all fun type => !type.endsWith "->host") = true := by native_decide
+
+/-- Only an Agent's owner places it: a `host` relationship is managed by no
+relation, so its native owner is the only actor that may write or delete one. -/
+theorem only_the_owner_places_an_agent (state : State) (actor : DID) (relation : Relation)
+    (host : relation.relation = "host") (h : mayManage state actor relation = true) :
+    ∃ object, state.objects.find? (fun object =>
+        object.resource == relation.resource && object.id == relation.id) = some object ∧
+      object.owner = actor := by
+  unfold mayManage at h
+  split at h
+  · rename_i definition object hdef hobj
+    simp only [Bool.and_eq_true, Bool.or_eq_true, List.any_eq_true] at h
+    rcases h with ⟨_, owner | ⟨manager, hmanager, manages, _⟩⟩
+    · exact ⟨object, hobj, by simpa using owner⟩
+    · have all := no_relation_manages_host
+      simp only [List.all_eq_true, Bool.not_eq_true'] at all
+      have := all definition (List.mem_of_find?_eq_some hdef) manager hmanager
+      rw [host] at manages
+      simp_all
+  · simp at h
 
 /-- The two manager usersets are published with the exact physical Node on
 creation. Removing either tuple or a Node administrator grant is a native
