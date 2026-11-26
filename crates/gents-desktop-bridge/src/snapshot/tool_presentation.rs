@@ -103,81 +103,12 @@ struct Streams {
     stderr: String,
 }
 
-fn returned_bytes(meta: Option<&Map<String, Value>>, key: &str) -> Option<(usize, bool)> {
-    let object = meta?.get(key)?.as_object()?;
-    Some((
-        object.get("returned_bytes")?.as_u64()? as usize,
-        object
-            .get("truncated")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    ))
-}
-
 fn split_command_streams(body: &str, meta: Option<&Map<String, Value>>) -> Streams {
-    const STDOUT_PREFIX: &str = "stdout:\n";
-    const STDERR_MARKER: &str = "\nstderr:\n";
-    if !body.starts_with(STDOUT_PREFIX) {
-        return Streams {
-            stdout: normalize_stream(body),
-            stderr: String::new(),
-        };
+    let streams = gents_tools::rendering::command_streams(body, meta);
+    Streams {
+        stdout: normalize_stream(streams.stdout),
+        stderr: normalize_stream(streams.stderr),
     }
-
-    let bytes = body.as_bytes();
-    if let Some((returned, false)) = returned_bytes(meta, "stdout_truncation") {
-        let length = if returned == 0 {
-            "(empty)".len()
-        } else {
-            returned
-        };
-        if let Some(streams) = split_at_marker(bytes, STDOUT_PREFIX.len() + length) {
-            return streams;
-        }
-    }
-    if let Some((returned, false)) = returned_bytes(meta, "stderr_truncation") {
-        let length = if returned == 0 {
-            "(empty)".len()
-        } else {
-            returned
-        };
-        if bytes.len() >= length + STDERR_MARKER.len() {
-            if let Some(streams) =
-                split_at_marker(bytes, bytes.len() - length - STDERR_MARKER.len())
-            {
-                return streams;
-            }
-        }
-    }
-
-    match body.find(STDERR_MARKER) {
-        Some(at) => Streams {
-            stdout: normalize_stream(&body[STDOUT_PREFIX.len()..at]),
-            stderr: normalize_stream(&body[at + STDERR_MARKER.len()..]),
-        },
-        None => Streams {
-            stdout: normalize_stream(&body[STDOUT_PREFIX.len()..]),
-            stderr: String::new(),
-        },
-    }
-}
-
-fn split_at_marker(bytes: &[u8], marker_start: usize) -> Option<Streams> {
-    const STDOUT_PREFIX: &str = "stdout:\n";
-    const STDERR_MARKER: &str = "\nstderr:\n";
-    let marker_end = marker_start.checked_add(STDERR_MARKER.len())?;
-    if marker_start < STDOUT_PREFIX.len()
-        || marker_end > bytes.len()
-        || &bytes[marker_start..marker_end] != STDERR_MARKER.as_bytes()
-    {
-        return None;
-    }
-    Some(Streams {
-        stdout: normalize_stream(
-            std::str::from_utf8(&bytes[STDOUT_PREFIX.len()..marker_start]).ok()?,
-        ),
-        stderr: normalize_stream(std::str::from_utf8(&bytes[marker_end..]).ok()?),
-    })
 }
 
 fn normalize_stream(value: &str) -> String {

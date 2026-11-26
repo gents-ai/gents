@@ -22,7 +22,7 @@ use gents_protocol::transcript::present_message;
 use gents_shell::app::transcript::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
-use gents_tools::rendering::{completion_metadata, CompletionMetadata};
+use gents_tools::rendering::{command_streams, completion_metadata, CompletionMetadata};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::Value;
 
@@ -525,10 +525,19 @@ fn command(name: &str, arguments: &Value) -> String {
 }
 
 /// A command's output line, none for no output. Its first line is the runner's metadata
-/// when it starts `gents_exec:`.
+/// when it starts `gents_exec:`, and of the streams after it the line shows stdout, or
+/// stderr when stdout is empty.
 fn output(id: &str, result: &str) -> Option<ChatLine> {
     let shown = match result.strip_prefix("gents_exec:") {
-        Some(rest) => rest.split_once('\n').map_or("", |(_, output)| output),
+        Some(rest) => {
+            let (header, body) = rest.split_once('\n').unwrap_or((rest, ""));
+            let meta = serde_json::from_str::<Value>(header).ok();
+            let streams = command_streams(body, meta.as_ref().and_then(Value::as_object));
+            match streams.stdout.trim().is_empty() {
+                true => streams.stderr,
+                false => streams.stdout,
+            }
+        }
         None => result,
     };
     let shown = clean(shown);
@@ -1307,6 +1316,19 @@ mod tests {
                 edited("  ✓ edit  b.rs", Tone::Label, "t1/1", Some(&changed[1])),
                 edited("  … edit  new.rs", Tone::Warn, "t2/0", None),
             ]
+        );
+    }
+
+    #[test]
+    fn command_output_shows_its_stdout_or_else_its_stderr() {
+        let shown = |result: &str| output("t1", result).map(|line| line.text);
+        let both = "gents_exec: {}\nstdout:\nran tests\nstderr:\nwarning: unused";
+        assert_eq!(shown(both).as_deref(), Some("ran tests"));
+        let failed = "gents_exec: {}\nstdout:\n(empty)\nstderr:\nerror: no such file";
+        assert_eq!(shown(failed).as_deref(), Some("error: no such file"));
+        assert_eq!(
+            shown("gents_exec: {}\nstdout:\n(empty)\nstderr:\n(empty)"),
+            None
         );
     }
 
