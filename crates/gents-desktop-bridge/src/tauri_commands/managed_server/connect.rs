@@ -35,9 +35,13 @@ where
         )
     })?;
     if let Err(store) = gents_service::repair::home::refuse_older_home(&node_home).await {
+        let message = store.to_string();
+        let mut managed = state.managed_server.lock().await;
+        managed.incompatible_store = Some(store);
+        managed.last_error = Some(message.clone());
         return Err(BridgeError::new(
-            BridgeErrorCode::Unsupported,
-            store.to_string(),
+            BridgeErrorCode::IncompatibleLocalStore,
+            message,
         ));
     }
     let status = serving_node(&state, &node_home).await?;
