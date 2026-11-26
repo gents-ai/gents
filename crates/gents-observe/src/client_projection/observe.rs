@@ -644,7 +644,9 @@ pub fn spawn_observer(
                     if changed.is_err() { break; }
                     queue.take_requests(&stores);
                 }
-                Some(joined) = loads.tasks.join_next(), if !loads.tasks.is_empty() => {
+                // Every exit of this arm falls through to the starts below: a
+                // settled read is what makes the node's next read startable.
+                Some(joined) = loads.tasks.join_next(), if !loads.tasks.is_empty() => { 'settled: {
                     let load = match joined {
                         Ok(load) => load,
                         Err(error) => {
@@ -660,11 +662,11 @@ pub fn spawn_observer(
                                 }
                                 None => {}
                             }
-                            continue;
+                            break 'settled;
                         }
                     };
                     if !loads.accept(&load) {
-                        continue;
+                        break 'settled;
                     }
                     let Load { node, store, captured, fetched, .. } = load;
                     let result = match fetched {
@@ -672,7 +674,7 @@ pub fn spawn_observer(
                         Fetched::Collections(roots, result) => {
                             let settlement = settle_collection_reload(&store, &captured, roots.clone(), result, &metrics_for_task);
                             queue.settle_collections(&node, settlement, roots);
-                            continue;
+                            break 'settled;
                         }
                     };
                     let settlement = match result {
@@ -703,7 +705,7 @@ pub fn spawn_observer(
                     if settlement.connection_event().is_some_and(settles_retry) {
                         waiters.settle(&node, &stores);
                     }
-                }
+                }}
                 _ = async {
                     if let Some(deadline) = wake {
                         tokio::time::sleep_until(deadline).await;
