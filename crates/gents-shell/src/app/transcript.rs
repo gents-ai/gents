@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
+use std::time::{Duration, Instant};
 
 use rapidhash::{HashSetExt, RapidHashSet};
 use ratatui::style::Style;
@@ -60,6 +61,8 @@ pub struct Tab {
     /// The tab sent a turn it has not seen end. The endpoint streams that turn here, and no
     /// other client's.
     pub following: bool,
+    /// When the tab sent the turn it follows.
+    pub since: Option<Instant>,
     /// The items whose lines are open, showing the lines under them. Not saved across runs.
     pub open: RapidHashSet<String>,
     pub(super) wrapped: Wrapped,
@@ -112,6 +115,7 @@ impl Tab {
             sidebar: false,
             prompts: Vec::new(),
             following: false,
+            since: None,
             open: RapidHashSet::new(),
             wrapped: Wrapped::default(),
         }
@@ -311,4 +315,14 @@ pub fn sample_chat() -> Vec<ChatLine> {
     };
     let (read, ran) = CHAT.split_at(6);
     [chat(read), changes(), chat(ran)].concat()
+}
+
+/// `spent` in whole seconds as the transcript reads it: `8s`, `1m 23s`, `1h 2m`.
+pub fn elapsed(spent: Duration) -> String {
+    let secs = spent.as_secs();
+    match (secs / 3600, secs / 60 % 60, secs % 60) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, s) => format!("{m}m {s}s"),
+        (h, m, _) => format!("{h}h {m}m"),
+    }
 }

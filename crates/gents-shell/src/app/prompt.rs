@@ -1,7 +1,9 @@
+use std::time::Instant;
+
 use ratatui::layout::Rect;
 
 use super::layers::LayerKind;
-use super::transcript::{wrap_lines, Tab};
+use super::transcript::{elapsed, wrap_lines, Tab};
 use super::{App, Mode, Pane};
 use crate::keys::{KeyCtx, KeySet};
 use crate::sample::Tone;
@@ -100,8 +102,8 @@ fn typed(prompt: &Prompt) -> bool {
 }
 
 impl App {
-    /// The active tab's conversation, with its first prompt under it, or `working…` while a
-    /// turn it sent runs.
+    /// The active tab's conversation, with its first prompt under it, or `working…` and how long
+    /// since the send while a turn it sent runs.
     pub fn conversation_rows(&self, width: u16) -> Vec<(String, Tone)> {
         let tab = &self.tabs[self.active];
         let mut rows = tab.wrapped_rows(width);
@@ -110,8 +112,14 @@ impl App {
             rows.extend(wrapped_prompt(tab, width, |prompt| {
                 key_row(prompt, set, false)
             }));
-        } else if tab.following && !matches!(self.connection, Connection::Lost(_)) {
-            rows.push(("working…".to_string(), Tone::Label));
+        } else if self.ticking() {
+            let spent = self.now.zip(tab.since);
+            let spent = spent.map(|(now, since)| elapsed(now.saturating_duration_since(since)));
+            let working = match spent {
+                Some(spent) => format!("working… {spent}"),
+                None => "working…".to_string(),
+            };
+            rows.push((working, Tone::Label));
         }
         rows
     }
@@ -176,6 +184,16 @@ impl App {
             Connection::NoAgent(why) => Some(why),
             _ => None,
         }
+    }
+
+    /// The time the next draw shows.
+    pub fn tick(&mut self, now: Instant) {
+        self.now = Some(now);
+    }
+
+    /// Whether the screen changes with time alone: a turn the active tab follows counts up.
+    pub fn ticking(&self) -> bool {
+        self.tabs[self.active].following && !matches!(self.connection, Connection::Lost(_))
     }
 
     /// What the shell should copy to the terminal's clipboard, once.
@@ -358,6 +376,26 @@ mod tests {
         type_text(&mut app, "hello");
         press(&mut app, "enter");
         (app, intended)
+    }
+
+    #[test]
+    fn elapsed_reads_seconds_minutes_and_hours() {
+        use crate::app::transcript::elapsed;
+        use std::time::Duration;
+        let reads = |secs| elapsed(Duration::from_secs(secs));
+        assert_eq!([reads(0), reads(8), reads(83)], ["0s", "8s", "1m 23s"]);
+        assert_eq!(reads(3_720), "1h 2m");
+    }
+
+    #[test]
+    fn the_working_row_counts_up_from_the_send() {
+        use std::time::Duration;
+        let (mut app, _intended) = sent_hello();
+        let since = app.tabs[0].since.expect("the send started the clock");
+        app.tick(since + Duration::from_secs(83));
+        let counted = Some(("working… 1m 23s".to_string(), Tone::Label));
+        assert_eq!(last_row(&app), counted);
+        assert!(app.ticking(), "a followed turn redraws while it runs");
     }
 
     #[test]

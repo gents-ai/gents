@@ -13,13 +13,13 @@ use gents_protocol::message::{AssistantContent, Message, ToolResultContent, User
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, PayloadPresentation, TranscriptMessage,
 };
-use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
+use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::tool_names::{
     AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
 };
 use gents_protocol::transcript::present_message;
-use gents_shell::app::transcript::ChatLine;
+use gents_shell::app::transcript::{elapsed, ChatLine};
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
 use gents_tools::rendering::{command_streams, completion_metadata, CompletionMetadata};
@@ -262,7 +262,22 @@ pub(super) fn transcript(
     let mut names = RapidHashMap::new();
     let mut subjects: RapidHashMap<String, String> = RapidHashMap::new();
     let mut delivered = Vec::new();
+    let requests: RapidHashMap<&str, &AgentRequestRow> = page
+        .requests
+        .iter()
+        .filter_map(|request| Some((request.doc_id.as_deref()?, request)))
+        .collect();
+    let worked_line = |turn: Option<&str>| {
+        let request = turn.and_then(|done| requests.get(done)).copied();
+        request.and_then(worked)
+    };
+    let mut turn = None;
     for row in &messages {
+        let request = row.message.request_doc_id.as_deref();
+        if request != turn {
+            lines.extend(worked_line(turn));
+            turn = request;
+        }
         let sequence = i64::from(row.message.sequence);
         while let Some(entry) = compacted.next_if(|entry| through(entry) < sequence) {
             lines.push(compaction(entry));
@@ -356,6 +371,7 @@ pub(super) fn transcript(
             _ => {}
         }
     }
+    lines.extend(worked_line(turn));
     lines.extend(compacted.map(compaction));
     // A spawned or background run has no result message: its own output is its result.
     for tool in view.tool_calls.iter().copied() {
@@ -377,6 +393,19 @@ pub(super) fn transcript(
         lines,
         next: next.unwrap_or_default(),
     }
+}
+
+/// How long a finished request worked: from its claim to its end.
+fn worked(request: &AgentRequestRow) -> Option<ChatLine> {
+    let claimed = DateTime::parse_from_rfc3339(request.claimed_at.as_deref()?).ok()?;
+    let ended = DateTime::parse_from_rfc3339(request.terminalized_at.as_deref()?).ok()?;
+    let spent = (ended - claimed).to_std().ok()?;
+    let id = format!("{}/worked", request.doc_id.as_deref()?);
+    Some(shown_line(
+        format!("  worked for {}", elapsed(spent)),
+        Tone::Label,
+        id,
+    ))
 }
 
 fn compaction(entry: &CompactionEntryRow) -> ChatLine {
@@ -849,6 +878,7 @@ mod tests {
     struct Page {
         rows: ClientStoreRows,
         closes: usize,
+        requests: Vec<AgentRequestRow>,
     }
 
     impl Page {
@@ -1040,6 +1070,14 @@ mod tests {
             self.message(notice);
         }
 
+        /// The page's request, claimed at `claimed` and ended at `ended` when it has.
+        fn claimed(&mut self, claimed: &str, ended: Option<&str>) {
+            let mut row = request("r1", "s1", "completed", "hello", claimed);
+            row.claimed_at = Some(claimed.to_string());
+            row.terminalized_at = ended.map(str::to_string);
+            self.requests.push(row);
+        }
+
         fn read(self, compactions: &[CompactionEntryRow], edits: &Edits) -> Transcript {
             let page = SessionTranscriptQueryPage {
                 store: ClientStore::from_rows(self.rows),
@@ -1051,7 +1089,7 @@ mod tests {
                 source_exhausted: true,
                 has_newer: false,
                 covered: Default::default(),
-                requests: Vec::new(),
+                requests: self.requests,
                 result_messages: Vec::new(),
             };
             transcript(&page, compactions, "s1", edits)
@@ -1066,6 +1104,26 @@ mod tests {
             under: Some(parent.to_string()),
             ..line
         }
+    }
+
+    #[test]
+    fn a_finished_request_ends_with_how_long_it_worked() {
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "hello");
+        page.text(1, MessageRole::Assistant, "hi");
+        page.claimed("2026-11-26T12:00:00Z", Some("2026-11-26T12:01:23Z"));
+        let read = page.read(&[], &Edits::new());
+        let worked = line("  worked for 1m 23s", Tone::Label, "bae-r1/worked");
+        assert_eq!(read.lines.last(), Some(&worked));
+
+        let mut running = Page::default();
+        running.text(0, MessageRole::User, "hello");
+        running.claimed("2026-11-26T12:00:00Z", None);
+        let read = running.read(&[], &Edits::new());
+        assert!(read
+            .lines
+            .iter()
+            .all(|shown| !shown.text.contains("worked for")));
     }
 
     #[test]
