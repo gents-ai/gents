@@ -447,7 +447,10 @@ pub async fn engineer_config(
             preview: held.self_config_preview.unwrap_or(false),
             enable_pack_install: held.enable_pack_install.unwrap_or(false),
             enable_pack_authority: held.enable_pack_authority.unwrap_or(false),
-            registry_url: target.registry.map(str::to_owned),
+            registry_url: Some(gents_pack::pack::registry::resolve_registry_url_for_home(
+                target.registry,
+                Some(target.home),
+            )),
             ..Default::default()
         },
         Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(

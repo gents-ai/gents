@@ -30,6 +30,9 @@ pub const SYSTEMD_UNIT: &str = "gents-runtime-native-e2e.service";
 /// supervised runtime logs to the system log. A definition without it still
 /// parses, and its refresh or a managed update renders it.
 pub const SYSTEM_LOG_FLAG: &str = "--system-log";
+/// The `gents server` argument a definition renders when the home records a
+/// pack registry.
+pub const REGISTRY_FLAG: &str = "--registry";
 /// Exit status of `gents` when it refuses to open a store this build cannot
 /// read (`gents_protocol::operations::install_repair::IncompatibleStore`). Supervisors and the
 /// desktop read it from the exit record to tell that refusal apart from a
@@ -1537,6 +1540,15 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     let executable = xml_path(&config.executable, "executable")?;
     let home = xml_path(&config.home, "home")?;
+    let registry = gents_store::local::home::recorded_registry(&config.home)
+        .map(|url| -> Result<String> {
+            Ok(format!(
+                "<string>{REGISTRY_FLAG}</string><string>{}</string>",
+                xml_escape(&url)?
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let search_path = config
         .search_path
         .as_ref()
@@ -1585,7 +1597,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
 <plist version="1.0"><dict>
   <key>Label</key><string>{SERVICE_LABEL}</string>
   <key>ProgramArguments</key><array>
-    <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string><string>{SYSTEM_LOG_FLAG}</string>
+    <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>{registry}<string>{SYSTEM_LOG_FLAG}</string>
   </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1620,6 +1632,10 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
     command.push(systemd_arg("server")?);
     command.push(systemd_arg("--home")?);
     command.push(home);
+    if let Some(registry) = gents_store::local::home::recorded_registry(&config.home) {
+        command.push(systemd_arg(REGISTRY_FLAG)?);
+        command.push(systemd_arg(&registry)?);
+    }
     command.push(systemd_arg(SYSTEM_LOG_FLAG)?);
     let stderr = config
         .stderr_path
@@ -1736,7 +1752,12 @@ fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
         .collect::<Result<Vec<_>>>()?;
     if values.get(1).copied() != Some("server")
         || values.get(2).copied() != Some("--home")
-        || !matches!(&values[3..], [_] | [_, SYSTEM_LOG_FLAG])
+        || !matches!(
+            &values[3..],
+            [_] | [_, SYSTEM_LOG_FLAG]
+                | [_, REGISTRY_FLAG, _]
+                | [_, REGISTRY_FLAG, _, SYSTEM_LOG_FLAG]
+        )
     {
         bail!("launchd definition is not a Gents foreground server invocation");
     }
@@ -1824,18 +1845,53 @@ fn systemd_home(unit: &str) -> Result<String> {
         .find_map(|line| line.strip_prefix("ExecStart="))
         .context("systemd definition has no ExecStart")?;
     let marker = " \"server\" \"--home\" ";
-    let (_, home) = exec
+    let (_, rest) = exec
         .split_once(marker)
         .context("systemd definition is not a Gents foreground server invocation")?;
-    parse_systemd_quoted(without_system_log_flag(home))
+    let args = parse_systemd_server_args(rest)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    if !matches!(
+        refs.as_slice(),
+        [_] | [_, SYSTEM_LOG_FLAG] | [_, REGISTRY_FLAG, _] | [_, REGISTRY_FLAG, _, SYSTEM_LOG_FLAG]
+    ) {
+        bail!("systemd definition is not a Gents foreground server invocation");
+    }
+    Ok(args
+        .into_iter()
+        .next()
+        .expect("matched at least one argument"))
 }
 
-/// The flag follows the quoted home; quoting escapes every quote inside the
-/// home, so no home ends in this suffix.
-fn without_system_log_flag(arguments: &str) -> &str {
-    arguments
-        .strip_suffix(&format!(" \"{SYSTEM_LOG_FLAG}\""))
-        .unwrap_or(arguments)
+fn parse_systemd_server_args(rest: &str) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut cursor = rest;
+    loop {
+        if !cursor.starts_with('"') {
+            bail!("systemd home argument is not quoted");
+        }
+        let mut end = None;
+        let mut escaped = false;
+        for (offset, ch) in cursor[1..].char_indices() {
+            match ch {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => {
+                    end = Some(1 + offset);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let end = end.context("systemd argument is not terminated")?;
+        args.push(parse_systemd_quoted(&cursor[..=end])?);
+        let tail = &cursor[end + 1..];
+        if tail.is_empty() {
+            return Ok(args);
+        }
+        cursor = tail
+            .strip_prefix(' ')
+            .context("unexpected separator between systemd arguments")?;
+    }
 }
 
 fn systemd_executable(unit: &str) -> Result<String> {

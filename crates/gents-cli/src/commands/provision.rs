@@ -187,6 +187,7 @@ async fn ensure_home_identity(
         store_lock: &store_lock,
         owner,
         client_identity: None,
+        registry: None,
     })
     .await
     .with_context(|| format!("initializing identity metadata in {}", home_dir.display()))?;

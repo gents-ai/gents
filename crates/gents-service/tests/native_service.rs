@@ -989,3 +989,88 @@ fn mac_bootout_already_in_progress_is_settled_by_the_wait() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn recorded_home_registry_is_rendered_and_preserved_by_service_definitions() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let registry_url = "http://127.0.0.1:18443";
+    let cfg = config(temp.path(), "gents");
+    gents_service::home_state::write_init_config(
+        &cfg.home,
+        &gents_service::state::StoredInitConfig {
+            home: cfg.home.display().to_string(),
+            node_name: "local".into(),
+            node_did: "did:key:local".into(),
+            key_path: None,
+            identity_backend: None,
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: None,
+            tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
+            tool_root: None,
+            store_encryption: None,
+            document_acp: Default::default(),
+            client_identity: None,
+            registry: Some(format!("{registry_url}/")),
+        },
+    )?;
+
+    for (platform, install_outputs) in [
+        (
+            NativeServicePlatform::Macos,
+            vec![output(true, "501", ""), ok()],
+        ),
+        (NativeServicePlatform::Linux, vec![ok(), ok()]),
+    ] {
+        let svc = manager(
+            cfg.clone(),
+            platform,
+            ScriptedRunner::with_outputs(install_outputs),
+        );
+        svc.install()?;
+        let def_path = cfg.definition_path(platform);
+        let text = fs::read_to_string(&def_path)?;
+        assert!(
+            text.contains("--registry") && text.contains(registry_url),
+            "{platform:?} definition did not render home registry: {text}"
+        );
+        assert_eq!(svc.installed_home()?, Some(cfg.home.clone()));
+        assert!(!svc.installed_executable_differs()?);
+        assert!(svc.definition_log_current()?);
+
+        // Managed executable replacement preserves the recorded registry flag.
+        let next = config(temp.path(), "gents-next");
+        let updated = manager(next, platform, ScriptedRunner::default())
+            .update_definition(text.as_bytes(), None)?;
+        let updated_text = String::from_utf8(updated)?;
+        assert!(
+            updated_text.contains("--registry") && updated_text.contains(registry_url),
+            "{platform:?} managed update dropped home registry: {updated_text}"
+        );
+        assert!(updated_text.contains("--system-log"), "{updated_text}");
+    }
+
+    // Without a recorded registry on the home, neither definition adds --registry.
+    let plain_temp = tempfile::tempdir()?;
+    let plain_cfg = config(plain_temp.path(), "gents");
+    for (platform, install_outputs) in [
+        (
+            NativeServicePlatform::Macos,
+            vec![output(true, "501", ""), ok()],
+        ),
+        (NativeServicePlatform::Linux, vec![ok(), ok()]),
+    ] {
+        manager(
+            plain_cfg.clone(),
+            platform,
+            ScriptedRunner::with_outputs(install_outputs),
+        )
+        .install()?;
+        let text = fs::read_to_string(plain_cfg.definition_path(platform))?;
+        assert!(
+            !text.contains("--registry"),
+            "default home must not emit --registry: {text}"
+        );
+    }
+    Ok(())
+}

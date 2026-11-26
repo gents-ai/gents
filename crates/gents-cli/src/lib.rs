@@ -958,6 +958,7 @@ mod tests {
                 ),
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();
@@ -1019,6 +1020,7 @@ mod tests {
                 ),
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();

@@ -311,6 +311,7 @@ pub fn resolve_policy(
         client_host: config.client_host,
         store_key_custody: config.store_key_custody,
         service_executable: config.service_executable.clone(),
+        registry: config.registry.clone(),
     })
 }
 

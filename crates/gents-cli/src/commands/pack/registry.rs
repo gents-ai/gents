@@ -4,7 +4,7 @@ use gents_pack::pack::archive::PackArchive;
 #[cfg(test)]
 use gents_pack::pack::registry::verify_pack_coordinate;
 pub(crate) use gents_pack::pack::registry::{
-    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
+    fetch_pack, resolve_pack_coordinate, resolve_registry_url_for_home, RegistryClient,
 };
 #[cfg(test)]
 use serde_json::Value;
@@ -53,7 +53,8 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         return fetch_into_store(args).await;
     }
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
-    let base_url = resolve_registry_url(args.registry.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let base_url = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let client = RegistryClient::new(base_url.clone());
 
     let coordinate =
@@ -129,7 +130,7 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
     };
     let options = gents_pack::pack::resolve::ResolveOptions {
         home: Some(&home),
-        registry_url: resolve_registry_url(args.registry.as_deref()),
+        registry_url: resolve_registry_url_for_home(args.registry.as_deref(), Some(&home)),
         installed: &[],
     };
     let resolved = gents_pack::pack::resolve::resolve_named(&spec, &options).await?;
@@ -158,16 +159,30 @@ fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<
 }
 
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
-    let results = client
-        .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
-        .await?;
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    search_for_home(
+        args.registry.as_deref(),
+        Some(&home),
+        args.query.as_deref().unwrap_or(""),
+        args.page,
+    )
+    .await
+}
+
+pub(crate) async fn search_for_home(
+    registry: Option<&str>,
+    home: Option<&std::path::Path>,
+    query: &str,
+    page: u32,
+) -> Result<()> {
+    let client = RegistryClient::new(resolve_registry_url_for_home(registry, home));
+    let results = client.search(query, page.max(1)).await?;
     crate::print_json(&results)
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
-    let registry = resolve_registry_url(args.registry.as_deref());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let bytes =

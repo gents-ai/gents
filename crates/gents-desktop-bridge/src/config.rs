@@ -19,6 +19,9 @@ pub struct BridgeConfig {
     /// launch; `None` discovers it beside the app, in its resources, then on
     /// PATH.
     pub service_executable: Option<PathBuf>,
+    /// Pack registry base URL named at launch (`--registry`); recorded when
+    /// provisioning a home, unset keeps whatever the home already records.
+    pub registry: Option<String>,
 }
 
 impl Default for BridgeConfig {
@@ -37,6 +40,7 @@ impl Default for BridgeConfig {
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
             service_executable: None,
+            registry: None,
         }
     }
 }
@@ -89,4 +93,5 @@ pub struct ResolvedBridgePolicy {
     pub client_host: bool,
     pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     pub service_executable: Option<PathBuf>,
+    pub registry: Option<String>,
 }
