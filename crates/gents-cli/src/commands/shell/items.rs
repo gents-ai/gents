@@ -6,10 +6,13 @@ use gents_observe::client_projection::canonical_output::{
 };
 use gents_observe::client_projection::query::SessionTranscriptQueryPage;
 use gents_observe::client_projection::store::{session_summary_entries, ClientStore};
+use gents_protocol::background_completion::is_background_completion_notification_message_key;
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::file_changes::{FileImage, ToolFileChanges};
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
-use gents_protocol::output::{MessageBlock, MessageRole};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, PayloadPresentation, TranscriptMessage,
+};
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
@@ -17,6 +20,7 @@ use gents_protocol::transcript::present_message;
 use gents_shell::app::transcript::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
+use gents_tools::rendering::{completion_metadata, CompletionMetadata};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::Value;
 
@@ -254,6 +258,7 @@ pub(super) fn transcript(
     let mut compacted = compacted.into_iter().peekable();
     let mut lines = Vec::new();
     let mut names = RapidHashMap::new();
+    let mut commands = RapidHashMap::new();
     let mut delivered = Vec::new();
     for row in &messages {
         let sequence = i64::from(row.message.sequence);
@@ -292,6 +297,22 @@ pub(super) fn transcript(
                     }
                 }
             }
+            MessageRole::User
+                if is_background_completion_notification_message_key(&row.message.message_key) =>
+            {
+                let Some((call, metadata)) = completion(&row.message) else {
+                    continue;
+                };
+                let subject = commands.get(&call).unwrap_or(&metadata.tool_name);
+                lines.push(notice(&metadata, subject, id));
+                if let Some(tool) = tools.get(call.as_str()).copied() {
+                    if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials)
+                    {
+                        lines.extend(output(&call, &result));
+                    }
+                }
+                delivered.push(call);
+            }
             MessageRole::User if shown.has_visible_body() => {
                 lines.push(shown_line(body, Tone::You, id));
             }
@@ -319,6 +340,9 @@ pub(super) fn transcript(
                     names.insert(tool_call_doc_id.clone(), name.clone());
                     let tool = tools.get(tool_call_doc_id.as_str()).copied();
                     let arguments = tool_arguments(&message, call);
+                    if is_command(name, tool) {
+                        commands.insert(tool_call_doc_id.clone(), command(name, &arguments));
+                    }
                     let changed = edits.get(tool_call_doc_id).and_then(Option::as_deref);
                     let made = tool_lines(tool_call_doc_id, name, tool, &arguments, changed);
                     lines.extend(made);
@@ -489,6 +513,32 @@ fn output(id: &str, result: &str) -> Option<ChatLine> {
     (!shown.is_empty()).then(|| shown_line(capped(shown), Tone::Label, format!("{id}/output")))
 }
 
+/// The call a completion notification delivers to, and what its envelope says.
+fn completion(message: &TranscriptMessage) -> Option<(String, CompletionMetadata)> {
+    let MessagePublication::ToolDelivery { tool_call_doc_id } = &message.publication else {
+        return None;
+    };
+    let metadata = message.blocks.iter().find_map(|block| match block {
+        MessageBlock::Text { text } => match &text.presentation {
+            PayloadPresentation::Composed { parts } => completion_metadata(parts),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    Some((tool_call_doc_id.clone(), metadata))
+}
+
+/// A background call's end, in its run line's columns.
+fn notice(metadata: &CompletionMetadata, subject: &str, id: String) -> ChatLine {
+    let ((mark, tone), verb) = match (metadata.status.as_str(), metadata.reason.as_deref()) {
+        ("completed", _) => (DONE, "done"),
+        ("cancelled", _) => (FAILED, "cancelled"),
+        ("failed", Some("deadline_exceeded")) => (FAILED, "timed out"),
+        _ => (FAILED, "failed"),
+    };
+    shown_line(format!("  {mark} {verb:<5} {}", clean(subject)), tone, id)
+}
+
 /// The running turn's reasoning and reply, under the sequence its message will take.
 pub(super) fn live(next: u32, reasoning: &str, reply: &str) -> Vec<ChatLine> {
     let id = format!("m{next}");
@@ -564,8 +614,8 @@ mod tests {
     };
     use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
     use gents_protocol::output::{
-        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter, StreamPayload,
-        ToolResultPart,
+        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
+        PayloadPresentation, PayloadRef, PresentedPayload, StreamPayload, ToolResultPart,
     };
     use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
     use gents_protocol::session::AgentSession;
@@ -865,6 +915,60 @@ mod tests {
             self.message(delivered);
         }
 
+        /// The completion notification the runtime delivers for background call `id`: a
+        /// user message whose text composes the envelope around the call's output.
+        fn notice(
+            &mut self,
+            sequence: u32,
+            id: &str,
+            status: &str,
+            reason: Option<&str>,
+            output: &str,
+        ) {
+            use gents_tools::rendering::{
+                tool_completion_presentation, NOTIFICATION_SUMMARY_BYTES,
+            };
+            let source = OutputSource::ToolCall {
+                tool_call_doc_id: id.to_string(),
+            };
+            let writer = OutputWriter::ToolExecution {
+                tool_call_doc_id: id.to_string(),
+            };
+            let segment = closed(&at(), source, writer, StreamPayload::ToolOutput, output);
+            let close_doc_id = self.segment(segment);
+            let (_, parts) = tool_completion_presentation(
+                id,
+                "bash",
+                status,
+                output,
+                reason,
+                NOTIFICATION_SUMMARY_BYTES,
+            );
+            let block = MessageBlock::Text {
+                text: PresentedPayload {
+                    output: PayloadRef {
+                        close_doc_id,
+                        stream: 0,
+                    },
+                    presentation: PayloadPresentation::Composed { parts },
+                },
+            };
+            let key =
+                gents_protocol::background_completion::background_completion_notification_message_key(id, "tool");
+            let publication = MessagePublication::ToolDelivery {
+                tool_call_doc_id: id.to_string(),
+            };
+            let notice = header(
+                &at(),
+                &key,
+                sequence,
+                MessageRole::User,
+                publication,
+                vec![block],
+            );
+            self.message(notice);
+        }
+
         fn read(self, compactions: &[CompactionEntryRow], edits: &Edits) -> Transcript {
             let page = SessionTranscriptQueryPage {
                 store: ClientStore::from_rows(self.rows),
@@ -930,6 +1034,81 @@ mod tests {
         ];
         assert_eq!(read.lines, expected);
         assert_eq!(read.next, 8, "the next message's sequence");
+    }
+
+    #[test]
+    fn a_background_completion_shows_its_command_and_output() {
+        use Tone::{Label, Reply, You};
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "run the tests in the background");
+        let cargo = json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        page.tool(1, "t1", "bash", cargo, "completed");
+        page.notice(2, "t1", "completed", None, "test result: ok. 412 passed");
+        page.text(3, MessageRole::Assistant, "All 412 tests passed.");
+
+        let read = page.read(&[], &Edits::new());
+
+        let expected = vec![
+            line("run the tests in the background", You, "m0"),
+            line("  ✓ run   cargo test -p gents", Label, "t1"),
+            line("  ✓ done  cargo test -p gents", Label, "m2"),
+            line("test result: ok. 412 passed", Label, "t1/output"),
+            line("All 412 tests passed.", Reply, "m3"),
+        ];
+        assert_eq!(read.lines, expected);
+        let raw = read
+            .lines
+            .iter()
+            .any(|shown| shown.text.contains("<tool-completion"));
+        assert!(!raw, "the envelope never shows");
+    }
+
+    #[test]
+    fn a_background_completion_names_how_it_ended() {
+        use Tone::{Label, Warn, You};
+        let cargo = || json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        for (status, reason, state, expected) in [
+            (
+                "cancelled",
+                None,
+                "cancelled",
+                "  ✗ cancelled cargo test -p gents",
+            ),
+            (
+                "failed",
+                Some("deadline_exceeded"),
+                "failed",
+                "  ✗ timed out cargo test -p gents",
+            ),
+            (
+                "failed",
+                Some("tool_failed"),
+                "failed",
+                "  ✗ failed cargo test -p gents",
+            ),
+        ] {
+            let mut page = Page::default();
+            page.tool(0, "t1", "bash", cargo(), state);
+            page.notice(1, "t1", status, reason, "boom");
+            let read = page.read(&[], &Edits::new());
+            assert_eq!(
+                read.lines[1],
+                line(expected, Warn, "m1"),
+                "{status} {reason:?}"
+            );
+        }
+
+        // A call not on the loaded page is named by its tool and has no output line.
+        let mut page = Page::default();
+        page.notice(0, "older", "completed", None, "ok");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(read.lines, vec![line("  ✓ done  bash", Label, "m0")]);
+
+        // Only the message key makes a notice: typed envelope text stays the person's.
+        let typed = "<tool-completion tool_call_id=\"x\" tool_name=\"bash\" status=\"completed\">\n  <result>ok</result>\n</tool-completion>";
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, typed);
+        assert_eq!(page.read(&[], &Edits::new()).lines[0].tone, You);
     }
 
     fn file(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeImages {
