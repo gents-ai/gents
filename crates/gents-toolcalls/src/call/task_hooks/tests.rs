@@ -68,34 +68,24 @@ async fn an_interrupt_cancels_ordinary_phases_before_launch_but_not_cleanup() {
 #[cfg(unix)]
 #[tokio::test]
 async fn an_interrupt_stops_a_running_hook() {
+    use crate::test_support::held_process::{HeldProcess, HOLD};
+    use gents_store::test_support::UNREACHED_DEADLINE;
+
     let directory = tempfile::tempdir().expect("hook marker directory");
-    let started = directory.path().join("started");
-    let finished = directory.path().join("finished");
-    assert!(tokio::process::Command::new("mkfifo")
-        .arg(&started)
-        .status()
-        .await
-        .unwrap()
-        .success());
+    let mut process = HeldProcess::new(directory.path()).await;
     let cancellation = TaskHookCancellation::default();
     let exec = ManagedTaskHookExec::new(directory.path().to_path_buf(), cancellation.clone());
-    let script = format!(
-        ": > {}; sleep 30; touch {}",
-        started.display(),
-        finished.display()
+    let script = format!("{HOLD}; touch finished");
+    let held = hook(
+        "held",
+        &["sh", "-c", &script],
+        Some(i64::try_from(UNREACHED_DEADLINE.as_secs()).unwrap()),
     );
     let interrupt = async {
-        let mut pipe = tokio::net::unix::pipe::OpenOptions::new()
-            .open_receiver(&started)
-            .unwrap();
-        let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf)
-            .await
-            .unwrap();
+        process.entered().await;
         cancellation.interrupt();
     };
-    let held = hook("held", &["sh", "-c", &script], Some(60));
     let (attempt, ()) = tokio::join!(exec.attempt(&held), interrupt);
     assert_eq!(attempt.result, HookCommandResult::Interrupted);
-    assert!(!finished.exists());
+    assert!(!directory.path().join("finished").exists());
 }
