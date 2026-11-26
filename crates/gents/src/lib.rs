@@ -1,3 +1,7 @@
+//! Root layer: the DefraDB-backed agent runtime, turn execution, and composition root.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Runtime/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 #[cfg(test)]
 mod client_observation_tests;
 

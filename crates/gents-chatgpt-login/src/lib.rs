@@ -1,3 +1,7 @@
+//! Unlayered leaf: ChatGPT OAuth PKCE login flow and local callback server.
+//!
+//! Renders callback pages via `gents-login-ui` without pulling in the core runtime.
+
 use rapidhash::RapidHashMap;
 use std::io;
 use std::sync::Arc;

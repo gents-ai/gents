@@ -1,3 +1,7 @@
+//! Unlayered leaf: self-contained HTML callback pages and HTTP responses for OAuth login flows.
+//!
+//! Shared by `gents-chatgpt-login` and `gents-claude-login`.
+
 use base64::Engine as _;
 use tiny_http::{Header, Response, StatusCode as TinyStatusCode};
 

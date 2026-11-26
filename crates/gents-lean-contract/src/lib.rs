@@ -1,3 +1,7 @@
+//! Unlayered leaf: test-only loader that builds and reads Lean conformance contract snapshots.
+//!
+//! Executes `Proofs.Conformance.Contracts` under `crates/gents/proofs/Proofs/Conformance/`.
+
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
