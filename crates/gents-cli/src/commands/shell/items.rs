@@ -15,7 +15,9 @@ use gents_protocol::output::{
 };
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
-use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents_protocol::tool_names::{
+    AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+};
 use gents_protocol::transcript::present_message;
 use gents_shell::app::transcript::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
@@ -258,7 +260,7 @@ pub(super) fn transcript(
     let mut compacted = compacted.into_iter().peekable();
     let mut lines = Vec::new();
     let mut names = RapidHashMap::new();
-    let mut commands = RapidHashMap::new();
+    let mut subjects: RapidHashMap<String, String> = RapidHashMap::new();
     let mut delivered = Vec::new();
     for row in &messages {
         let sequence = i64::from(row.message.sequence);
@@ -303,12 +305,15 @@ pub(super) fn transcript(
                 let Some((call, metadata)) = completion(&row.message) else {
                     continue;
                 };
-                let subject = commands.get(&call).unwrap_or(&metadata.tool_name);
-                lines.push(notice(&metadata, subject, id));
-                if let Some(tool) = tools.get(call.as_str()).copied() {
+                let tool = tools.get(call.as_str()).copied();
+                let parent = tool.and_then(|tool| tool.spawned_by_tool_call_doc_id.as_deref());
+                let subject = subjects.get(&call).or_else(|| subjects.get(parent?));
+                let subject = subject.unwrap_or(&metadata.tool_name);
+                lines.push(notice(&metadata, subject, id.clone()));
+                if let Some(tool) = tool {
                     if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials)
                     {
-                        lines.extend(output(&call, &result));
+                        lines.extend(output(&id, &result));
                     }
                 }
                 delivered.push(call);
@@ -340,8 +345,8 @@ pub(super) fn transcript(
                     names.insert(tool_call_doc_id.clone(), name.clone());
                     let tool = tools.get(tool_call_doc_id.as_str()).copied();
                     let arguments = tool_arguments(&message, call);
-                    if is_command(name, tool) {
-                        commands.insert(tool_call_doc_id.clone(), command(name, &arguments));
+                    if let Some(subject) = subject(name, tool, &arguments) {
+                        subjects.insert(tool_call_doc_id.clone(), subject);
                     }
                     let changed = edits.get(tool_call_doc_id).and_then(Option::as_deref);
                     let made = tool_lines(tool_call_doc_id, name, tool, &arguments, changed);
@@ -430,13 +435,7 @@ fn tool_lines(
     };
     let line = |text: String, tone| shown_line(text, tone, id.to_string());
     if name == AGENT_NEW_TOOL_NAME || name == AGENT_MESSAGE_TOOL_NAME {
-        let field = if name == AGENT_NEW_TOOL_NAME {
-            "prompt"
-        } else {
-            "message"
-        };
-        let prompt = arguments[field].as_str().unwrap_or_default();
-        let first = clean(prompt.lines().next().unwrap_or_default());
+        let first = first_prompt_line(name, arguments);
         return vec![line(format!("  ◆ {first}"), Tone::Label)];
     }
     if is_command(name, tool) {
@@ -480,6 +479,30 @@ fn tool_lines(
         name,
     );
     vec![line(format!("  {mark} {service} {called}"), tone)]
+}
+
+/// What a background call's completion names it by: an agent call's first prompt line, a
+/// spawned process's command, or a command's own. A spawned process's completion is its
+/// child's, which names it through this call.
+fn subject(name: &str, tool: Option<&AgentToolCallRow>, arguments: &Value) -> Option<String> {
+    if name == AGENT_NEW_TOOL_NAME || name == AGENT_MESSAGE_TOOL_NAME {
+        return Some(first_prompt_line(name, arguments));
+    }
+    if name == SPAWN_PROCESS_TOOL_NAME {
+        let spawned = arguments["tool_name"].as_str()?;
+        return Some(command(spawned, &arguments["args"]));
+    }
+    is_command(name, tool).then(|| command(name, arguments))
+}
+
+fn first_prompt_line(name: &str, arguments: &Value) -> String {
+    let field = if name == AGENT_NEW_TOOL_NAME {
+        "prompt"
+    } else {
+        "message"
+    };
+    let prompt = arguments[field].as_str().unwrap_or_default();
+    clean(prompt.lines().next().unwrap_or_default())
 }
 
 /// A command as it was run: its argv joined as a shell would read it.
@@ -887,6 +910,35 @@ mod tests {
             let source = OutputSource::ToolCall {
                 tool_call_doc_id: id.to_string(),
             };
+            self.delivery(sequence, id, source, output);
+        }
+
+        /// The receipt a background call's caller gets at once, written apart from its output.
+        fn receipt(&mut self, sequence: u32, id: &str, text: &str) {
+            let key = format!("receipt:{id}");
+            self.delivery(sequence, id, OutputSource::Authored { key }, text);
+        }
+
+        /// Marks call `id` as run in the background.
+        fn background(&mut self, id: &str) {
+            let mut tools = self.rows.tool_calls.iter_mut();
+            let tool = tools.find(|tool| tool.doc_id.as_deref() == Some(id));
+            tool.expect("a call on the page").await_mode = Some("background".to_string());
+        }
+
+        /// The process `parent`'s spawn_process call started, as call `id` in `state`.
+        fn spawned(&mut self, id: &str, parent: &str, state: &str) {
+            let row = json!({
+                "_docID": id, "node_did": "n", "request_doc_id": "bae-r1", "tool_call_key": id,
+                "session_id": "s1", "request_id": "r1", "requester_did": "u", "tool_name": "bash",
+                "lifecycle_state": state, "await_mode": "background",
+                "spawned_by_tool_call_doc_id": parent,
+            });
+            let row = serde_json::from_value::<AgentToolCallRow>(row).unwrap();
+            self.rows.tool_calls.push(row);
+        }
+
+        fn delivery(&mut self, sequence: u32, id: &str, source: OutputSource, output: &str) {
             let writer = OutputWriter::ToolExecution {
                 tool_call_doc_id: id.to_string(),
             };
@@ -1052,7 +1104,7 @@ mod tests {
             line("run the tests in the background", You, "m0"),
             line("  ✓ run   cargo test -p gents", Label, "t1"),
             line("  ✓ done  cargo test -p gents", Label, "m2"),
-            line("test result: ok. 412 passed", Label, "t1/output"),
+            line("test result: ok. 412 passed", Label, "m2/output"),
             line("All 412 tests passed.", Reply, "m3"),
         ];
         assert_eq!(read.lines, expected);
@@ -1109,6 +1161,62 @@ mod tests {
         let mut page = Page::default();
         page.text(0, MessageRole::User, typed);
         assert_eq!(page.read(&[], &Edits::new()).lines[0].tone, You);
+    }
+
+    #[test]
+    fn a_receipt_and_the_completion_keep_their_own_lines() {
+        use Tone::Label;
+        let mut page = Page::default();
+        let cargo = json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        page.tool(0, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        page.receipt(1, "t1", "continues in the background");
+        page.notice(2, "t1", "completed", None, "test result: ok");
+
+        let read = page.read(&[], &Edits::new());
+
+        let expected = vec![
+            line("  ✓ run   cargo test -p gents", Label, "t1"),
+            line("continues in the background", Label, "t1/output"),
+            line("  ✓ done  cargo test -p gents", Label, "m2"),
+            line("test result: ok", Label, "m2/output"),
+        ];
+        assert_eq!(read.lines, expected);
+    }
+
+    #[test]
+    fn an_agent_call_completion_names_its_prompt() {
+        let mut page = Page::default();
+        let prompt = json!({ "prompt": "review it\nthen report" });
+        page.tool(0, "t1", AGENT_NEW_TOOL_NAME, prompt, "completed");
+        page.background("t1");
+        page.notice(1, "t1", "completed", None, "reviewed");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(
+            read.lines[1],
+            line("  ✓ done  review it", Tone::Label, "m1")
+        );
+    }
+
+    #[test]
+    fn a_spawned_process_completion_names_its_command() {
+        use Tone::Label;
+        let mut page = Page::default();
+        let spawn = json!({
+            "tool_name": "bash",
+            "args": { "command": "cargo", "args": ["test", "-p", "gents"] },
+        });
+        page.tool(0, "p1", "spawn_process", spawn, "completed");
+        page.spawned("c1", "p1", "completed");
+        page.notice(1, "c1", "completed", None, "test result: ok");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(
+            read.lines[1..],
+            [
+                line("  ✓ done  cargo test -p gents", Label, "m1"),
+                line("test result: ok", Label, "m1/output"),
+            ]
+        );
     }
 
     fn file(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeImages {
