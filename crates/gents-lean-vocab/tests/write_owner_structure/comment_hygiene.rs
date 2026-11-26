@@ -110,7 +110,12 @@ fn skip_quoted_string(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     let mut newlines = 0;
     while index < bytes.len() {
         match bytes[index] {
-            b'\\' => index = (index + 2).min(bytes.len()),
+            b'\\' => {
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    newlines += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
             b'"' => return Some((index + 1, newlines)),
             b'\n' => {
                 newlines += 1;
@@ -316,4 +321,8 @@ fn comment_hygiene_fence_flags_issue_refs_and_history_without_false_positives() 
             "{source}"
         );
     }
+    assert_eq!(
+        comment_violations("let s = \"a \\\n b\";\n// fix #4123\n", &patterns),
+        vec![(3, "issue/PR number")]
+    );
 }
