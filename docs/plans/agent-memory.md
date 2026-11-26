@@ -1,149 +1,152 @@
-# Agent memory on DefraDB DiskANN
+# Agent memory on DefraDB (DiskANN + BM25)
 
-Status: in progress. Plan slug: `agent-memory`. Branch: `vclq/memory`.
+Status: plan under review. Plan slug: `agent-memory`. Branch: `vclq/memory`.
+No implementation tests will run until this plan is approved as complete.
 
-## Problem
+## Goal
 
-Agents persist every `AgentMessage`, but cross-session recall is literal substring
-search over message text. There is no semantic store, no embedding, and no
-retrieval step, so long-horizon memory benchmarks (AMB, DolphinBench, LoCoMo,
-LongMemEval) score at the no-memory baseline. The runtime owns the primitives
-(DefraDB vector indexes, BM25, ACP, transactions) but not the pipeline.
+Give an agent cross-session memory: an in-process multilingual embedder, a
+DefraDB collection with a DiskANN (disk-based) vector index and a BM25 full-text
+index, an ingest and retrieval path, a `memory` tool, and bounded automatic
+context injection. Target long-horizon memory tasks (AMB, DolphinBench, LoCoMo,
+LongMemEval) without a remote embedding service.
 
-## Delivered behavior
+## Verified facts (pinned DefraDB rev `2e6f673bf5...`, 2026-11-25)
 
-1. `help indexes vector diskann` documents the DiskANN engine.
-2. A pure-Rust in-process embedder ships in the binary and generates vectors with
-   no network and no external service.
-3. An application collection `AgentMemory` stores text, metadata and a DiskANN
-   vector index, scoped by node, agent and ACP.
-4. A `memory` tool ingests and retrieves memory (remember, search, forget, list,
-   ingest).
-5. Retrieval is hybrid: BM25 and DiskANN, fused by reciprocal rank, deduped and
-   bounded.
-6. A bounded memory section is injected into the provider context before each
-   turn, behind config, with the model id and ranking recorded.
-7. Measurements: embed latency and throughput, search latency, DiskANN recall
-   against FLAT, hybrid vs vector-only recall.
+- gents pins defradb.rs at `2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606`
+  (`Cargo.toml`, `Cargo.lock`). This is the Rust runtime. Go `defradb` is not used.
+- DiskANN is the disk-based vector engine. Code:
+  `crates/database/db/src/index/vector/engine/diskann/` (mod, build, codec, graph,
+  merge, pending_cache, params). `EngineKind::DiskAnn` is in
+  `crates/database/db/src/index/vector/engine/ann.rs:144`.
+- DiskANN SDL is `@index(vector: {dimensions: N, diskann: {...}})`. Accepted keys:
+  `R`, `lBuild`, `lSearch`, `alphaPercent`, `m`, `sampleBytes`, `residentCodes`
+  (`crates/engine/query/tests/vector_index_sdl.rs:547`). `alg: DISKANN` selects
+  defaults. Defaults are `R 64`, `lBuild 100`, `lSearch 100`, `alphaPercent 120`,
+  `m 0` (derived), `sampleBytes 128 MiB`, `residentCodes false`
+  (`crates/foundation/schema/src/index.rs`, `DiskAnnParams`).
+- DiskANN accepts `COSINE` only; `EUCLIDEAN` and `DOT` are refused at definition
+  time (`supports_metric`, same file). Below `TRAIN_THRESHOLD = 1024`
+  (`diskann/params.rs:7`) the index answers by exhaustive scan; the first write
+  at the threshold trains a product quantizer and builds a FreshVamana graph.
+  After training, inserts go to a durable pending set with an in-memory cache,
+  and searches walk the graph, scan pending codes, and re-rank.
+- BM25 is a first-class DefraDB index: `@fulltext(language, k1, b)`
+  (`FullTextIndexDescription` in `crates/foundation/schema/src/index.rs`), and
+  queries rank with `BM25(query: "...", fields: [...])`.
+- DefraDB also has a Rust hybrid helper:
+  `DenseHybridSearchRequest` and `hybrid_search_dense` in
+  `crates/database/db/src/search/dense.rs`, exported from `db/src/lib.rs`. It
+  issues a BM25 query and a dense query and fuses them with reciprocal rank
+  fusion, `DEFAULT_RRF_K = 60.0`.
+- That helper embeds the query itself through `EmbeddingClientConfig` and
+  `embed_query`, which call an OpenAI-compatible or Ollama HTTP endpoint
+  (`crates/database/db/src/search/dense.rs`, `search/config.rs`,
+  `search/embedding.rs`). It has no input for a precomputed query vector, so an
+  in-process embedder cannot use it unchanged.
+- A collection with no `@policy` is public: ACP is not enforced
+  (`crates/database/db/src/collection/acp.rs:59-77`, `116-127`). Memory must carry
+  a policy.
+- `parentField` is required exactly when a policy resource declares a `create`
+  rule (`crates/database/db/src/access/dac/mod.rs:231`). The household
+  `agent_children` resource (parent agents; read `parent->session_read`, update
+  and delete `parent->session_admin`) has no `create` rule, so its documents take
+  no `parentField`; the `parent` relationship is granted separately
+  (`crates/gents-schemas/schemas/agent/agent_ownership_policy_v2.yaml:314`).
+- Handshake points in gents: `ConfigAccess::add_collection`
+  (`crates/gents-store/src/config_client/mod.rs:1092`), reads through
+  `graphql_with_transaction_retry` (`crates/gents-store/src/graphql.rs:172`),
+  policy placeholder rendering through `HomePolicyIds::render`
+  (`crates/gents-schemas/src/policy_ids.rs`), and the pre-turn context message at
+  `AgentDaemon::request_frontier`
+  (`crates/gents/src/runtime/agent/daemon/inference/prepare.rs:427`).
 
-## Decisions
+## Embedder
 
-- Embedder: `minishlab/blink-multilingual-64M-int8` (MIT, 256d, 100+ languages,
-  static, MMTEB mean 51.60, retrieval 47.52). Rejected: potion-retrieval-32M
-  (English only), potion-multilingual-128M (lower), bge-small (English), Qwen3-0.6B
-  (too large to bundle), EmbeddingGemma (gated license).
-- Pure Rust: `model2vec-rs` with `fancy-regex` and `local-only`, weights in the
-  binary via `include_bytes!`.
-- DiskANN (FreshVamana) is the vector engine. No VM25 exists in the pinned
-  defradb.rs rev or in the Go defradb repo.
-- Application collection installed by gents with the household `children`
-  policy; no new core document type and no new Lean ACP model.
-- Hybrid retrieval, no cross-encoder reranker in v1. A reranker is deferred until
-  recall measurement shows a gap.
-- Tool plus automatic injection. Injection happens in `request_frontier`, before
-  the first request entry, bounded by tokens.
+`minishlab/blink-multilingual-64M-int8` (MIT): 64M parameters, 256 dimensions,
+100+ languages, normalized, static Model2Vec. Published MMTEB Multilingual v2
+mean 51.60, retrieval 47.52, MNanoBEIR 41.18. Asset size: 64,000,088 bytes
+int8 safetensors, 7,417,320 bytes tokenizer, 84 bytes config (about 68 MB).
+Run through `model2vec-rs` 0.5.1 with `fancy-regex` and `local-only` for a pure
+Rust, offline build; weights embedded with `include_bytes!`.
 
-## Phases
+This is a static model: faster than a transformer, with lower retrieval quality.
+Hybrid BM25 and the measurement phase are how the plan holds that trade-off
+honestly. Rejected: `potion-retrieval-32M` and `bge-small-en-v1.5` (English
+only), `potion-multilingual-128M` (lower quality), `Qwen3-Embedding-0.6B` and
+`EmbeddingGemma-300m` (too large to embed in the binary; Gemma also has a gated
+license).
+
+## Design
+
+- New leaf crate `gents-memory-embed`: the bundled model and an `Embedder` trait
+  (`model_id`, `dimensions`, `embed(batch)`); calls run on `spawn_blocking`, no
+  second runtime.
+- Collection `AgentMemory`, installed by gents at first use as an application
+  collection with `@policy(id: "$household", resource: "agent_children")` and an
+  explicit `parent` relationship to the `Agent` document. It is not a new Lean
+  policy resource. Fields: `memory_key`, `node_did`, `agent_did`, `session_id`,
+  `source`, `kind`, `text` (`@fulltext`), `embedding: [Float32!]` with
+  `@index(vector: {dimensions: 256, diskann: {...}})`, `content_hash`,
+  `model_id`, `created_at`, `last_used_at`, `metadata`, plus a composite unique
+  index on `agent_did` and `content_hash`.
+- Retrieval: BM25 and DiskANN candidates, fused in gents with RRF `k = 60`
+  (matching DefraDB's constant), deduped and bounded. Two reads in parallel. We
+  do not use `hybrid_search_dense` in v1 because it cannot take the in-process
+  query vector; switching to it needs a defradb.rs input for a precomputed
+  vector, which is out of scope for this branch and recorded as a follow-up.
+- Tool `memory`: `help`, `remember`, `search`, `forget`, `list`, `ingest`.
+  Ingestion pages `AgentMessage`, chunks within a token budget, embeds in
+  batches, dedupes by `content_hash`, and checkpoints a cursor. Bounded.
+- Automatic injection: in `request_frontier`, after the authored prompt is
+  known, retrieve a bounded memory section and append it to the context message.
+  Config: enabled, top_k, char and token budget. No memory text in logs.
+- Observability: tracing counters and histograms for embed latency, search
+  latency, candidate counts, and fusion; model id and ranking mode recorded.
+
+## Phases and status
 
 | # | Phase | Status |
 |---|---|---|
-| 0 | Worktree, plan, decision log, WIP PR | in progress |
+| 0 | Worktree, factual plan, decision log, WIP PR | done |
 | 1 | Expose DiskANN in schema help and discovery | pending |
-| 2 | `gents-memory-embed`: pure-Rust embedder + bundled int8 model | pending |
-| 3 | `AgentMemory` collection, install, store, ACP | pending |
-| 4 | `memory` tool: remember, search, forget, list, help | pending |
-| 5 | Ingestion: explicit and bounded session ingest | pending |
-| 6 | Hybrid retrieval: BM25 + DiskANN RRF | pending |
-| 7 | Automatic injection in the provider context | pending |
-| 8 | Measurement and recall gate | pending |
-| 9 | Gate, verify, document results | pending |
+| 2 | `gents-memory-embed` crate, bundled int8 model, hakari update | pending |
+| 3 | `AgentMemory` collection, policy parent, install, ACP isolation | pending |
+| 4 | `memory` tool and bounded ingestion | pending |
+| 5 | Hybrid BM25 + DiskANN retrieval with RRF k=60 | pending |
+| 6 | Bounded automatic context injection | pending |
+| 7 | Measurement: embed/search latency, DiskANN recall vs FLAT, hybrid lift | pending |
+| 8 | Gate, verification, PR description with results | pending |
 
-## Phase detail
+Tests are written with each phase and run only after this plan is approved as
+complete. Each phase ends with a commit and push to `vclq/memory`.
 
-### 0. Setup
+## Open points already decided
 
-`make worktree BRANCH=vclq/memory BASE=origin/main`, decision log, draft PR.
-Commit and push at each phase boundary.
-
-### 1. DiskANN exposure
-
-Add `indexes vector diskann` to `help::PATHS`, a page in
-`crates/gents-tools/src/builtin/schema_help/help/indexes.rs`, extend the
-`indexes vector` discovery line, and cover the page in the existing parse tests.
-
-### 2. Embedder
-
-New leaf crate `gents-memory-embed`:
-- `Embedder` trait: `model_id`, `dimensions`, `embed(&[String]) -> Vec<Vec<f32>>`.
-- `StaticEmbedder` over `model2vec_rs::model::StaticModel` loaded from bytes.
-- Bundled asset: `blink-multilingual-64M-int8` config, tokenizer and safetensors,
-  with the model license.
-- `spawn_blocking` at call sites; no second runtime.
-- Tests: deterministic vectors for a fixed sentence, dimension and normalization.
-
-### 3. Memory collection
-
-`AgentMemory` SDL with:
-- `memory_key` unique, `node_did`, `agent_did`, `session_id`, `source`, `kind`,
-  `text`, `embedding: [Float32!] @index(vector: {dimensions: 256, diskann: {...}})`,
-  `content_hash`, `model_id`, `created_at`, `last_used_at`, `metadata`.
-- composite unique index on `agent_did` and `content_hash`.
-- `@fulltext` on `text` for BM25.
-- household `children` policy rendered with `HomePolicyIds`.
-- install owner: preview and apply through `ConfigAccess`; idempotent.
-
-Tests: install, write, read back, nearest neighbor (exact below training
-threshold), agent isolation.
-
-### 4. Tool
-
-`gents-tools/src/memory/` with `help`, `remember`, `search`, `forget`, `list`.
-`search` embeds the query, runs hybrid retrieval, returns bounded snippets with
-scores and ranking mode. Guided failures; no unbounded scans.
-
-### 5. Ingestion
-
-`remember` writes one record. `ingest` pages `AgentMessage` for a session,
-chunks, embeds in batches, dedupes by `content_hash`, checkpoints a cursor and
-reports counts. Bounded page size and batch size.
-
-### 6. Hybrid retrieval
-
-BM25 and DiskANN candidates in parallel, reciprocal rank fusion (k = 60),
-dedupe by `memory_key`, bounded candidate and result counts. Shared query builder
-with `defra_query`; no second GraphQL interpreter.
-
-### 7. Automatic injection
-
-In `request_frontier`, after the authored prompt is known, retrieve a bounded
-memory section and append it to the context message. Config: enabled, top_k,
-char and token budget. Timeout bounded by the request deadline. Record model id
-and ranking mode in the injected section, never memory text in logs.
-
-### 8. Measurement
-
-- Embed latency p50/p95 and texts/s for the bundled model.
-- Search latency p50/p95 for BM25, DiskANN, hybrid.
-- Recall@10 of DiskANN vs FLAT on a fixed corpus.
-- Recall@10 of hybrid vs vector-only.
-- A recall gate test; a reranker decision recorded from the numbers.
-
-### 9. Gate
-
-`make gate-plan`, the selected jobs, `fmt`, `lint`, `contract` for the new crate
-and docs. Report exact commands and results.
+- Use defradb.rs, not Go.
+- Use the disk-based DiskANN engine and DefraDB BM25.
+- Keep the branch self-contained: gents-side RRF instead of a defradb.rs API
+  change for a precomputed query vector.
+- `agent_children` policy with an explicit parent relationship; prove agent
+  isolation.
+- One bundled multilingual static model; no optional quality model in v1.
 
 ## Deferred
 
-- Cross-encoder reranker: only if measured recall demands it.
-- P2P memory replication: inherited from DefraDB, not designed here.
-- LLM summarization/extraction on ingest: not in v1.
+- `hybrid_search_dense` with a precomputed query vector (needs a defradb.rs
+  change and a pin bump).
+- Cross-encoder reranker; only if measured recall demands it.
+- LLM summarization or extraction on ingest.
+- P2P memory replication beyond whatever DefraDB already provides.
 
 ## Risks
 
-- DiskANN is approximate after training and cosine only; recall gate required.
-- Static embeddings trade quality for speed; hybrid BM25 and measurements hold it.
-- 68 MB asset grows the binary; measured and documented.
-- Application-collection policy must be proven by an ACP isolation test.
-- Memory text is prompt material; same access boundary as the session, no PII in
-  logs.
+- Static embeddings are weaker than transformers; hybrid retrieval and the
+  measurement phase bound the risk.
+- DiskANN is approximate after 1024 vectors and cosine only; a recall gate
+  against FLAT is required.
+- 68 MB asset increases binary and repository size.
+- ACP correctness depends on the `agent_children` parent relationship; an
+  isolation test is a release gate.
+- If `VM25` names a different disk-based engine than DiskANN, it is not in the
+  pinned tree; the exact reference is needed before it can be used.
