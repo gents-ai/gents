@@ -1,0 +1,4 @@
+---- MODULE MCObserverCollectionReloadKeepFence ----
+EXTENDS ObserverCollectionReload
+
+====

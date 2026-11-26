@@ -53,6 +53,12 @@ attribute [conformance_function] deliver asksRetryNow
 
 end ObserverResync
 
+namespace SessionRequestReload
+
+attribute [conformance_function] derivesAlone
+
+end SessionRequestReload
+
 namespace ServiceLifecycle
 
 deriving instance Lean.ToJson for Action, CallerObservation, Decision, StartDisposition

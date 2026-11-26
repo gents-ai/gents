@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::watch;
 
-use crate::client_projection::query::{replace_collection_roots, CollectionRoot};
+use crate::client_projection::query::{replace_partial_read, CollectionRoot, PartialRead};
 use crate::client_projection::store::{ClientStore, SharedClientStore};
+use gents_protocol::session::SessionScope;
 
 #[derive(Debug, Default)]
 pub struct ObserverMetrics {
@@ -113,11 +114,34 @@ impl StoreReadFence {
     }
 }
 
+/// `SessionRequestReload.derivesAlone`.
+fn derives_alone(held_triggered: bool, read_triggered: bool) -> bool {
+    !held_triggered && !read_triggered
+}
+
+/// Why a read did not publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rejected {
+    /// A publication since the capture moved its fence.
+    Superseded,
+    /// A session scope it read does not derive alone.
+    Deferred,
+}
+
+/// `ObserverResync.collectionSettlement` of a partial read that returned rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartialPublication {
+    Published,
+    Superseded,
+    Deferred,
+}
+
 enum StoreMutation {
     /// A reload of the node, replacing every row its store holds.
     Replace(ClientStore),
-    /// A reload of some collections, replacing their rows alone.
-    Collections(BTreeSet<CollectionRoot>, ClientStore),
+    /// A partial read, replacing the rows of its collections and the
+    /// requests of its session scopes alone.
+    Partial(PartialRead, ClientStore),
     Chat(ClientStore),
 }
 
@@ -127,7 +151,7 @@ impl StoreMutation {
     /// the request-event epoch.
     fn accepts(&self, fences: &StoreReadFence, captured: &StoreReadFence) -> bool {
         match self {
-            Self::Replace(_) | Self::Collections(..) => fences.accepts_reload(captured),
+            Self::Replace(_) | Self::Partial(..) => fences.accepts_reload(captured),
             Self::Chat(_) => fences.accepts(captured),
         }
     }
@@ -135,17 +159,32 @@ impl StoreMutation {
     fn provenance(&self) -> Option<ProvenanceUpdate> {
         match self {
             Self::Replace(_) => Some(ProvenanceUpdate::Invalidate),
-            Self::Collections(..) => None,
+            Self::Partial(read, _) => {
+                (!read.scopes.is_empty()).then_some(ProvenanceUpdate::Compare)
+            }
             Self::Chat(incoming) => provenance_update(incoming),
+        }
+    }
+
+    /// Whether every session scope the mutation replaces derives alone
+    /// against the rows it publishes into.
+    fn derivable(&self, current: &ClientStore) -> bool {
+        match self {
+            Self::Partial(read, incoming) if !read.scopes.is_empty() => derives_alone(
+                current.holds_triggered_request(&read.scopes),
+                incoming
+                    .requests
+                    .iter()
+                    .any(|row| row.caused_by_trigger_id.is_some()),
+            ),
+            _ => true,
         }
     }
 
     fn apply(self, current: &ClientStore) -> ClientStore {
         match self {
             Self::Replace(incoming) => incoming,
-            Self::Collections(roots, incoming) => {
-                replace_collection_roots(current, &roots, incoming)
-            }
+            Self::Partial(read, incoming) => replace_partial_read(current, &read, incoming),
             Self::Chat(incoming) => current.merge_chat_patch(incoming),
         }
     }
@@ -220,7 +259,7 @@ struct Fleet {
     version_tx: watch::Sender<u64>,
     resync_tx: watch::Sender<u64>,
     pending_resync: StdMutex<BTreeSet<String>>,
-    pending_collections: StdMutex<BTreeMap<String, BTreeSet<CollectionRoot>>>,
+    pending_partial: StdMutex<BTreeMap<String, PartialRead>>,
 }
 
 impl Fleet {
@@ -252,7 +291,7 @@ impl ObservedStores {
                 version_tx,
                 resync_tx,
                 pending_resync: StdMutex::new(BTreeSet::new()),
-                pending_collections: StdMutex::new(BTreeMap::new()),
+                pending_partial: StdMutex::new(BTreeMap::new()),
             }),
         })
     }
@@ -420,14 +459,15 @@ impl ObservedStores {
         self.fleet.resync_tx.subscribe()
     }
 
-    /// The collections each node's store asked to reload alone.
-    pub(crate) fn take_collection_requests(&self) -> BTreeMap<String, BTreeSet<CollectionRoot>> {
+    /// The collections and session scopes each node's store asked to read
+    /// alone.
+    pub(crate) fn take_partial_requests(&self) -> BTreeMap<String, PartialRead> {
         std::mem::take(
             &mut *self
                 .fleet
-                .pending_collections
+                .pending_partial
                 .lock()
-                .expect("pending collections lock poisoned"),
+                .expect("pending partial reads lock poisoned"),
         )
     }
 
@@ -538,13 +578,29 @@ impl ObservedStore {
     /// Queues `root` of this node for the observer's collection reload
     /// (`ObserverResync.queueCollection`); requests coalesce into one read.
     pub(crate) fn request_collection_reload(&self, root: CollectionRoot) {
+        self.request_partial_read(PartialRead {
+            roots: BTreeSet::from([root]),
+            ..Default::default()
+        });
+    }
+
+    /// Queues the requests of `scopes` of this node for the observer's
+    /// partial read (`ObserverResync.queueCollection`).
+    pub(crate) fn request_session_reload(&self, scopes: BTreeSet<SessionScope>) {
+        self.request_partial_read(PartialRead {
+            scopes,
+            ..Default::default()
+        });
+    }
+
+    fn request_partial_read(&self, read: PartialRead) {
         self.fleet
-            .pending_collections
+            .pending_partial
             .lock()
-            .expect("pending collections lock poisoned")
+            .expect("pending partial reads lock poisoned")
             .entry(self.node_did.clone())
             .or_default()
-            .insert(root);
+            .extend(read);
         self.fleet.resync_tx.send_modify(|generation| {
             *generation = generation.saturating_add(1);
         });
@@ -594,6 +650,7 @@ impl ObservedStore {
             Some(captured),
             StoreMutation::Chat(patch.into_observer_projection()),
         )
+        .ok()
     }
 
     pub fn replace_reloaded_snapshot_at_read(
@@ -605,7 +662,7 @@ impl ObservedStore {
             Some(captured),
             StoreMutation::Replace(incoming.into_observer_projection()),
         )
-        .is_some()
+        .is_ok()
     }
 
     /// Replaces the rows of `roots` with `incoming`'s through the reload fence
@@ -617,8 +674,33 @@ impl ObservedStore {
         roots: BTreeSet<CollectionRoot>,
         incoming: ClientStore,
     ) -> bool {
-        self.update_if(Some(captured), StoreMutation::Collections(roots, incoming))
-            .is_some()
+        self.publish_partial_at_read(
+            captured,
+            PartialRead {
+                roots,
+                ..Default::default()
+            },
+            incoming,
+        ) == PartialPublication::Published
+    }
+
+    /// Publishes a partial read's rows (`ObserverResync.collectionSettlement`):
+    /// nothing when a session scope it read does not derive alone against the
+    /// store's rows, else through the reload fence.
+    pub(crate) fn publish_partial_at_read(
+        &self,
+        captured: &StoreReadFence,
+        read: PartialRead,
+        incoming: ClientStore,
+    ) -> PartialPublication {
+        match self.update_if(
+            Some(captured),
+            StoreMutation::Partial(read, incoming.into_observer_projection()),
+        ) {
+            Ok(_) => PartialPublication::Published,
+            Err(Rejected::Superseded) => PartialPublication::Superseded,
+            Err(Rejected::Deferred) => PartialPublication::Deferred,
+        }
     }
 
     /// Publish a structural database change without retaining its transcript
@@ -708,11 +790,18 @@ impl ObservedStore {
         (fence_accepted, rows_current)
     }
 
-    fn update_if(&self, captured: Option<&StoreReadFence>, mutation: StoreMutation) -> Option<u64> {
+    fn update_if(
+        &self,
+        captured: Option<&StoreReadFence>,
+        mutation: StoreMutation,
+    ) -> Result<u64, Rejected> {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
+            if !mutation.derivable(state.snapshot.as_ref()) {
+                return Err(Rejected::Deferred);
+            }
             if captured.is_some_and(|captured| !mutation.accepts(&state.fences, captured)) {
-                return None;
+                return Err(Rejected::Superseded);
             }
             let store_version = state.revision.store_version.saturating_add(1);
             let provenance = mutation.provenance();
@@ -740,7 +829,7 @@ impl ObservedStore {
             }
         };
         self.publish_notice(notice);
-        Some(notice.revision.store_version)
+        Ok(notice.revision.store_version)
     }
 }
 
@@ -775,3 +864,13 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
 
 #[cfg(test)]
 mod reload_tests;
+
+#[cfg(test)]
+mod conformance {
+    #[test]
+    fn derives_alone_matches_lean() {
+        gents_lean_vocab::families::session_request_reload_derives_alone::replay(|i| {
+            super::derives_alone(i.held_triggered, i.read_triggered)
+        });
+    }
+}

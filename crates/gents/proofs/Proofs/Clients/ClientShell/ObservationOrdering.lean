@@ -1410,6 +1410,96 @@ theorem admission_blocked_unless_ready (status : Status) :
 
 end RuntimeConnectionObservation
 
+/-! Which requests a node's snapshot shows, and when one session scope's share
+of them can be read alone. The snapshot selects its roots (every non-terminal
+request, every session's head request, each trigger's newest candidates) and
+closes them over the request links (the owner of a folded or replaced request,
+a retry's parent and children, the request a queued one waits behind). Every
+link stays inside one session scope (node, session and requester:
+`request_closure.rs` refuses a linked row outside its scope). Candidates are
+the one root chosen across scopes. -/
+namespace SessionRequestReload
+
+/-- A request as the snapshot's selection sees it. -/
+structure Request where
+  scope : Nat
+  /-- Non-terminal, or its session's head request: a root read from its scope. -/
+  seed : Bool
+  /-- Among its trigger's newest candidates: a root read per trigger. -/
+  candidate : Bool
+  /-- A trigger caused it. -/
+  triggered : Bool
+
+/-- `b` is reached from `a` over the request links. -/
+inductive Reaches (linked : Request → Request → Prop) : Request → Request → Prop where
+  | root (r : Request) : Reaches linked r r
+  | link {a b c : Request} : Reaches linked a b → linked b c → Reaches linked a c
+
+/-- The requests a full load of the node shows. -/
+def Shown (linked : Request → Request → Prop) (r : Request) : Prop :=
+  ∃ root, (root.seed = true ∨ root.candidate = true) ∧ Reaches linked root r
+
+/-- The requests a read of one session scope shows: that scope's non-terminal
+requests and its head, closed over the links. -/
+def ShownFromScope (linked : Request → Request → Prop) (scope : Nat) (r : Request) : Prop :=
+  ∃ root, root.seed = true ∧ root.scope = scope ∧ Reaches linked root r
+
+theorem reaches_keeps_scope {linked : Request → Request → Prop}
+    (hscope : ∀ a b, linked a b → a.scope = b.scope) {a b : Request}
+    (h : Reaches linked a b) : a.scope = b.scope := by
+  induction h with
+  | root => rfl
+  | link _ hl ih => exact ih.trans (hscope _ _ hl)
+
+/-- A scope holding no trigger candidate is derivable alone: the requests a
+full load shows for it are exactly those a read of the scope shows. Replacing
+the scope's rows with that read leaves the store as a full load would. -/
+theorem session_requests_derive_alone {linked : Request → Request → Prop}
+    (hscope : ∀ a b, linked a b → a.scope = b.scope) (scope : Nat)
+    (hnone : ∀ r : Request, r.candidate = true → r.scope ≠ scope) (r : Request) :
+    (Shown linked r ∧ r.scope = scope) ↔ ShownFromScope linked scope r := by
+  constructor
+  · rintro ⟨⟨root, hroot, hreach⟩, hr⟩
+    have hsame : root.scope = scope := (reaches_keeps_scope hscope hreach).trans hr
+    rcases hroot with hseed | hcand
+    · exact ⟨root, hseed, hsame, hreach⟩
+    · exact absurd hsame (hnone root hcand)
+  · rintro ⟨root, hseed, hsame, hreach⟩
+    exact ⟨⟨root, Or.inl hseed, hreach⟩, (reaches_keeps_scope hscope hreach).symm.trans hsame⟩
+
+/-- A scope with a candidate is not: the candidate is shown by a full load
+and, unless it is also a seed or linked from one, by no read of its scope. -/
+theorem candidate_is_shown_by_the_full_load (linked : Request → Request → Prop)
+    (r : Request) (h : r.candidate = true) : Shown linked r :=
+  ⟨r, Or.inr h, .root r⟩
+
+/-- Whether a session scope's requests may be replaced by a read of that scope
+alone: the store holds no trigger-caused request for the scope and the read
+returned none. A request becomes a candidate only by a trigger-caused write,
+which is a node change (`ObserverResync.Change`), so the full load that
+follows it puts the candidate in the store; a scope whose stored and read
+requests no trigger caused therefore has no candidate
+(`untriggered_scope_has_no_candidate`). The test is wider than candidacy,
+which only the per-trigger read knows: a triggered request that is no longer
+a candidate also sends its scope to the full load. -/
+def derivesAlone (heldTriggered readTriggered : Bool) : Bool :=
+  !heldTriggered && !readTriggered
+
+theorem untriggered_scope_has_no_candidate (scope : Nat)
+    (hcandidate : ∀ r : Request, r.candidate = true → r.triggered = true)
+    (huntriggered : ∀ r : Request, r.scope = scope → r.triggered = false) :
+    ∀ r : Request, r.candidate = true → r.scope ≠ scope := by
+  intro r hcand hsame
+  have := hcandidate r hcand
+  simp [huntriggered r hsame] at this
+
+theorem derives_alone_iff_untriggered (heldTriggered readTriggered : Bool) :
+    derivesAlone heldTriggered readTriggered = true ↔
+      heldTriggered = false ∧ readTriggered = false := by
+  cases heldTriggered <;> cases readTriggered <;> simp [derivesAlone]
+
+end SessionRequestReload
+
 /-! The observer's per-node load loop and what it shows the user. One loop owns
 every node: a queued node starts one load, which captures the store fence,
 reads the runtime and publishes into the node's own store through
@@ -1445,12 +1535,15 @@ def settlement (s : State) (read : Read) : LoadResult → Settlement
 /-- What a change delivered on a node's subscription is, by its collection. A
 `collection` is a configuration collection whose snapshot root is one
 self-contained view: its rows depend on no other root and no other root's
-follow-up reads depend on them. `node` is every other observed collection: the
-Node root, whose absence is a refusal, and the requests, sessions and triggers,
-from which the snapshot derives request closure, session heads and trigger
-candidates together. -/
+follow-up reads depend on them. A `sessionRequest` is a request no trigger
+caused, whose event names its session scope and is not a deletion: the requests
+the snapshot shows for that scope are derivable from the scope alone
+(`SessionRequestReload.session_requests_derive_alone`). `node` is every other
+change: the Node root, whose absence is a refusal, the sessions and triggers,
+a request a trigger caused, whose candidacy spans sessions, and a deleted or
+unscoped request. -/
 inductive Change where
-  | toolControl | transcript | toolCall | collection | node
+  | toolControl | transcript | toolCall | collection | sessionRequest | node
   deriving DecidableEq, Repr
 
 /-- What the observer does with a delivered change. -/
@@ -1462,6 +1555,10 @@ inductive Delivery where
   | invalidateProvenance
   /-- A request event, and the collection is queued for its own reload. -/
   | reloadCollection
+  /-- A request event, and the request's session scope is queued for the
+  node's partial read, which reads that scope's requests beside any queued
+  collection. -/
+  | reloadSessionRequests
   /-- A request event, and the node is queued for a full load. -/
   | resync
   deriving DecidableEq, Repr
@@ -1470,11 +1567,14 @@ inductive Delivery where
 load per change re-reads every session, agent and request the node holds:
 a runtime whose backend probe rewrites each backend observation's catalog
 freshness every minute made every connected client read hundreds of kilobytes
-a minute to show a few changed rows. -/
+a minute to show a few changed rows. A request is written several times in
+every turn (created, claimed, renewed, finished), so the same holds for it: its
+session scope's requests are read again, not the node. -/
 def deliver : Change → Delivery
   | .toolControl | .transcript => .invalidateTranscript
   | .toolCall => .invalidateProvenance
   | .collection => .reloadCollection
+  | .sessionRequest => .reloadSessionRequests
   | .node => .resync
 
 structure Slot where
@@ -1488,9 +1588,11 @@ structure Slot where
   premise is outside the model). -/
   armed : Bool
   status : Status
-  /-- Collections are queued for their own reload (`Delivery.reloadCollection`). -/
+  /-- Collections (`Delivery.reloadCollection`) or session scopes
+  (`Delivery.reloadSessionRequests`) are queued for the node's partial read:
+  one read of the queued collections' roots and the queued scopes' requests. -/
   collections : Bool := false
-  /-- A collection reload is in flight. It and the full load never overlap:
+  /-- A partial read is in flight. It and the full load never overlap:
   one read per node is in flight. -/
   reloadingCollections : Bool := false
   deriving DecidableEq, Repr
@@ -1548,22 +1650,37 @@ inductive CollectionSettlement where
   | superseded
   /-- The read failed; the full load owns the status, back-off and refusal. -/
   | failed
+  /-- A session scope it read cannot be derived alone
+  (`SessionRequestReload.derivesAlone`); nothing is published and the full
+  load reads the node. -/
+  | deferred
   deriving DecidableEq, Repr
 
-/-- A collection reload replaces only its collections' rows, through the reload
-fence (`ClientDataPublication.acceptsReload`): a request event since its capture
-leaves it publishable, a publication rejects it. -/
-def collectionSettlement (s : State) (read : Read) : LoadResult → CollectionSettlement
-  | .rows => if acceptsReload s read then .published else .superseded
+/-- A partial read replaces only its collections' rows and its session scopes'
+requests, through the reload fence (`ClientDataPublication.acceptsReload`): a
+request event since its capture leaves it publishable, a publication rejects
+it. `derivable` is `SessionRequestReload.derivesAlone` of every session scope
+it read, decided against the store it publishes into; a read of collections
+alone is derivable. The reload fence, not the patch fence, because every
+event after the capture queues its own read: a row read before that event is
+read again after it, while under `accepts` one request event per read (a lease
+renewal, the turn's own writes) would reject every partial read
+(`ObserverCollectionReload` TLA, `EventFence`). -/
+def collectionSettlement (s : State) (read : Read) (derivable : Bool) :
+    LoadResult → CollectionSettlement
+  | .rows =>
+      if !derivable then .deferred
+      else if acceptsReload s read then .published else .superseded
   | .transportFailed | .refused => .failed
 
-/-- A superseded collection reload queues its collections again; a failed one
-queues the node's full load, which reports the failure (`settle`). Neither
-changes the shown status: only a full load shows a node connected. -/
+/-- A superseded partial read queues its collections and scopes again; a
+failed or deferred one queues the node's full load, which reports a failure
+(`settle`). None changes the shown status: only a full load shows a node
+connected. -/
 def settleCollections (n : Slot) : CollectionSettlement → Slot
   | .published => { n with reloadingCollections := false }
   | .superseded => { n with reloadingCollections := false, collections := true }
-  | .failed => { n with reloadingCollections := false, pending := true }
+  | .failed | .deferred => { n with reloadingCollections := false, pending := true }
 
 def timer (n : Slot) : Slot := { n with waiting := false }
 
@@ -1878,24 +1995,45 @@ theorem queued_collection_starts (n : Slot) (hc : n.collections = true) (hp : n.
 /-- However many request events arrive while a collection reload runs, it
 publishes (the safety half of the TLA model's EventualPublication). -/
 theorem request_events_never_supersede_collections (s : State) (events : Nat) :
-    collectionSettlement (requestEvents s events) (beginRead s) .rows = .published := by
+    collectionSettlement (requestEvents s events) (beginRead s) true .rows = .published := by
   have h := arbitrarily_many_request_events_preserve_reload s events
   simp [collectionSettlement, h]
 
 /-- NoStaleCommit for collection reloads: a publication since capture
 supersedes the reload, and its collections are queued for a fresh read. -/
 theorem publication_supersedes_collections_and_requeues (s : State) (n : Slot) :
-    collectionSettlement (dataChange s) (beginRead s) .rows = .superseded ∧
+    collectionSettlement (dataChange s) (beginRead s) true .rows = .superseded ∧
       (settleCollections n
-        (collectionSettlement (dataChange s) (beginRead s) .rows)).collections = true := by
+        (collectionSettlement (dataChange s) (beginRead s) true .rows)).collections = true := by
   have h := publication_rejects_reload s
   simp [collectionSettlement, h, settleCollections]
 
 /-- A failed collection read is not lost: the node's full load is queued. -/
 theorem failed_collections_queue_full_load (n : Slot) (result : LoadResult)
-    (h : result ≠ .rows) (s : State) (read : Read) :
-    (settleCollections n (collectionSettlement s read result)).pending = true := by
+    (h : result ≠ .rows) (s : State) (read : Read) (derivable : Bool) :
+    (settleCollections n (collectionSettlement s read derivable result)).pending = true := by
   cases result <;> simp_all [collectionSettlement, settleCollections]
+
+/-- A partial read holding a scope that cannot be derived alone publishes
+nothing, whatever it read and whatever the fence says, and the node's full
+load is queued. -/
+theorem underivable_scope_queues_full_load (n : Slot) (s : State) (read : Read)
+    (result : LoadResult) :
+    collectionSettlement s read false result ≠ .published ∧
+      (settleCollections n (collectionSettlement s read false result)).pending = true := by
+  cases result <;> simp [collectionSettlement, settleCollections]
+
+/-- A partial read is a publication: one accepted since a reload's capture
+rejects that reload, so no reload in flight replaces the rows it published
+with the older rows it read. -/
+theorem published_partial_read_rejects_reload_in_flight (s : State) (read : Read)
+    (h : collectionSettlement s read true .rows = .published) :
+    acceptsReload (ClientDataPublication.reload s read) (beginRead s) = false := by
+  have ha : acceptsReload s read = true := by
+    by_cases ha : acceptsReload s read = true
+    · exact ha
+    · simp [collectionSettlement, ha] at h
+  simp [ClientDataPublication.reload, ha, publication_rejects_reload]
 
 /-- A collection reload never changes the shown status. -/
 theorem collection_reload_keeps_status (n : Slot) (outcome : CollectionSettlement) :
@@ -1906,6 +2044,17 @@ theorem collection_reload_keeps_status (n : Slot) (outcome : CollectionSettlemen
 the whole node. -/
 theorem only_collections_reload_alone (change : Change) :
     deliver change = .reloadCollection ↔ change = .collection := by
+  cases change <;> simp [deliver]
+
+/-- Only a session request change reads its session scope alone. -/
+theorem only_session_requests_reload_their_scope (change : Change) :
+    deliver change = .reloadSessionRequests ↔ change = .sessionRequest := by
+  cases change <;> simp [deliver]
+
+/-- A full load is queued by a node change alone: no collection or session
+request change reads the whole node. -/
+theorem only_node_changes_resync (change : Change) :
+    deliver change = .resync ↔ change = .node := by
   cases change <;> simp [deliver]
 
 end ObserverResync

@@ -445,6 +445,40 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     Ok(())
 }
 
+/// `ObserverResync.collectionStartable`: a session scope queued while a
+/// partial read is in flight is read when that read settles, not at the
+/// observer's next unrelated wake.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_request_changes_all_reach_the_store() -> Result<()> {
+    let (_tempdir, core, runtime) = served_core().await?;
+    runtime
+        .publish_node(serde_json::json!({"enabled": true}))
+        .await;
+    let node_did = gents_store::graphql::escape_graphql_string(runtime.node_did());
+    let requester = gents_store::graphql::escape_graphql_string(core.node_identity().did());
+    for i in 0..20usize {
+        runtime
+            .user_graphql_access()
+            .write(
+                "test.client_store.burst_request",
+                &format!(
+                    r#"mutation {{ create_AgentRequest(input: {{ request_id: "burst-{i}", purpose: "normal", node_did: "{node_did}", requester_did: "{requester}", agent_did: "{node_did}", session_id: "burst-{i}", content: "burst", lifecycle_state: "processing", created_at: "2026-11-04T00:00:{i:02}Z" }}) {{ _docID }} }}"#
+                ),
+            )
+            .await?;
+    }
+
+    until(&core, "all 20 requests in the store", |core| {
+        let snapshot = core.stores().snapshot(runtime.node_did());
+        (0..20usize).all(|i| snapshot.request_row(&format!("burst-{i}")).is_some())
+    })
+    .await?;
+
+    Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;

@@ -23,6 +23,7 @@ use crate::client_projection::store::{ClientStore, ClientStoreRows};
 
 mod collection_roots;
 mod document_patches;
+mod partial_read;
 mod request_closure;
 mod session_tip;
 mod session_transcript;
@@ -33,6 +34,7 @@ pub use session_tip::{
 };
 mod snapshot_loaders;
 pub use collection_roots::{load_collection_roots_on, replace_collection_roots, CollectionRoot};
+pub use partial_read::{load_partial_read_on, replace_partial_read, PartialRead};
 pub use snapshot_loaders::{
     load_inference_configuration, load_node_scoped_snapshot_with_connections,
     load_node_snapshot_on, SnapshotReadError,
