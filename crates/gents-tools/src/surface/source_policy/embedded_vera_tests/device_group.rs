@@ -124,7 +124,6 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
 ) -> anyhow::Result<()> {
     use crate::test_support::vera_test_home::SETTLE_CEILING;
     use anyhow::Context;
-    use std::time::Duration;
 
     if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
         let _ = tracing_subscriber::fmt()

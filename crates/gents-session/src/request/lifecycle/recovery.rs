@@ -28,27 +28,7 @@ impl RequestLifecycle {
         Self::recover_all_with_identities_at(node, node_did, identities, chrono::Utc::now()).await
     }
 
-    #[cfg(test)]
     pub(crate) async fn recover_all_with_identities_at(
-        node: &std::sync::Arc<EmbeddedNode>,
-        node_did: &str,
-        identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<RecoveryReport> {
-        let active = recover_active_requests_at(node, node_did, identities, now).await?;
-        let background_wakes_redriven =
-            Self::redrive_failed_background_wakeups_with_identities(node, node_did, identities)
-                .await?
-                .redriven;
-        Ok(RecoveryReport {
-            responses_recovered: active.responses_recovered,
-            requests_recovered: active.requests.repaired,
-            background_wakes_redriven,
-        })
-    }
-
-    #[cfg(not(test))]
-    async fn recover_all_with_identities_at(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
