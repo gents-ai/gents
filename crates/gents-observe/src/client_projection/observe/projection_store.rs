@@ -94,21 +94,16 @@ enum ProvenanceUpdate {
     Invalidate,
 }
 
-/// `ClientDataPublication` epochs of one node's store: publications move
-/// `data`, request events move `events`. A snapshot reload checks `data`
-/// only; a patch checks both.
+/// What a read of one node's store captures: the publication epoch a
+/// snapshot reload checks (`ClientDataPublication.acceptsReload`) and the
+/// step count a patch checks (`ClientDataPublication.PatchFence.capture`).
 #[derive(Clone, Default)]
 pub struct StoreReadFence {
     data: Arc<()>,
-    events: Arc<()>,
+    sequence: u64,
 }
 
 impl StoreReadFence {
-    /// `ClientDataPublication.accepts`.
-    fn accepts(&self, captured: &Self) -> bool {
-        self.accepts_reload(captured) && Arc::ptr_eq(&self.events, &captured.events)
-    }
-
     /// `ClientDataPublication.acceptsReload`.
     fn accepts_reload(&self, captured: &Self) -> bool {
         Arc::ptr_eq(&self.data, &captured.data)
@@ -117,9 +112,115 @@ impl StoreReadFence {
     fn touch(&mut self) {
         self.data = Arc::new(());
     }
+}
 
-    fn touch_events(&mut self) {
-        self.events = Arc::new(());
+/// `ClientDataPublication.Reach`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Reach {
+    Nothing,
+    Named,
+    Whole,
+}
+
+/// `ClientDataPublication.PatchStep`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PatchStep {
+    ScopeEvent,
+    UnscopedEvent,
+    CollectionEvent,
+    CarriedCollectionEvent,
+    ProvenanceEvent,
+    NodeReload,
+    ScopeReload,
+    CollectionReload,
+    CarriedCollectionReload,
+    Patch,
+    UnscopedPatch,
+}
+
+/// `ClientDataPublication.reach`.
+fn reach(step: PatchStep) -> Reach {
+    match step {
+        PatchStep::ScopeEvent | PatchStep::ScopeReload | PatchStep::Patch => Reach::Named,
+        PatchStep::CollectionEvent | PatchStep::CollectionReload => Reach::Nothing,
+        PatchStep::UnscopedEvent
+        | PatchStep::CarriedCollectionEvent
+        | PatchStep::ProvenanceEvent
+        | PatchStep::NodeReload
+        | PatchStep::CarriedCollectionReload
+        | PatchStep::UnscopedPatch => Reach::Whole,
+    }
+}
+
+/// Whether patches carry rows of `root`: a patch reads the goals of the
+/// session scopes its requests name.
+fn carried_by_patches(root: CollectionRoot) -> bool {
+    root == CollectionRoot::Goals
+}
+
+/// The session scopes a patch's rows name, by session id within this node's
+/// store; `None` when a request names none, which is decided for the whole
+/// store.
+fn carried_scopes(patch: &ClientStore) -> Option<BTreeSet<&str>> {
+    let mut carried = patch
+        .sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for request in patch.requests.iter() {
+        carried.insert(request.session_id.as_deref()?);
+    }
+    (!carried.is_empty()).then_some(carried)
+}
+
+/// `ClientDataPublication.PatchFence` beside the captured `sequence`: the
+/// steps at which the whole store and each session scope last moved.
+#[derive(Default)]
+struct PatchFence {
+    whole: u64,
+    scopes: rapidhash::RapidHashMap<String, u64>,
+}
+
+impl PatchFence {
+    /// `ClientDataPublication.PatchFence.move`.
+    fn step<'a>(
+        &mut self,
+        fences: &mut StoreReadFence,
+        step: PatchStep,
+        named: impl IntoIterator<Item = &'a str>,
+    ) {
+        fences.sequence = fences.sequence.saturating_add(1);
+        match reach(step) {
+            Reach::Nothing => {}
+            Reach::Named => {
+                for scope in named {
+                    self.scopes.insert(scope.to_owned(), fences.sequence);
+                }
+            }
+            Reach::Whole => self.whole = fences.sequence,
+        }
+    }
+
+    /// `ClientDataPublication.PatchFence.accepts`.
+    fn accepts(
+        &self,
+        fences: &StoreReadFence,
+        captured: &StoreReadFence,
+        carried: Option<&BTreeSet<&str>>,
+    ) -> bool {
+        match carried {
+            None => fences.sequence == captured.sequence,
+            Some(carried) => {
+                self.whole <= captured.sequence
+                    && carried.iter().all(|scope| {
+                        self.scopes
+                            .get(*scope)
+                            .is_none_or(|moved| *moved <= captured.sequence)
+                    })
+            }
+        }
     }
 }
 
@@ -156,12 +257,44 @@ enum StoreMutation {
 
 impl StoreMutation {
     /// Whether a read captured at `captured` may still publish this mutation:
-    /// a snapshot reload checks the publication epoch, a patch also checks
-    /// the request-event epoch.
-    fn accepts(&self, fences: &StoreReadFence, captured: &StoreReadFence) -> bool {
+    /// a reload checks the publication epoch, a patch the steps that reached
+    /// the session scopes it carries.
+    fn accepts(&self, state: &ObservedState, captured: &StoreReadFence) -> bool {
         match self {
-            Self::Replace(_) | Self::Partial(..) => fences.accepts_reload(captured),
-            Self::Chat(_) => fences.accepts(captured),
+            Self::Replace(_) | Self::Partial(..) => state.fences.accepts_reload(captured),
+            Self::Chat(patch) => {
+                state
+                    .patch_fence
+                    .accepts(&state.fences, captured, carried_scopes(patch).as_ref())
+            }
+        }
+    }
+
+    /// The publication as a step of the patch fence
+    /// (`ClientDataPublication.PatchStep`) and the session scopes it names.
+    fn patch_step(&self) -> (PatchStep, Vec<String>) {
+        match self {
+            Self::Replace(_) => (PatchStep::NodeReload, Vec::new()),
+            Self::Partial(read, _) if read.roots.iter().copied().any(carried_by_patches) => {
+                (PatchStep::CarriedCollectionReload, Vec::new())
+            }
+            Self::Partial(read, _) if read.scopes.is_empty() => {
+                (PatchStep::CollectionReload, Vec::new())
+            }
+            Self::Partial(read, _) => (
+                PatchStep::ScopeReload,
+                read.scopes
+                    .iter()
+                    .map(|scope| scope.session_id.clone())
+                    .collect(),
+            ),
+            Self::Chat(patch) => match carried_scopes(patch) {
+                Some(carried) => (
+                    PatchStep::Patch,
+                    carried.into_iter().map(str::to_owned).collect(),
+                ),
+                None => (PatchStep::UnscopedPatch, Vec::new()),
+            },
         }
     }
 
@@ -259,6 +392,13 @@ struct ObservedState {
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
     fences: StoreReadFence,
+    patch_fence: PatchFence,
+}
+
+impl ObservedState {
+    fn patch_step<'a>(&mut self, step: PatchStep, named: impl IntoIterator<Item = &'a str>) {
+        self.patch_fence.step(&mut self.fences, step, named);
+    }
 }
 
 /// What every node's store shares: the fleet notice that any store, status or
@@ -519,6 +659,7 @@ impl ObservedStore {
                 snapshot: Arc::new(initial_snapshot.into_observer_projection()),
                 revision,
                 fences: StoreReadFence::default(),
+                patch_fence: PatchFence::default(),
             }),
             focused_request_id: RwLock::new(None),
             version_tx,
@@ -721,7 +862,7 @@ impl ObservedStore {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             if provenance_changed {
-                state.fences.touch_events();
+                state.patch_step(PatchStep::ProvenanceEvent, []);
             }
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
@@ -742,11 +883,41 @@ impl ObservedStore {
         notice.revision.store_version
     }
 
-    /// `ClientDataPublication.requestEvent`: a change delivered on this
-    /// node's subscription, or a gap in it.
+    /// `ClientDataPublication.requestEvent` of a change that names no session
+    /// scope, or of a gap in this node's subscription: it reaches every patch
+    /// (`ClientDataPublication.PatchStep.unscopedEvent`).
     pub fn observe_request_event(&self) -> u64 {
+        self.observe_patch_step(PatchStep::UnscopedEvent, [])
+    }
+
+    /// `ClientDataPublication.requestEvent` of a request or session change
+    /// that names its session scopes: it reaches the patches carrying one of
+    /// them (`ClientDataPublication.PatchStep.scopeEvent`).
+    pub fn observe_scope_event(&self, scopes: &BTreeSet<SessionScope>) -> u64 {
+        self.observe_patch_step(
+            PatchStep::ScopeEvent,
+            scopes.iter().map(|scope| scope.session_id.as_str()),
+        )
+    }
+
+    /// `ClientDataPublication.requestEvent` of a change of `root`: it reaches
+    /// patches only when they carry the collection's rows.
+    pub(crate) fn observe_collection_event(&self, root: CollectionRoot) -> u64 {
+        let step = if carried_by_patches(root) {
+            PatchStep::CarriedCollectionEvent
+        } else {
+            PatchStep::CollectionEvent
+        };
+        self.observe_patch_step(step, [])
+    }
+
+    fn observe_patch_step<'a>(
+        &self,
+        step: PatchStep,
+        named: impl IntoIterator<Item = &'a str>,
+    ) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
-        state.fences.touch_events();
+        state.patch_step(step, named);
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
@@ -773,9 +944,11 @@ impl ObservedStore {
     }
 
     #[cfg(test)]
-    pub fn accepts_chat_patch_read(&self, captured: &StoreReadFence) -> bool {
+    pub fn accepts_chat_patch_read(&self, captured: &StoreReadFence, patch: &ClientStore) -> bool {
         let state = self.state.read().expect("store snapshot lock poisoned");
-        state.fences.accepts(captured)
+        state
+            .patch_fence
+            .accepts(&state.fences, captured, carried_scopes(patch).as_ref())
     }
 
     /// Checks the publication fence and cached request evidence against the
@@ -788,7 +961,10 @@ impl ObservedStore {
         incoming: &ClientStore,
     ) -> (bool, bool) {
         let state = self.state.read().expect("store snapshot lock poisoned");
-        let fence_accepted = state.fences.accepts(captured);
+        let fence_accepted =
+            state
+                .patch_fence
+                .accepts(&state.fences, captured, carried_scopes(incoming).as_ref());
         let rows_current = !incoming.requests.is_empty()
             && incoming.requests.iter().all(|expected| {
                 let Some(doc_id) = expected.doc_id.as_deref() else {
@@ -809,11 +985,12 @@ impl ObservedStore {
             if !mutation.derivable(state.snapshot.as_ref()) {
                 return Err(Rejected::Deferred);
             }
-            if captured.is_some_and(|captured| !mutation.accepts(&state.fences, captured)) {
+            if captured.is_some_and(|captured| !mutation.accepts(&state, captured)) {
                 return Err(Rejected::Superseded);
             }
             let store_version = state.revision.store_version.saturating_add(1);
             let provenance = mutation.provenance();
+            let (step, named) = mutation.patch_step();
             let next = mutation.apply(state.snapshot.as_ref());
             let provenance_version =
                 state
@@ -827,6 +1004,7 @@ impl ObservedStore {
                         Some(ProvenanceUpdate::Invalidate) => true,
                     }));
             state.fences.touch();
+            state.patch_step(step, named.iter().map(String::as_str));
             state.snapshot = Arc::new(next);
             state.revision = StoreProjectionRevision {
                 store_version,
@@ -876,6 +1054,13 @@ mod reload_tests;
 
 #[cfg(test)]
 mod conformance {
+    #[test]
+    fn reach_matches_lean() {
+        gents_lean_vocab::families::client_data_publication_reach::replay(|i| {
+            super::reach(i.patch_step)
+        });
+    }
+
     #[test]
     fn derives_alone_matches_lean() {
         gents_lean_vocab::families::session_request_reload_derives_alone::replay(|i| {

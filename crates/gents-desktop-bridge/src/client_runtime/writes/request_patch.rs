@@ -171,7 +171,7 @@ impl ClientRuntime {
                 }
                 signatures.remove(&cache_key);
                 if !fence_accepted {
-                    store.request_resync();
+                    // `RequestPatchPublication.FreshReadAction.rejectCandidate`.
                     return Ok(None);
                 }
             }
@@ -197,8 +197,10 @@ impl ClientRuntime {
             signature = chat_patch_signature(&patch);
         }
         let (rows, bytes, _hash) = signature;
+        // A rejected patch is read again by its caller and asks the observer for
+        // nothing (`RequestPatchPublication.FreshReadAction.rejectCandidate`):
+        // the step that rejected it queued its own read or published newer rows.
         let Some(version) = store.merge_chat_patch_at_read(&captured, patch) else {
-            store.request_resync();
             return Ok(None);
         };
         let mut signatures = self.request_patch_signatures.lock().await;
