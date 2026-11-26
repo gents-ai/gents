@@ -370,40 +370,51 @@ async fn read_request_state_and_generation(
     )
 }
 
-async fn recv_dispatch_attempts(
-    dispatch_rx: &mut mpsc::UnboundedReceiver<()>,
-    count: usize,
+async fn recv_next_dispatch(
+    dispatch_rx: &mut mpsc::UnboundedReceiver<String>,
     what: &str,
-) {
-    for index in 0..count {
-        tokio::time::timeout(STALL_CEILING, dispatch_rx.recv())
-            .await
-            .unwrap_or_else(|_| panic!("{what}: timed out at dispatch {index}/{count}"))
-            .unwrap_or_else(|| panic!("{what}: router dispatch probe closed at {index}/{count}"));
-    }
+) -> String {
+    tokio::time::timeout(STALL_CEILING, dispatch_rx.recv())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: timed out waiting for router dispatch"))
+        .unwrap_or_else(|| panic!("{what}: router dispatch probe closed"))
 }
 
 async fn fill_generation_one_queue_and_block_target(
     home: &AgentRuntimeHome,
     held: &gents_inference::test_support::scripted_backend::HeldCall<'_>,
-    dispatch_rx: &mut mpsc::UnboundedReceiver<()>,
+    dispatch_rx: &mut mpsc::UnboundedReceiver<String>,
     target_request_id: &str,
 ) {
     let agent_did = home.agent.did().to_owned();
-    let mut worker_ids = Vec::with_capacity(BLOCKED_LEVEL_WORKERS);
-    for index in 0..BLOCKED_LEVEL_WORKERS {
-        let req_id = format!("blocked-a-{index:02}");
-        let session_id = format!("blocked-session-a-{index:02}");
-        let content = if index == 0 {
-            "blocked-hold-0"
-        } else {
-            "blocked-worker"
-        };
-        home.submit_request(&agent_did, &req_id, &session_id, content)
-            .await;
-        worker_ids.push(req_id);
-    }
+    let hold_request_id = "blocked-a-00".to_owned();
+    home.submit_request(
+        &agent_did,
+        &hold_request_id,
+        "blocked-session-a-00",
+        "blocked-hold-0",
+    )
+    .await;
+    // Hold the backend's single max_concurrent=1 permit before submitting the
+    // remaining worker requests so none of them can race ahead and complete.
     held.entered().await;
+
+    let mut worker_ids = Vec::with_capacity(BLOCKED_LEVEL_WORKERS);
+    worker_ids.push(hold_request_id);
+    let rest_worker_specs: Vec<(String, String)> = (1..BLOCKED_LEVEL_WORKERS)
+        .map(|index| {
+            (
+                format!("blocked-a-{index:02}"),
+                format!("blocked-session-a-{index:02}"),
+            )
+        })
+        .collect();
+    futures::future::join_all(rest_worker_specs.iter().map(|(req_id, session_id)| {
+        home.submit_request(&agent_did, req_id, session_id, "blocked-worker")
+    }))
+    .await;
+    worker_ids.extend(rest_worker_specs.into_iter().map(|(req_id, _)| req_id));
+
     let user_access = home.home.user_access.clone();
     read_when_changed(
         &user_access,
@@ -432,15 +443,37 @@ async fn fill_generation_one_queue_and_block_target(
         },
     )
     .await;
-    recv_dispatch_attempts(dispatch_rx, BLOCKED_LEVEL_WORKERS, "worker requests").await;
 
-    for index in 0..BLOCKED_QUEUE_CAPACITY {
-        let req_id = format!("blocked-b-{index:02}");
-        let session_id = format!("blocked-session-b-{index:02}");
-        home.submit_request(&agent_did, &req_id, &session_id, "blocked-queue")
-            .await;
+    let mut seen_workers = rapidhash::RapidHashSet::default();
+    let mut channel_entries = 0usize;
+    while seen_workers.len() < BLOCKED_LEVEL_WORKERS {
+        let dispatched = recv_next_dispatch(dispatch_rx, "worker requests").await;
+        if worker_ids.iter().any(|wanted| wanted == &dispatched) && seen_workers.insert(dispatched)
+        {
+            continue;
+        }
+        channel_entries += 1;
     }
-    recv_dispatch_attempts(dispatch_rx, BLOCKED_QUEUE_CAPACITY, "queue fill requests").await;
+
+    let queue_needed = BLOCKED_QUEUE_CAPACITY.saturating_sub(channel_entries);
+    let queue_specs: Vec<(String, String)> = (0..queue_needed)
+        .map(|index| {
+            (
+                format!("blocked-b-{index:02}"),
+                format!("blocked-session-b-{index:02}"),
+            )
+        })
+        .collect();
+    for chunk in queue_specs.chunks(BLOCKED_LEVEL_WORKERS) {
+        futures::future::join_all(chunk.iter().map(|(req_id, session_id)| {
+            home.submit_request(&agent_did, req_id, session_id, "blocked-queue")
+        }))
+        .await;
+    }
+    while channel_entries < BLOCKED_QUEUE_CAPACITY {
+        let _dispatched = recv_next_dispatch(dispatch_rx, "queue fill requests").await;
+        channel_entries += 1;
+    }
 
     home.submit_request(
         &agent_did,
@@ -449,7 +482,11 @@ async fn fill_generation_one_queue_and_block_target(
         "blocked-target",
     )
     .await;
-    recv_dispatch_attempts(dispatch_rx, 1, "blocked target request").await;
+    let blocked = recv_next_dispatch(dispatch_rx, "blocked target request").await;
+    assert_eq!(
+        blocked, target_request_id,
+        "router blocked on {blocked} instead of target {target_request_id}"
+    );
 }
 
 /// Fills generation 1's real level-0 workers and bounded queue on a booted
@@ -546,6 +583,7 @@ async fn blocked_dispatch_follows_the_lean_model() {
                 let (state, generation) =
                     read_request_state_and_generation(&user_access, target_id).await;
                 let router_stopped = *router_stopped_rx.borrow();
+                held.release();
                 runtime.shutdown().await.expect("the runtime stops cleanly");
                 let destination = match (state.as_deref(), generation) {
                     (Some("pending"), None) => "undispatched",

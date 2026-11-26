@@ -178,7 +178,7 @@ pub struct DocumentRuntimeOptions {
     pub plugin_home: Option<PathBuf>,
     pub native_executables: gents_tools::native::NativeExecutables,
     #[cfg(test)]
-    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     #[cfg(test)]
     pub(crate) router_stopped_probe: Option<tokio::sync::watch::Sender<bool>>,
 }
@@ -238,7 +238,7 @@ pub struct Gents {
         Option<Arc<dyn crate::runtime::startup_readiness::StartupBuildFailureObserver>>,
     startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     #[cfg(test)]
-    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     #[cfg(test)]
     router_stopped_probe: Option<tokio::sync::watch::Sender<bool>>,
     rendered_request_capture_factory:

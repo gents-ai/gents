@@ -32,7 +32,7 @@ pub(in crate::runtime::agent) struct RuntimeAdmissionGate {
     #[cfg(test)]
     entered: Arc<tokio::sync::Notify>,
     #[cfg(test)]
-    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 impl RuntimeAdmissionGate {
@@ -50,7 +50,7 @@ impl RuntimeAdmissionGate {
 
     #[cfg(test)]
     pub(super) fn closed_with_dispatch_probe(
-        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Self {
         let mut gate = Self::closed();
         gate.dispatch_attempted = dispatch_attempted;
@@ -366,7 +366,7 @@ where
                 );
                 #[cfg(test)]
                 if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
-                    let _ = dispatch_attempted.send(());
+                    let _ = dispatch_attempted.send(request.request_id.clone());
                 }
                 let permit = tokio::select! {
                     biased;
