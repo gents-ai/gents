@@ -173,7 +173,7 @@ async fn desktop_create_rolls_back_signed_agent_after_late_reference_failure() -
     assert!(rows["data"]["Agent"].as_array().unwrap().is_empty());
     // Only the Node manager usersets were staged before the context check,
     // inside the transaction the failure rolled back; no grant naming the
-    // Agent's identity (`parent`, `executor`) was issued.
+    // Agent's identity (`parent`, `executor`, `host`) was issued.
     assert_eq!(
         fixture.relationships.lock().unwrap().clone(),
         vec![
@@ -207,13 +207,27 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
         doc_id,
         relation,
         target,
+    }, ConfigRelationshipGrant::Actor {
+        collection: host_collection,
+        doc_id: host_doc,
+        relation: host_relation,
+        target: host_target,
     }] = pending.as_slice()
     else {
-        anyhow::bail!("expected exactly the unfinished executor grant: {pending:?}");
+        anyhow::bail!("expected exactly the unfinished executor and host grants: {pending:?}");
     };
     assert_eq!(
         (collection.as_str(), relation.as_str(), target.as_str()),
         ("Agent", "executor", fixture.agent.agent_did.as_str())
+    );
+    assert_eq!(
+        (
+            host_collection.as_str(),
+            host_doc,
+            host_relation.as_str(),
+            host_target.as_str()
+        ),
+        ("Agent", doc_id, "host", fixture.runtime.node_did())
     );
     let rows = fixture.access.execute("{ Agent { _docID } }").await?;
     assert_eq!(rows["data"]["Agent"][0]["_docID"], *doc_id);
@@ -235,7 +249,8 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
             ("POST".into(), "parent".into()),
             ("POST".into(), "executor".into()),
             ("DELETE".into(), "parent".into()),
-            ("POST".into(), "executor".into())
+            ("POST".into(), "executor".into()),
+            ("POST".into(), "host".into())
         ]
     );
     fixture.shutdown().await

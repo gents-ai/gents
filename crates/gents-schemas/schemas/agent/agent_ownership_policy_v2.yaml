@@ -219,6 +219,8 @@ resources:
         types: [actor]
       - name: config_writer
         types: [actor]
+      - name: host
+        types: [actor]
     permissions:
       - name: read
         expr: reader + workspace_selected_by + session_writer + administrator + executor + config_writer + parent->read
