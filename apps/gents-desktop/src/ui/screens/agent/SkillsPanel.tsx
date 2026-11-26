@@ -1,5 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
 import {
@@ -253,7 +253,7 @@ export function SkillEditor({
       {!draft && (
         <DeleteButton
           label={skill.name ?? skill.skillId}
-          warning={dependentsWarning(deployment, "skill", skill.skillId)}
+          blocked={deleteBlocker(deployment, "skill", skill.skillId)}
           base={base}
           onDelete={() =>
             changeConfig("deleteSkillConfig", {
@@ -352,7 +352,7 @@ export function SkillsPanel({
                 nodeDid: deployment.nodeDid,
               })
             }
-            warning={dependentsWarning(deployment, "skill", s.skillId)}
+            blocked={deleteBlocker(deployment, "skill", s.skillId)}
           />
         ),
       }))}

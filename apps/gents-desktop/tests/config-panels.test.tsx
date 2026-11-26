@@ -2849,40 +2849,72 @@ describe("configuration panels", () => {
     }
   });
 
-  it("names the documents a delete leaves without their reference", async () => {
+  it("blocks delete up front and lists dependents when a backend, profile, or schedule is still in use", async () => {
     const user = userEvent.setup();
-    const { app } = harness();
-    const cases: Array<[React.ReactElement, RegExp]> = [
+    const { api, app } = harness();
+    const profileLabel =
+      deployment.inferenceProfiles.find((p) => p.backend_id === "backend-a")
+        ?.display_name ?? "profile-a";
+    const cases: Array<[React.ReactElement, RegExp, string]> = [
+      [
+        <InferencePanel deployment={deployment} item="backend-a" />,
+        /Still used by \d+ inference profiles?\. Repoint or delete (?:it|them) first\./,
+        profileLabel,
+      ],
       [
         <ProfilesPanel deployment={deployment} item="profile-a" />,
-        /Used by \d+ agents?; they lose this reference\./,
+        /Still used by \d+ agents?\. Repoint or delete (?:it|them) first\./,
+        deployment.agents.find((a) => a.inferenceProfileId === "profile-a")!
+          .displayName,
       ],
       [
         <SchedulesPanel deployment={deployment} item="timer-a" />,
-        /Used by 1 trigger; they lose this reference\./,
+        /Still used by 1 trigger\. Repoint or delete it first\./,
+        deployment.triggers[0]!.config.display_name ??
+          deployment.triggers[0]!.config.trigger_id,
       ],
     ];
-    for (const [panel, warning] of cases) {
+    for (const [panel, summary, dependentName] of cases) {
       const view = renderIn(app, panel);
       await user.click(
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
-      expect(within(screen.getByRole("alertdialog")).getByText(warning)).toBeVisible();
+      const dialog = screen.getByRole("alertdialog");
+      expect(within(dialog).getByText(summary)).toBeVisible();
+      expect(within(dialog).getByText(dependentName)).toBeVisible();
+      expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("button", { name: /^Delete / }),
+      ).not.toBeInTheDocument();
       view.unmount();
     }
+    expect(api.deleteBackendConfig).not.toHaveBeenCalled();
+    expect(api.deleteInferenceProfileConfig).not.toHaveBeenCalled();
+    expect(api.deleteScheduleConfig).not.toHaveBeenCalled();
   });
 
-  it("asks for the name before a list row's delete runs", async () => {
+  it("blocks a referenced list row's delete and asks for the name before an unused one runs", async () => {
     const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <TasksPanel deployment={deployment} />);
+    const view = renderIn(app, <TasksPanel deployment={deployment} />);
     const name = deployment.tasks[0]!.name ?? deployment.tasks[0]!.taskId;
     await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
-    const dialog = screen.getByRole("alertdialog");
+    const blockedDialog = screen.getByRole("alertdialog");
     expect(
-      within(dialog).getByText(/Used by 1 trigger; they lose this reference\./),
+      within(blockedDialog).getByText(
+        /Still used by 1 trigger\. Repoint or delete it first\./,
+      ),
     ).toBeVisible();
+    expect(within(blockedDialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(api.deleteTaskConfig).not.toHaveBeenCalled();
+    view.unmount();
+
+    const unreferenced = { ...deployment, triggers: [] };
+    renderIn(app, <TasksPanel deployment={unreferenced} />);
+    await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
+    await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
+    const dialog = screen.getByRole("alertdialog");
     const button = within(dialog).getByRole("button", { name: /^Delete / });
     expect(button).toBeDisabled();
     await user.type(within(dialog).getByRole("textbox"), name);
@@ -2894,62 +2926,96 @@ describe("configuration panels", () => {
   });
 
   describe("routes every destructive panel action through its typed delete command", () => {
+    const unreferenced = {
+      ...deployment,
+      node: { ...deployment.node, defaultAgentDid: null },
+      agentTargets: [],
+    };
     const cases: Array<{
       renderPanel: () => React.ReactElement;
       method: string;
       request: Record<string, string>;
     }> = [
       {
-        renderPanel: () => <AgentsPanel deployment={deployment} agentDid="ops" />,
+        renderPanel: () => (
+          <AgentsPanel deployment={{ ...unreferenced, tasks: [] }} agentDid="ops" />
+        ),
         method: "deleteAgentConfig",
         request: { agentDid: "ops", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <InferencePanel deployment={deployment} item="backend-a" />,
+        renderPanel: () => (
+          <InferencePanel
+            deployment={{ ...unreferenced, inferenceProfiles: [] }}
+            item="backend-a"
+          />
+        ),
         method: "deleteBackendConfig",
         request: { backendId: "backend-a", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <ProfilesPanel deployment={deployment} item="profile-a" />,
+        renderPanel: () => (
+          <ProfilesPanel
+            deployment={{ ...unreferenced, agents: [] }}
+            item="profile-a"
+          />
+        ),
         method: "deleteInferenceProfileConfig",
         request: { profileId: "profile-a", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <ToolsPanel deployment={deployment} item="tools-b" />,
+        renderPanel: () => (
+          <ToolsPanel deployment={{ ...unreferenced, contexts: [] }} item="tools-b" />
+        ),
         method: "deleteToolsConfig",
         request: { toolsId: "tools-b", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => (
-          <ToolServicesPanel deployment={deployment} item="service-a" />
+          <ToolServicesPanel
+            deployment={{ ...unreferenced, tools: [] }}
+            item="service-a"
+          />
         ),
         method: "deleteToolServiceConfig",
         request: { serviceId: "service-a", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <SkillsPanel deployment={deployment} item="skill-a" />,
+        renderPanel: () => (
+          <SkillsPanel deployment={{ ...unreferenced, contexts: [] }} item="skill-a" />
+        ),
         method: "deleteSkillConfig",
         request: { skillId: "skill-a", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <TasksPanel deployment={deployment} item="task-b" />,
+        renderPanel: () => (
+          <TasksPanel deployment={{ ...unreferenced, triggers: [] }} item="task-b" />
+        ),
         method: "deleteTaskConfig",
         request: { taskId: "task-b", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <SchedulesPanel deployment={deployment} item="timer-a" />,
+        renderPanel: () => (
+          <SchedulesPanel
+            deployment={{ ...unreferenced, triggers: [] }}
+            item="timer-a"
+          />
+        ),
         method: "deleteScheduleConfig",
         request: { scheduleId: "timer-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => (
-          <EventSourcesPanel deployment={deployment} item="source-a" />
+          <EventSourcesPanel
+            deployment={{ ...unreferenced, triggers: [] }}
+            item="source-a"
+          />
         ),
         method: "deleteEventSourceConfig",
         request: { eventSourceId: "source-a", nodeDid: deployment.nodeDid },
       },
       {
-        renderPanel: () => <TriggersPanel deployment={deployment} item="trigger-a" />,
+        renderPanel: () => <TriggersPanel deployment={unreferenced} item="trigger-a" />,
         method: "deleteTriggerConfig",
         request: { triggerId: "trigger-a", nodeDid: deployment.nodeDid },
       },

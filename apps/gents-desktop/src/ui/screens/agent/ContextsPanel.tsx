@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useState } from "react";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { ArrowLeft } from "lucide-react";
 import type { AgentContext } from "@source-inc/gents-desktop-client";
 import { href, type Route } from "@/lib/router";
@@ -370,7 +370,7 @@ export function ContextsPanel({
                   nodeDid: deployment.nodeDid,
                 })
               }
-              warning={dependentsWarning(deployment, "context", c.context_id)}
+              blocked={deleteBlocker(deployment, "context", c.context_id)}
             />
           ),
         }))}

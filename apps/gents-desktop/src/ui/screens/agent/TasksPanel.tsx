@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { TaskView } from "@source-inc/gents-desktop-client";
@@ -567,7 +567,7 @@ export function TaskEditor({
       {!embedded && (
         <DeleteButton
           label={task.name ?? task.taskId}
-          warning={dependentsWarning(deployment, "task", task.taskId)}
+          blocked={deleteBlocker(deployment, "task", task.taskId)}
           base={base}
           onDelete={() =>
             changeConfig("deleteTaskConfig", {
@@ -846,7 +846,7 @@ export function TasksPanel({
                     nodeDid: deployment.nodeDid,
                   })
                 }
-                warning={dependentsWarning(deployment, "task", t.taskId)}
+                blocked={deleteBlocker(deployment, "task", t.taskId)}
               />
             ),
           };

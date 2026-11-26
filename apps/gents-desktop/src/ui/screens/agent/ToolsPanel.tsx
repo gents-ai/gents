@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { Tools, AgentTargetDocument } from "@source-inc/gents-desktop-client";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -471,7 +471,7 @@ export function ToolsEditor({
       {!embedded && !draftMode && (
         <DeleteButton
           label={tools.display_name ?? tools.tools_id}
-          warning={dependentsWarning(deployment, "tools", tools.tools_id)}
+          blocked={deleteBlocker(deployment, "tools", tools.tools_id)}
           base={base}
           onDelete={() =>
             changeConfig("deleteToolsConfig", {
@@ -533,7 +533,7 @@ export function ToolsPanel({
                 nodeDid: deployment.nodeDid,
               })
             }
-            warning={dependentsWarning(deployment, "tools", t.tools_id)}
+            blocked={deleteBlocker(deployment, "tools", t.tools_id)}
           />
         ),
       }))}
