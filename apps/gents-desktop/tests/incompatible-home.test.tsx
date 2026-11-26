@@ -455,6 +455,29 @@ function ResetSettings() {
 }
 
 describe("user-invoked desktop reset", () => {
+  it("offers to start fresh when startup cannot read saved connections", async () => {
+    const user = userEvent.setup();
+    const run = harness({
+      fetchDesktopSnapshot: vi.fn(async () => {
+        throw new Error("decoding the client runtime directory");
+      }),
+    });
+    run.resetManagedServer.mockImplementation(async () =>
+      preview({ stores: [], reason: "fullReset" }),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Start fresh…" }));
+
+    expect(run.resetManagedServer).toHaveBeenCalledExactlyOnceWith(
+      undefined,
+      undefined,
+      true,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Reset Gents on this Mac" }),
+    ).toBeInTheDocument();
+  });
+
   it("previews healthy state from Settings and allows cancelling without retirement", async () => {
     const user = userEvent.setup();
     const resetManagedServer = vi.fn(async () =>

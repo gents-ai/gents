@@ -50,6 +50,17 @@ export function StartupScreen({ gate }: { gate?: Exclude<StartupGate, "shell"> }
       setConnecting(false);
     }
   };
+  const home = startup.incompatibleHome;
+  const startFresh = home.canFullReset && (
+    <Button
+      variant="outline"
+      data-testid="startup-start-fresh"
+      disabled={home.busy}
+      onClick={() => void home.previewReset()}
+    >
+      Start fresh…
+    </Button>
+  );
   if (unconnected) {
     return (
       <section
@@ -132,13 +143,12 @@ export function StartupScreen({ gate }: { gate?: Exclude<StartupGate, "shell"> }
               The saved node settings could not be read. Try again to reload them.
             </p>
           </div>
-          <Button
-            variant="outline"
-            className="w-fit"
-            onClick={() => void actions.refreshSnapshot()}
-          >
-            Try again
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => void actions.refreshSnapshot()}>
+              Try again
+            </Button>
+            {startFresh}
+          </div>
         </div>
       </section>
     );
@@ -194,6 +204,7 @@ export function StartupScreen({ gate }: { gate?: Exclude<StartupGate, "shell"> }
               >
                 Try again
               </Button>
+              {status.failed && startFresh}
               {phase === "managed-server-error" &&
                 skip("startup-continue-without-managed-server")}
             </>
