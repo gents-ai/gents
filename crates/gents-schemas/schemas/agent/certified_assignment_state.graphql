@@ -8,5 +8,6 @@ type CertifiedAssignmentState @policy(id: "$household", resource: "configuration
     term: String
     height: String
     block_hash: String
+    timestamp: String
     assigned: JSON
 }

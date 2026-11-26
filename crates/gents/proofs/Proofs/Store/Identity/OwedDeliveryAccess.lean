@@ -23,7 +23,7 @@ def fixture : State :=
         ⟨"sessions", "s", "working_agent", .actor "a"⟩,
         ⟨"owed_deliveries", "owed", "parent", .object "nodes" "node"⟩]
     , enrolled := [] }
-  commitAgentCreation base "a" "user" "a" "node" true
+  commitAgentCreation base "a" "user" "a" "node" "runtime" true
 
 def access (actor : String) : Bool × Bool × Bool :=
   (allowed 8 fixture actor "owed_deliveries" "owed" "read",

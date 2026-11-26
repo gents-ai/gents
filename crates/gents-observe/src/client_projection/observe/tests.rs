@@ -958,12 +958,58 @@ async fn collection_reload_reads_the_rows_a_full_load_shows() {
     fixture.stop().await;
 }
 
-/// Premise of `ObserverResync.Change.sessionRequest`: a request's change
-/// event carries its session scope and its trigger, when it is created and
-/// when it is updated, so the delivery routes it without a read.
+/// Premise of `ObserverResync.Change.sessionScope`: a session's and a
+/// request's change event carries its session scope, and a request's its
+/// trigger, when it is created and when it is updated, so the delivery routes
+/// it without a read.
 #[tokio::test]
-async fn request_change_event_names_its_session_scope() {
+async fn session_and_request_change_events_name_their_session_scope() {
     let fixture = ObservedRuntime::start().await;
+    let mut sessions = fixture
+        .access
+        .subscribe(&remote::subscription(
+            gents_protocol::schemas::AGENT_SESSION_NAME,
+        ))
+        .await
+        .unwrap();
+    let session = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "session_id": "session", "node_did": fixture.runtime_did,
+        "requester_did": "did:test:requester", "agent_did": "default",
+        "created_at": "2026-11-01T00:00:00Z",
+    }))
+    .unwrap();
+    let created = fixture
+        .access
+        .write(
+            "test.observer.session",
+            &format!("mutation {{ create_AgentSession(input: {session}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    let session_doc = gents_store::graphql::created_doc_id(&created, "AgentSession").unwrap();
+    fixture
+        .access
+        .write(
+            "test.observer.session",
+            &format!(
+                "mutation {{ update_AgentSession(docID: \"{session_doc}\", input: {{archived_at: \"2026-11-02T00:00:00Z\"}}) {{ _docID }} }}"
+            ),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let envelope = sessions.recv().await.unwrap().unwrap();
+        assert_eq!(
+            envelope["data"]["AgentSession"],
+            serde_json::json!([{
+                "_docID": session_doc,
+                "_deleted": false,
+                "session_id": "session",
+                "requester_did": "did:test:requester",
+            }]),
+        );
+    }
+    drop(sessions);
     let mut stream = fixture
         .access
         .subscribe(&remote::subscription(
@@ -1014,8 +1060,9 @@ async fn request_change_event_names_its_session_scope() {
 
 /// `SessionRequestReload.session_requests_derive_alone` against a served
 /// runtime. A follow-up turn moves a session's head: replacing the scope's
-/// requests with a read of the scope leaves the store's requests as a full
-/// load shows them, without the earlier turn's finished request. Once the
+/// session row and requests with a read of the scope leaves the store's
+/// sessions and requests as a full load shows them, with the moved head and
+/// without the earlier turn's finished request. Once the
 /// scope holds a trigger-caused request the read publishes nothing
 /// (`SessionRequestReload.derivesAlone`).
 #[tokio::test]
@@ -1081,7 +1128,7 @@ async fn session_reload_leaves_the_requests_a_full_load_shows() {
             .map(|row| row.request_id.clone())
             .collect::<Vec<_>>()
     };
-    let rows = |store: &ClientStore| serde_json::to_value(&store.requests).unwrap();
+    let rows = |store: &ClientStore| serde_json::json!({"sessions": store.sessions, "requests": store.requests});
 
     let before = load_node_snapshot_on(&fixture.access, &node).await.unwrap();
     assert_eq!(ids(&before), ["first", "other-a"]);
@@ -1624,6 +1671,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     "probe_status": null, "last_probe": null,
                 }))
                 .unwrap()]
+            },
+            sessions: if read.scopes.is_empty() {
+                Vec::new()
+            } else {
+                vec![session(node)]
             },
             requests: if read.scopes.is_empty() {
                 Vec::new()
