@@ -2,13 +2,13 @@
   "id": "engineer-composite-apps",
   "title": "Engineer composite apps",
   "coverage": [
-    "autonomous trigger worker paired with KPI stats, table and write form page",
-    "filtered trigger alerts paired with line chart, stats and badge page",
-    "ACP-scoped read/write clerk agent paired with tabbed, filtered checkout page",
-    "per-key session trigger worker paired with bar chart and table page",
-    "threshold-filtered auditor paired with donut chart, cards and write form page",
-    "packaged and installed app pack with collections, surface and linted desktop page",
-    "grid, stats, bar chart and search input page paired with steward agent",
-    "trigger-driven triage worker paired with tabs, badges and dialog intake form"
+    "multi-stage in-place schema, trigger and themed UI page evolution",
+    "exact-boundary filtered trigger alerts paired with line chart, stats, badges and empty state",
+    "datastore-scoped read/write clerk agent with refusal check and tabbed switch checkout page",
+    "two-agent handoff chain with per-key session continuity and bar chart table page",
+    "workspace JSON import with fulltext BM25 search and donut chart textarea page",
+    "packaged app pack verified via pack_config.json with node Page, table and live mutation",
+    "grouped quorum event source paired with grid, bar chart, search input and table page",
+    "two-branch triage trigger worker paired with tabs, badges, dialog intake form and toast feedback"
   ]
 }

@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install civic/library 1.0.0 in packs/library: CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also build and lint a Library Desk page displaying books and a hold form.",
+      "prompt": "Package and install civic/library 1.0.0 in packs/library with CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also save and lint a node Page titled \"Library Desk\" with a books table, empty state, and hold form.",
       "capture": [
         {
           "kind": "documents",
@@ -40,6 +40,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -70,6 +71,11 @@
             "CatalogBook",
             "BookHold"
           ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "packs/library/pack_config.json"
         }
       ],
       "checks": [
@@ -109,31 +115,98 @@
                 ]
               },
               {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Library Desk",
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "library-desk",
                 "expect": [
                   {
                     "field": "enabled",
                     "equals": true
                   },
                   {
-                    "field": "module",
-                    "matches": "\\bTable\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"CatalogBook\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"BookHold\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"library-desk\""
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)library[- ]?desk"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(EmptyState|LoadingState)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bisbn\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bpatron\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"library-desk\".*\"surface\"\\s*:\\s*\"library-desk\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "packs/library/pack_config.json",
+                "contains": "library-desk"
               }
             ]
           },
@@ -156,6 +229,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },

@@ -2,10 +2,18 @@
   "case_id": "bakery-batch-pack",
   "split": "validation",
   "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "batches.csv",
+        "contents": "batch,item,loaves\nB-01,Sourdough,24\nB-02,Rye,18\nB-03,Brioche,30\n"
+      }
+    ]
+  },
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install kitchen/bakery 1.0.0 in packs/bakery: OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch. Build and lint a Bakery Batches page featuring a donut chart and a waste entry form.",
+      "prompt": "Package and install kitchen/bakery 1.0.0 in packs/bakery with OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch, then import batches.csv. Save and lint a node Page titled \"Bakery Batches\" with a donut chart, search input, and waste form.",
       "capture": [
         {
           "kind": "documents",
@@ -40,6 +48,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -70,6 +79,22 @@
             "OvenBatch",
             "WasteLog"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "batches",
+          "collection": "OvenBatch",
+          "filter": {},
+          "fields": [
+            "batch",
+            "item",
+            "loaves"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "packs/bakery/pack_config.json"
         }
       ],
       "checks": [
@@ -90,6 +115,11 @@
               {
                 "capture": "surfaces",
                 "min": 1
+              },
+              {
+                "capture": "batches",
+                "min": 3,
+                "max": 3
               }
             ],
             "rows": [
@@ -109,31 +139,113 @@
                 ]
               },
               {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Bakery Batches",
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "bakery-batch",
                 "expect": [
                   {
                     "field": "enabled",
                     "equals": true
                   },
                   {
-                    "field": "module",
-                    "matches": "\\bDonutChart\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"OvenBatch\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"WasteLog\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"bakery-batch\""
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
                   }
                 ]
+              },
+              {
+                "capture": "batches",
+                "key": "batch",
+                "id": "B-01",
+                "expect": [
+                  {
+                    "field": "item",
+                    "equals": "Sourdough"
+                  },
+                  {
+                    "field": "loaves",
+                    "equals": 24
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)bakery[- ]?batches"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bDonutChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bloaves\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcount\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"bakery-batch\".*\"surface\"\\s*:\\s*\"bakery-batch\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "packs/bakery/pack_config.json",
+                "contains": "bakery-batch"
               }
             ]
           },
@@ -156,6 +268,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },

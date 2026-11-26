@@ -5,7 +5,8 @@
   "fixtures": {
     "schemas": [
       "type CargoLot { lot: String origin: String weight: Float }",
-      "type CustomsHold { lot: String reason: String }"
+      "type CustomsHold { lot: String reason: String }",
+      "type DockEscalation { lot: String owner: String }"
     ],
     "documents": [
       {
@@ -21,7 +22,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Customs Officer agent that files a CustomsHold only when a new CargoLot exceeds 2000 weight. Build and lint a Cargo Control page showing KPI stats, a bar chart of lot weights, and an intake form.",
+      "prompt": "Set up a two-agent chain: Customs Officer wakes only when a new CargoLot strictly exceeds 2000 weight to file a CustomsHold, and Dock Supervisor wakes on each new CustomsHold to add a DockEscalation. Build and lint a \"Cargo Control\" page with KPI stats, a bar chart, and a lot form.",
       "capture": [
         {
           "kind": "documents",
@@ -55,6 +56,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -62,7 +64,7 @@
         },
         {
           "kind": "documents",
-          "name": "worker",
+          "name": "officer",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -73,6 +75,26 @@
             },
             "display_name": {
               "_ilike": "%customs officer%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "supervisor",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%dock supervisor%"
             }
           },
           "fields": [
@@ -96,46 +118,14 @@
                 "min": 1
               },
               {
-                "capture": "worker",
+                "capture": "officer",
                 "min": 1,
                 "max": 1
-              }
-            ],
-            "rows": [
+              },
               {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Cargo Control",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bStat\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bBarChart\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bweight\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
+                "capture": "supervisor",
+                "min": 1,
+                "max": 1
               }
             ]
           },
@@ -145,12 +135,54 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(CargoLot|CustomsHold)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)cargo[- ]?control"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bweight\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\breason\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -164,6 +196,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -173,18 +209,36 @@
       ]
     },
     {
-      "stage_id": "light_lot",
+      "stage_id": "boundary_lot",
       "seed": {
         "collection": "CargoLot",
         "document": {
           "lot": "L-21",
           "origin": "Cork",
-          "weight": 850.0
+          "weight": 2000.0
         }
       },
+      "expect_fire": false,
       "deadline_secs": 180,
-      "capture": [],
-      "checks": []
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     },
     {
       "stage_id": "heavy_lot",
@@ -199,6 +253,98 @@
       "deadline_secs": 300,
       "settle": true,
       "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "officer_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^customs[ -]?officer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "supervisor_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^dock[ -]?supervisor$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
+          ]
+        },
         {
           "kind": "documents",
           "name": "light_holds",
@@ -226,6 +372,20 @@
             "lot",
             "reason"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "heavy_escalations",
+          "collection": "DockEscalation",
+          "filter": {
+            "lot": {
+              "_eq": "L-22"
+            }
+          },
+          "fields": [
+            "lot",
+            "owner"
+          ]
         }
       ],
       "checks": [
@@ -234,13 +394,29 @@
           "params": {
             "present": [
               {
+                "capture": "officer_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "supervisor_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
                 "capture": "light_holds",
                 "min": 0,
                 "max": 0
               },
               {
                 "capture": "heavy_holds",
-                "min": 1
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "heavy_escalations",
+                "min": 1,
+                "max": 1
               }
             ]
           },

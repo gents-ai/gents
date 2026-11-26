@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "engineer_composite_apps",
   "version": "0.1.0",
-  "description": "Native eval definition engineer-composite-apps: the Engineer composes collections, ACP-scoped agents, automations, packs, and linted desktop pages across diverse UI patterns.",
+  "description": "Native eval definition engineer-composite-apps: the Engineer composes schemas, datastore-scoped agents, multi-agent and grouped automations, full-app packs, workspace imports, and linted desktop pages across diverse UI patterns.",
   "authors": [
     "gents-ai contributors"
   ],
@@ -17,7 +17,7 @@
     "cases/dock_cargo_control.json",
     "cases/fleet_service_desk.json",
     "cases/greenhouse_climate_board.json",
-    "cases/invoice_approval_hub.json",
+    "cases/kb_triage_desk.json",
     "cases/lab_sample_pipeline.json",
     "cases/library_desk_pack.json",
     "cases/market_vendor_board.json",

@@ -5,7 +5,8 @@
   "fixtures": {
     "schemas": [
       "type MarketStall { stall: String vendor: String zone: String fee: Float }",
-      "type StallCheckin { stall: String present: Boolean }"
+      "type StallCheckin { stall: String zone: String present: Boolean }",
+      "type ZoneReport { zone: String note: String }"
     ],
     "documents": [
       {
@@ -31,7 +32,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Market Steward agent that records StallCheckin entries. Build and lint a Market Board page organized in a grid of stats, a bar chart of fees by zone, a vendor search input, and a live table.",
+      "prompt": "Set up a Zone Inspector agent woken automatically once 2 StallCheckin rows arrive for the same zone, writing a ZoneReport for that zone. Build and lint a \"Market Board\" page with a grid of KPI stats, a bar chart of fees by zone, a vendor search input, and a live table.",
       "capture": [
         {
           "kind": "documents",
@@ -65,6 +66,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -82,7 +84,7 @@
               "_eq": true
             },
             "display_name": {
-              "_ilike": "%market steward%"
+              "_ilike": "%zone inspector%"
             }
           },
           "fields": [
@@ -110,47 +112,6 @@
                 "min": 1,
                 "max": 1
               }
-            ],
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Market Board",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bGrid\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bStat\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bBarChart\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bInput\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bTable\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
-              }
             ]
           },
           "tier": "acceptance",
@@ -159,12 +120,62 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(MarketStall|StallCheckin)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)market[- ]?board"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bGrid\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bvendor\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bzone\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -178,6 +189,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -187,10 +202,87 @@
       ]
     },
     {
-      "stage_id": "exercise",
-      "settle": true,
-      "prompt": "Have the Market Steward check in stall S-14 as present.",
+      "stage_id": "east_first",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-14",
+          "zone": "east",
+          "present": true
+        }
+      },
+      "expect_fire": false,
+      "deadline_secs": 180,
       "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "west_first",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-22",
+          "zone": "west",
+          "present": true
+        }
+      },
+      "expect_fire": false,
+      "deadline_secs": 180,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "east_second",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-15",
+          "zone": "east",
+          "present": true
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
         {
           "kind": "documents",
           "name": "worker_runs",
@@ -207,6 +299,9 @@
             },
             "lifecycle_state": {
               "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
             }
           },
           "fields": [
@@ -219,16 +314,30 @@
         },
         {
           "kind": "documents",
-          "name": "checkins",
-          "collection": "StallCheckin",
+          "name": "east_reports",
+          "collection": "ZoneReport",
           "filter": {
-            "stall": {
-              "_eq": "S-14"
+            "zone": {
+              "_eq": "east"
             }
           },
           "fields": [
-            "stall",
-            "present"
+            "zone",
+            "note"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "west_reports",
+          "collection": "ZoneReport",
+          "filter": {
+            "zone": {
+              "_eq": "west"
+            }
+          },
+          "fields": [
+            "zone",
+            "note"
           ]
         }
       ],
@@ -238,23 +347,35 @@
           "params": {
             "present": [
               {
-                "capture": "worker_runs",
-                "min": 1
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
               },
               {
-                "capture": "checkins",
-                "min": 1
+                "capture": "worker_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "east_reports",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "west_reports",
+                "min": 0,
+                "max": 0
               }
             ],
             "rows": [
               {
-                "capture": "checkins",
-                "key": "stall",
-                "id": "S-14",
+                "capture": "east_reports",
+                "key": "zone",
+                "id": "east",
                 "expect": [
                   {
-                    "field": "present",
-                    "equals": true
+                    "field": "note",
+                    "matches": "\\S+"
                   }
                 ]
               }

@@ -2,10 +2,15 @@
   "case_id": "orchard-harvest-pack",
   "split": "held_out",
   "reducer": "all",
+  "fixtures": {
+    "seed_schemas": [
+      "type CratePick { lot: String cultivar: String weight: Float }"
+    ]
+  },
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package and install farm/orchard 1.0.0 in packs/orchard: CratePick(lot, cultivar, weight: Float), PressPlan(lot, note), surface orchard-desk, and Press Planner woken on new CratePick to add a PressPlan. Build and lint an Orchard Harvest page showing a grid, bar chart, and table.",
+      "prompt": "Package and install farm/orchard 1.0.0 in packs/orchard: CratePick(lot, cultivar, weight: Float), PressPlan(lot, note), surface orchard-desk, and Press Planner woken on new CratePick to add a PressPlan. Save and lint a node Page titled \"Orchard Harvest\" with a grid, bar chart, and table.",
       "capture": [
         {
           "kind": "documents",
@@ -40,6 +45,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -90,6 +96,11 @@
             "CratePick",
             "PressPlan"
           ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "packs/orchard/pack_config.json"
         }
       ],
       "checks": [
@@ -134,35 +145,102 @@
                 ]
               },
               {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Orchard Harvest",
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "orchard-desk",
                 "expect": [
                   {
                     "field": "enabled",
                     "equals": true
                   },
                   {
-                    "field": "module",
-                    "matches": "\\bGrid\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"CratePick\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\bBarChart\\b"
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"PressPlan\""
                   },
                   {
-                    "field": "module",
-                    "matches": "\\bTable\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"orchard-desk\""
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)orchard[- ]?harvest"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bGrid\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcultivar\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bnote\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"orchard-desk\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "packs/orchard/pack_config.json",
+                "contains": "orchard-desk"
+              },
+              {
+                "path": "packs/orchard/pack_config.json",
+                "matches": "(?i)press[- ]?planner"
               }
             ]
           },
@@ -185,6 +263,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -206,6 +288,11 @@
       "deadline_secs": 300,
       "settle": true,
       "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
         {
           "kind": "documents",
           "name": "worker_runs",
@@ -256,12 +343,32 @@
           "params": {
             "present": [
               {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
                 "capture": "worker_runs",
-                "min": 1
+                "min": 1,
+                "max": 1
               },
               {
                 "capture": "plans",
-                "min": 1
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plans",
+                "key": "lot",
+                "id": "H-77",
+                "expect": [
+                  {
+                    "field": "note",
+                    "matches": "(?i)honeycrisp|420|H-77|press"
+                  }
+                ]
               }
             ]
           },

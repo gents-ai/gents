@@ -5,6 +5,7 @@
   "fixtures": {
     "schemas": [
       "type LabSample { code: String batch: String status: String }",
+      "type LabPrep { code: String batch: String prepNote: String }",
       "type LabReport { code: String batch: String verdict: String }"
     ],
     "documents": [
@@ -29,7 +30,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Lab Analyst agent woken automatically on each new LabSample in one session per batch named batch- plus the batch, writing a LabReport for it. Build and lint a Lab Pipeline page showing a bar chart by batch and a reports table.",
+      "prompt": "Set up a two-agent chain: Lab Tech wakes on each new LabSample in session batch- plus batch to add a LabPrep, and Lab Analyst wakes on each new LabPrep to add a LabReport. Build and lint a \"Lab Pipeline\" page with a bar chart by batch and a reports table.",
       "capture": [
         {
           "kind": "documents",
@@ -63,6 +64,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -70,7 +72,27 @@
         },
         {
           "kind": "documents",
-          "name": "worker",
+          "name": "tech",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%lab tech%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "analyst",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -104,42 +126,14 @@
                 "min": 1
               },
               {
-                "capture": "worker",
+                "capture": "tech",
                 "min": 1,
                 "max": 1
-              }
-            ],
-            "rows": [
+              },
               {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Lab Pipeline",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bBarChart\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bTable\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bbatch\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
+                "capture": "analyst",
+                "min": 1,
+                "max": 1
               }
             ]
           },
@@ -149,12 +143,50 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(LabSample|LabReport)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)lab[- ]?pipeline"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bbatch\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bverdict\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -168,6 +200,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -187,8 +223,60 @@
         }
       },
       "deadline_secs": 300,
-      "capture": [],
-      "checks": []
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "s201_preps",
+          "collection": "LabPrep",
+          "filter": {
+            "code": {
+              "_eq": "S-201"
+            }
+          },
+          "fields": [
+            "code",
+            "batch",
+            "prepNote"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "s201_reports",
+          "collection": "LabReport",
+          "filter": {
+            "code": {
+              "_eq": "S-201"
+            }
+          },
+          "fields": [
+            "code",
+            "batch",
+            "verdict"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "s201_preps",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "s201_reports",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     },
     {
       "stage_id": "sample_two",
@@ -205,26 +293,128 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "batch_b7_runs",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tech_b7_runs",
           "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^lab[ -]?tech$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "session_id": {
+              "_eq": "batch-B7"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "analyst_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^lab[ -]?analyst$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "b7_sessions",
+          "collection": "AgentSession",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
             "session_id": {
               "_eq": "batch-B7"
-            },
-            "caused_by_trigger_id": {
-              "_ne": null
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
             }
           },
           "fields": [
-            "request_id",
-            "session_id",
-            "lifecycle_state"
+            "session_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "b7_preps",
+          "collection": "LabPrep",
+          "filter": {
+            "batch": {
+              "_eq": "B7"
+            }
+          },
+          "fields": [
+            "code",
+            "batch",
+            "prepNote"
           ]
         },
         {
@@ -249,12 +439,29 @@
           "params": {
             "present": [
               {
-                "capture": "batch_b7_runs",
-                "min": 2
+                "capture": "tech_b7_runs",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "analyst_runs",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "b7_sessions",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "b7_preps",
+                "min": 2,
+                "max": 2
               },
               {
                 "capture": "b7_reports",
-                "min": 2
+                "min": 2,
+                "max": 2
               }
             ]
           },

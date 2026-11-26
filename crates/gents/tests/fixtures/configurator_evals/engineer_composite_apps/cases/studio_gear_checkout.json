@@ -31,7 +31,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Create a Gear Clerk agent that can read GearItem only and add or edit GearLoan records. Build and lint a Studio Gear page having tabs for Inventory and Loans, a category select filter, and a checkout form.",
+      "prompt": "Create a Gear Clerk agent with its own datastore tools to read GearItem only and add GearLoan only, with no other database access. Build and lint a \"Studio Gear\" page with Inventory and Loans tabs, a category select filter, a returned switch, and a checkout form.",
       "capture": [
         {
           "kind": "documents",
@@ -53,41 +53,72 @@
         },
         {
           "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
             "node_did": {
               "_eq": "$trial"
-            },
-            "surface_id": {
-              "_ne": "engineer-mailbox"
             }
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "worker",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "enabled": {
-              "_eq": true
-            },
-            "display_name": {
-              "_ilike": "%gear clerk%"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name"
           ]
         }
       ],
@@ -104,50 +135,43 @@
               {
                 "capture": "surfaces",
                 "min": 1
-              },
-              {
-                "capture": "worker",
-                "min": 1,
-                "max": 1
               }
             ],
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Studio Gear",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gear-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^gear[ -]?clerk$"
                   },
-                  {
-                    "field": "module",
-                    "matches": "\\bTabs\\b"
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "datastore": {
+                    "surfaces": "surfaces",
+                    "query": [
+                      "GearItem"
+                    ],
+                    "create": [
+                      "GearLoan"
+                    ]
                   },
-                  {
-                    "field": "module",
-                    "matches": "\\bSelect\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bcategory\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
-              }
-            ]
+                  "tools": [
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           "tier": "acceptance",
           "weight": 1
@@ -155,12 +179,58 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(GearItem|GearLoan)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)studio[- ]?gear"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bTabs\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bSelect\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bSwitch\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcategory\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bborrower\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -174,6 +244,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -185,24 +259,50 @@
     {
       "stage_id": "exercise",
       "settle": true,
-      "prompt": "Have the Gear Clerk record a loan of tag CAM-4 to Nadia (returned false), then try to mark GearItem CAM-4 unavailable and tell me what happened.",
+      "prompt": "Have the Gear Clerk look up what item CAM-4 is, record a GearLoan of tag CAM-4 to Nadia (returned false), then try to mark GearItem CAM-4 unavailable and tell me both the item name and what happened.",
       "capture": [
         {
           "kind": "documents",
-          "name": "worker_runs",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "clerk_runs",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
             "agent_did": {
-              "_ne": "gents:agent-slot:engineer"
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^gear[ -]?clerk$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
             },
             "lifecycle_state": {
               "_eq": "completed"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [
@@ -210,7 +310,8 @@
             "agent_did",
             "session_id",
             "lifecycle_state",
-            "caused_by_trigger_id"
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
@@ -249,12 +350,13 @@
           "params": {
             "present": [
               {
-                "capture": "worker_runs",
+                "capture": "clerk_runs",
                 "min": 1
               },
               {
                 "capture": "loans",
-                "min": 1
+                "min": 1,
+                "max": 1
               },
               {
                 "capture": "cam4",
@@ -288,6 +390,21 @@
                     "equals": true
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)cinema body"
+              },
+              {
+                "matches": "(?i)(?:cannot|can't|unable|denied|not allowed|not permitted|no (?:mutation|update|write|tool)|read[- ]only|prevent|refus|fail|forbidden|disallowed)"
               }
             ]
           },

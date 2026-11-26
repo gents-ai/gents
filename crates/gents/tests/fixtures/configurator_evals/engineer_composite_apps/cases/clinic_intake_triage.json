@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Create a Triage Nurse agent woken automatically on each new IntakeForm to write a TriageNote assigning lane urgent or standard. Build and lint a Clinic Triage page featuring tabs, acuity badges, and a dialog form to add an intake.",
+      "prompt": "Create a Triage Nurse agent woken automatically on each new IntakeForm to add a TriageNote with lane urgent when acuity is urgent and standard otherwise. Build and lint a \"Clinic Triage\" page with tabs, acuity badges, a dialog intake form, and toast feedback.",
       "capture": [
         {
           "kind": "documents",
@@ -55,6 +55,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -100,43 +101,6 @@
                 "min": 1,
                 "max": 1
               }
-            ],
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Clinic Triage",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bTabs\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bBadge\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bDialog\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
-              }
             ]
           },
           "tier": "acceptance",
@@ -145,12 +109,62 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(IntakeForm|TriageNote)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)clinic[- ]?triage"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bTabs\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBadge\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bDialog\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\btoast\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bacuity\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\blane\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -164,6 +178,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -185,6 +203,11 @@
       "deadline_secs": 300,
       "settle": true,
       "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
         {
           "kind": "documents",
           "name": "worker_runs",
@@ -216,7 +239,7 @@
         },
         {
           "kind": "documents",
-          "name": "triage",
+          "name": "triage_urgent",
           "collection": "TriageNote",
           "filter": {
             "visit": {
@@ -235,23 +258,98 @@
           "params": {
             "present": [
               {
-                "capture": "worker_runs",
-                "min": 1
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
               },
               {
-                "capture": "triage",
-                "min": 1
+                "capture": "worker_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "triage_urgent",
+                "min": 1,
+                "max": 1
               }
             ],
             "rows": [
               {
-                "capture": "triage",
+                "capture": "triage_urgent",
                 "key": "visit",
                 "id": "V-42",
                 "expect": [
                   {
                     "field": "lane",
                     "matches": "(?i)urgent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "routine_arrival",
+      "seed": {
+        "collection": "IntakeForm",
+        "document": {
+          "visit": "V-43",
+          "patient": "Lina",
+          "acuity": "routine"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
+        {
+          "kind": "documents",
+          "name": "triage_routine",
+          "collection": "TriageNote",
+          "filter": {
+            "visit": {
+              "_eq": "V-43"
+            }
+          },
+          "fields": [
+            "visit",
+            "lane"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "triage_routine",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "triage_routine",
+                "key": "visit",
+                "id": "V-43",
+                "expect": [
+                  {
+                    "field": "lane",
+                    "matches": "(?i)standard"
                   }
                 ]
               }

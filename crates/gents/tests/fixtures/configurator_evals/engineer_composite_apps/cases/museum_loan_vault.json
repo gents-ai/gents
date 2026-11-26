@@ -4,25 +4,39 @@
   "reducer": "all",
   "fixtures": {
     "schemas": [
-      "type Artifact { catalog: String title: String gallery: String }",
       "type LoanRequest { catalog: String borrower: String approved: Boolean }"
     ],
-    "documents": [
+    "files": [
       {
-        "collection": "Artifact",
-        "document": {
-          "catalog": "ART-5",
-          "title": "Bronze Astrolabe",
-          "gallery": "East Wing"
-        }
+        "path": "artifacts.json",
+        "contents": "[\n  {\n    \"catalog\": \"ART-3\",\n    \"title\": \"Porcelain Ewer\",\n    \"gallery\": \"North Hall\",\n    \"notes\": \"Glazed cobalt ceramic pitcher used for ceremonial tea service during the late Ming period.\"\n  },\n  {\n    \"catalog\": \"ART-5\",\n    \"title\": \"Bronze Astrolabe\",\n    \"gallery\": \"East Wing\",\n    \"notes\": \"Engraved celestial astrolabe with interchangeable latitude plates calibrated for Mediterranean navigation.\"\n  },\n  {\n    \"catalog\": \"ART-8\",\n    \"title\": \"Woven Tapestry\",\n    \"gallery\": \"South Gallery\",\n    \"notes\": \"Wool and silk hunting tapestry restored with archival linen backing in 1994.\"\n  }\n]\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Create a Vault Registrar agent that can read Artifact only and write LoanRequest records. Build and lint a Museum Vault page displaying artifact cards and a dialog button to submit a loan request.",
+      "prompt": "Create Artifact(catalog, title, gallery, English fulltext notes), import artifacts.json, and add Vault Registrar with tools to read Artifact only and add LoanRequest only (no other DB access). Build and lint a \"Museum Vault\" page with cards, search input, and a dialog loan form.",
       "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Artifact"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "artifacts",
+          "collection": "Artifact",
+          "filter": {},
+          "fields": [
+            "catalog",
+            "title",
+            "gallery",
+            "notes"
+          ]
+        },
         {
           "kind": "documents",
           "name": "pages",
@@ -43,49 +57,94 @@
         },
         {
           "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
             "node_did": {
               "_eq": "$trial"
-            },
-            "surface_id": {
-              "_ne": "engineer-mailbox"
             }
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "worker",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "enabled": {
-              "_eq": true
-            },
-            "display_name": {
-              "_ilike": "%vault registrar%"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name"
           ]
         }
       ],
       "checks": [
         {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Artifact { catalog: String title: String gallery: String notes: String @fulltext(language:\"english\") }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
           "check": "crew_spec_match",
           "params": {
             "present": [
+              {
+                "capture": "artifacts",
+                "min": 3,
+                "max": 3
+              },
               {
                 "capture": "pages",
                 "min": 1,
@@ -94,50 +153,43 @@
               {
                 "capture": "surfaces",
                 "min": 1
-              },
-              {
-                "capture": "worker",
-                "min": 1,
-                "max": 1
               }
             ],
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Museum Vault",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "vault-registrar",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^vault[ -]?registrar$"
                   },
-                  {
-                    "field": "module",
-                    "matches": "\\bCard\\b"
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "datastore": {
+                    "surfaces": "surfaces",
+                    "query": [
+                      "Artifact"
+                    ],
+                    "create": [
+                      "LoanRequest"
+                    ]
                   },
-                  {
-                    "field": "module",
-                    "matches": "\\bDialog\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseWrite\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bcatalog\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
-              }
-            ]
+                  "tools": [
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           "tier": "acceptance",
           "weight": 1
@@ -145,12 +197,58 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(Artifact|LoanRequest)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)museum[- ]?vault"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bDialog\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcatalog\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bborrower\\b"
+              },
+              {
+                "field": "data",
+                "matches": "(?s)\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -164,6 +262,53 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "search",
+      "prompt": "Search Artifact notes for \"celestial astrolabe\" and tell me its catalog code and gallery.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "Artifact"
+              },
+              {
+                "field": "ranking",
+                "equals": "bm25"
+              },
+              {
+                "field": "results",
+                "contains": "ART-5"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)ART-5"
+              },
+              {
+                "matches": "(?i)east wing"
               }
             ]
           },
@@ -175,24 +320,50 @@
     {
       "stage_id": "exercise",
       "settle": true,
-      "prompt": "Have the Vault Registrar add a LoanRequest for ART-5 to Leiden Museum (approved false), then try to move Artifact ART-5 to West Wing and report what happened.",
+      "prompt": "Have the Vault Registrar check the title of ART-5, add a LoanRequest for ART-5 to Leiden Museum (approved false), then try to move Artifact ART-5 to West Wing and tell me both the title and what happened.",
       "capture": [
         {
           "kind": "documents",
-          "name": "worker_runs",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "registrar_runs",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
             "agent_did": {
-              "_ne": "gents:agent-slot:engineer"
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^vault[ -]?registrar$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
             },
             "lifecycle_state": {
               "_eq": "completed"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [
@@ -200,7 +371,8 @@
             "agent_did",
             "session_id",
             "lifecycle_state",
-            "caused_by_trigger_id"
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
@@ -239,12 +411,13 @@
           "params": {
             "present": [
               {
-                "capture": "worker_runs",
+                "capture": "registrar_runs",
                 "min": 1
               },
               {
                 "capture": "loans",
-                "min": 1
+                "min": 1,
+                "max": 1
               },
               {
                 "capture": "art5",
@@ -278,6 +451,21 @@
                     "equals": "East Wing"
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)bronze astrolabe"
+              },
+              {
+                "matches": "(?i)(?:cannot|can't|unable|denied|not allowed|not permitted|no (?:mutation|update|write|tool)|read[- ]only|prevent|refus|fail|forbidden|disallowed)"
               }
             ]
           },

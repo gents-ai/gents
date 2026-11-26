@@ -31,7 +31,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Set up a Grower Watch agent that records a ClimateAlert only when a new BayReading exceeds 32 celsius. Build and lint a Greenhouse Monitor page showing a line chart of temperature, summary stats, and alert badges.",
+      "prompt": "Set up a Grower Watch agent woken only when a new BayReading strictly exceeds 32 celsius to record a ClimateAlert. Build and lint a \"Greenhouse Monitor\" page showing a temperature line chart, KPI stats, alert badges, and an empty state.",
       "capture": [
         {
           "kind": "documents",
@@ -65,6 +65,7 @@
           },
           "fields": [
             "surface_id",
+            "node_did",
             "display_name",
             "entries",
             "enabled"
@@ -110,43 +111,6 @@
                 "min": 1,
                 "max": 1
               }
-            ],
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "display_name",
-                "id": "Greenhouse Monitor",
-                "expect": [
-                  {
-                    "field": "enabled",
-                    "equals": true
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bLineChart\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bStat\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bBadge\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\buseQuery\\b"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bcelsius\\b"
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
-                  }
-                ]
-              }
             ]
           },
           "tier": "acceptance",
@@ -155,12 +119,58 @@
         {
           "check": "captured_fields_match",
           "params": {
-            "name": "surfaces",
+            "name": "pages",
             "min_rows": 1,
+            "max_rows": 1,
             "expect": [
               {
-                "field": "entries",
-                "matches": "\"collection\"\\s*:\\s*\"(BayReading|ClimateAlert)\""
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)greenhouse[- ]?monitor"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bLineChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBadge\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(EmptyState|LoadingState)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcelsius\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bmessage\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
               }
             ]
           },
@@ -174,6 +184,10 @@
               {
                 "field": "admitted",
                 "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
               }
             ]
           },
@@ -183,19 +197,37 @@
       ]
     },
     {
-      "stage_id": "cool_reading",
+      "stage_id": "boundary_reading",
       "seed": {
         "collection": "BayReading",
         "document": {
           "bay": "East",
-          "celsius": 24.0,
+          "celsius": 32.0,
           "humidity": 60.0,
           "hour": "10:00"
         }
       },
+      "expect_fire": false,
       "deadline_secs": 180,
-      "capture": [],
-      "checks": []
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     },
     {
       "stage_id": "hot_reading",
@@ -211,6 +243,40 @@
       "deadline_secs": 300,
       "settle": true,
       "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
         {
           "kind": "documents",
           "name": "east_alerts",
@@ -246,13 +312,37 @@
           "params": {
             "present": [
               {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "worker_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
                 "capture": "east_alerts",
                 "min": 0,
                 "max": 0
               },
               {
                 "capture": "west_alerts",
-                "min": 1
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "west_alerts",
+                "key": "bay",
+                "id": "West",
+                "expect": [
+                  {
+                    "field": "message",
+                    "matches": "(?i)west|35|temp|hot|high|celsius|heat|alert"
+                  }
+                ]
               }
             ]
           },
