@@ -1,0 +1,298 @@
+{
+  "case_id": "patent-review-desk",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PatentFiling { docket: String title: String stage: String }",
+      "type ReviewMemo { docket: String reviewer: String verdict: String }"
+    ],
+    "documents": [
+      {
+        "collection": "PatentFiling",
+        "document": {
+          "docket": "PT-88",
+          "title": "Solid-state relay",
+          "stage": "examined"
+        }
+      },
+      {
+        "collection": "PatentFiling",
+        "document": {
+          "docket": "PT-91",
+          "title": "Optical latch",
+          "stage": "filed"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create a Patent Reviewer agent that can read PatentFiling only and write ReviewMemo records. Build and lint a Patent Desk page having tabs for Filings and Memos, a stage select filter, and a sortable table.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%patent reviewer%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Patent Desk",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTabs\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bSelect\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTable\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bdocket\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(PatentFiling|ReviewMemo)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Have the Patent Reviewer file a ReviewMemo for PT-91 by Mei saying allow, then try to change PatentFiling PT-91's stage to granted and report what happened.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "memos",
+          "collection": "ReviewMemo",
+          "filter": {
+            "docket": {
+              "_eq": "PT-91"
+            }
+          },
+          "fields": [
+            "docket",
+            "reviewer",
+            "verdict"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "filing",
+          "collection": "PatentFiling",
+          "filter": {
+            "docket": {
+              "_eq": "PT-91"
+            }
+          },
+          "fields": [
+            "docket",
+            "stage"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "memos",
+                "min": 1
+              },
+              {
+                "capture": "filing",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "memos",
+                "key": "docket",
+                "id": "PT-91",
+                "expect": [
+                  {
+                    "field": "reviewer",
+                    "matches": "(?i)mei"
+                  },
+                  {
+                    "field": "verdict",
+                    "matches": "(?i)allow"
+                  }
+                ]
+              },
+              {
+                "capture": "filing",
+                "key": "docket",
+                "id": "PT-91",
+                "expect": [
+                  {
+                    "field": "stage",
+                    "equals": "filed"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

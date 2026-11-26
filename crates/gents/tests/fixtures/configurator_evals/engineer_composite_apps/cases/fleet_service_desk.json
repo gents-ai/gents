@@ -1,0 +1,266 @@
+{
+  "case_id": "fleet-service-desk",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type FleetOrder { unit: String issue: String severity: String }",
+      "type FleetNote { unit: String summary: String }"
+    ],
+    "documents": [
+      {
+        "collection": "FleetOrder",
+        "document": {
+          "unit": "VAN-12",
+          "issue": "brake pad wear",
+          "severity": "high"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Set up a Fleet Dispatcher agent that automatically adds a FleetNote whenever a new FleetOrder arrives. Also build a linted Fleet Service page showing KPI stats, an orders table, and a form to log a new order.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%fleet dispatcher%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Fleet Service",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bStat\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTable\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bunit\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(FleetOrder|FleetNote)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "new_order",
+      "seed": {
+        "collection": "FleetOrder",
+        "document": {
+          "unit": "TRK-44",
+          "issue": "coolant leak",
+          "severity": "critical"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "FleetNote",
+          "filter": {
+            "unit": {
+              "_eq": "TRK-44"
+            }
+          },
+          "fields": [
+            "unit",
+            "summary"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "notes",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notes",
+                "key": "unit",
+                "id": "TRK-44",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "matches": "(?i)coolant|leak|TRK-44|critical"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

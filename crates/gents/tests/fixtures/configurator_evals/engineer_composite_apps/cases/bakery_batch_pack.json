@@ -1,0 +1,212 @@
+{
+  "case_id": "bakery-batch-pack",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package and install kitchen/bakery 1.0.0 in packs/bakery: OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch. Build and lint a Bakery Batches page featuring a donut chart and a waste entry form.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "kitchen/bakery"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "OvenBatch",
+            "WasteLog"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "kitchen/bakery",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Bakery Batches",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bDonutChart\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"bakery-batch\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type OvenBatch { batch: String item: String loaves: Int } type WasteLog { batch: String count: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Log 4 wasted loaves for batch B-09 in the bakery desk.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Was the waste entry for B-09 saved?",
+        "max": 1,
+        "until": "waste"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "waste",
+          "collection": "WasteLog",
+          "filter": {
+            "batch": {
+              "_eq": "B-09"
+            }
+          },
+          "fields": [
+            "batch",
+            "count"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "waste",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "count",
+                "equals": 4
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

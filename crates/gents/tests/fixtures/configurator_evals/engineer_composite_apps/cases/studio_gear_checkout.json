@@ -1,0 +1,300 @@
+{
+  "case_id": "studio-gear-checkout",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type GearItem { tag: String item: String category: String available: Boolean }",
+      "type GearLoan { tag: String borrower: String returned: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "GearItem",
+        "document": {
+          "tag": "CAM-4",
+          "item": "Cinema Body",
+          "category": "camera",
+          "available": true
+        }
+      },
+      {
+        "collection": "GearItem",
+        "document": {
+          "tag": "MIC-2",
+          "item": "Shotgun Mic",
+          "category": "audio",
+          "available": true
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create a Gear Clerk agent that can read GearItem only and add or edit GearLoan records. Build and lint a Studio Gear page having tabs for Inventory and Loans, a category select filter, and a checkout form.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%gear clerk%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Studio Gear",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTabs\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bSelect\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bcategory\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(GearItem|GearLoan)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Have the Gear Clerk record a loan of tag CAM-4 to Nadia (returned false), then try to mark GearItem CAM-4 unavailable and tell me what happened.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loans",
+          "collection": "GearLoan",
+          "filter": {
+            "tag": {
+              "_eq": "CAM-4"
+            }
+          },
+          "fields": [
+            "tag",
+            "borrower",
+            "returned"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "cam4",
+          "collection": "GearItem",
+          "filter": {
+            "tag": {
+              "_eq": "CAM-4"
+            }
+          },
+          "fields": [
+            "tag",
+            "available"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "loans",
+                "min": 1
+              },
+              {
+                "capture": "cam4",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "loans",
+                "key": "tag",
+                "id": "CAM-4",
+                "expect": [
+                  {
+                    "field": "borrower",
+                    "matches": "(?i)nadia"
+                  },
+                  {
+                    "field": "returned",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "cam4",
+                "key": "tag",
+                "id": "CAM-4",
+                "expect": [
+                  {
+                    "field": "available",
+                    "equals": true
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

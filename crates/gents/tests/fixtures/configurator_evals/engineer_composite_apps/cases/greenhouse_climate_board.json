@@ -1,0 +1,265 @@
+{
+  "case_id": "greenhouse-climate-board",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type BayReading { bay: String celsius: Float humidity: Float hour: String }",
+      "type ClimateAlert { bay: String message: String }"
+    ],
+    "documents": [
+      {
+        "collection": "BayReading",
+        "document": {
+          "bay": "North",
+          "celsius": 23.5,
+          "humidity": 62.0,
+          "hour": "08:00"
+        }
+      },
+      {
+        "collection": "BayReading",
+        "document": {
+          "bay": "South",
+          "celsius": 26.0,
+          "humidity": 58.0,
+          "hour": "09:00"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Set up a Grower Watch agent that records a ClimateAlert only when a new BayReading exceeds 32 celsius. Build and lint a Greenhouse Monitor page showing a line chart of temperature, summary stats, and alert badges.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%grower watch%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Greenhouse Monitor",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bLineChart\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bStat\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bBadge\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bcelsius\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(BayReading|ClimateAlert)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "cool_reading",
+      "seed": {
+        "collection": "BayReading",
+        "document": {
+          "bay": "East",
+          "celsius": 24.0,
+          "humidity": 60.0,
+          "hour": "10:00"
+        }
+      },
+      "deadline_secs": 180,
+      "capture": [],
+      "checks": []
+    },
+    {
+      "stage_id": "hot_reading",
+      "seed": {
+        "collection": "BayReading",
+        "document": {
+          "bay": "West",
+          "celsius": 35.5,
+          "humidity": 41.0,
+          "hour": "11:00"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "east_alerts",
+          "collection": "ClimateAlert",
+          "filter": {
+            "bay": {
+              "_eq": "East"
+            }
+          },
+          "fields": [
+            "bay",
+            "message"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "west_alerts",
+          "collection": "ClimateAlert",
+          "filter": {
+            "bay": {
+              "_eq": "West"
+            }
+          },
+          "fields": [
+            "bay",
+            "message"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "east_alerts",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "west_alerts",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

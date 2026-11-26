@@ -1,0 +1,212 @@
+{
+  "case_id": "library-desk-pack",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package and install civic/library 1.0.0 in packs/library: CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also build and lint a Library Desk page displaying books and a hold form.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "civic/library"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CatalogBook",
+            "BookHold"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "civic/library",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Library Desk",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTable\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"library-desk\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CatalogBook { isbn: String title: String copies: Int } type BookHold { isbn: String patron: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Place a hold on ISBN-404 for Priya through the library desk.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Did the hold for ISBN-404 go through?",
+        "max": 1,
+        "until": "holds"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "holds",
+          "collection": "BookHold",
+          "filter": {
+            "isbn": {
+              "_eq": "ISBN-404"
+            }
+          },
+          "fields": [
+            "isbn",
+            "patron"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "holds",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "patron",
+                "matches": "(?i)\\bpriya\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

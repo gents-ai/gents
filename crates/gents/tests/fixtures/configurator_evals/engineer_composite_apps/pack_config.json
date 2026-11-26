@@ -1,0 +1,40 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-composite-apps",
+      "comparability_version": 1,
+      "title": "Composite apps: end-to-end datastore, agents, automations, packs and desktop UI",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/fleet_service_desk.json",
+        "./cases/greenhouse_climate_board.json",
+        "./cases/studio_gear_checkout.json",
+        "./cases/lab_sample_pipeline.json",
+        "./cases/invoice_approval_hub.json",
+        "./cases/library_desk_pack.json",
+        "./cases/market_vendor_board.json",
+        "./cases/clinic_intake_triage.json",
+        "./cases/dock_cargo_control.json",
+        "./cases/patent_review_desk.json",
+        "./cases/bakery_batch_pack.json",
+        "./cases/solar_grid_dispatch.json",
+        "./cases/museum_loan_vault.json",
+        "./cases/orchard_harvest_pack.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,290 @@
+{
+  "case_id": "museum-loan-vault",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type Artifact { catalog: String title: String gallery: String }",
+      "type LoanRequest { catalog: String borrower: String approved: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "Artifact",
+        "document": {
+          "catalog": "ART-5",
+          "title": "Bronze Astrolabe",
+          "gallery": "East Wing"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create a Vault Registrar agent that can read Artifact only and write LoanRequest records. Build and lint a Museum Vault page displaying artifact cards and a dialog button to submit a loan request.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%vault registrar%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Museum Vault",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bCard\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bDialog\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bcatalog\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(Artifact|LoanRequest)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Have the Vault Registrar add a LoanRequest for ART-5 to Leiden Museum (approved false), then try to move Artifact ART-5 to West Wing and report what happened.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loans",
+          "collection": "LoanRequest",
+          "filter": {
+            "catalog": {
+              "_eq": "ART-5"
+            }
+          },
+          "fields": [
+            "catalog",
+            "borrower",
+            "approved"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "art5",
+          "collection": "Artifact",
+          "filter": {
+            "catalog": {
+              "_eq": "ART-5"
+            }
+          },
+          "fields": [
+            "catalog",
+            "gallery"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "loans",
+                "min": 1
+              },
+              {
+                "capture": "art5",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "loans",
+                "key": "catalog",
+                "id": "ART-5",
+                "expect": [
+                  {
+                    "field": "borrower",
+                    "matches": "(?i)leiden"
+                  },
+                  {
+                    "field": "approved",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "art5",
+                "key": "catalog",
+                "id": "ART-5",
+                "expect": [
+                  {
+                    "field": "gallery",
+                    "equals": "East Wing"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

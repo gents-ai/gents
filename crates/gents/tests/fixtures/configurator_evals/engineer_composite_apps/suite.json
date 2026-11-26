@@ -1,0 +1,14 @@
+{
+  "id": "engineer-composite-apps",
+  "title": "Engineer composite apps",
+  "coverage": [
+    "autonomous trigger worker paired with KPI stats, table and write form page",
+    "filtered trigger alerts paired with line chart, stats and badge page",
+    "ACP-scoped read/write clerk agent paired with tabbed, filtered checkout page",
+    "per-key session trigger worker paired with bar chart and table page",
+    "threshold-filtered auditor paired with donut chart, cards and write form page",
+    "packaged and installed app pack with collections, surface and linted desktop page",
+    "grid, stats, bar chart and search input page paired with steward agent",
+    "trigger-driven triage worker paired with tabs, badges and dialog intake form"
+  ]
+}

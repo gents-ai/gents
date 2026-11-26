@@ -1,0 +1,267 @@
+{
+  "case_id": "lab-sample-pipeline",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type LabSample { code: String batch: String status: String }",
+      "type LabReport { code: String batch: String verdict: String }"
+    ],
+    "documents": [
+      {
+        "collection": "LabSample",
+        "document": {
+          "code": "S-100",
+          "batch": "B1",
+          "status": "checked"
+        }
+      },
+      {
+        "collection": "LabReport",
+        "document": {
+          "code": "S-100",
+          "batch": "B1",
+          "verdict": "clear"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Set up a Lab Analyst agent woken automatically on each new LabSample in one session per batch named batch- plus the batch, writing a LabReport for it. Build and lint a Lab Pipeline page showing a bar chart by batch and a reports table.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%lab analyst%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Lab Pipeline",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bBarChart\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTable\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bbatch\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"(LabSample|LabReport)\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "sample_one",
+      "seed": {
+        "collection": "LabSample",
+        "document": {
+          "code": "S-201",
+          "batch": "B7",
+          "status": "queued"
+        }
+      },
+      "deadline_secs": 300,
+      "capture": [],
+      "checks": []
+    },
+    {
+      "stage_id": "sample_two",
+      "seed": {
+        "collection": "LabSample",
+        "document": {
+          "code": "S-202",
+          "batch": "B7",
+          "status": "queued"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "batch_b7_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "batch-B7"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "b7_reports",
+          "collection": "LabReport",
+          "filter": {
+            "batch": {
+              "_eq": "B7"
+            }
+          },
+          "fields": [
+            "code",
+            "batch",
+            "verdict"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "batch_b7_runs",
+                "min": 2
+              },
+              {
+                "capture": "b7_reports",
+                "min": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
