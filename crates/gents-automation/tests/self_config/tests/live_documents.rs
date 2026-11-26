@@ -449,7 +449,7 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     integrations["plugins"] = json!([first["selection"]]);
     // Selecting a plugin nothing installed would leave this agent without a
     // tool surface on its next request, so the edit is refused whole, with
-    // the install as the next call (#1796).
+    // the install as the next call.
     let mut absent = integrations.clone();
     absent["plugins"] = json!([
         first["selection"],

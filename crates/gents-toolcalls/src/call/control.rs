@@ -519,7 +519,6 @@ mod tests {
         reloaded
     }
 
-    /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
     #[tokio::test]
     async fn generated_stop_actions_select_the_durable_transition() {
         use gents_protocol::tool_call::ToolCallState;

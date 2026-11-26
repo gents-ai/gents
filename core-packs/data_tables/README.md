@@ -54,8 +54,9 @@ to that agent's Tools. The model calls
 {"path": "reports", "sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}
 ```
 
-and reads `rows`, `markdown` and `warnings`; a result with `next.cursor` is continued by calling again with that
-`cursor` and every other field unchanged. `plugins/data_tables/TOOL.md` is the small core the model reads with every
+and reads `response.rows`, `response.markdown` and `response.warnings`; a result with `response.next.cursor` is
+continued by calling again with that `cursor` and every other field unchanged. `plugins/data_tables/TOOL.md` is the
+small core the model reads with every
 request; the detail is in help topics (`plugins/data_tables/help/`) that the model reads on demand with
 `{"help": "<topic>"}`.
 
@@ -100,7 +101,7 @@ that wants a chart passes them on unchanged (see "Combine it" below). The collec
 
 ```sh
 gents config pack plugin run gents/data_tables --bind-dir ./reports \
-  --input '{"sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}' | jq -r .markdown
+  --input '{"sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}' | jq -r .response.markdown
 ```
 
 A long result is read to the end with the cursor:
@@ -110,8 +111,8 @@ dir=./reports sql='SELECT * FROM sales' cursor=""
 while :; do
   input="$(jq -nc --arg s "$sql" --arg c "$cursor" '{sql: $s} + (if $c == "" then {} else {cursor: $c} end)')"
   out="$(gents config pack plugin run gents/data_tables --bind-dir "$dir" --input "$input")"
-  jq -c '.rows[]' <<<"$out"
-  cursor="$(jq -r '.next.cursor // empty' <<<"$out")"
+  jq -c '.response.rows[]' <<<"$out"
+  cursor="$(jq -r '.response.next.cursor // empty' <<<"$out")"
   [ -n "$cursor" ] || break
 done
 ```
@@ -124,10 +125,10 @@ To write a result, add `output`: `gents config pack plugin run gents/data_tables
 - **ocr**: the ocr pack reads CSV and XLSX into Markdown for a model; this pack answers questions over the same
   files exactly. Use ocr to read a scanned or office document, then query the tables it exposes (export them to
   CSV, or pass the rows inline).
-- **charts**: the `columns` and `rows` of a result are the input shape of the charts pack, unchanged; feed them
-  on directly, or through `DataResult.columns` and `DataRow.values` in a callback chain.
-- **itself**: `tables` accepts the `columns` and `rows` of an earlier result, so a query can read a previous
-  query's output without a file.
+- **charts**: a `data_tables` result (`{"response": {"columns": [...], "rows": [[...]]}}`) is accepted unchanged as
+  `charts` `data`, or pass `DataResult.columns` and `DataRow.values` in a callback chain.
+- **itself**: `tables` accepts a `data_tables` result unchanged (or bare `columns` and `rows`), so a query can read a
+  previous query's output without a file.
 
 ## Exact results
 

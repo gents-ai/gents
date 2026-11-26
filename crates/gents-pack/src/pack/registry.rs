@@ -410,7 +410,7 @@ pub async fn download_verified_pack(
 }
 
 /// The Gents release a registry version entry says the pack was built for,
-/// its `gents_version` (gents-ai/packs#63); `None` when the entry does not
+/// its `gents_version`; `None` when the entry does not
 /// say.
 pub fn advertised_release(
     version: &Value,

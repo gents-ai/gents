@@ -1,7 +1,9 @@
 {
   "expect": {
-    "help": "topics",
-    "text": "Call with {\"help\": \"<topic>\"} for one of these topics:\n- inputs: path, files, tables, the three modes and the other options\n- sql: the SQL dialect, useful functions and example calls\n- csv: how CSV types and headers are detected\n- output: the result, its types and values, and the row order\n- paging: reading a long result page by page with cursor\n- saving: writing a result as a CSV or Parquet file with output\n- limits: memory, size limits and what fails\n"
+    "response": {
+      "help": "topics",
+      "text": "Call with {\"help\": \"<topic>\"} for one of these topics:\n- inputs: path, files, tables, the three modes and the other options\n- sql: the SQL dialect, useful functions and example calls\n- csv: how CSV types and headers are detected\n- output: the result, its types and values, and the row order\n- paging: reading a long result page by page with cursor\n- saving: writing a result as a CSV or Parquet file with output\n- limits: memory, size limits and what fails\n"
+    }
   },
   "input": {
     "help": "topics"

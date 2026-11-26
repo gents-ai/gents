@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use defra_node::AssignmentPosition;
-use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents_store::config_client::placement_fence::PlacementBasis;
 
 use super::*;
@@ -64,18 +63,6 @@ impl Fixture {
                 floors: BTreeMap::from([(SCOPE.to_owned(), position(floor))]),
                 agent_documents: self.documents.clone(),
             })
-    }
-}
-
-struct Joined(mpsc::UnboundedSender<(String, u64)>);
-
-impl RuntimeSnapshotObserver for Joined {
-    fn on_generation_published(&self, _: u64, _: &str, _: &[String]) {}
-
-    fn on_event_sources_reconciled(&self, _: u64, _: &str, _: Result<(), &str>) {}
-
-    fn on_retired_slot_joined(&self, agent_did: &str, generation: u64) {
-        let _ = self.0.send((agent_did.to_owned(), generation));
     }
 }
 
@@ -171,7 +158,9 @@ async fn start(fixture: &Fixture, slots: &Slots, initial: ResolvedRuntimeSnapsho
     )
     .await
     .unwrap()
-    .with_observer(Some(Arc::new(Joined(joined_tx))));
+    .with_observer(Some(Arc::new(
+        crate::test_support::running_runtime::RetiredSlots(joined_tx),
+    )));
     let placement = supervisor.placement();
     let (active_tx, active_rx) = watch::channel(supervisor.current_snapshot());
     let (proposal_tx, proposal_rx) = mpsc::channel(8);

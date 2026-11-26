@@ -1318,7 +1318,7 @@ pub(crate) mod tests {
     }
 
     /// A core pack is installed as the Engineer, so what it ships is the
-    /// Engineer's to use and to remove (gents-ai/packs#61): the pack's agent
+    /// Engineer's to use and to remove: the pack's agent
     /// is in its agent list, it targets and wires that agent, and it removes
     /// the pack with everything the pack left.
     #[tokio::test]

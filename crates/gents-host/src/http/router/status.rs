@@ -183,7 +183,7 @@ async fn attest_status(
 pub const NATIVE_EXECUTORS_STATUS_FIELD: &str = "native_executors";
 
 /// This node's measured backend probes; the replicated `InferenceBackend`
-/// document never carries them (#640), so a failed probe's reason is read here.
+/// document never carries them, so a failed probe's reason is read here.
 pub const BACKEND_PROBES_STATUS_FIELD: &str = "backend_probes";
 
 fn backend_probe_reports(

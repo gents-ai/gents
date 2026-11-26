@@ -380,8 +380,7 @@ pub(crate) async fn collection_cleanup_plan(
 /// Empties and removes each collection [`collection_cleanup_plan`] finds
 /// removable, as the actor of `access`; the rest are kept and reported with
 /// what keeps them. The plan is complete before the first document is
-/// removed, so a refusal costs no data. Ownership of pack-declared
-/// collections is discussed in gents-ai/gents#3572.
+/// removed, so a refusal costs no data.
 pub(crate) async fn remove_unused_collections(
     access: &ConfigAccess,
     home: Option<&Path>,

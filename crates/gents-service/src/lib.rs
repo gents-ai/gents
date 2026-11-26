@@ -1,3 +1,7 @@
+//! Host layer: home state, native service supervision, runtime control, and managed updates.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Clients/`; test fixtures live in `src/test_support.rs` (`test-fixtures`).
+
 pub mod args;
 pub mod enrollment_admin;
 pub mod home_state;

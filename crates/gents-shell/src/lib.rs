@@ -1,3 +1,7 @@
+//! Client adapter layer: terminal user interface and interactive shell for Gents.
+//!
+//! Presents sessions, transcripts, and slash commands over `ratatui`.
+
 pub mod app;
 pub mod cli;
 pub mod commands;

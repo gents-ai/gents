@@ -105,7 +105,7 @@ pub enum StreamPayload {
 /// two visible flushes sharing an ordinal but differing in writer, runs or
 /// payload, or two visible closures, are an integrity conflict every reader
 /// must surface. The storage index is ordinary, not unique, because a unique
-/// index can hide the losing twin of a remote conflict (#1073). A replay
+/// index can hide the losing twin of a remote conflict. A replay
 /// reuses the persisted document, including its creation timestamp; an
 /// already-existing create is accepted only after verifying the stored fact.
 ///
@@ -323,7 +323,7 @@ pub enum TerminalOutput {
 ///
 /// A successfully accepted provider turn atomically publishes its Complete
 /// closing record, assistant header and pending `AgentToolCall` rows before any
-/// tool is dispatched (#945). Partial turns may publish diagnostic headers, but
+/// tool is dispatched. Partial turns may publish diagnostic headers, but
 /// any retained tool-call blocks name terminal, nondispatchable lifecycle rows.
 /// Once published, an accepted turn cannot be retracted/resampled because a
 /// later dispatch fails. Recovery resumes its existing rows, never new calls.
@@ -345,7 +345,7 @@ pub enum TerminalOutput {
 /// payloads only for referenced blocks.
 ///
 /// Stored form: `AgentMessage` is client-authored, so its schema stays the v1.0.0-rc0 one
-/// (#1123/#1125) and `native_request_id` has no column. It is read from a
+/// and `native_request_id` has no column. It is read from a
 /// `native_request_id` key inside the `publication` JSON, and written there only when
 /// [`storage::PERSIST_NATIVE_REQUEST_ID`] is on (it is off; see there).
 #[derive(Clone, Debug, PartialEq, Deserialize)]

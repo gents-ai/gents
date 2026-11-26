@@ -174,7 +174,7 @@ async fn a_dropped_read_keeps_nothing_and_frees_the_status_lock() {
 /// TLA+ `HeldAudienceReads` `Queued`: two requests minted for the audience the
 /// home left are refused; the second waits while the first reads and keeps
 /// the new audience, so its own read changes nothing. It is sent again all
-/// the same, since what it presented is not what is kept (gents#3963).
+/// the same, since what it presented is not what is kept.
 #[tokio::test(flavor = "current_thread")]
 async fn a_refusal_queued_behind_another_is_sent_again_with_the_newest_audience() {
     let gate = Arc::new(Notify::new());
