@@ -484,3 +484,4 @@
 {"timestamp":"2026-11-26T17:47:51Z","run_id":"45515243098","job":"ts-browser:3/3","steps":[{"step":"npm run build:packages","seconds":11.1},{"step":"npm --prefix apps/gents-desktop run build","seconds":44.0},{"step":"npm --prefix apps/gents-desktop run test:ui:e2e","seconds":840.4}],"total_seconds":895.5}
 {"timestamp":"2026-11-26T17:47:52Z","run_id":"45515243098","job":"ts-browser:1/3","steps":[{"step":"npm run build:packages","seconds":6.8},{"step":"npm --prefix apps/gents-desktop run build","seconds":28.2},{"step":"npm --prefix apps/gents-desktop run test:ui:e2e","seconds":544.5}],"total_seconds":579.5}
 {"timestamp":"2026-11-26T17:47:54Z","run_id":"45515243098","job":"fmt","steps":[{"step":"cargo fmt --all --check","seconds":9.5}],"total_seconds":9.5}
+{"timestamp":"2026-11-26T17:47:56Z","run_id":"45516449129","job":"fmt","steps":[{"step":"cargo fmt --all --check","seconds":10.6}],"total_seconds":10.6}
