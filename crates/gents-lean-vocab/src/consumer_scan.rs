@@ -628,6 +628,32 @@ mod tests {
 
     use super::*;
 
+    #[derive(Default)]
+    struct TraceIncludes(Vec<String>);
+
+    impl<'ast> Visit<'ast> for TraceIncludes {
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            if !has_cfg_false(&item.attrs)
+                && item.attrs.iter().any(|attr| {
+                    attr.path()
+                        .segments
+                        .last()
+                        .is_some_and(|part| part.ident == "test")
+                })
+            {
+                self.visit_block(&item.block);
+            }
+        }
+
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            if mac.path.is_ident("include_str") {
+                if let Ok(path) = mac.parse_body::<syn::LitStr>() {
+                    self.0.push(path.value());
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_generated_trace_has_one_replay_consumer() {
         let workspace = workspace();
@@ -636,33 +662,51 @@ mod tests {
         for root in SOURCE_ROOTS {
             source_files(&workspace.join(root), &mut files);
         }
-        let imports: Vec<_> = files
-            .iter()
-            .filter(|path| {
-                (compiled.contains(*path) && path.components().any(|c| c.as_os_str() == "tests"))
-                    || path.to_string_lossy().ends_with(".test.ts")
-            })
-            .flat_map(|path| {
-                fs::read_to_string(path)
-                    .unwrap()
-                    .lines()
-                    .filter_map(|line| {
-                        let (_, tail) = line.trim().split_once("/proofs/tla/generated/traces/")?;
-                        let (file, _) = tail.split_once('"')?;
-                        Some((file.to_owned(), path))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        for entry in crate::tla::generated_dir()
+        let directory = crate::tla::generated_dir()
             .join("traces")
-            .read_dir()
-            .unwrap()
-        {
-            let name = entry.unwrap().file_name().into_string().unwrap();
-            let consumers: Vec<_> = imports.iter().filter(|(file, _)| file == &name).collect();
-            assert_eq!(consumers.len(), 1, "{name} replay consumers: {consumers:?}");
+            .canonicalize()
+            .unwrap();
+        let mut sites = BTreeMap::<_, Vec<_>>::new();
+        for path in files {
+            let ts = path.to_string_lossy().ends_with(".test.ts");
+            if !ts && !compiled.contains(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path).unwrap();
+            if !source.contains("/generated/traces/") {
+                continue;
+            }
+            let imports = if ts {
+                source
+                    .lines()
+                    .filter(|s| s.starts_with("import "))
+                    .filter_map(|s| s.split_once(" from \"")?.1.strip_suffix("\";"))
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                let mut includes = TraceIncludes::default();
+                includes.visit_file(&syn::parse_file(&source).unwrap());
+                includes.0
+            };
+            for import in imports.iter().filter(|s| s.contains("/generated/traces/")) {
+                let file = path.parent().unwrap().join(import).canonicalize().unwrap();
+                sites.entry(file).or_default().push(path.clone());
+            }
         }
+        for entry in directory.read_dir().unwrap() {
+            let file = entry.unwrap().path();
+            let consumers = sites.remove(&file).unwrap_or_default();
+            assert_eq!(
+                consumers.len(),
+                1,
+                "{} replay consumers: {consumers:?}",
+                file.display()
+            );
+        }
+        assert!(
+            sites.is_empty(),
+            "consumers outside the generated traces: {sites:?}"
+        );
     }
 
     const PREMISE_PREFIX: &str = "boundary.";
