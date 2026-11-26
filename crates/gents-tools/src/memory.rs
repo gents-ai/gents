@@ -16,10 +16,10 @@ use gents_loop::tool::ToolDyn;
 use gents_loop::tool::{Tool, ToolCallEnvelope};
 use gents_memory_embed::{EmbedError, StaticEmbedder, DIMENSIONS, MODEL_ID};
 use gents_protocol::message::Message;
-use gents_protocol::schemas::HomePolicyIds;
 use gents_protocol::tool_names::MEMORY_TOOL_NAME;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::local::document_acp::node_policy_ids;
 use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -38,10 +38,11 @@ const MAX_INJECT_CHARS: usize = 4_000;
 const RRF_K: f64 = 60.0;
 
 /// DefraDB SDL for the memory collection. The household policy placeholder is
-/// rendered by [`HomePolicyIds`] before installation.
+/// rendered with the home's policy ids before installation.
 pub const MEMORY_SDL: &str = r#"type AgentMemory
   @policy(id: "$household", resource: "children")
-  @index(fields: ["agent_did", "content_hash"], unique: true) {
+  @index(fields: ["agent_did", "content_hash"], unique: true)
+  @index(fields: ["agent_did", "created_at"]) {
     memory_key: String @index(unique: true)
     node_did: String @index @immutable
     agent_did: String @index @immutable
@@ -61,7 +62,7 @@ pub const MEMORY_SDL: &str = r#"type AgentMemory
     metadata: JSON
 }"#;
 
-const HELP: &str = "Persistent cross-session memory. Actions: help, remember, search, forget, list, ingest. remember stores one text with a kind and optional metadata. search ranks stored memory with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes by memory_key. list returns newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash. Results state the ranking mode; semantic ranking is not claimed when the embedder is unavailable.";
+const HELP: &str = "Persistent cross-session memory. Actions: help, remember, search, forget, list, ingest. remember stores one text with a kind and optional metadata. search ranks stored memory with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes by memory_key. list returns newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash; stored counts new memory only and next_cursor is null after the last page. Results state the ranking mode; semantic ranking is not claimed when the embedder is unavailable.";
 
 #[derive(Debug)]
 pub struct MemoryToolError(anyhow::Error);
@@ -165,7 +166,7 @@ impl<'a> MemoryStore<'a> {
             .await?
             .is_none()
         {
-            let sdl = HomePolicyIds::node_store().render(MEMORY_SDL);
+            let sdl = node_policy_ids(self.node.as_ref()).render(MEMORY_SDL);
             install.add_collection(&sdl).await?;
         }
         Ok(())
@@ -207,7 +208,7 @@ impl<'a> MemoryStore<'a> {
         request_doc_id: Option<&str>,
         requester_did: Option<&str>,
         metadata: Option<&Value>,
-    ) -> anyhow::Result<Option<SearchHit>> {
+    ) -> anyhow::Result<(SearchHit, bool)> {
         let text = text.trim();
         if text.is_empty() {
             anyhow::bail!("memory text must not be empty");
@@ -217,27 +218,8 @@ impl<'a> MemoryStore<'a> {
         }
         self.ensure_collection().await?;
         let content_hash = content_hash(self.agent_did, text);
-        let existing = self
-            .read(&format!(
-                "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{content_hash: {{_eq: \"{}\"}}}}]}}, limit: 1) {{ _docID memory_key text kind source created_at }}}}",
-                escape_graphql_string(self.agent_did),
-                escape_graphql_string(&content_hash),
-            ))
-            .await?;
-        if let Some(row) = existing.pointer("/data/AgentMemory/0") {
-            if let Some(hit) = parse_row(row) {
-                return Ok(Some(SearchHit {
-                    doc_id: hit.doc_id,
-                    memory_key: hit.memory_key,
-                    text: hit.text,
-                    kind: hit.kind,
-                    source: hit.source,
-                    created_at: hit.created_at,
-                    score: 1.0,
-                    bm25_rank: None,
-                    dense_rank: None,
-                }));
-            }
+        if let Some(hit) = self.existing_memory(&content_hash).await? {
+            return Ok((hit, false));
         }
         let vector = self
             .embedder
@@ -265,6 +247,7 @@ impl<'a> MemoryStore<'a> {
             .map(|value| value.to_string())
             .collect::<Vec<_>>()
             .join(",");
+        let created_at = Utc::now().to_rfc3339();
         let mutation = format!(
             "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", model_id: \"{model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
             memory_key = escape_graphql_string(&memory_key),
@@ -277,46 +260,88 @@ impl<'a> MemoryStore<'a> {
             text = escape_graphql_string(text),
             content_hash = escape_graphql_string(&content_hash),
             model_id = escape_graphql_string(MODEL_ID),
-            created_at = Utc::now().to_rfc3339(),
         );
-        let created = self.write(&mutation).await?;
-        let doc_id = created
-            .pointer("/data/add_AgentMemory/0/_docID")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("memory write returned no document id"))?
-            .to_owned();
+        let doc_id = match self.create_and_link(&mutation, session_doc_id).await {
+            Ok(doc_id) => doc_id,
+            Err(error) => {
+                if let Some(hit) = self.existing_memory(&content_hash).await? {
+                    return Ok((hit, false));
+                }
+                return Err(error);
+            }
+        };
+        Ok((
+            SearchHit {
+                doc_id,
+                memory_key,
+                text: text.to_owned(),
+                kind: kind.to_owned(),
+                source: source.to_owned(),
+                created_at,
+                score: 1.0,
+                bm25_rank: None,
+                dense_rank: None,
+            },
+            true,
+        ))
+    }
+
+    async fn existing_memory(&self, content_hash: &str) -> anyhow::Result<Option<SearchHit>> {
+        let existing = self
+            .read(&format!(
+                "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{content_hash: {{_eq: \"{}\"}}}}]}}, limit: 1) {{ _docID memory_key text kind source created_at }}}}",
+                escape_graphql_string(self.agent_did),
+                escape_graphql_string(content_hash),
+            ))
+            .await?;
+        Ok(existing
+            .pointer("/data/AgentMemory/0")
+            .and_then(parse_row)
+            .map(|hit| SearchHit {
+                doc_id: hit.doc_id,
+                memory_key: hit.memory_key,
+                text: hit.text,
+                kind: hit.kind,
+                source: hit.source,
+                created_at: hit.created_at,
+                score: 1.0,
+                bm25_rank: None,
+                dense_rank: None,
+            }))
+    }
+
+    async fn create_and_link(
+        &self,
+        mutation: &str,
+        session_doc_id: &str,
+    ) -> anyhow::Result<String> {
+        let mutation = mutation.to_owned();
         let collection = MEMORY_COLLECTION.to_owned();
         let parent = session_doc_id.to_owned();
-        let link_doc = doc_id.clone();
         self.access
-            .transact_write("tool.memory.link_parent", move |txn| {
+            .transact_write("tool.memory.remember", move |txn| {
+                let mutation = mutation.clone();
                 let collection = collection.clone();
-                let link_doc = link_doc.clone();
                 let parent = parent.clone();
                 Box::pin(async move {
+                    let created = txn.execute(&mutation).await?;
+                    let doc_id = created
+                        .pointer("/data/add_AgentMemory/0/_docID")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow::anyhow!("memory write returned no document id"))?
+                        .to_owned();
                     txn.add_resource_relationship(
                         &collection,
-                        &link_doc,
+                        &doc_id,
                         "parent",
                         "sessions",
                         &parent,
                     )
                     .await?;
-                    Ok::<(), anyhow::Error>(())
+                    Ok::<String, anyhow::Error>(doc_id)
                 })
             })
-            .await?;
-        Ok(Some(SearchHit {
-            doc_id,
-            memory_key,
-            text: text.to_owned(),
-            kind: kind.to_owned(),
-            source: source.to_owned(),
-            created_at: Utc::now().to_rfc3339(),
-            score: 1.0,
-            bm25_rank: None,
-            dense_rank: None,
-        }))
+            .await
     }
 
     async fn search(&self, query: &str, limit: usize) -> anyhow::Result<SearchOutcome> {
@@ -438,13 +463,14 @@ impl<'a> MemoryStore<'a> {
         session_doc_id: &str,
         limit: usize,
         offset: usize,
-    ) -> anyhow::Result<(usize, usize)> {
+    ) -> anyhow::Result<(usize, Option<usize>)> {
         self.ensure_collection().await?;
         let limit = limit.clamp(1, MAX_INGEST_LIMIT);
         let value = self
             .read(&format!(
-                "{{AgentMessage(filter: {{session_id: {{_eq: \"{}\"}}}}, order: [{{sequence: ASC}}], limit: {limit}, offset: {offset}) {{ message_key sequence blocks }}}}",
+                "{{AgentMessage(filter: {{session_id: {{_eq: \"{}\"}}, node_did: {{_eq: \"{}\"}}}}, order: [{{sequence: ASC}}], limit: {limit}, offset: {offset}) {{ message_key sequence blocks }}}}",
                 escape_graphql_string(session_id),
+                escape_graphql_string(self.node_did),
             ))
             .await?;
         let rows = value
@@ -463,7 +489,7 @@ impl<'a> MemoryStore<'a> {
                 continue;
             }
             for chunk in chunks(text, CHUNK_CHARS) {
-                if self
+                let (_, created) = self
                     .remember(
                         &chunk,
                         "message",
@@ -474,14 +500,14 @@ impl<'a> MemoryStore<'a> {
                         None,
                         None,
                     )
-                    .await?
-                    .is_some()
-                {
+                    .await?;
+                if created {
                     stored += 1;
                 }
             }
         }
-        Ok((stored, offset + rows.len()))
+        let next = (rows.len() == limit).then_some(offset + rows.len());
+        Ok((stored, next))
     }
 }
 
@@ -815,7 +841,7 @@ impl Tool for MemoryTool {
                     "memory_key": {"type": "string", "minLength": 1, "description": "forget: the memory_key from a search or list result."},
                     "session_id": {"type": "string", "minLength": 1, "description": "ingest: session to read; defaults to the current session."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "cursor": {"type": "string", "description": "ingest: the next_cursor from the previous page."}
+                    "cursor": {"type": "string", "description": "ingest: the next_cursor from the previous page; absent or null means the first page."}
                 }
             }),
         }
@@ -855,7 +881,7 @@ impl Tool for MemoryTool {
                 }
                 let mut stored = Vec::new();
                 for text in texts {
-                    if let Some(hit) = store
+                    let (hit, _) = store
                         .remember(
                             &text,
                             kind,
@@ -866,10 +892,8 @@ impl Tool for MemoryTool {
                             requester,
                             args.metadata.as_ref(),
                         )
-                        .await?
-                    {
-                        stored.push(hit);
-                    }
+                        .await?;
+                    stored.push(hit);
                 }
                 json!({"stored": stored})
             }
@@ -910,7 +934,7 @@ impl Tool for MemoryTool {
                         offset,
                     )
                     .await?;
-                json!({"stored": stored, "next_cursor": next.to_string()})
+                json!({"stored": stored, "next_cursor": next})
             }
             other => {
                 return Err(anyhow::anyhow!("unsupported memory action {other}; use help").into())
