@@ -61,9 +61,9 @@ pub(super) async fn read(
         call(runtime, home, |home| crate::packs::installed(home, None)),
         call(runtime, home, crate::packs::plugin_slots),
         call(runtime, home, |home| crate::packs::whoami(home, None)),
-        call(runtime, home, move |_| crate::packs::search(
-            None, query_sent, page
-        )),
+        call(runtime, home, move |home| {
+            crate::packs::search(Some(home), None, query_sent, page)
+        }),
         tags(&access, node_did),
     );
     let account = account.ok();
@@ -687,7 +687,10 @@ pub(super) async fn sign_out(runtime: Handle, home: PathBuf) -> Result<Value, St
 /// A registry pack's page, read from the registry alone.
 pub(super) async fn page(runtime: Handle, home: PathBuf, pack: String, installed: bool) -> Update {
     let asked = pack.clone();
-    let info = call(&runtime, &home, move |_| crate::packs::info(None, asked)).await;
+    let info = call(&runtime, &home, move |home| {
+        crate::packs::info(Some(home), None, asked)
+    })
+    .await;
     pack_page(&pack, installed, info.as_ref().map_err(String::as_str))
 }
 

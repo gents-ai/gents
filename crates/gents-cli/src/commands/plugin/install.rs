@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::cli::args::PluginInstallArgs;
-use crate::commands::pack::registry::{fetch_pack, resolve_registry_url, RegistryClient};
+use crate::commands::pack::registry::{fetch_pack, resolve_registry_url_for_home, RegistryClient};
 
 pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
-    let base_url = resolve_registry_url(args.registry.as_deref());
-    let client = RegistryClient::new(base_url.clone());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let base_url = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
+    let client = RegistryClient::new(base_url.clone());
 
     let pack = fetch_pack(
         &client,
