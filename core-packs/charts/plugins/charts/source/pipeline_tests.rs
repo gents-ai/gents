@@ -68,6 +68,67 @@ fn the_result_has_the_documented_shape() {
     assert_eq!(v["parts"].as_array().unwrap().len(), 1);
 }
 
+fn assert_shared_envelope(v: &Value, allow_parts: bool) -> &serde_json::Map<String, Value> {
+    let top = v.as_object().expect("tool result must be a JSON object");
+    for key in top.keys() {
+        assert!(
+            key == "response" || (allow_parts && key == "parts"),
+            "unexpected top-level key {key:?} in {v}"
+        );
+    }
+    top.get("response")
+        .and_then(Value::as_object)
+        .expect("tool result must wrap its payload in a top-level response object")
+}
+
+#[test]
+fn charts_and_data_tables_share_the_response_envelope_and_chain_unchanged() {
+    let dt_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../data_tables/plugins/data_tables/tests");
+    let dt_query_case: Value =
+        serde_json::from_slice(&std::fs::read(dt_dir.join("csv-people.json")).unwrap()).unwrap();
+    let dt_result = &dt_query_case["expect"];
+    let dt_resp = assert_shared_envelope(dt_result, false);
+    assert!(dt_resp["columns"].is_array() && dt_resp["rows"].is_array());
+
+    // Passing the data_tables result unchanged as `data` draws a chart with the same envelope.
+    let chart_result = run(&json!({
+        "chart": "bar",
+        "x": "name",
+        "y": ["score"],
+        "data": dt_result,
+    })
+    .to_string());
+    let chart_resp = assert_shared_envelope(&chart_result, true);
+    assert_eq!(chart_resp["chart"], "bar");
+    assert_eq!(chart_resp["series"][0]["name"], "score");
+    assert_eq!(chart_resp["series"][0]["points"], 2);
+    assert_eq!(chart_resp["series"][0]["gaps"], 1);
+    assert_eq!(chart_resp["series"][0]["min"], 7.0);
+    assert_eq!(chart_resp["series"][0]["max"], 9.0);
+    assert_eq!(chart_result["parts"].as_array().unwrap().len(), 1);
+
+    // SVG-only chart results and help replies share the exact same single-key `response` envelope.
+    let chart_svg = run(&json!({
+        "chart": "bar",
+        "output": "svg",
+        "x": "name",
+        "y": ["score"],
+        "data": dt_result,
+    })
+    .to_string());
+    assert_shared_envelope(&chart_svg, false);
+
+    let dt_help_case: Value =
+        serde_json::from_slice(&std::fs::read(dt_dir.join("help-topics.json")).unwrap()).unwrap();
+    let dt_help = assert_shared_envelope(&dt_help_case["expect"], false);
+    let chart_help_raw = run(r#"{"help":"topics"}"#);
+    let chart_help = assert_shared_envelope(&chart_help_raw, false);
+    assert_eq!(dt_help["help"], "topics");
+    assert_eq!(chart_help["help"], "topics");
+    assert!(dt_help["text"].is_string() && chart_help["text"].is_string());
+}
+
 fn base64_len(data: &Value) -> u64 {
     base64::engine::general_purpose::STANDARD
         .decode(data.as_str().unwrap())

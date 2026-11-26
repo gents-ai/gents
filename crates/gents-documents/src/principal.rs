@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::serde_helpers::first_row_with_doc_id;
 
 /// DefraDB DID identity for the runtime node. One active instance is an
-/// operating convention; runtime enforcement is deferred to #1435. No host identity.
+/// operating convention without runtime enforcement. No host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

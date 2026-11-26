@@ -1,5 +1,5 @@
 //! Probes, in the real webview with the app's own capabilities, whether a
-//! plugin page's sandboxed frame can reach the app's IPC (#3483).
+//! plugin page's sandboxed frame can reach the app's IPC.
 //!
 //! The probe page is served from a scheme this builder registers, which Tauri
 //! treats as a local origin, in a window labelled `main`, so the app's

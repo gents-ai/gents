@@ -504,7 +504,7 @@ impl ConfigReferences {
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { .. } => {
                         // The fire-time owner, so publication refuses exactly
-                        // what every schedule fire would error on (#2080).
+                        // what every schedule fire would error on.
                         crate::task_delivery::validate_task_delivery_options(
                             crate::task_delivery::TriggerKind::Schedule,
                             task.emit_outcome,

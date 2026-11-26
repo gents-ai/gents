@@ -1,0 +1,54 @@
+{
+  "expect": {
+    "response": {
+      "columns": [
+        {
+          "name": "total",
+          "type": "int64"
+        }
+      ],
+      "markdown": "| total |\n| --- |\n| 25 |",
+      "offset": 0,
+      "order": "columns",
+      "row_count": 1,
+      "rows": [
+        [
+          25
+        ]
+      ],
+      "warnings": []
+    }
+  },
+  "input": {
+    "sql": "SELECT sum(units) AS total FROM data",
+    "tables": {
+      "response": {
+        "columns": [
+          {
+            "name": "region",
+            "type": "text"
+          },
+          {
+            "name": "units",
+            "type": "int64"
+          }
+        ],
+        "markdown": "| region | units |\n| --- | --- |\n| north | 15 |\n| south | 10 |",
+        "offset": 0,
+        "order": "columns",
+        "row_count": 2,
+        "rows": [
+          [
+            "north",
+            15
+          ],
+          [
+            "south",
+            10
+          ]
+        ],
+        "warnings": []
+      }
+    }
+  }
+}

@@ -494,7 +494,7 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
 
 /// A hosted install plans with the installer's values: when the runtime's own
 /// environment holds a different value for an install variable, both sides
-/// still plan the same graph and the install goes through (gents#3857).
+/// still plan the same graph and the install goes through.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hosted_pack_install_ignores_the_runtime_environment() -> Result<()> {
     let temp = tempfile::tempdir()?;

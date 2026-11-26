@@ -1,3 +1,7 @@
+//! Inference layer: inference backends, accounts, credential resolution, admission, and provider clients.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Inference/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 pub mod admission;
 pub mod auth;
 pub mod backends;

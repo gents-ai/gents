@@ -89,7 +89,7 @@ mod tests {
     fn every_topic_answers_with_its_text_and_no_other_field() {
         for (name, _, text) in TOPICS {
             let v = reply(&json!({"help": name}).to_string());
-            assert_eq!(v, json!({"help": name, "text": text}));
+            assert_eq!(v, json!({"response": {"help": name, "text": text}}));
             assert!(text.len() > 200, "{name}");
         }
     }
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn the_topic_list_names_every_topic() {
         let v = reply(r#"{"help": "topics"}"#);
-        let list = v["text"].as_str().unwrap();
+        let list = v["response"]["text"].as_str().unwrap();
         for (name, about, _) in TOPICS {
             assert!(list.contains(&format!("- {name}: {about}\n")), "{list}");
         }

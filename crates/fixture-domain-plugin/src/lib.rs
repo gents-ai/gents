@@ -1,3 +1,7 @@
+//! Client host fixture: co-resident Tauri domain plugin for testing reusable desktop composition.
+//!
+//! Stores domain documents under the host's own data directory, separate from the Gents bridge home.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

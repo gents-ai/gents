@@ -1,3 +1,7 @@
+//! Client adapter layer: Tauri plugin, snapshot projections, and desktop bridge host logic.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Clients/`; test fixtures live in `src/test_support.rs` (`test-fixtures`).
+
 pub mod accounts;
 #[cfg(feature = "tauri-host")]
 mod app_exit;

@@ -1,3 +1,7 @@
+//! Client host layer: minimal downstream Tauri host proving reusable desktop package composition.
+//!
+//! Composes `gents-desktop-bridge` with a co-resident domain plugin.
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 

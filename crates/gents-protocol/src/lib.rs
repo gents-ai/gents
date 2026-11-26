@@ -1,3 +1,7 @@
+//! Vocabulary layer: wire types, operation contracts, typed DefraDB queries, and row mirrors.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Shared/`.
+
 pub mod adapter_projection_kind;
 pub mod agent_identity;
 pub mod authored_submission;

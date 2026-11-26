@@ -535,7 +535,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     // create end to end: the hosting node key reads only what document ACP
     // grants it (`GrantSets.node_runtime_does_not_read_past_dac`), so
     // it neither reads the Node nor uses it to admit or provision the Agent
-    // (gents#3935, `Identity.Household.runtimeMayUse`).
+    // (`Identity.Household.runtimeMayUse`).
     let runtime_actor = identity::Did::new(runtime.did())?;
     user_access
         .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)

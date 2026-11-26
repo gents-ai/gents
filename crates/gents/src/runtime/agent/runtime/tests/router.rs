@@ -1,10 +1,15 @@
 use super::support::*;
 use super::*;
 use crate::runtime::agent::runtime::router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
-use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
-use crate::test_support::readiness::RejectRouterGenerationWriter;
+use crate::runtime::agent::runtime::router::{RouterInputs, RuntimeAdmissionGate};
+use crate::test_support::readiness::{
+    GatedRouterGenerationDefraWriter, RejectRouterGenerationWriter,
+};
+use crate::test_support::running_runtime::{AgentRuntimeHome, BootedRuntime};
 use crate::test_support::runtime::ScriptedWatcher;
-use gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileInput;
+use gents_inference::test_support::scripted_backend::{ScriptedBackend, Unscripted};
+use gents_store::test_support::snapshot_reader::SnapshotReader as _;
+use gents_store::test_support::{read_when_changed, STALL_CEILING};
 use rapidhash::{HashMapExt, RapidHashMap};
 
 fn routed_snapshot(
@@ -345,137 +350,250 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     node.shutdown().await.expect("node shutdown");
 }
 
+const BLOCKED_LEVEL_WORKERS: usize = 8;
+const BLOCKED_QUEUE_CAPACITY: usize = 32;
+
+async fn read_request_state_and_generation(
+    access: &gents_store::config_client::ConfigAccess,
+    request_id: &str,
+) -> (Option<String>, Option<i64>) {
+    let escaped = escape_graphql_string(request_id);
+    let data = access
+        .read_data(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state executed_runtime_generation }} }}"#
+        ))
+        .await;
+    let row = &data["AgentRequest"][0];
+    (
+        row["lifecycle_state"].as_str().map(str::to_owned),
+        row["executed_runtime_generation"].as_i64(),
+    )
+}
+
+async fn recv_next_dispatch(
+    dispatch_rx: &mut mpsc::UnboundedReceiver<String>,
+    what: &str,
+) -> String {
+    tokio::time::timeout(STALL_CEILING, dispatch_rx.recv())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: timed out waiting for router dispatch"))
+        .unwrap_or_else(|| panic!("{what}: router dispatch probe closed"))
+}
+
+async fn fill_generation_one_queue_and_block_target(
+    home: &AgentRuntimeHome,
+    held: &gents_inference::test_support::scripted_backend::HeldCall<'_>,
+    dispatch_rx: &mut mpsc::UnboundedReceiver<String>,
+    target_request_id: &str,
+) {
+    let agent_did = home.agent.did().to_owned();
+    let hold_request_id = "blocked-a-00".to_owned();
+    home.submit_request(
+        &agent_did,
+        &hold_request_id,
+        "blocked-session-a-00",
+        "blocked-hold-0",
+    )
+    .await;
+    // Hold the backend's single max_concurrent=1 permit before submitting the
+    // remaining worker requests so none of them can race ahead and complete.
+    held.entered().await;
+
+    let mut worker_ids = Vec::with_capacity(BLOCKED_LEVEL_WORKERS);
+    worker_ids.push(hold_request_id);
+    let rest_worker_specs: Vec<(String, String)> = (1..BLOCKED_LEVEL_WORKERS)
+        .map(|index| {
+            (
+                format!("blocked-a-{index:02}"),
+                format!("blocked-session-a-{index:02}"),
+            )
+        })
+        .collect();
+    futures::future::join_all(rest_worker_specs.iter().map(|(req_id, session_id)| {
+        home.submit_request(&agent_did, req_id, session_id, "blocked-worker")
+    }))
+    .await;
+    worker_ids.extend(rest_worker_specs.into_iter().map(|(req_id, _)| req_id));
+
+    let user_access = home.home.user_access.clone();
+    read_when_changed(
+        &user_access,
+        "AgentRequest",
+        "all level-0 workers occupy their requests",
+        async || {
+            let data = user_access
+                .read_data(r#"{ AgentRequest { request_id lifecycle_state } }"#)
+                .await;
+            let processing = data["AgentRequest"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|row| {
+                    row["request_id"]
+                        .as_str()
+                        .is_some_and(|id| worker_ids.iter().any(|wanted| wanted == id))
+                        && row["lifecycle_state"].as_str() == Some("processing")
+                })
+                .count();
+            if processing == BLOCKED_LEVEL_WORKERS {
+                Ok(())
+            } else {
+                Err(format!("processing {processing}/{BLOCKED_LEVEL_WORKERS}"))
+            }
+        },
+    )
+    .await;
+
+    let mut seen_workers = rapidhash::RapidHashSet::default();
+    let mut channel_entries = 0usize;
+    while seen_workers.len() < BLOCKED_LEVEL_WORKERS {
+        let dispatched = recv_next_dispatch(dispatch_rx, "worker requests").await;
+        if worker_ids.iter().any(|wanted| wanted == &dispatched) && seen_workers.insert(dispatched)
+        {
+            continue;
+        }
+        channel_entries += 1;
+    }
+
+    let queue_needed = BLOCKED_QUEUE_CAPACITY.saturating_sub(channel_entries);
+    let queue_specs: Vec<(String, String)> = (0..queue_needed)
+        .map(|index| {
+            (
+                format!("blocked-b-{index:02}"),
+                format!("blocked-session-b-{index:02}"),
+            )
+        })
+        .collect();
+    for chunk in queue_specs.chunks(BLOCKED_LEVEL_WORKERS) {
+        futures::future::join_all(chunk.iter().map(|(req_id, session_id)| {
+            home.submit_request(&agent_did, req_id, session_id, "blocked-queue")
+        }))
+        .await;
+    }
+    while channel_entries < BLOCKED_QUEUE_CAPACITY {
+        let _dispatched = recv_next_dispatch(dispatch_rx, "queue fill requests").await;
+        channel_entries += 1;
+    }
+
+    home.submit_request(
+        &agent_did,
+        target_request_id,
+        "blocked-session-z-target",
+        "blocked-target",
+    )
+    .await;
+    let blocked = recv_next_dispatch(dispatch_rx, "blocked target request").await;
+    assert_eq!(
+        blocked, target_request_id,
+        "router blocked on {blocked} instead of target {target_request_id}"
+    );
+}
+
+/// Fills generation 1's real level-0 workers and bounded queue on a booted
+/// runtime so the target request blocks on `dispatcher.reserve()`. Replays
+/// each modeled wait event (`nothing`, `snapshot_changed`, `admission_closed`)
+/// and observes which real executor generation claims the target request and
+/// whether the router stops.
 #[tokio::test]
 async fn blocked_dispatch_follows_the_lean_model() {
     for case in
         gents_lean_vocab::families::router_dispatch_blocked_dispatch::cases::<String, String>()
     {
-        let signed_home = gents_documents::test_support::SignedHome::enroll(
-            crate::support::trial_store("runtime-router").await,
-            "runtime-router",
-        )
-        .await;
-        let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (db, _user, user_access) = signed_home.into_parts();
-        let node = db.node.clone();
-        let node_did = db.node_identity.did().to_owned();
-        let agent_did = binding.agent_did;
-        create_user_agent_session(
-            &user_access,
-            &node_did,
+        let backend = ScriptedBackend::builder("default")
+            .unscripted(Unscripted::Reply)
+            .start()
+            .unwrap();
+        let held = backend.hold("blocked-hold-0");
+        let home = AgentRuntimeHome::start(
+            &format!("blocked-dispatch-{}", case.input.event),
             None,
-            "blocked-dispatch",
-            &agent_did,
-            Some(&agent_did),
+            backend.endpoint(),
+            1,
+            gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
         )
         .await;
-        let (old_dispatcher, mut old_rx) = mpsc::channel(1);
-        old_dispatcher
-            .send(request(Some(&agent_did), "already-queued"))
-            .await
-            .unwrap();
-        let (new_dispatcher, mut new_rx) = mpsc::channel(1);
-        let initial_snapshot = routed_snapshot(1, &agent_did, old_dispatcher);
-        let updated_snapshot = routed_snapshot(2, &agent_did, new_dispatcher);
-        let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (request_tx, request_rx) = mpsc::channel(1);
-        let (status_owner, status) =
-            RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
-        status.initialize_startup(&agent_did).await.unwrap();
-        status
+        let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel();
+        let (router_stopped_tx, router_stopped_rx) = watch::channel(false);
+        let runtime = BootedRuntime::boot(
+            &home,
+            crate::runtime::agent::DocumentRuntimeOptions {
+                tool_ceiling: ToolCeiling::meta_only(),
+                router_dispatch_probe: Some(dispatch_tx),
+                router_stopped_probe: Some(router_stopped_tx),
+                ..Default::default()
+            },
+        )
+        .await;
+        let initial_generation = runtime
             .readiness()
-            .register_slot(&agent_did, 1)
             .await
-            .unwrap();
-        status
-            .readiness()
-            .publish_snapshot(initial_snapshot.as_ref())
-            .await
-            .unwrap();
-        status
-            .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
-            .await
-            .unwrap();
-        let gate = RuntimeAdmissionGate::closed();
-        gate.open().await;
+            .expect("booted runtime readiness")
+            .active_generation;
+        assert_eq!(initial_generation, 1);
 
-        let mut routed = request(Some(&agent_did), "blocked-dispatch");
-        routed.node_did = node_did.to_string();
-        request_tx.send(Ok(routed)).await.unwrap();
-        let gate_for_router = gate.clone();
-        let router_node = node.clone();
-        let status_for_router = status.clone();
-        let router_node_did = node_did.clone();
-        let mut router = tokio::spawn(async move {
-            super::super::router::run_router_with_watcher(RouterInputs {
-                node: router_node,
-                node_did: router_node_did,
-                watcher: ScriptedWatcher::new(request_rx),
-                active_snapshot_rx: active_rx,
-                shutdown: shutdown_rx,
-                admission_gate: gate_for_router,
-                runtime_status: status_for_router,
-                runtime_snapshot_observer: None,
-                unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
-            })
-            .await
-        });
+        let target_id = "blocked-z-target";
+        fill_generation_one_queue_and_block_target(&home, &held, &mut dispatch_rx, target_id).await;
 
-        tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
-            .await
-            .expect("router must reach the full queue");
-        match case.input.event.as_str() {
+        let user_access = home.home.user_access.clone();
+        let (destination, router_stopped) = match case.input.event.as_str() {
             "snapshot_changed" => {
-                status
-                    .readiness()
-                    .publish_snapshot(updated_snapshot.as_ref())
-                    .await
-                    .unwrap();
-                active_tx.send(updated_snapshot.clone()).unwrap();
+                home.bind_backend(backend.endpoint(), 2).await;
+                let executed_generation = read_when_changed(
+                    &user_access,
+                    "AgentRequest",
+                    "rerouted target request completes on generation 2",
+                    async || {
+                        let (state, generation) =
+                            read_request_state_and_generation(&user_access, target_id).await;
+                        if state.as_deref() == Some("completed") {
+                            Ok(generation)
+                        } else {
+                            Err(format!("state={state:?} generation={generation:?}"))
+                        }
+                    },
+                )
+                .await;
+                let router_stopped = *router_stopped_rx.borrow();
+                held.release();
+                runtime.shutdown().await.expect("the runtime stops cleanly");
+                let destination = match executed_generation {
+                    Some(1) => "routed_executor",
+                    Some(generation) if generation > 1 => "newest_executor",
+                    _ => "undispatched",
+                };
+                (destination, router_stopped)
             }
             "admission_closed" => {
-                tokio::time::timeout(Duration::from_secs(1), gate.close())
+                runtime
+                    .shutdown()
                     .await
-                    .expect("gate close must cancel the blocked executor send");
+                    .expect("shutdown closes admission and stops the blocked router");
+                let router_stopped = *router_stopped_rx.borrow();
+                let (state, generation) =
+                    read_request_state_and_generation(&user_access, target_id).await;
+                let destination = match (state.as_deref(), generation) {
+                    (Some("pending"), None) => "undispatched",
+                    (_, Some(1)) => "routed_executor",
+                    (_, Some(gen)) if gen > 1 => "newest_executor",
+                    other => panic!("unexpected target state after shutdown: {other:?}"),
+                };
+                (destination, router_stopped)
             }
-            _ => {}
-        }
-        let newest = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
-            .await
-            .ok()
-            .flatten()
-            .map(|request| request.session_id);
-        let stopped = tokio::time::timeout(Duration::from_millis(500), &mut router).await;
-        let router_stopped = stopped.is_ok();
-        match stopped {
-            Ok(joined) => joined.unwrap().unwrap(),
-            Err(_) => {
-                shutdown_tx.send(true).unwrap();
-                tokio::time::timeout(Duration::from_secs(1), router)
-                    .await
-                    .expect("router must shut down")
-                    .unwrap()
-                    .unwrap();
+            "nothing" => {
+                let (state, generation) =
+                    read_request_state_and_generation(&user_access, target_id).await;
+                let router_stopped = *router_stopped_rx.borrow();
+                held.release();
+                runtime.shutdown().await.expect("the runtime stops cleanly");
+                let destination = match (state.as_deref(), generation) {
+                    (Some("pending"), None) => "undispatched",
+                    (_, Some(1)) => "routed_executor",
+                    (_, Some(gen)) if gen > 1 => "newest_executor",
+                    other => panic!("unexpected target state while blocked: {other:?}"),
+                };
+                (destination, router_stopped)
             }
-        }
-        let mut routed_queue = Vec::new();
-        while let Ok(queued) = old_rx.try_recv() {
-            routed_queue.push(queued.session_id);
-        }
-        assert_eq!(
-            routed_queue.first().map(String::as_str),
-            Some("already-queued")
-        );
-        let on_routed = routed_queue
-            .iter()
-            .any(|session| session == "blocked-dispatch");
-        let on_newest = newest.as_deref() == Some("blocked-dispatch");
-        let destination = match (on_routed, on_newest) {
-            (true, false) => "routed_executor",
-            (false, true) => "newest_executor",
-            (false, false) => "undispatched",
-            (true, true) => panic!("{:?}: the request reached two executors", case.input),
+            other => panic!("unmodeled blocked dispatch event {other}"),
         };
         case.check(
             gents_lean_vocab::families::router_dispatch_blocked_dispatch::BlockedDispatch {
@@ -483,8 +601,6 @@ async fn blocked_dispatch_follows_the_lean_model() {
                 router_stopped,
             },
         );
-        status_owner.close().await.unwrap();
-        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -561,282 +677,203 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     node.shutdown().await.expect("node shutdown");
 }
 
-fn router_snapshot(
-    generation: u64,
-    default_agent_did: &str,
-) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
-    Arc::new(
-        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation,
-            node: None,
-            local_did: String::new(),
-            default_agent_did: default_agent_did.to_string(),
-            tool_configs: Default::default(),
-            agents: RapidHashMap::new(),
-            tool_surfaces: RapidHashMap::new(),
-            backend_admission_configs: RapidHashMap::new(),
-            unavailable_agents: RapidHashMap::new(),
-            active_schedules: RapidHashMap::new(),
-            unavailable_schedules: rapidhash::RapidHashSet::default(),
-            active_event_triggers: RapidHashMap::new(),
-            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-            active_tasks: RapidHashMap::new(),
-            dispatchers: RapidHashMap::new(),
-            agent_executor_capacities: RapidHashMap::new(),
-            agent_executor_queue_capacities: RapidHashMap::new(),
-        },
-    )
-}
-
-/// The router routes with the generation it observed (`pre_router_generation`)
-/// while the published source is `pre_active_generation`, with one request
-/// waiting. Every input the router waits on is ready before its first poll, so
-/// that poll either returns the request or holds it until an input changes.
-/// A held request is then released by publishing the source generation to
-/// the router.
-async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) {
-    use futures::FutureExt as _;
-
-    let node_did = "did:test:router-latest-snapshot";
-    let (active_tx, mut active_rx) =
-        watch::channel(router_snapshot(input.pre_router_generation, "general"));
-    let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    let (watcher_tx, watcher_rx) = mpsc::channel(1);
-    let mut watcher = ScriptedWatcher::new(watcher_rx);
-    let mut active_snapshot = active_rx.borrow().clone();
-
-    let mut routed_request = request(Some("code"), "session-router");
-    routed_request.doc_id = "doc-router".to_string();
-    routed_request.request_id = "req-router".to_string();
-    routed_request.node_did = node_did.to_string();
-    watcher_tx.send(Ok(routed_request)).await.unwrap();
-    let admission_gate = RuntimeAdmissionGate::closed();
-    admission_gate.open().await;
-    let mut admission_rx = admission_gate.subscribe();
-    let (_readiness_tx, mut readiness_rx) = watch::channel(
-        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(
-            input.pre_active_generation,
-            [],
-        ),
-    );
-    let mut pending_request = None;
-    let mut deferred = Default::default();
-    macro_rules! route {
-        () => {
-            wait_for_next_request_with_latest_snapshot(
-                node_did,
-                &mut watcher,
-                RouterWaitState {
-                    active_snapshot: &mut active_snapshot,
-                    active_snapshot_rx: &mut active_rx,
-                    admission_gate: &admission_gate,
-                    admission_changed: &mut admission_rx,
-                    readiness_changed: &mut readiness_rx,
-                    pending_request: &mut pending_request,
-                    deferred: &mut deferred,
-                },
-                &mut shutdown_rx,
-                None,
-                None,
-            )
-        };
-    }
-    let first = route!().now_or_never();
-    let accepted = first.is_some();
-    let observed = active_snapshot.generation;
-    let routed = match first {
-        Some(routed) => routed,
-        None => {
-            assert!(
-                pending_request.is_none(),
-                "a held request stays with the watcher"
-            );
-            active_tx
-                .send(router_snapshot(input.pre_active_generation, "code"))
-                .unwrap();
-            route!().await
-        }
-    };
-    let (request, routed_snapshot, routed_observation) = routed
-        .expect("router wait should succeed")
-        .expect("request should be returned");
-    assert_eq!(request.request_id, "req-router");
-    assert_eq!(
-        routed_observation.source_generation(),
-        input.pre_active_generation
-    );
-    assert_eq!(routed_snapshot.generation, input.pre_active_generation);
-    (accepted, observed)
-}
-
-async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {
-    let signed_home = gents_documents::test_support::SignedHome::enroll(
-        crate::support::trial_store("runtime-router").await,
-        "runtime-router",
+/// Drives `contracts_runtime_reconcile_router` through the real runtime:
+/// generation 1 boots Ready, a real backend update publishes generation 2 while
+/// `GatedRouterGenerationDefraWriter` holds the router's acknowledgement of
+/// generation 2, exposing the window where `active_generation == 2` and
+/// `router_generation == 1`. Releasing the gate lets the router persist
+/// generation 2 and complete requests on generation 2.
+async fn replay_router_reconcile_case(
+    action: &str,
+    pre_active_generation: u64,
+    pre_router_generation: u64,
+    name: &str,
+) -> (bool, u64) {
+    let backend = ScriptedBackend::builder("default")
+        .unscripted(Unscripted::Reply)
+        .start()
+        .unwrap();
+    let home = AgentRuntimeHome::start(
+        &format!("router-reconcile-{name}"),
+        None,
+        backend.endpoint(),
+        1,
+        gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
     )
     .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, _user, _user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let node_did = db.node_identity.did().to_owned();
-    let agent_did = binding.agent_did;
-    let initial_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: input.pre_router_generation,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: agent_did.clone(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::from_iter([(
-            agent_did.clone(),
-            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
-                "test fixture has no executor",
-            ),
-        )]),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
+    let node = home.home.store.node.clone();
+    let identity = home.home.store.node_identity.clone();
+    let node_did = identity.did().to_owned();
+    let agent_did = home.agent.did().to_owned();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let writer = Arc::new(GatedRouterGenerationDefraWriter {
+        node: node.clone(),
+        router_generation: pre_active_generation,
+        gated: std::sync::atomic::AtomicBool::new(true),
+        entered: entered.clone(),
+        release: release.clone(),
     });
-    let updated_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: input.pre_active_generation,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: agent_did.clone(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::from_iter([(
-            agent_did.clone(),
-            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
-                "test fixture has no executor",
-            ),
-        )]),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    });
-    let (active_tx, mut active_rx) = watch::channel(initial_snapshot.clone());
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.to_string());
-    runtime_status.initialize_startup(&agent_did).await.unwrap();
-    runtime_status
-        .publish_startup_snapshot(initial_snapshot.as_ref())
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity,
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(home.home.backend_admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(super::startup::run_agent_with_readiness_writer(
+        agent,
+        shutdown_rx,
+        writer,
+        Duration::from_secs(20),
+    ));
+
+    wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
+    read_when_changed(
+        node.as_ref(),
+        "NodeReadiness",
+        "generation 1 is ready and routed",
+        async || {
+            let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+            if readiness.process_state == NodeReadinessProcessState::Ready
+                && readiness.active_generation == 1
+                && readiness.router_generation == 1
+            {
+                Ok(())
+            } else {
+                Err(format!("{readiness:?}"))
+            }
+        },
+    )
+    .await;
+
+    home.bind_backend(backend.endpoint(), 2).await;
+    tokio::time::timeout(STALL_CEILING, entered.notified())
         .await
-        .unwrap();
+        .expect("router must attempt to acknowledge generation 2");
 
-    let (_request_tx, request_rx) = mpsc::channel(1);
-    let mut watcher = ScriptedWatcher::new(request_rx);
-    let mut active_snapshot = active_rx.borrow().clone();
-    let runtime_status_for_router = runtime_status.clone();
-    let mut readiness_rx = runtime_status.readiness().subscribe_observation();
-    let admission_gate = RuntimeAdmissionGate::closed();
-    admission_gate.open().await;
-    let mut admission_rx = admission_gate.subscribe();
-    let mut pending_request = None;
-    let mut deferred = Default::default();
-    let router_node_did = node_did.clone();
-    let router_task = tokio::spawn(async move {
-        wait_for_next_request_with_latest_snapshot(
-            &router_node_did,
-            &mut watcher,
-            RouterWaitState {
-                active_snapshot: &mut active_snapshot,
-                active_snapshot_rx: &mut active_rx,
-                admission_gate: &admission_gate,
-                admission_changed: &mut admission_rx,
-                readiness_changed: &mut readiness_rx,
-                pending_request: &mut pending_request,
-                deferred: &mut deferred,
-            },
-            &mut shutdown_rx,
-            Some(&runtime_status_for_router),
-            None,
-        )
-        .await
-    });
+    let while_unobserved = fetch_node_readiness(node.as_ref(), &node_did).await;
+    assert_eq!(while_unobserved.active_generation, pre_active_generation);
+    assert_eq!(while_unobserved.router_generation, 1);
 
-    tokio::task::yield_now().await;
-    runtime_status
-        .readiness()
-        .publish_snapshot(updated_snapshot.as_ref())
-        .await
-        .unwrap();
-    active_tx.send(updated_snapshot).unwrap();
-    tokio::task::yield_now().await;
-
-    let row = fetch_runtime_status(node.as_ref(), &node_did).await;
-    assert_eq!(row.last_reconcile_result, "startup");
-
-    let query = format!(
-        r#"{{
-            NodeReadiness(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
-                snapshot_json
-            }}
-        }}"#,
-        node_did = escape_graphql_string(&node_did),
-    );
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(&node, ["NodeReadiness"])
-            .expect("subscribe NodeReadiness");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    let published = loop {
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "NodeReadiness router query failed: {:?}",
-            response.errors
-        );
-        let router_generation = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("NodeReadiness"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("snapshot_json"))
-            .and_then(Value::as_str)
-            .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
-            .map(|snapshot| snapshot.router_generation)
-            .unwrap_or_default();
-        if router_generation != input.pre_router_generation
-            || tokio::time::timeout_at(deadline, changes.recv())
-                .await
-                .is_err()
-        {
-            break router_generation;
+    let user_access = home.home.user_access.clone();
+    let (legal, post_router_generation) = match (action, pre_router_generation) {
+        ("routerObserve", _) => {
+            release.add_permits(1);
+            let observed = read_when_changed(
+                node.as_ref(),
+                "NodeReadiness",
+                "router acknowledges generation 2",
+                async || {
+                    let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+                    if readiness.router_generation == pre_active_generation {
+                        Ok(readiness.router_generation)
+                    } else {
+                        Err(format!("{readiness:?}"))
+                    }
+                },
+            )
+            .await;
+            (observed != pre_router_generation, observed)
         }
+        ("acceptRequest", router_gen) if router_gen < pre_active_generation => {
+            let req_id = format!("router-unobserved-{name}");
+            home.submit_request(&agent_did, &req_id, "router-unobserved-session", "held")
+                .await;
+            let (state, executed_gen) =
+                read_request_state_and_generation(&user_access, &req_id).await;
+            let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+            assert_eq!(state.as_deref(), Some("pending"));
+            assert_eq!(executed_gen, None);
+            let result = (
+                state.as_deref() == Some("completed"),
+                readiness.router_generation,
+            );
+            release.add_permits(1);
+            read_when_changed(
+                &user_access,
+                "AgentRequest",
+                "held request finishes after router observes generation 2",
+                async || {
+                    let (state, generation) =
+                        read_request_state_and_generation(&user_access, &req_id).await;
+                    if state.as_deref() == Some("completed")
+                        && generation == Some(pre_active_generation as i64)
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("state={state:?} generation={generation:?}"))
+                    }
+                },
+            )
+            .await;
+            result
+        }
+        ("acceptRequest", _) => {
+            release.add_permits(1);
+            read_when_changed(
+                node.as_ref(),
+                "NodeReadiness",
+                "router acknowledges generation 2 before request submission",
+                async || {
+                    let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+                    if readiness.router_generation == pre_active_generation {
+                        Ok(())
+                    } else {
+                        Err(format!("{readiness:?}"))
+                    }
+                },
+            )
+            .await;
+            let req_id = format!("router-observed-{name}");
+            home.submit_request(&agent_did, &req_id, "router-observed-session", "routed")
+                .await;
+            let executed_gen = read_when_changed(
+                &user_access,
+                "AgentRequest",
+                "request completes on generation 2",
+                async || {
+                    let (state, generation) =
+                        read_request_state_and_generation(&user_access, &req_id).await;
+                    if state.as_deref() == Some("completed") {
+                        Ok(generation)
+                    } else {
+                        Err(format!("state={state:?} generation={generation:?}"))
+                    }
+                },
+            )
+            .await;
+            let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+            assert_eq!(executed_gen, Some(pre_active_generation as i64));
+            (true, readiness.router_generation)
+        }
+        (other, _) => panic!("the router fixture cannot drive {other}"),
     };
 
     let _ = shutdown_tx.send(true);
-    assert!(router_task.await.unwrap().unwrap().is_none());
-    runtime_status_owner.close().await.unwrap();
-    node.shutdown().await.expect("node shutdown");
-    (published != input.pre_router_generation, published)
+    tokio::time::timeout(STALL_CEILING, run)
+        .await
+        .expect("runtime stops within ceiling")
+        .expect("runtime task joins")
+        .expect("runtime stops cleanly");
+    (legal, post_router_generation)
 }
 
 #[tokio::test]
 async fn router_generation_steps_match_lean_runtime_reconcile_cases() {
     for case in gents_lean_vocab::families::contracts_runtime_reconcile_router::cases() {
-        let (legal, post_router_generation) = match case.input.action.as_str() {
-            "routerObserve" => observed_generation_publication(&case.input).await,
-            "acceptRequest" => accept_after_generation_handoff(&case.input).await,
-            other => panic!("the router fixture cannot drive {other}"),
-        };
+        let (legal, post_router_generation) = replay_router_reconcile_case(
+            case.input.action.as_str(),
+            case.input.pre_active_generation,
+            case.input.pre_router_generation,
+            case.input.name.as_str(),
+        )
+        .await;
         case.check(
             gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileRouterOutput {
                 legal,

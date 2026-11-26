@@ -1,3 +1,7 @@
+//! P2P layer: peer directory, node access, enrollment, and sync reconciliation.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/P2P/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 pub mod directory_projection;
 pub mod node_access;
 pub mod operations;

@@ -406,7 +406,7 @@ pub fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
 /// rolling hash, whether they share a block with the opening messages depends
 /// on bytes the request does not control, such as the Agent DID in the system
 /// prompt: a session whose first cut falls past the tool schemas stores them
-/// again on every call that changes how its message list opens (#3605).
+/// again on every call that changes how its message list opens.
 pub fn chunk_capture_layout(layout: &CaptureLayout) -> Vec<ChunkedBlock> {
     let (stable, rest) = layout.json.split_at(layout.stable_len);
     let mut blocks = chunk_long_strings_apart(stable);
@@ -510,7 +510,7 @@ pub(crate) const MANIFEST_FANOUT: usize = 32;
 /// `MAX_MANIFEST_HEIGHT` levels at four entries per group. Eight entries
 /// closing at every sixteenth key let a tail group reach ~24 entries, so a
 /// call's manifest bytes grew with the calls since that group last closed;
-/// short groups keep them flat for one more node per level (#3605).
+/// short groups keep them flat for one more node per level.
 const MANIFEST_MIN_GROUP: usize = 4;
 pub(crate) const TREE_RESOLUTION_FUEL: usize =
     MAX_MANIFEST_BLOCKS * 2 + MAX_MANIFEST_HEIGHT as usize;
@@ -542,7 +542,7 @@ impl ManifestTree {
 /// `manifest_node_boundary_key` of its children. Boundary keys follow block
 /// content only, never a node's bytes, which carry the document IDs and
 /// commit CIDs of the session's scope; the shape of a payload's tree, and so
-/// the rows each call adds, then depends on its content alone (#3605).
+/// the rows each call adds, then depends on its content alone.
 pub(crate) fn manifest_groups(boundary_keys: &[String]) -> Vec<std::ops::Range<usize>> {
     let mut groups = Vec::new();
     let mut start = 0;
@@ -1694,7 +1694,7 @@ mod tests {
     /// first hosts a cut inside its own bytes in `session_bodies`, so the
     /// leading block holding the tool schemas closes before the messages that
     /// change; with the second that block runs on into them and the session
-    /// stores the tool schemas again (#3605).
+    /// stores the tool schemas again.
     const DID_HOSTING_A_CUT: &str = "did:key:z6Mkc6f3ac57944a531490cd39902d0f777715fd005efac9";
     const ORDINARY_DID: &str = "did:key:z6Mk5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e";
 
@@ -1713,8 +1713,7 @@ mod tests {
         assert_ne!(
             session_block_bytes(DID_HOSTING_A_CUT, hash_cut_only).0,
             session_block_bytes(ORDINARY_DID, hash_cut_only).0,
-            "rolling-hash cuts alone no longer make block storage depend on the DID, so these \
-             DIDs no longer reproduce #3605"
+            "rolling-hash cuts alone must make block storage depend on the DID for this fixture"
         );
 
         assert_eq!(

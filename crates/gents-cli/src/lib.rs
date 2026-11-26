@@ -1,3 +1,7 @@
+//! Client adapter layer: command-line interface and operator commands for the Gents runtime.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Clients/`; unit test helpers live in `src/test_support.rs`.
+
 use gents_service::home_state::default_data_dir;
 use gents_service::home_state::home_graphql_endpoint;
 use gents_service::home_state::init_config_path;

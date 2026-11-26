@@ -8,7 +8,7 @@ pub const STATUS_DELEGATION_AUDIENCE_FIELD: &str = "delegation_audience";
 pub const STATUS_PROVIDER_TIME_FIELD: &str = "provider_time";
 pub const STATUS_NODE_DID_FIELD: &str = "node_did";
 
-/// External premise (defradb.rs#3006): the code DefraDB answers a verified
+/// External premise: the code DefraDB answers a verified
 /// write with when the delegation it carries does not hold at the provider's
 /// time.
 pub const DELEGATION_OUTSIDE_WINDOW_CODE: &str = "DELEGATION_OUTSIDE_WINDOW";
