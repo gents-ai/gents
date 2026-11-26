@@ -738,19 +738,22 @@ fn committed_bindings_match_regeneration() {
     assert_eq!(
         actual_files,
         expected_files,
-        "bindings file set drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
+        "bindings file set drifted under {}. Regenerate with:\n  cargo run -p gents-desktop-bridge --features typegen --bin gents-desktop-typegen",
         committed.display()
     );
 
     for name in &expected_files {
         let expected = std::fs::read_to_string(tmp.path().join(name)).expect("read generated");
         let actual = std::fs::read_to_string(committed.join(name)).unwrap_or_else(|_| {
-            panic!("missing committed binding {name}; regenerate with write_bindings")
+            panic!(
+                "missing committed binding {name} under {}. Regenerate with:\n  cargo run -p gents-desktop-bridge --features typegen --bin gents-desktop-typegen",
+                committed.display()
+            )
         });
         assert_eq!(
             actual,
             expected,
-            "binding {name} drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
+            "binding {name} drifted under {}. Regenerate with:\n  cargo run -p gents-desktop-bridge --features typegen --bin gents-desktop-typegen",
             committed.display()
         );
     }

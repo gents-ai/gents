@@ -194,9 +194,74 @@ pub(super) enum EmbeddedFinalizationBoundary {
     BeforeCommit,
     AfterCommit,
     BeforeRollback,
+    AfterRollback,
+    BeforeRollbackTimeoutRelease,
+}
+
+#[derive(Clone)]
+pub(super) struct BoundaryPause {
+    pub(super) reached: Arc<tokio::sync::Notify>,
+    pub(super) release: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Default)]
+pub(super) struct EmbeddedFinalizationLifecycle {
+    pub(super) before_commit: Option<BoundaryPause>,
+    pub(super) after_commit: Option<BoundaryPause>,
+    pub(super) before_rollback: Option<BoundaryPause>,
+    pub(super) after_rollback: Option<BoundaryPause>,
+    pub(super) before_rollback_timeout_release: Option<BoundaryPause>,
+    pub(super) on_rollback_drop: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl EmbeddedFinalizationLifecycle {
+    fn pause_for(&self, boundary: EmbeddedFinalizationBoundary) -> Option<BoundaryPause> {
+        match boundary {
+            EmbeddedFinalizationBoundary::BeforeCommit => self.before_commit.clone(),
+            EmbeddedFinalizationBoundary::AfterCommit => self.after_commit.clone(),
+            EmbeddedFinalizationBoundary::BeforeRollback => self.before_rollback.clone(),
+            EmbeddedFinalizationBoundary::AfterRollback => self.after_rollback.clone(),
+            EmbeddedFinalizationBoundary::BeforeRollbackTimeoutRelease => {
+                self.before_rollback_timeout_release.clone()
+            }
+        }
+    }
+}
+
+pub(super) struct EmbeddedRollbackDropObserver {
+    on_drop: Option<Arc<dyn Fn() + Send + Sync>>,
+    disarmed: bool,
+}
+
+impl EmbeddedRollbackDropObserver {
+    pub(super) fn for_test() -> Self {
+        let on_drop = EMBEDDED_FINALIZATION_LIFECYCLE
+            .try_with(|lifecycle| lifecycle.on_rollback_drop.clone())
+            .ok()
+            .flatten();
+        Self {
+            on_drop,
+            disarmed: false,
+        }
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for EmbeddedRollbackDropObserver {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            if let Some(on_drop) = &self.on_drop {
+                on_drop();
+            }
+        }
+    }
 }
 
 tokio::task_local! {
+    pub(super) static EMBEDDED_FINALIZATION_LIFECYCLE: Arc<EmbeddedFinalizationLifecycle>;
     pub(super) static EMBEDDED_FINALIZATION_PAUSE: (
         EmbeddedFinalizationBoundary,
         Arc<tokio::sync::Notify>,
@@ -205,6 +270,13 @@ tokio::task_local! {
 }
 
 pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
+    if let Ok(Some(pause)) =
+        EMBEDDED_FINALIZATION_LIFECYCLE.try_with(|lifecycle| lifecycle.pause_for(boundary))
+    {
+        pause.reached.notify_one();
+        pause.release.notified().await;
+        return;
+    }
     let reached = EMBEDDED_FINALIZATION_PAUSE
         .try_with(|(selected, reached)| (*selected == boundary).then(|| Arc::clone(reached)))
         .ok()
