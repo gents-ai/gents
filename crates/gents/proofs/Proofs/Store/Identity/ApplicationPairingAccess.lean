@@ -78,7 +78,7 @@ def unpaired : State :=
         ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
         ⟨"configuration", "config", "parent", .object "nodes" "node"⟩],
       enrolled := [] }
-    "a" "user" "author" "node" true
+    "a" "user" "author" "node" "runtime" true
 
 /-- `pairings_apply` as document ACP sees it: the author creates the overlay
 through the native create gate and links it to its Node, both in the one

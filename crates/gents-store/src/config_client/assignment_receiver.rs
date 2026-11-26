@@ -40,6 +40,8 @@ pub struct AssignmentScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignmentState {
     pub position: defra_node::AssignmentPosition,
+    /// The certified revision's block time, in Unix seconds.
+    pub timestamp: u64,
     pub assigned: Vec<String>,
 }
 
@@ -139,7 +141,7 @@ struct Stored {
 
 async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, ReceiverError> {
     let query = format!(
-        "{{ CertifiedAssignmentState(filter: {{scope_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID term height block_hash assigned }} }}",
+        "{{ CertifiedAssignmentState(filter: {{scope_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID term height block_hash timestamp assigned }} }}",
         crate::graphql::escape_graphql_string(key)
     );
     let response = txn.execute_for_decision(&query, &json!({})).await?;
@@ -168,6 +170,9 @@ async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, Rec
     let height = string("height")?
         .parse()
         .map_err(|_| ReceiverError::InvalidState("missing field"))?;
+    let timestamp = string("timestamp")?
+        .parse()
+        .map_err(|_| ReceiverError::InvalidState("missing field"))?;
     let assigned = serde_json::from_value(
         row.get("assigned")
             .cloned()
@@ -182,6 +187,7 @@ async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, Rec
                 height,
                 block_hash: string("block_hash")?.to_owned(),
             },
+            timestamp,
             assigned,
         },
     }))
@@ -195,6 +201,7 @@ fn check(previous: &AssignmentState, next: &AssignmentState) -> Result<(), Recei
     }
     if new == old
         && (next.position.block_hash != previous.position.block_hash
+            || next.timestamp != previous.timestamp
             || next.assigned != previous.assigned)
     {
         return Err(ReceiverError::InvalidState(
@@ -222,6 +229,7 @@ async fn persist(
         "term": next.position.term.to_string(),
         "height": next.position.height.to_string(),
         "block_hash": next.position.block_hash,
+        "timestamp": next.timestamp.to_string(),
         "assigned": next.assigned,
     });
     match previous {
@@ -506,6 +514,7 @@ impl ConfigAccess {
         assigned.dedup();
         let next = AssignmentState {
             position: certified.position,
+            timestamp: certified.timestamp,
             assigned,
         };
         if let Some(previous) = &previous {
@@ -587,6 +596,7 @@ mod tests {
                 height,
                 block_hash: hash.into(),
             },
+            timestamp: height,
             assigned: assigned.iter().map(|id| (*id).to_owned()).collect(),
         }
     }
@@ -659,6 +669,7 @@ mod tests {
                     height: 0,
                     block_hash: String::new(),
                 },
+                timestamp: 0,
                 assigned: input.state.assigned.clone(),
             };
             state.may_run(&input.id, input.body_verified)
@@ -674,6 +685,7 @@ mod tests {
                     height: input.position.height,
                     block_hash: input.position.hash.clone(),
                 },
+                timestamp: input.position.height,
                 assigned: input.assigned.clone(),
             };
             if let Some(previous) = &input.state.position {
@@ -683,6 +695,7 @@ mod tests {
                         height: previous.height,
                         block_hash: previous.hash.clone(),
                     },
+                    timestamp: previous.height,
                     assigned: input.state.assigned.clone(),
                 };
                 if check(&previous, &next).is_err() {

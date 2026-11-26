@@ -667,7 +667,7 @@ def agentAcpState : Identity.Household.State :=
     , enrolled := [] }
   let created := [("default", "user"), ("engineer", "user"), ("worker", "user"),
     ("idle", "user"), ("lead", "user"), ("helper", "engineer")].foldl
-    (fun s (id, creator) => Identity.Household.commitAgentCreation s id creator id "node" true)
+    (fun s (id, creator) => Identity.Household.commitAgentCreation s id creator id "node" "runtime" true)
     base
   let initialised := initDefaultSelection created "node" "user"
   { initialised with relations :=
@@ -716,7 +716,7 @@ an Engineer source, the clone's DID neither holds the catalog nor configures
 itself or its source. -/
 theorem clone_holds_no_category :
     actorGrantsOf
-      (Identity.Household.commitAgentCreation agentAcpState "clone" "engineer" "clone" "node" true)
+      (Identity.Household.commitAgentCreation agentAcpState "clone" "engineer" "clone" "node" "runtime" true)
       "clone" "node" ["clone", "engineer"] = ⟨false, []⟩ := by
   native_decide
 

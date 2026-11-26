@@ -1535,15 +1535,17 @@ def settlement (s : State) (read : Read) : LoadResult → Settlement
 /-- What a change delivered on a node's subscription is, by its collection. A
 `collection` is a configuration collection whose snapshot root is one
 self-contained view: its rows depend on no other root and no other root's
-follow-up reads depend on them. A `sessionRequest` is a request no trigger
-caused, whose event names its session scope and is not a deletion: the requests
-the snapshot shows for that scope are derivable from the scope alone
-(`SessionRequestReload.session_requests_derive_alone`). `node` is every other
-change: the Node root, whose absence is a refusal, the sessions and triggers,
-a request a trigger caused, whose candidacy spans sessions, and a deleted or
-unscoped request. -/
+follow-up reads depend on them. A `sessionScope` change is a session
+document's, or that of a request no trigger caused, whose event names its
+session scope and is not a deletion: the session row and the requests the
+snapshot shows for that scope are derivable from the scope alone
+(`SessionRequestReload.session_requests_derive_alone`; a node holds one
+session document per session id, and the snapshot reads it only for its head
+request). `node` is every other change: the Node root, whose absence is a
+refusal, the triggers, a request a trigger caused, whose candidacy spans
+sessions, and a deleted or unscoped session or request. -/
 inductive Change where
-  | toolControl | transcript | toolCall | collection | sessionRequest | node
+  | toolControl | transcript | toolCall | collection | sessionScope | node
   deriving DecidableEq, Repr
 
 /-- What the observer does with a delivered change. -/
@@ -1555,10 +1557,10 @@ inductive Delivery where
   | invalidateProvenance
   /-- A request event, and the collection is queued for its own reload. -/
   | reloadCollection
-  /-- A request event, and the request's session scope is queued for the
-  node's partial read, which reads that scope's requests beside any queued
-  collection. -/
-  | reloadSessionRequests
+  /-- A request event, and the change's session scope is queued for the
+  node's partial read, which reads that scope's session row and requests
+  beside any queued collection. -/
+  | reloadSessionScope
   /-- A request event, and the node is queued for a full load. -/
   | resync
   deriving DecidableEq, Repr
@@ -1568,13 +1570,14 @@ load per change re-reads every session, agent and request the node holds:
 a runtime whose backend probe rewrites each backend observation's catalog
 freshness every minute made every connected client read hundreds of kilobytes
 a minute to show a few changed rows. A request is written several times in
-every turn (created, claimed, renewed, finished), so the same holds for it: its
-session scope's requests are read again, not the node. -/
+every turn (created, claimed, renewed, finished), and its session document
+beside it (its head, its activity), so the same holds for them: their session
+scope is read again, not the node. -/
 def deliver : Change → Delivery
   | .toolControl | .transcript => .invalidateTranscript
   | .toolCall => .invalidateProvenance
   | .collection => .reloadCollection
-  | .sessionRequest => .reloadSessionRequests
+  | .sessionScope => .reloadSessionScope
   | .node => .resync
 
 structure Slot where
@@ -1589,8 +1592,8 @@ structure Slot where
   armed : Bool
   status : Status
   /-- Collections (`Delivery.reloadCollection`) or session scopes
-  (`Delivery.reloadSessionRequests`) are queued for the node's partial read:
-  one read of the queued collections' roots and the queued scopes' requests. -/
+  (`Delivery.reloadSessionScope`) are queued for the node's partial read: one
+  read of the queued collections' roots and the queued scopes' rows. -/
   collections : Bool := false
   /-- A partial read is in flight. It and the full load never overlap:
   one read per node is in flight. -/
@@ -1657,7 +1660,7 @@ inductive CollectionSettlement where
   deriving DecidableEq, Repr
 
 /-- A partial read replaces only its collections' rows and its session scopes'
-requests, through the reload fence (`ClientDataPublication.acceptsReload`): a
+session row and requests, through the reload fence (`ClientDataPublication.acceptsReload`): a
 request event since its capture leaves it publishable, a publication rejects
 it. `derivable` is `SessionRequestReload.derivesAlone` of every session scope
 it read, decided against the store it publishes into; a read of collections
@@ -2046,9 +2049,9 @@ theorem only_collections_reload_alone (change : Change) :
     deliver change = .reloadCollection ↔ change = .collection := by
   cases change <;> simp [deliver]
 
-/-- Only a session request change reads its session scope alone. -/
-theorem only_session_requests_reload_their_scope (change : Change) :
-    deliver change = .reloadSessionRequests ↔ change = .sessionRequest := by
+/-- Only a session scope change reads its session scope alone. -/
+theorem only_session_scope_changes_reload_their_scope (change : Change) :
+    deliver change = .reloadSessionScope ↔ change = .sessionScope := by
   cases change <;> simp [deliver]
 
 /-- A full load is queued by a node change alone: no collection or session
