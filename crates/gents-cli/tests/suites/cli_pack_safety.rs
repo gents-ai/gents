@@ -697,7 +697,7 @@ async fn a_session_install_grants_its_planned_root_agents_reader_on_the_installe
 /// Installing a documents pack that declares an EventSource (and its Trigger)
 /// from the CLI on a fresh running node succeeds through the hosted approver
 /// session, seeding the EventSourceCursor alongside the EventSource and
-/// Trigger (gents#3849).
+/// Trigger.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hosted_pack_install_with_event_source_seeds_cursor_and_succeeds() -> Result<()> {
     let temp = tempfile::tempdir()?;
