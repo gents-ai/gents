@@ -6,9 +6,9 @@ traces a native test serializes. Each node has its own store. After every
 operation it reports the slot of the operation's node; a finished load also
 reports its settlement and the patch fence's decision for its read, and a
 finished partial read its settlement. The final report adds every node's slot
-and every node's store rows: its sessions, which only a full load reads, its
-backend observations, which a collection reload reads alone, and its requests,
-which a session reload replaces for its scope. -/
+and every node's store rows: its backend observations, which a collection
+reload reads alone, and its sessions and requests, which a session scope
+reload replaces for its scope. -/
 namespace Conformance.ObserverResync
 open Lean
 open _root_.ClientDataPublication
@@ -85,7 +85,8 @@ def reloadNode (m : Machine) (read : Read) (node : Nat) (incoming : List String)
   else (outcome, m)
 
 /-- A partial read of `node`, captured at `read`: its backend observations
-when it holds collections, its scope's requests when it holds session scopes. -/
+when it holds collections, its scope's session row and requests when it holds
+session scopes. -/
 def reloadCollections (m : Machine) (read : Read) (node : Nat)
     (result : LoadResult) : CollectionSettlement × Machine :=
   let outcome := collectionSettlement (m.pubs node) read (derivable m node) result
@@ -95,6 +96,7 @@ def reloadCollections (m : Machine) (read : Read) (node : Nat)
                 observations :=
                   if roots then update m.observations node (observationRows node)
                   else m.observations
+                rows := if scopes then update m.rows node (snapshot node) else m.rows
                 requests :=
                   if scopes then update m.requests node (scopeRequests node) else m.requests })
   else (outcome, m)

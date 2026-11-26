@@ -505,13 +505,16 @@ impl Drop for EndNotice {
     }
 }
 
-/// The change subscription of `collection`. A request's event also names its
-/// session scope and its trigger, which `delivery::Change::of` routes it by.
+/// The change subscription of `collection`. A session's and a request's event
+/// also name the session scope, and a request's its trigger, which
+/// `delivery::Change::of` routes them by.
 pub(super) fn subscription(collection: &str) -> String {
-    let scope = if collection == gents_protocol::schemas::AGENT_REQUEST_NAME {
-        " session_id requester_did caused_by_trigger_id"
-    } else {
-        ""
+    let scope = match collection {
+        gents_protocol::schemas::AGENT_REQUEST_NAME => {
+            " session_id requester_did caused_by_trigger_id"
+        }
+        gents_protocol::schemas::AGENT_SESSION_NAME => " session_id requester_did",
+        _ => "",
     };
     format!("subscription {{ {collection}(showDeleted: true) {{ _docID _deleted{scope} }} }}")
 }
