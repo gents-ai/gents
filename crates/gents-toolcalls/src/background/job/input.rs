@@ -1868,17 +1868,6 @@ pub(crate) mod tests {
             .unwrap();
         }
 
-        pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
-            self.access
-                .transact_write("test.input.guest_state", |txn| {
-                    Box::pin(async move {
-                        write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
-                    })
-                })
-                .await
-                .unwrap();
-        }
-
         async fn later(&self, row: &str) -> anyhow::Result<(JobStepInput, u64)> {
             build_step_input(&self.access, &self.runtime, row, StepKind::Later).await
         }

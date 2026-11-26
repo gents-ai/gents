@@ -119,12 +119,6 @@ async fn rows(access: &ConfigAccess, did: &str, provider: &str) -> Vec<OAuthCred
         .collect()
 }
 
-async fn set_enabled(access: &ConfigAccess, did: &str, credential_id: &str, enabled: bool) {
-    set_account_enabled(access, did, credential_id, enabled)
-        .await
-        .unwrap();
-}
-
 async fn seed_raw(access: &ConfigAccess, input: Value) {
     let did = input["node_did"].as_str().unwrap().to_owned();
     access
@@ -144,12 +138,6 @@ async fn seed_raw(access: &ConfigAccess, input: Value) {
         })
         .await
         .unwrap();
-}
-
-async fn labeled(access: &ConfigAccess, credential: OAuthCredential, label: &str) -> SignIn {
-    store_sign_in(access, credential, Some(label))
-        .await
-        .unwrap()
 }
 
 async fn backends(access: &ConfigAccess, did: &str) -> Vec<gents_documents::InferenceBackend> {
