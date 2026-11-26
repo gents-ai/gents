@@ -162,7 +162,7 @@ describe("a home this version cannot open", () => {
 
     const panel = await screen.findByTestId("incompatible-home");
     expect(panel).toHaveTextContent(
-      "This home was created by an older Gents version. This release can't open or convert it. Back it up or delete it to start fresh; nothing is carried over.",
+      "This home was created by an older Gents version, which this release can't open or convert. Nothing in it has been changed. Back it up or delete it to start fresh; nothing is carried over.",
     );
     expect(panel).toHaveTextContent(`${HOME}/data`);
     expect(screen.getByTestId("incompatible-home-retained")).toHaveTextContent(
@@ -364,8 +364,37 @@ describe("a home this version cannot open", () => {
     expect(
       await screen.findByTestId("incompatible-home-different-version"),
     ).toHaveTextContent("possibly a newer one");
+    expect(screen.getByTestId("incompatible-home-different-version")).toHaveTextContent(
+      "Nothing in it has been changed.",
+    );
     expect(screen.queryByTestId("incompatible-home-delete")).not.toBeInTheDocument();
     expect(screen.getByTestId("incompatible-home-backup")).toBeInTheDocument();
+    expect(screen.getByTestId("incompatible-home-keep")).toBeInTheDocument();
+  });
+
+  it("opens the incompatible-home screen when launch repair blocks on an older home", async () => {
+    const run = harness({
+      repairManagedServer: vi.fn(async () => ({
+        repaired: [],
+        outcome: "blocked" as const,
+        blocker: `${HOME} was made by an older version of Gents.`,
+        savedRuntimes: [],
+        localNodeLost: false,
+      })),
+      managedServerStatus: vi.fn(async () =>
+        managedStatus({
+          state: "failed",
+          error: `${HOME} was made by an older version of Gents.`,
+          errorCode: "incompatibleLocalStore",
+        }),
+      ),
+    });
+
+    const panel = await screen.findByTestId("incompatible-home");
+    expect(panel).toHaveTextContent("Nothing in it has been changed.");
+    expect(run.resetManagedServer).toHaveBeenCalledWith();
+    expect(screen.getByTestId("incompatible-home-backup")).toBeInTheDocument();
+    expect(screen.getByTestId("incompatible-home-delete")).toBeInTheDocument();
     expect(screen.getByTestId("incompatible-home-keep")).toBeInTheDocument();
   });
 
@@ -391,6 +420,9 @@ describe("a home this version cannot open", () => {
 
     expect(await screen.findByTestId("incompatible-home-unsafe-key")).toHaveTextContent(
       "This home's keys were created by an older Gents version with unsafe file permissions",
+    );
+    expect(screen.getByTestId("incompatible-home-unsafe-key")).toHaveTextContent(
+      "Nothing in it has been changed.",
     );
     expect(screen.getByTestId("incompatible-home-backup")).toBeInTheDocument();
     expect(screen.getByTestId("incompatible-home-delete")).toBeInTheDocument();

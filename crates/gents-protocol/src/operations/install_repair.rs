@@ -63,7 +63,7 @@ impl IncompatibleStore {
     pub fn client_store_report(&self) -> String {
         match older_what(self.kind) {
             Some(what) => format!(
-                "The desktop app's local data at {} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed. The desktop app can back it up and start fresh from this screen",
+                "The desktop app's local data at {} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed. The desktop app can back it up or delete it to start fresh from this screen",
                 self.data_path.display()
             ),
             None => self.to_string(),
@@ -93,8 +93,11 @@ fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
     let home = data_path.parent().unwrap_or(data_path);
     let home_word = shell_word(home);
     if let Some(what) = older_what(kind) {
+        let mut backup = home.as_os_str().to_os_string();
+        backup.push(".bak");
+        let backup_word = shell_word(Path::new(&backup));
         return format!(
-            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. The older Gents can export its application records (`gents utils data export --help`); that export does not include sessions or agent configuration. To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
+            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. To start fresh with this version, either archive the old home (`mv {home_word} {backup_word}`) or delete it (`rm -rf {home_word}`), then run `gents` (or `gents init`)",
             home = home.display()
         );
     }
@@ -727,4 +730,82 @@ pub enum ClientIdentityAction {
 pub struct RepairRecoveryObservation {
     pub candidate_exposed: bool,
     pub same_build: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_home_refusal_is_untouched_and_gives_archive_and_delete_commands() {
+        for kind in [
+            IncompatibleStoreKind::LegacyRocksDb,
+            IncompatibleStoreKind::LegacyLark,
+            IncompatibleStoreKind::UnknownLineage,
+            IncompatibleStoreKind::UnencryptedStore,
+            IncompatibleStoreKind::OtherVersionSchema,
+        ] {
+            let store = IncompatibleStore {
+                kind,
+                data_path: PathBuf::from("/Users/me/.gents/data"),
+            };
+            let text = store.to_string();
+            assert!(text.contains("older version of Gents"), "{kind:?}: {text}");
+            assert!(
+                text.contains(
+                    "Nothing in it was changed and no background service was started for it."
+                ),
+                "{kind:?}: {text}"
+            );
+            assert!(
+                text.contains("`mv /Users/me/.gents /Users/me/.gents.bak`"),
+                "{kind:?}: {text}"
+            );
+            assert!(
+                text.contains("`rm -rf /Users/me/.gents`"),
+                "{kind:?}: {text}"
+            );
+            assert!(
+                text.contains("then run `gents` (or `gents init`)"),
+                "{kind:?}: {text}"
+            );
+            assert!(
+                !text.contains("http://") && !text.contains("https://"),
+                "{text}"
+            );
+
+            let client = store.client_store_report();
+            assert!(client.contains("Nothing in it was changed."), "{client}");
+            assert!(
+                client.contains("back it up or delete it to start fresh from this screen"),
+                "{client}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_home_refusal_quotes_paths_with_spaces() {
+        let store = IncompatibleStore {
+            kind: IncompatibleStoreKind::UnknownLineage,
+            data_path: PathBuf::from("/Users/me/my home/data"),
+        };
+        let text = store.to_string();
+        assert!(
+            text.contains("`mv '/Users/me/my home' '/Users/me/my home.bak'`"),
+            "{text}"
+        );
+        assert!(text.contains("`rm -rf '/Users/me/my home'`"), "{text}");
+    }
+
+    #[test]
+    fn foreign_version_refusal_never_suggests_deleting_the_home() {
+        let store = IncompatibleStore {
+            kind: IncompatibleStoreKind::ForeignVersion,
+            data_path: PathBuf::from("/Users/me/.gents/data"),
+        };
+        let text = store.to_string();
+        assert!(text.contains("newer version of Gents"), "{text}");
+        assert!(text.contains("Nothing in it was changed."), "{text}");
+        assert!(!text.contains("rm -rf"), "{text}");
+    }
 }
