@@ -25,7 +25,7 @@ pub use build::measured_mcp_services_for_access;
 pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 use gents_protocol::tool_names::{
-    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, MEMORY_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 pub use modes::ToolCeiling;
 pub use output_budget::configured_output_budget;
@@ -141,6 +141,7 @@ pub struct ToolSurface {
     custom_tools: Vec<CustomToolFactory>,
     pub(crate) enable_context_budget_tool: bool,
     pub(crate) enable_session_history_tool: bool,
+    pub(crate) enable_memory_tool: bool,
     pub(crate) enable_schema_tool: bool,
     pub(crate) enable_p2p_tool: bool,
     pub(crate) enable_p2p_mutations: bool,
@@ -370,6 +371,9 @@ impl ToolSurface {
         if self.enable_session_history_tool {
             names.push(SESSION_HISTORY_TOOL_NAME.to_string());
         }
+        if self.enable_memory_tool {
+            names.push(MEMORY_TOOL_NAME.to_string());
+        }
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
@@ -571,20 +575,22 @@ impl ToolSurface {
                 )?,
             ));
         }
-        if let Some(agent) = runtime
-            .agent_identity
-            .as_ref()
-            .filter(|agent| agent.did() != runtime.node_did)
-        {
-            tools.push(
-                crate::memory::build_memory_tool(
-                    runtime.node.clone(),
-                    runtime.node_did.clone(),
-                    agent.did().to_owned(),
-                    agent.as_ref(),
-                )
-                .await?,
-            );
+        if self.enable_memory_tool {
+            if let Some(agent) = runtime
+                .agent_identity
+                .as_ref()
+                .filter(|agent| agent.did() != runtime.node_did)
+            {
+                tools.push(
+                    crate::memory::build_memory_tool(
+                        runtime.node.clone(),
+                        runtime.node_did.clone(),
+                        agent.did().to_owned(),
+                        agent.as_ref(),
+                    )
+                    .await?,
+                );
+            }
         }
         let datastore_actor = if self.enable_defra_query
             || !self.application_write_collections.is_empty()
@@ -850,6 +856,7 @@ impl std::fmt::Debug for ToolSurface {
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
+            .field("enable_memory_tool", &self.enable_memory_tool)
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)

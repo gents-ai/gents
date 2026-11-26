@@ -1303,6 +1303,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         explanation.tool_names,
         vec![
             gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME,
+            gents_protocol::tool_names::MEMORY_TOOL_NAME,
             "read_research_source"
         ]
     );
@@ -2679,7 +2680,8 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         explanation.tool_names,
         vec![
             name.clone(),
-            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()
+            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string(),
+            gents_protocol::tool_names::MEMORY_TOOL_NAME.to_string()
         ]
     );
     assert_eq!(explanation.included["meta_mcp"], vec![name]);

@@ -39,6 +39,7 @@ pub struct AgentToolSurfaceConfig {
     custom_tools: Vec<CustomToolFactory>,
     enable_context_budget_tool: bool,
     enable_session_history_tool: bool,
+    enable_memory_tool: bool,
     enable_schema_tool: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
@@ -86,6 +87,7 @@ impl AgentToolSurfaceConfig {
             custom_tools: Vec::new(),
             enable_context_budget_tool: true,
             enable_session_history_tool: true,
+            enable_memory_tool: false,
             enable_schema_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -365,6 +367,7 @@ impl AgentToolSurfaceConfig {
             custom_tools,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
             enable_session_history_tool: static_policy.session_history,
+            enable_memory_tool: true,
             enable_schema_tool: static_policy.schema_management,
             enable_defra_query: static_policy.include_defra_query(),
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
@@ -572,6 +575,7 @@ impl AgentToolSurfaceConfig {
             enable_context_budget_tool: effective_policy.context_budget
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
+            enable_memory_tool: self.enable_memory_tool,
             enable_schema_tool: effective_policy.schema_management,
             enable_p2p_tool: effective_policy.p2p_read,
             enable_p2p_mutations: effective_policy.permits_p2p_mutation(),
@@ -774,6 +778,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
+            .field("enable_memory_tool", &self.enable_memory_tool)
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)
