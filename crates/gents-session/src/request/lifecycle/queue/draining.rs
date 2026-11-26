@@ -22,7 +22,7 @@ fn is_any_pending_request(_: &AgentRequestRow) -> bool {
     true
 }
 
-// SAFETY (#664): `node_did` scopes both the pending-row scan and mutation.
+// SAFETY: `node_did` scopes both the pending-row scan and mutation.
 async fn drain_pending_session_requests_where_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,

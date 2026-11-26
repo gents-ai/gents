@@ -40,10 +40,10 @@ struct ActiveManagedExecRecord {
 
 static NEXT_EXEC_ID: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_EXECS: OnceLock<Mutex<BTreeMap<u64, ActiveManagedExecRecord>>> = OnceLock::new();
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 static ACTIVE_EXEC_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn active_executors_notified() -> tokio::sync::futures::Notified<'static> {
     ACTIVE_EXEC_NOTIFY
         .get_or_init(tokio::sync::Notify::new)
@@ -98,7 +98,7 @@ impl ActiveExecGuard {
             .lock()
             .expect("managed exec active registry mutex poisoned")
             .insert(id, record);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if let Some(notify) = ACTIVE_EXEC_NOTIFY.get() {
             notify.notify_waiters();
         }

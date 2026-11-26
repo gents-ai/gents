@@ -178,7 +178,9 @@ pub struct DocumentRuntimeOptions {
     pub plugin_home: Option<PathBuf>,
     pub native_executables: gents_tools::native::NativeExecutables,
     #[cfg(test)]
-    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    #[cfg(test)]
+    pub(crate) router_stopped_probe: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 #[derive(Clone)]
@@ -236,7 +238,9 @@ pub struct Gents {
         Option<Arc<dyn crate::runtime::startup_readiness::StartupBuildFailureObserver>>,
     startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     #[cfg(test)]
-    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    #[cfg(test)]
+    router_stopped_probe: Option<tokio::sync::watch::Sender<bool>>,
     rendered_request_capture_factory:
         Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     enrollment_authority:
@@ -340,6 +344,8 @@ impl Gents {
             startup_readiness: options.startup_readiness,
             #[cfg(test)]
             router_dispatch_probe: options.router_dispatch_probe,
+            #[cfg(test)]
+            router_stopped_probe: options.router_stopped_probe,
             // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: None,
             enrollment_authority: Arc::default(),

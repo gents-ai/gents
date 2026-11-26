@@ -12,8 +12,8 @@ use tokio::sync::watch;
 
 /// Ends the runtime's server-sent event responses once serve shutdown begins.
 ///
-/// The pinned DefraDB ends its GraphQL subscription and event streams when
-/// `Node::shutdown` starts closing the node's request scope (defradb.rs#2793),
+/// External premise: the pinned DefraDB ends its GraphQL subscription and event
+/// streams when `Node::shutdown` starts closing the node's request scope,
 /// but serve shutdown begins earlier: the runtime task is joined first. The
 /// runtime's own event streams (the pack UX watch) belong to no DefraDB
 /// request scope, so DefraDB's drain would wait its network drain timeout for

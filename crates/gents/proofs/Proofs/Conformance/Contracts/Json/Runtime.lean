@@ -81,12 +81,11 @@ private def reconcileInput (c : RuntimeReconcileCase) : ReconcileInput :=
 private def reconcileInputs (names : List String) : List ReconcileInput :=
   (runtimeReconcileCases.filter fun c => c.name ∈ names).map reconcileInput
 
-/-- The router admits an explicit selection when the session's bound Agent
-reads the session and is the requested one, and the routed generation holds a
-ready dispatcher for it: the private-session fixture binds a session to one of
-two readable Agents and the routed generation dispatches the requested Agent,
-dispatches none for an unknown one, and holds a startup demotion for a demoted
-one. -/
+/-- The booted runtime's router admits an explicit selection when the session's
+bound Agent reads the session and is the requested one, and the routed
+generation holds a ready executor for it: it completes requests for matching
+ready Agents, rejects session mismatches and startup-demoted Agents, and never
+falls back to the default Agent for an unknown selection. -/
 def selectionNames : List String :=
   ["default-A-explicit-B-binds-B", "existing-A-requested-B-rejected",
     "existing-A-requested-A-accepted", "unknown-selection-never-falls-back",
@@ -110,11 +109,11 @@ def runtimeReconcileStatus : Family ReconcileInput ReconcileStatusOutput where
     { postPhase := c.postPhase, postActiveGeneration := c.postActiveGeneration
       postRouterGeneration := c.postRouterGeneration }
 
-/-- The router observes the active snapshot's generation and holds a request
-until that generation is the one it routes with, so it builds the router
-observation, a request held while the published generation is unobserved, and
-the accept after the observation. A held request leaves the routed generation
-where it was. -/
+/-- The booted runtime's router observes the active snapshot's generation and
+holds requests until that generation's router acknowledgement is persisted: a
+gated router-generation write exposes the window where the published generation
+is unobserved, and releasing it lets the router acknowledge the generation and
+complete the request. -/
 def routerNames : List String :=
   ["router_observe_published_generation", "unobserved-generation-rejects-explicit-request",
     "accept_request_after_router_observe"]
@@ -127,8 +126,9 @@ def runtimeReconcileRouter : Family ReconcileInput ReconcileRouterOutput where
     { legal := c.legal
       postRouterGeneration := if c.legal then c.postRouterGeneration else c.preRouterGeneration }
 
-/-- The generation supervisor applies a proposed snapshot or keeps the
-previous generation when the proposal fails to apply. -/
+/-- The booted runtime's generation supervisor advances active generation and
+settles to idle when a configuration change applies, and keeps the previous
+active generation while settling to idle when readiness publication fails. -/
 def supervisorNames : List String :=
   ["publish_changed_snapshot", "apply_failed_clears_pending"]
 
@@ -142,10 +142,9 @@ def runtimeReconcileSupervisor : Family ReconcileInput ReconcileSupervisorOutput
 example : (reconcileCase "publish_changed_snapshot").legal = true ∧
     (reconcileCase "apply_failed_clears_pending").legal = true := by native_decide
 
-/-- A resolved snapshot becomes the runtime's generation only when every
-runnable Agent's dependencies are present: the generation supervisor refuses a
-proposal whose runnable Agent has no tool surface and keeps the previous
-generation. -/
+/-- A resolved snapshot includes an Agent as runnable only when its dependencies
+are present: the booted runtime's resolver marks an Agent naming a missing tool
+dependency unavailable on readiness rather than starting it runnable. -/
 def resolveNames : List String := ["missing_dependency_snapshot_is_not_resolved"]
 
 structure ReconcileResolveOutput where

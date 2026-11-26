@@ -33,7 +33,7 @@
   "stages": [
     {
       "stage_id": "decide",
-      "prompt": "From the meeting notes in notes/, work out Heron's current agreed launch date, owner and budget. A later agreed note overrides an earlier one (go by each note's Date line, not its file name), and drafts were never agreed. Save decisions/heron.json with launch_date (YYYY-MM-DD), owner, and budget_k (a number, in thousands). Leave the notes alone.",
+      "prompt": "From notes/, find Heron's current agreed launch date, owner, and budget. Later agreed notes override earlier ones by their Date line (not filename); ignore drafts. Save decisions/heron.json with launch_date (YYYY-MM-DD), owner, and budget_k (number, in thousands). Leave notes/ untouched.",
       "capture": [
         {
           "kind": "file",

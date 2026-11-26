@@ -2,8 +2,8 @@
 //! this crate's unit tests and any build enabling `test-home-guard`, which only
 //! dev-dependencies do (`service_isolation_stays_test_only` in
 //! `write_owner_structure.rs`), so every `gents` a test spawns is one. The
-//! label is per user, not per `HOME`: on 2026-11-13 test binaries that ran
-//! `gents` with a temporary `HOME` stopped the maintainer's node through it.
+//! label is per user, not per `HOME`, so test binaries running `gents` with a
+//! temporary `HOME` would otherwise stop the user's own node.
 //! Here the manager holds nothing, and a request to change it panics with the
 //! process that asked. `native-e2e` debug builds keep their dedicated label
 //! and drive the real manager.

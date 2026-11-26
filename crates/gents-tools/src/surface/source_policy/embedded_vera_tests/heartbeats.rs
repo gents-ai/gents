@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents_store::config_client::ConfigAccess;
 use gents_store::local::backend_protection::{FreshBackendStore, ProtectedBackendStore};

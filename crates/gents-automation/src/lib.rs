@@ -1,3 +1,7 @@
+//! Automation layer: triggers, callbacks, lifecycle hooks, and Goals.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Automation/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 pub mod goal;
 pub mod lifecycle_hooks;
 pub mod operations;

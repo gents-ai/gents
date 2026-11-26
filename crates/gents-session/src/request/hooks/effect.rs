@@ -152,7 +152,7 @@ pub struct Grantable {
 
 /// Lean `Hooks.sessionChildGrants`: the Household `children` resource's
 /// `parent` (a session) and `working_agent` (an actor). The only grants a
-/// plugin may publish for now (decision 2026-11-11, maintainer-approved).
+/// plugin may publish.
 pub const SESSION_CHILD_GRANTS: &[Grantable] = &[
     Grantable {
         relation: "parent",

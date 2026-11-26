@@ -1133,7 +1133,7 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
     }
 }
 
-/// #3330 "Done when": a shared-Context edit is refused by default and
+/// A shared-Context edit is refused by default and
 /// accepted with the acknowledgement, and the receipt lists every agent.
 #[tokio::test]
 async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
@@ -1245,9 +1245,8 @@ async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgeme
     );
 }
 
-/// The bound `context update` path — the call shape #3330 asked for and the
-/// help page advertises — must honour the acknowledgement. It used to capture
-/// `shared_ack` before the caller assigned it, so it always refused.
+/// The bound `context update` path advertised by the help page must honour
+/// the acknowledgement.
 #[tokio::test]
 async fn bound_context_update_honours_the_acknowledgement() {
     let (fixture, tools) = authenticated_setup("bound-ack", &["node", "tools", "agent"]).await;

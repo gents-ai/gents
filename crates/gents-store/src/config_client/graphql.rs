@@ -58,8 +58,8 @@ pub(super) async fn auto_commit(
 
 /// Whether `error` is a delegation DefraDB refused for its window, which the
 /// endpoint recovers by minting it again at its home's clock and sending the
-/// request once more (`Identity.HeldAudience.resend`). External premise
-/// (defradb.rs#3006): such a write was refused before anything was written.
+/// request once more (`Identity.HeldAudience.resend`).
+/// External premise: such a write was refused before anything was written.
 async fn recovers_window(
     endpoint: &GraphqlEndpoint,
     error: &ConfigClientError,

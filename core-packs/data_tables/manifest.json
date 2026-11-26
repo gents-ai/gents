@@ -133,7 +133,7 @@
             "type": "string"
           },
           "tables": {
-            "description": "Rows sent inline: a list of {name, columns, rows} tables, one such table, or an object of name to rows; see {\"help\": \"inputs\"}.",
+            "description": "Rows sent inline: a data_tables result as it is, a list of {name, columns, rows} tables, one such table, or an object of name to rows; see {\"help\": \"inputs\"}.",
             "type": [
               "array",
               "object"

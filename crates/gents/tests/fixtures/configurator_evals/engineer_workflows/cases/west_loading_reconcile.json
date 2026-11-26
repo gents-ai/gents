@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run a background job called west-loading-check with two helpers working side by side: one pulls the unique loaded pallet IDs from west-scan.csv, the other the outbound pallet IDs in dispatch.json. Return missing (outbound but not loaded) and unexpected (loaded but not outbound), each sorted. Only read the files.",
+      "prompt": "Run background job west-loading-check with two parallel helpers: one gets unique loaded pallet IDs from west-scan.csv, the other outbound pallet IDs from dispatch.json. Return sorted missing (outbound, not loaded) and unexpected (loaded, not outbound). Only read the files.",
       "settle": true,
       "checks": [
         {

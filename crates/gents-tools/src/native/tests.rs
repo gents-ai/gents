@@ -3168,6 +3168,9 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
             } else {
                 tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
                     loop {
+                        let notified = gents_session::exec::status::active_executors_notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
                         let registered = gents_session::exec::status::active_native_executors()
                             .into_iter()
                             .find(|executor| {
@@ -3181,7 +3184,7 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
                             }
                             .to_string();
                         }
-                        tokio::time::sleep(Duration::from_millis(2)).await;
+                        notified.await;
                     }
                 })
                 .await

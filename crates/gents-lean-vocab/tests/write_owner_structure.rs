@@ -4,6 +4,8 @@ mod classifiers;
 mod client_credentials;
 #[path = "write_owner_structure/client_endpoints.rs"]
 mod client_endpoints;
+#[path = "write_owner_structure/comment_hygiene.rs"]
+mod comment_hygiene;
 #[path = "write_owner_structure/compiled_sources.rs"]
 mod compiled_sources;
 #[path = "write_owner_structure/defradb_access.rs"]

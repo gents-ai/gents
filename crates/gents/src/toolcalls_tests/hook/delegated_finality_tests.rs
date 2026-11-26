@@ -15,6 +15,7 @@ use gents_session::request::lifecycle::{
 use gents_session::session::message::{AgentMessageDelivery, Plan, RenderedBody};
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::STALL_CEILING;
 use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde_json::json;
 
@@ -368,7 +369,7 @@ async fn delegated_commit_finality_follows_the_lean_traces() {
                     false,
                 ),
             ));
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::time::timeout(STALL_CEILING, async {
                 tokio::select! {
                     _ = reached.notified() => {}
                     result = &mut child => panic!("child did not reach native commit boundary: {result:?}"),
@@ -378,7 +379,7 @@ async fn delegated_commit_finality_follows_the_lean_traces() {
             assert_eq!(native(&state, &children, None), "pending");
             if failure_first {
                 tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    STALL_CEILING,
                     competitor.spawn_failed(FailureClass::External, "competing failure"),
                 )
                 .await
@@ -433,7 +434,7 @@ async fn drop_commit_acknowledgement(fixture: &mut Fixture) {
             false,
         ),
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(STALL_CEILING, async {
         tokio::select! {
             _ = reached.notified() => {}
             result = &mut dispatch => panic!("dispatch returned before cancellation: {result:?}"),
@@ -840,7 +841,7 @@ async fn child_claim_raced(fixture: &Fixture, doc: &str, races: &[String]) -> St
         release.clone(),
         lifecycle.claim_with_identity(),
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    tokio::time::timeout(STALL_CEILING, async {
         tokio::select! {
             _ = reached.notified() => {}
             outcome = &mut claim => panic!("claim returned before its commit boundary: {outcome:?}"),

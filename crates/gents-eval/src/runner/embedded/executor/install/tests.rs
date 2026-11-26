@@ -1135,3 +1135,120 @@ async fn core_packs_are_left_on_the_subject_as_init_leaves_them() {
     );
     home.node.shutdown().await.expect("shutdown node");
 }
+
+#[tokio::test]
+async fn configuration_fixtures_are_readable_and_editable_by_the_engineer() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("pack");
+    write_engineer_pack(&pack);
+    let case_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../gents/tests/fixtures/configurator_evals/engineer_pages/cases/restore_my_holdings.json",
+    );
+    let case: Value = serde_json::from_slice(&std::fs::read(case_path).unwrap()).unwrap();
+    let schemas: Vec<String> = serde_json::from_value(case["fixtures"]["schemas"].clone()).unwrap();
+    let documents: Vec<FixtureDocument> =
+        serde_json::from_value(case["fixtures"]["documents"].clone()).unwrap();
+    let mut home = EmbeddedHome::create_temp("config-fixtures").await.unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack),
+        pack_dir: pack,
+        inference: frozen_binding(json!("frozen-profile")),
+        agent_slot: "subject".into(),
+        fixtures: TrialFixtures {
+            schemas,
+            documents,
+            ..Default::default()
+        },
+        ..TrialSpec::empty_for_tests("config-fixtures")
+    };
+    bind_test_evaluator(&mut spec, &mut home);
+    let agent_did = install(&spec, &home, &dir.path().join("workspace"), &[])
+        .await
+        .unwrap();
+
+    let evaluator = home.client_access(&spec.evaluator_did).unwrap();
+    let agent_row = evaluator
+        .execute("{ Agent { agent_did creation_nonce } }")
+        .await
+        .unwrap();
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding =
+        serde_json::from_value(agent_row["data"]["Agent"][0].clone()).unwrap();
+    let agent_identity =
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
+    let engineer = ConfigAccess::local_managed_agent(
+        home.node.clone(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
+
+    let pages = gents_documents::list_pages(&engineer, home.did())
+        .await
+        .unwrap();
+    let surfaces = gents_documents::list_datastore_tool_surfaces(&engineer, home.did())
+        .await
+        .unwrap();
+    assert_eq!(pages.len(), 3);
+    assert!(surfaces
+        .iter()
+        .any(|surface| surface.surface_id == "archive_desk"));
+    let mut my_holdings = pages
+        .into_iter()
+        .find(|page| page.page_id == "my_holdings")
+        .expect("seeded my_holdings page");
+    assert!(!my_holdings.enabled);
+    assert!(gents_pack::plugin::ux::page::lint(&my_holdings).is_empty());
+
+    my_holdings.enabled = true;
+    let plan = DesiredStateApplyPlan::new(vec![desired(
+        Collection::Page,
+        serde_json::to_value(&my_holdings).unwrap(),
+    )])
+    .unwrap();
+    apply(&engineer, "test.config_fixtures.enable_page", &plan)
+        .await
+        .unwrap();
+    let restored = gents_documents::list_pages(&engineer, home.did())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|page| page.page_id == "my_holdings")
+        .unwrap();
+    assert!(restored.enabled);
+
+    let outsider = "did:key:eval-fixture-outsider";
+    grant_trial_operations(&home, outsider).await.unwrap();
+    let outsider_access =
+        ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(outsider).unwrap());
+    assert!(
+        gents_documents::list_pages(&outsider_access, home.did())
+            .await
+            .unwrap()
+            .is_empty(),
+        "an outsider must not read fixture Page documents"
+    );
+
+    for rel in [
+        "add_chart_keep_css.json",
+        "fix_stale_calibrations.json",
+        "rename_read_tool.json",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/configurator_evals/engineer_pages/cases")
+            .join(rel);
+        let case: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        for doc in case["fixtures"]["documents"].as_array().unwrap() {
+            if doc["collection"] == "Page" {
+                let page: gents_documents::PageDocument =
+                    serde_json::from_value(doc["document"].clone()).unwrap();
+                assert!(
+                    gents_pack::plugin::ux::page::lint(&page).is_empty(),
+                    "{rel} / {} has unexpected lint findings",
+                    page.page_id
+                );
+            }
+        }
+    }
+    home.node.shutdown().await.expect("shutdown node");
+}

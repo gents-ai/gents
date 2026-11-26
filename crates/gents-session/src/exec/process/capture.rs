@@ -25,10 +25,62 @@ pub(super) struct CaptureTask {
     exit_notify: Arc<Notify>,
 }
 
+#[derive(Clone, Default)]
+enum DrainClock {
+    #[default]
+    System,
+    #[cfg(test)]
+    Virtual(Arc<std::sync::atomic::AtomicU64>),
+}
+
+enum DrainMark {
+    System(Instant),
+    #[cfg(test)]
+    Virtual(u64),
+}
+
+impl DrainClock {
+    fn mark(&self) -> DrainMark {
+        match self {
+            Self::System => DrainMark::System(Instant::now()),
+            #[cfg(test)]
+            Self::Virtual(nanos) => {
+                DrainMark::Virtual(nanos.load(std::sync::atomic::Ordering::Acquire))
+            }
+        }
+    }
+
+    fn elapsed(&self, mark: DrainMark) -> Duration {
+        match (self, mark) {
+            (Self::System, DrainMark::System(started)) => started.elapsed(),
+            #[cfg(test)]
+            (Self::Virtual(nanos), DrainMark::Virtual(started)) => Duration::from_nanos(
+                nanos
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .saturating_sub(started),
+            ),
+            #[cfg(test)]
+            _ => unreachable!("drain clock and mark must match"),
+        }
+    }
+}
+
 pub(super) fn spawn_optional_capped<R>(
     reader: Option<R>,
     max_bytes: usize,
     live_output: Option<(LiveToolOutputWriter, LiveOutputStream)>,
+) -> CaptureTask
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    spawn_optional_capped_with_clock(reader, max_bytes, live_output, DrainClock::System)
+}
+
+fn spawn_optional_capped_with_clock<R>(
+    reader: Option<R>,
+    max_bytes: usize,
+    live_output: Option<(LiveToolOutputWriter, LiveOutputStream)>,
+    clock: DrainClock,
 ) -> CaptureTask
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -53,6 +105,7 @@ where
             task_output,
             task_exited,
             task_notify,
+            clock,
         )
         .await;
     });
@@ -130,6 +183,7 @@ async fn read_capped<R>(
     output: Arc<Mutex<OutputCapture>>,
     child_exited: Arc<std::sync::atomic::AtomicBool>,
     exit_notify: Arc<Notify>,
+    clock: DrainClock,
 ) where
     R: AsyncRead + Unpin,
 {
@@ -138,7 +192,7 @@ async fn read_capped<R>(
     let mut post_exit_bytes = 0usize;
     loop {
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
-        let read_started = Instant::now();
+        let read_started = clock.mark();
         let next = if exited_before_read {
             match tokio::task::unconstrained(read_retry_interrupted(&mut reader, &mut buf))
                 .now_or_never()
@@ -191,7 +245,7 @@ async fn read_capped<R>(
             }
         };
         if exited_before_read {
-            post_exit_read_time = post_exit_read_time.saturating_add(read_started.elapsed());
+            post_exit_read_time = post_exit_read_time.saturating_add(clock.elapsed(read_started));
             post_exit_bytes = post_exit_bytes.saturating_add(read);
         }
         {
@@ -297,6 +351,7 @@ mod tests {
                 Arc::clone(&output),
                 Arc::new(std::sync::atomic::AtomicBool::new(exited)),
                 Arc::new(Notify::new()),
+                DrainClock::System,
             )
             .await;
             let output = lock_output(&output);
@@ -364,21 +419,23 @@ mod tests {
         assert!(matches!(read, Some(Ok(0))), "{read:?}");
     }
 
-    struct DelayedReadyRead(bool);
+    struct DelayedReadyRead {
+        done: bool,
+        clock_nanos: Arc<std::sync::atomic::AtomicU64>,
+    }
 
     impl AsyncRead for DelayedReadyRead {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "simulates a read that overruns the drain budget within one poll"
-        )]
         fn poll_read(
             mut self: Pin<&mut Self>,
             _: &mut Context<'_>,
             buf: &mut ReadBuf<'_>,
         ) -> Poll<std::io::Result<()>> {
-            if !self.0 {
-                self.0 = true;
-                std::thread::sleep(POST_EXIT_DRAIN_READ_BUDGET * 2);
+            if !self.done {
+                self.done = true;
+                let overrun = u64::try_from((POST_EXIT_DRAIN_READ_BUDGET * 2).as_nanos())
+                    .expect("drain budget fits in u64 nanos");
+                self.clock_nanos
+                    .fetch_add(overrun, std::sync::atomic::Ordering::AcqRel);
                 buf.put_slice(b"x");
             }
             Poll::Ready(Ok(()))
@@ -387,19 +444,27 @@ mod tests {
 
     #[tokio::test]
     async fn ready_eof_after_a_scheduling_stall_is_complete() {
-        let task = spawn_optional_capped(Some(DelayedReadyRead(false)), 65536, None);
+        let clock_nanos = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let task = spawn_optional_capped_with_clock(
+            Some(DelayedReadyRead {
+                done: false,
+                clock_nanos: Arc::clone(&clock_nanos),
+            }),
+            65536,
+            None,
+            DrainClock::Virtual(clock_nanos),
+        );
         let output = join_capture_after_child_exit(task).await;
         assert_eq!(output.bytes, b"x");
         assert!(!output.truncated);
     }
 
-    struct CooperativeEof(bool);
+    struct CooperativeEof {
+        done: bool,
+        clock_nanos: Arc<std::sync::atomic::AtomicU64>,
+    }
 
     impl AsyncRead for CooperativeEof {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "simulates a read that overruns the drain budget within one poll"
-        )]
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
@@ -407,14 +472,17 @@ mod tests {
         ) -> Poll<std::io::Result<()>> {
             let permit = std::task::ready!(tokio::task::coop::poll_proceed(cx));
             permit.made_progress();
-            if !self.0 {
-                self.0 = true;
+            if !self.done {
+                self.done = true;
                 for _ in 0..128 {
                     if let Poll::Ready(permit) = tokio::task::coop::poll_proceed(cx) {
                         permit.made_progress();
                     }
                 }
-                std::thread::sleep(POST_EXIT_DRAIN_READ_BUDGET * 2);
+                let overrun = u64::try_from((POST_EXIT_DRAIN_READ_BUDGET * 2).as_nanos())
+                    .expect("drain budget fits in u64 nanos");
+                self.clock_nanos
+                    .fetch_add(overrun, std::sync::atomic::Ordering::AcqRel);
                 buf.put_slice(b"x");
             }
             Poll::Ready(Ok(()))
@@ -423,7 +491,16 @@ mod tests {
 
     #[tokio::test]
     async fn ready_eof_with_exhausted_cooperative_budget_is_complete() {
-        let task = spawn_optional_capped(Some(CooperativeEof(false)), 1024, None);
+        let clock_nanos = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let task = spawn_optional_capped_with_clock(
+            Some(CooperativeEof {
+                done: false,
+                clock_nanos: Arc::clone(&clock_nanos),
+            }),
+            1024,
+            None,
+            DrainClock::Virtual(clock_nanos),
+        );
         let output = join_capture_after_child_exit(task).await;
         assert_eq!(output.bytes, b"x");
         assert!(!output.truncated);

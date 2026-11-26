@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run a background job called calibration-review with two helpers, each reading one report in reports/. Revision 8 is current: for each current station, put the difference between its highest and lowest offset under its station ID in spreads, and list the other stations' IDs in stale. Return spreads and stale, and don't change the reports.",
+      "prompt": "Run background job calibration-review with two helpers, each reading one report in reports/. Revision 8 is current: map each current station ID in spreads to its max-minus-min offset, and list non-current station IDs in stale. Return spreads and stale without editing reports/.",
       "settle": true,
       "checks": [
         {

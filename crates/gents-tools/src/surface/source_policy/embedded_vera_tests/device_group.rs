@@ -124,7 +124,6 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
 ) -> anyhow::Result<()> {
     use crate::test_support::vera_test_home::SETTLE_CEILING;
     use anyhow::Context;
-    use std::time::Duration;
 
     if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
         let _ = tracing_subscriber::fmt()
@@ -168,9 +167,16 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
         )
         .await?;
 
-    let row = source.as_node().write("test.registry.create", &format!(
-        r#"mutation {{ create_PeerRegistry(input: {{peer_id:"foreign",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#, source.node_did
-    )).await?;
+    let row = source
+        .as_node()
+        .transact_write("test.registry.create", |txn| {
+            let mutation = format!(
+                r#"mutation {{ create_PeerRegistry(input: {{peer_id:"foreign",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#,
+                source.node_did
+            );
+            Box::pin(async move { txn.execute(&mutation).await })
+        })
+        .await?;
     let id = gents_store::graphql::created_doc_id(&row, collection)?;
     source
         .settled(&source.node_did, "origin registration")

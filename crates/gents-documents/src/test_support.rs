@@ -20,9 +20,92 @@ impl crate::inference_backend::AdvertisedProfilePolicy for AdmitAllProfiles {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum TestNodeLockKey {
+    Local(usize, String),
+    Remote(String, String),
+}
+
+fn test_node_lock(key: TestNodeLockKey) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use rapidhash::{HashMapExt, RapidHashMap};
+    use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+
+    static LOCKS: OnceLock<StdMutex<RapidHashMap<TestNodeLockKey, Weak<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| StdMutex::new(RapidHashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let entry = locks.entry(key).or_default();
+    if let Some(lock) = entry.upgrade() {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    *entry = Arc::downgrade(&lock);
+    lock
+}
+
+fn test_node_lock_key(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+) -> TestNodeLockKey {
+    match access {
+        gents_store::config_client::ConfigAccess::Local(local) => TestNodeLockKey::Local(
+            std::sync::Arc::as_ptr(local.node()) as usize,
+            node_did.to_owned(),
+        ),
+        gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
+            TestNodeLockKey::Remote(endpoint.url().to_owned(), node_did.to_owned())
+        }
+    }
+}
+
+async fn create_test_node_if_absent(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+) -> anyhow::Result<()> {
+    use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+
+    let node_input = serde_json::json!({"node_did": node_did});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents_store::collection::Collection::Node,
+        add: node_input.clone(),
+        update: node_input,
+    }])?;
+    access
+        .transact_write("test.signed_node", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                if crate::desired_state::find_node_doc_id(txn, node_did)
+                    .await?
+                    .is_some()
+                {
+                    return Ok(());
+                }
+                crate::apply_desired_state_plan(txn, plan, &AdmitAllProfiles)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .await
+}
+
 /// Creates the fixture Node through the runtime owner's signed access.
 /// `ensure_node` only loads; production Nodes are created by an authenticated client.
+///
+/// Serializes per `(node, node_did)` and treats an already-committed Node from a
+/// concurrent writer as success without hiding store failures when no Node exists
+/// (`tla/TestNodeEnsure.tla`).
 pub async fn ensure_test_node(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
+    if crate::load_node(node, node_did).await.unwrap().is_some() {
+        return;
+    }
+    let lock = test_node_lock(TestNodeLockKey::Local(
+        std::sync::Arc::as_ptr(node) as usize,
+        node_did.to_owned(),
+    ));
+    let _guard = lock.lock().await;
     if crate::load_node(node, node_did).await.unwrap().is_some() {
         return;
     }
@@ -30,7 +113,12 @@ pub async fn ensure_test_node(node: &std::sync::Arc<defra_node::Node>, node_did:
         node.clone(),
         identity::Did::new(node_did).unwrap(),
     );
-    bootstrap_signed_test_node(&access, node_did).await;
+    if let Err(error) = create_test_node_if_absent(&access, node_did).await {
+        if crate::load_node(node, node_did).await.unwrap().is_some() {
+            return;
+        }
+        panic!("ensuring fixture Node {node_did:?} failed: {error:#}");
+    }
 }
 
 /// Enrols `user` as the runtime's operator and publishes the runtime's Node
@@ -50,24 +138,22 @@ pub async fn bootstrap_signed_test_node(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) {
-    use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
-    let node_input = serde_json::json!({"node_did": node_did});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node_input.clone(),
-        update: node_input,
-    }])
-    .unwrap();
-    access
-        .transact_write("test.signed_node", |txn| {
-            let plan = &plan;
-            Box::pin(
-                async move { crate::apply_desired_state_plan(txn, plan, &AdmitAllProfiles).await },
-            )
-        })
-        .await
-        .unwrap();
+    let lock = test_node_lock(test_node_lock_key(access, node_did));
+    let _guard = lock.lock().await;
+    if let Err(error) = create_test_node_if_absent(access, node_did).await {
+        let existing = access
+            .transact_readonly("test.signed_node.recheck", |txn| {
+                Box::pin(async move { crate::desired_state::find_node_doc_id(txn, node_did).await })
+            })
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if existing {
+            return;
+        }
+        panic!("bootstrapping fixture Node {node_did:?} failed: {error:#}");
+    }
 }
 
 pub async fn set_test_default_agent_as(
@@ -386,5 +472,117 @@ pub mod desired_state_fixtures {
                 })
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod ensure_test_node_tests {
+    use std::sync::Arc;
+
+    use gents_store::node_extension::Extensions;
+    use gents_store::test_support::TestStore;
+    use tokio::sync::Barrier;
+
+    #[tokio::test]
+    async fn concurrent_ensure_test_node_calls_succeed_with_one_node_doc() {
+        let store = TestStore::start("ensure-test-node-concurrent", Extensions::none()).await;
+        let node_did = store.node_identity.did().to_owned();
+        let callers = 8usize;
+        let barrier = Arc::new(Barrier::new(callers));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..callers {
+            let node = store.node.clone();
+            let node_did = node_did.clone();
+            let barrier = barrier.clone();
+            tasks.spawn(async move {
+                barrier.wait().await;
+                super::ensure_test_node(&node, &node_did).await;
+                crate::principal::load_node_record(&node, &node_did)
+                    .await
+                    .unwrap()
+                    .expect("Node must exist after ensure_test_node")
+                    .0
+            });
+        }
+        let mut observed_doc_ids = Vec::with_capacity(callers);
+        while let Some(result) = tasks.join_next().await {
+            observed_doc_ids.push(result.expect("ensure_test_node task must not panic"));
+        }
+        assert_eq!(observed_doc_ids.len(), callers);
+        let first = &observed_doc_ids[0];
+        assert!(
+            observed_doc_ids.iter().all(|doc_id| doc_id == first),
+            "all concurrent callers must observe the identical Node doc ID: {observed_doc_ids:?}"
+        );
+
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            store.node.clone(),
+            identity::Did::new(&node_did).unwrap(),
+        );
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::node as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &node_did))
+                .render()
+        };
+        let response = access
+            .transact_readonly("test.ensure_node.count", |txn| {
+                let rendered = &rendered;
+                Box::pin(async move { txn.run(rendered).await })
+            })
+            .await
+            .unwrap();
+        let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+        assert_eq!(rows.len(), 1, "expected exactly one Node row: {rows:?}");
+    }
+
+    #[tokio::test]
+    async fn ensure_test_node_tolerates_external_concurrent_node_writer() {
+        let store = TestStore::start("ensure-test-node-external-race", Extensions::none()).await;
+        let node_did = store.node_identity.did().to_owned();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let ensure_task = {
+            let node = store.node.clone();
+            let node_did = node_did.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                super::ensure_test_node(&node, &node_did).await;
+                crate::principal::load_node_record(&node, &node_did)
+                    .await
+                    .unwrap()
+                    .expect("Node must exist after ensure_test_node")
+                    .0
+            })
+        };
+
+        // Direct desired-state write bypassing `ensure_test_node`'s per-node mutex.
+        let external_task = {
+            let node = store.node.clone();
+            let node_did = node_did.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                let access = gents_store::config_client::ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(&node_did).unwrap(),
+                );
+                barrier.wait().await;
+                let _ = super::create_test_node_if_absent(&access, &node_did).await;
+                crate::principal::load_node_record(&node, &node_did)
+                    .await
+                    .unwrap()
+                    .expect("Node must exist after external write")
+                    .0
+            })
+        };
+
+        let ensure_doc = ensure_task
+            .await
+            .expect("ensure_test_node must not panic under external writer race");
+        let external_doc = external_task.await.expect("external writer task");
+        assert_eq!(ensure_doc, external_doc);
     }
 }

@@ -743,7 +743,7 @@ impl McpPool {
                 }
                 anyhow::bail!(
                     "MCP service '{service_id}' endpoint '{endpoint}' is parked for {:?} after \
-                     {} consecutive connection/session failures (#639)",
+                     {} consecutive connection/session failures",
                     state.parked_until - now,
                     state.strikes
                 );
@@ -751,7 +751,7 @@ impl McpPool {
             if state.connect_in_flight {
                 anyhow::bail!(
                     "MCP service '{service_id}' endpoint '{endpoint}' connect already in flight \
-                     after {} consecutive connection/session failures (#639)",
+                     after {} consecutive connection/session failures",
                     state.strikes
                 );
             }
@@ -820,7 +820,7 @@ impl McpPool {
             reason,
             strikes = state.strikes,
             park_seconds = horizon.as_secs(),
-            "MCP service struck; new connects parked (#639)"
+            "MCP service struck; new connects parked"
         );
     }
 }

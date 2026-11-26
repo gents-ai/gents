@@ -29,6 +29,8 @@ const MAX_ROW_BYTES: usize = 1024 * 1024;
 /// The most bytes the whole result of a call may take: the host's output limit is 4 MiB and
 /// the rest is the Markdown table, the column list and the warnings.
 pub const OUTPUT_BUDGET: usize = 3_500_000;
+/// Bytes added around the response object by the tool envelope `{"response":...}`.
+const ENVELOPE_BYTES: usize = r#"{"response":}"#.len();
 /// The most bytes the Markdown table of a page may take.
 const MARKDOWN_BYTES: usize = 256 * 1024;
 
@@ -259,7 +261,7 @@ fn fit(mut page: Page, fp: u64, markdown_rows: usize, catalog: &Catalog) -> Res<
     let mut trimmed = false;
     loop {
         let out = page_json(&page, fp, markdown_rows, catalog);
-        let size = serde_json::to_string(&out).map_or(usize::MAX, |s| s.len());
+        let size = serde_json::to_string(&out).map_or(usize::MAX, |s| s.len() + ENVELOPE_BYTES);
         if size <= OUTPUT_BUDGET {
             return Ok(out);
         }

@@ -376,6 +376,10 @@ impl ObserverHandle {
     pub fn metrics_snapshot(&self) -> ObserverMetricsSnapshot {
         self.metrics.snapshot()
     }
+
+    pub fn metrics_notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.metrics.notified()
+    }
 }
 
 /// What a finished read of a node fetched.

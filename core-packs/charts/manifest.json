@@ -109,7 +109,7 @@
             "type": "array"
           },
           "data": {
-            "description": "Inline data: {\"columns\": [...], \"rows\": [[...]]} (a data_tables result), a list of objects, or CSV text. Use this or path."
+            "description": "Inline data: a data_tables result as it is, {\"columns\": [...], \"rows\": [[...]]}, a list of objects, or CSV text. Use this or path."
           },
           "file": {
             "description": "The data file inside the folder named in path.",

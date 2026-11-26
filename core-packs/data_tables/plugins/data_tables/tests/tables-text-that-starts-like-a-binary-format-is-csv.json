@@ -1,69 +1,71 @@
 {
   "bind": "fixtures/heads",
   "expect": {
-    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| marks | marks.csv | 1 | ARROW1, qty |\n| parts | parts.csv | 1 | PAR1, qty |\n| semis | semis.csv | 3 | v |",
-    "tables": [
-      {
-        "column_count": 2,
-        "columns": [
-          {
-            "name": "ARROW1",
-            "type": "text"
+    "response": {
+      "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| marks | marks.csv | 1 | ARROW1, qty |\n| parts | parts.csv | 1 | PAR1, qty |\n| semis | semis.csv | 3 | v |",
+      "tables": [
+        {
+          "column_count": 2,
+          "columns": [
+            {
+              "name": "ARROW1",
+              "type": "text"
+            },
+            {
+              "name": "qty",
+              "type": "int64"
+            }
+          ],
+          "details": {
+            "delimiter": ",",
+            "header": true
           },
-          {
-            "name": "qty",
-            "type": "int64"
-          }
-        ],
-        "details": {
-          "delimiter": ",",
-          "header": true
+          "format": "csv",
+          "name": "marks",
+          "row_count": 1,
+          "source": "marks.csv"
         },
-        "format": "csv",
-        "name": "marks",
-        "row_count": 1,
-        "source": "marks.csv"
-      },
-      {
-        "column_count": 2,
-        "columns": [
-          {
-            "name": "PAR1",
-            "type": "text"
+        {
+          "column_count": 2,
+          "columns": [
+            {
+              "name": "PAR1",
+              "type": "text"
+            },
+            {
+              "name": "qty",
+              "type": "int64"
+            }
+          ],
+          "details": {
+            "delimiter": ",",
+            "header": true
           },
-          {
-            "name": "qty",
-            "type": "int64"
-          }
-        ],
-        "details": {
-          "delimiter": ",",
-          "header": true
+          "format": "csv",
+          "name": "parts",
+          "row_count": 1,
+          "source": "parts.csv"
         },
-        "format": "csv",
-        "name": "parts",
-        "row_count": 1,
-        "source": "parts.csv"
-      },
-      {
-        "column_count": 1,
-        "columns": [
-          {
-            "name": "v",
-            "type": "text"
-          }
-        ],
-        "details": {
-          "delimiter": ",",
-          "header": true
-        },
-        "format": "csv",
-        "name": "semis",
-        "row_count": 3,
-        "source": "semis.csv"
-      }
-    ],
-    "warnings": []
+        {
+          "column_count": 1,
+          "columns": [
+            {
+              "name": "v",
+              "type": "text"
+            }
+          ],
+          "details": {
+            "delimiter": ",",
+            "header": true
+          },
+          "format": "csv",
+          "name": "semis",
+          "row_count": 3,
+          "source": "semis.csv"
+        }
+      ],
+      "warnings": []
+    }
   },
   "input": {
     "mode": "tables"

@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Set up an automation for new MeterCheck records: each one gets a run that replies CONFIRM and its reference. Once that run has finished for a check whose handoff_id starts with redline-, start a follow-up run that replies FOLLOW and the handoff_id. Other checks get no follow-up. Set it up now; checks come in later.",
+      "prompt": "Automate new MeterCheck records: each gets a run replying CONFIRM and its reference. After that run finishes for a check whose handoff_id starts with redline-, start a follow-up run replying FOLLOW and the handoff_id. Other checks get no follow-up. Set it up now; checks come in later.",
       "checks": [],
       "capture": []
     },

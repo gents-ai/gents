@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "plan",
-      "prompt": "I'd like an app for tracking loaner laptops at the front desk: who has which laptop and when it's due back. Only the front desk staff use it, and students must never see who has which laptop. Before building anything, write down in ACCEPTANCE.md what has to be true for it to count as done, and tell me your plan. Don't build anything yet.",
+      "prompt": "I want a front-desk loaner laptop tracker (who has each laptop and when it's due back). Only front-desk staff use it; students must never see who has a laptop. Before building anything, write the acceptance criteria in ACCEPTANCE.md and share your plan. Don't build yet.",
       "capture": [
         {
           "kind": "file",

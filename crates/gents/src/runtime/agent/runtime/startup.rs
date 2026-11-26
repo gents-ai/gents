@@ -65,16 +65,6 @@ impl BackgroundTaskResult {
     }
 }
 
-#[cfg(test)]
-pub(super) type TestSlotRunner = Arc<
-    dyn Fn(
-            u64,
-            watch::Receiver<bool>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-        + Send
-        + Sync,
->;
-
 pub(in crate::runtime::agent) async fn run_agent(
     agent: Gents,
     external_shutdown: watch::Receiver<bool>,
@@ -93,8 +83,6 @@ pub(in crate::runtime::agent) async fn run_agent(
         external_shutdown,
         runtime_status_owner,
         runtime_status,
-        #[cfg(test)]
-        None,
     )
     .await
 }
@@ -105,24 +93,6 @@ pub(super) async fn run_agent_with_readiness_writer(
     external_shutdown: watch::Receiver<bool>,
     writer: Arc<dyn crate::runtime::node_readiness_publisher::NodeReadinessWriter>,
     retry_delay: std::time::Duration,
-) -> Result<()> {
-    run_agent_with_readiness_writer_and_slot_runner(
-        agent,
-        external_shutdown,
-        writer,
-        retry_delay,
-        None,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
-    agent: Gents,
-    external_shutdown: watch::Receiver<bool>,
-    writer: Arc<dyn crate::runtime::node_readiness_publisher::NodeReadinessWriter>,
-    retry_delay: std::time::Duration,
-    slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     gents_store::schema::catalog::ensure_runtime_owned(agent.node.clone())
         .await
@@ -139,7 +109,6 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
         external_shutdown,
         runtime_status_owner,
         runtime_status,
-        slot_runner,
     )
     .await
 }
@@ -149,7 +118,6 @@ async fn run_agent_with_runtime_status(
     external_shutdown: watch::Receiver<bool>,
     runtime_status_owner: crate::runtime::status::RuntimeStatusOwner,
     runtime_status: RuntimeStatusHandle,
-    #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     #[cfg(not(test))]
     let admission_gate = super::router::RuntimeAdmissionGate::closed();
@@ -173,8 +141,6 @@ async fn run_agent_with_runtime_status(
                 runtime_status,
                 &lifecycle,
                 admission_gate,
-                #[cfg(test)]
-                slot_runner,
             )
             .await
         }
@@ -346,7 +312,6 @@ async fn run_agent_owned(
     runtime_status: RuntimeStatusHandle,
     lifecycle: &Arc<RuntimeLifecycleCoordinator>,
     admission_gate: super::router::RuntimeAdmissionGate,
-    #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
@@ -405,8 +370,6 @@ async fn run_agent_owned(
         &enrollment_handle,
     );
     let runtime_for_runner = runtime.clone();
-    #[cfg(test)]
-    let test_slot_runner = slot_runner;
     let readiness_fatal_error = fatal_error_tx.clone();
     let slot_failure_policy: Arc<dyn crate::runtime::agent::reconcile::SlotFailurePolicy> =
         Arc::new(StartupSlotFailurePolicy {
@@ -424,13 +387,7 @@ async fn run_agent_owned(
         agent.retry_policy.clone(),
         move |agent, tool_surface, request_rx, capacity, generation, shutdown| {
             let runtime = runtime_for_runner.clone();
-            #[cfg(test)]
-            let test_slot_runner = test_slot_runner.clone();
             async move {
-                #[cfg(test)]
-                if let Some(test_slot_runner) = test_slot_runner {
-                    return test_slot_runner(generation, shutdown.clone()).await;
-                }
                 runtime
                     .run_agent(
                         agent,

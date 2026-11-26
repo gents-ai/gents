@@ -86,28 +86,69 @@ pub fn is_volatile_result_field(key: &str) -> bool {
             | "next_pending_retry_in_ms"
             | "lease_remaining_days"
             | "duration_ms"
+            | "elapsed_ms"
     )
 }
 
-/// A call's result normalized for no-progress comparison: JSON objects have
-/// keys sorted and volatile read-time fields omitted; non-JSON text stays as
-/// given.
+/// Lean `GoalProgress.isVolatileFieldFor`: whether `key` varies only with the
+/// read-time clock, including command-envelope-only volatile metadata such as
+/// `hint` inside `gents_exec:` results.
+pub fn is_volatile_field_for(command_envelope: bool, key: &str) -> bool {
+    is_volatile_result_field(key)
+        || (command_envelope
+            && gents_loop::live_output::COMMAND_OUTPUT_VOLATILE_FIELDS.contains(&key))
+}
+
+const FS_OUTPUT_META_PREFIX: &str = "gents_fs: ";
+
+fn canonical_prefixed_envelope(
+    result: &str,
+    prefix: &str,
+    command_envelope: bool,
+) -> Option<String> {
+    let rest = result.strip_prefix(prefix)?;
+    let (header, body) = match rest.split_once('\n') {
+        Some((header, body)) => (header, Some(body)),
+        None => (rest, None),
+    };
+    let value = serde_json::from_str::<serde_json::Value>(header).ok()?;
+    let canonical_header = canonical_filtered(&value, Some(command_envelope));
+    Some(match body {
+        Some(body) => format!("{prefix}{canonical_header}\n{body}"),
+        None => format!("{prefix}{canonical_header}"),
+    })
+}
+
+/// Lean `GoalProgress.canonicalizeResultText`: a call's result normalized for
+/// no-progress comparison: JSON objects (including `gents_exec:` and
+/// `gents_fs:` metadata headers) have keys sorted and volatile read-time
+/// fields omitted; non-JSON text and malformed headers stay as given.
 pub fn canonical_result(result: &str) -> String {
+    if let Some(canonical) = canonical_prefixed_envelope(
+        result,
+        gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX,
+        true,
+    ) {
+        return canonical;
+    }
+    if let Some(canonical) = canonical_prefixed_envelope(result, FS_OUTPUT_META_PREFIX, false) {
+        return canonical;
+    }
     serde_json::from_str::<serde_json::Value>(result)
-        .map(|value| canonical_filtered(&value, true))
+        .map(|value| canonical_filtered(&value, Some(false)))
         .unwrap_or_else(|_| result.to_owned())
 }
 
 fn canonical(value: &serde_json::Value) -> String {
-    canonical_filtered(value, false)
+    canonical_filtered(value, None)
 }
 
-fn canonical_filtered(value: &serde_json::Value, drop_volatile: bool) -> String {
+fn canonical_filtered(value: &serde_json::Value, drop_volatile_for: Option<bool>) -> String {
     match value {
         serde_json::Value::Object(map) => {
             let mut keys: Vec<_> = map
                 .keys()
-                .filter(|key| !drop_volatile || !is_volatile_result_field(key))
+                .filter(|key| drop_volatile_for.is_none_or(|cmd| !is_volatile_field_for(cmd, key)))
                 .collect();
             keys.sort();
             let fields: Vec<String> = keys
@@ -116,7 +157,7 @@ fn canonical_filtered(value: &serde_json::Value, drop_volatile: bool) -> String 
                     format!(
                         "{}:{}",
                         serde_json::Value::String(key.clone()),
-                        canonical_filtered(&map[key], drop_volatile)
+                        canonical_filtered(&map[key], drop_volatile_for)
                     )
                 })
                 .collect();
@@ -125,7 +166,7 @@ fn canonical_filtered(value: &serde_json::Value, drop_volatile: bool) -> String 
         serde_json::Value::Array(items) => {
             let items: Vec<String> = items
                 .iter()
-                .map(|item| canonical_filtered(item, drop_volatile))
+                .map(|item| canonical_filtered(item, drop_volatile_for))
                 .collect();
             format!("[{}]", items.join(","))
         }
