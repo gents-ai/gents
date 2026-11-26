@@ -243,25 +243,26 @@ theorem catalog_refusal_words_name_the_node :
 
 /-- The relations creating or cloning an Agent publishes
 (`Identity.Household.commitAgentCreation`). -/
-def creationRelations (child childDid node : String) : List Relation :=
+def creationRelations (child childDid node nodeDid : String) : List Relation :=
   [⟨"agents", child, "parent", .object "nodes" node⟩,
    ⟨"agents", child, "executor", .actor childDid⟩,
    ⟨"agents", child, "administrator", .entitySet "nodes" node "owner"⟩,
-   ⟨"agents", child, "administrator", .entitySet "nodes" node "administrator"⟩]
+   ⟨"agents", child, "administrator", .entitySet "nodes" node "administrator"⟩,
+   ⟨"agents", child, "host", .actor nodeDid⟩]
 
-theorem creation_publishes_creation_relations (s : State) (child creator childDid node : String) :
-    (commitAgentCreation s child creator childDid node true).relations =
-      creationRelations child childDid node ++ s.relations := rfl
+theorem creation_publishes_creation_relations (s : State) (child creator childDid node nodeDid : String) :
+    (commitAgentCreation s child creator childDid node nodeDid true).relations =
+      creationRelations child childDid node nodeDid ++ s.relations := rfl
 
 /-- A clone, like any created Agent, receives no self-config grant: creation
 publishes relations on the new Agent document only, none of them
 `config_writer`, and names the new Agent's DID only as `executor`, which no
 update permission contains. Self-configuration stays an explicit later grant
 (`clone_inherits_no_self_config` states the same of its Tools). -/
-theorem creation_grants_no_category (child childDid node : String) :
-    (creationRelations child childDid node).map (fun r => (r.resource, r.relation)) =
+theorem creation_grants_no_category (child childDid node nodeDid : String) :
+    (creationRelations child childDid node nodeDid).map (fun r => (r.resource, r.relation)) =
       [("agents", "parent"), ("agents", "executor"), ("agents", "administrator"),
-       ("agents", "administrator")] ∧
+       ("agents", "administrator"), ("agents", "host")] ∧
     (Conferral.relation "executor").inPolicy "agents" "update" = false ∧
     (Conferral.relation "executor").inPolicy "nodes" "update" = false := by
   refine ⟨rfl, ?_, ?_⟩ <;> native_decide
@@ -372,7 +373,7 @@ def catalogRelationFixture : State :=
         ⟨"configuration", "cfg", "parent", .object "nodes" "node"⟩,
         ⟨"sessions", "s", "parent", .object "agents" "a"⟩]
     , enrolled := [] }
-  initDefaultSelection (commitAgentCreation base "a" "user" "a" "node" true) "node" "user"
+  initDefaultSelection (commitAgentCreation base "a" "user" "a" "node" "runtime" true) "node" "user"
 
 theorem initialised_node_has_one_default_selection :
     (catalogRelationFixture.objects.filter fun o =>
@@ -451,7 +452,7 @@ theorem catalog_is_not_self_granted :
 /-- `catalogRelationFixture` after init publishes the Engineer and its grants. -/
 def initialisedEngineerState : State :=
   provisionEngineer
-    (commitAgentCreation catalogRelationFixture "engineer" "user" "engineer" "node" true)
+    (commitAgentCreation catalogRelationFixture "engineer" "user" "engineer" "node" "runtime" true)
     "engineer" "node"
 
 /-- The Engineer as initialised holds the catalog and configures every Agent
@@ -461,7 +462,7 @@ theorem initialised_engineer_holds_catalog :
     actorGrantsOf initialisedEngineerState "engineer" "node" ["engineer", "a"] =
       ⟨true, ["engineer", "a"]⟩ ∧
     actorGrantsOf
-      (commitAgentCreation initialisedEngineerState "clone" "engineer" "clone" "node" true)
+      (commitAgentCreation initialisedEngineerState "clone" "engineer" "clone" "node" "runtime" true)
       "clone" "node" ["clone", "engineer", "a"] = ⟨false, []⟩ := by
   native_decide
 
@@ -489,8 +490,8 @@ theorem engineer_without_administration_loses_catalog :
   native_decide
 
 /-- Creating or cloning an Agent never issues the catalog relation. -/
-theorem creation_issues_no_catalog (child childDid node : String) :
-    (creationRelations child childDid node).all (·.relation != "agent_manager") = true := by
+theorem creation_issues_no_catalog (child childDid node nodeDid : String) :
+    (creationRelations child childDid node nodeDid).all (·.relation != "agent_manager") = true := by
   simp [creationRelations]
 
 end SelfConfig
