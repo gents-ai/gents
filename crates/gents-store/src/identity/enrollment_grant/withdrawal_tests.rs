@@ -225,6 +225,7 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         .refresh_assignments(&scope, &running)
         .await
         .map_err(|error| anyhow::anyhow!("initial assignment refresh: {error}"))?;
+    assert_eq!(initial.timestamp, certified.timestamp);
     assert!(initial.may_run(&home.node_doc, true));
     assert!(!initial.may_run(&home.node_doc, false));
     assert!(running.active.lock().await.contains(&home.node_doc));
@@ -386,6 +387,71 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
             .collect::<Vec<_>>(),
         [replacement]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_agent_its_owner_places_is_a_certified_assignment_of_its_node() -> anyhow::Result<()> {
+    let home = home(Provider::Vera).await?;
+    let access = home.runtime()?;
+    access
+        .add_collection(
+            &crate::local::document_acp::node_policy_ids(&home.node)
+                .render(gents_protocol::schemas::AGENT),
+        )
+        .await?;
+    let owner_access = ConfigAccess::Graphql(home.owner_endpoint.clone());
+    let (_, agent_key) = held_client()?;
+    let input = json!({
+        "node_did": home.runtime.did(),
+        "agent_did": agent_key.did(),
+        "creation_nonce": "placement",
+        "enabled": true,
+    });
+    let response = owner_access
+        .transact_write("test.placement.agent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                    gents_protocol::schemas::AGENT,
+                )
+                .await
+            })
+        })
+        .await?;
+    let agent = crate::graphql::created_doc_id(&response, "Agent")?;
+    let node: identity::Did = home.runtime.did().parse()?;
+    assert!(
+        access
+            .add_actor_relationship("Agent", &agent, "host", &node)
+            .await
+            .is_err(),
+        "only the Agent's owner places it"
+    );
+    owner_access
+        .add_actor_relationship("Agent", &agent, "host", &node)
+        .await?;
+    let query = defra_node::AssignmentQuery {
+        policy: crate::local::document_acp::node_policy_ids(&home.node)
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            .to_owned(),
+        resource: "agents".into(),
+        relation: "host".into(),
+        subject: home.runtime.did().into(),
+        issuer: home.owner.did().into(),
+        not_before: None,
+    };
+    let placed = access.certified_assignments(query.clone()).await?;
+    assert_eq!(placed.object_ids, [agent]);
+    let unissued = access
+        .certified_assignments(defra_node::AssignmentQuery {
+            issuer: home.runtime.did().into(),
+            ..query
+        })
+        .await?;
+    assert!(unissued.object_ids.is_empty());
     Ok(())
 }
 
