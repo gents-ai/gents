@@ -7,11 +7,11 @@ use super::super::adapter::{capture_seal_snapshot, write_seal_marker};
 use super::super::binding::release_binding;
 use super::super::documents::{
     writer_receipt_id, IsolatedWorkspaceDoc, WorkspaceDocuments, WorkspacePlacementDoc,
-    WorkspaceReceiptDoc, LIFECYCLE_READY, LIFECYCLE_SEALED, RECEIPT_KIND_WRITER,
+    WorkspaceReceiptDoc, RECEIPT_KIND_WRITER,
 };
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
+use super::super::transition::{step_isolated_workspace, WorkspaceLifecycleState};
 use super::{HostExecuteError, HostExecutorContext};
-use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 const DIFF_ARTIFACT_LIMIT: usize = 64 * 1024;
 
@@ -28,9 +28,12 @@ pub(super) fn apply_seal_snapshot(
     dest: &Path,
     seal_hash: &str,
 ) -> Result<()> {
+    let seal_hash = seal_hash.trim();
+    let mut candidate = workspace.clone();
+    candidate.seal_hash = (!seal_hash.is_empty()).then(|| seal_hash.to_owned());
+    let next = step_isolated_workspace(&candidate, WorkspaceLifecycleState::Sealed)?;
     write_seal_marker(dest, seal_hash, &workspace.base_sha)?;
-    workspace.seal_hash = Some(seal_hash.to_owned());
-    workspace.lifecycle_state = LIFECYCLE_SEALED.to_owned();
+    *workspace = next;
     placement.observed_tree_hash = seal_hash.to_owned();
     Ok(())
 }
@@ -167,8 +170,8 @@ fn seal_workspace_action(
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     let seal_hash = snapshot.tree_hash.clone();
 
-    let lifecycle = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
-    if lifecycle == Some(LIFECYCLE_SEALED) {
+    let lifecycle = WorkspaceLifecycleState::parse(&workspace.lifecycle_state);
+    if lifecycle == Some(WorkspaceLifecycleState::Sealed) {
         let existing = workspace.seal_hash.as_deref().unwrap_or_default();
         if existing != seal_hash {
             return Err(HostExecuteError::failed(
@@ -188,7 +191,7 @@ fn seal_workspace_action(
         return Ok(outcome);
     }
 
-    if lifecycle != Some(LIFECYCLE_READY) {
+    if lifecycle != Some(WorkspaceLifecycleState::Ready) {
         return Err(HostExecuteError::denied(format!(
             "workspace {} in state {} cannot be sealed",
             action.workspace_id, workspace.lifecycle_state
