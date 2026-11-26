@@ -2,19 +2,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use gents_protocol::enrollment::{
+    AuthorizationRevisionKind as WireRevisionKind, EnrollmentDecisionKind as WireDecisionKind,
+};
 use gents_protocol::network_token::NetworkRecord;
 use serde_json::Value;
 
 use super::super::enrollment::{DurableEnrollmentDocuments, NetworkAdminPin};
-use super::{
+use super::graphql::{DecisionRow, NetworkRow, RequestRow, RevisionRow, RouteReceiptRow};
+use super::projection::{
+    ActiveEnrollment, DeniedEnrollment, EnrollmentProjection, PendingEnrollment, RevokedEnrollment,
+};
+use super::verified::{
     add_request_conflict, add_scope_conflict, attribute_candidate_request, finish_conflicts,
     invalid_revision_is_current, observe_next_authorization_sequence, raw_i64, raw_text,
     revisions_for, scope_for_authority_row, unique_approved_decision, unique_request,
-    ActiveEnrollment, CandidateRequestAttribution, DecisionRow, DeniedEnrollment,
-    EnrollmentProjection, GraphqlEnrollmentStore, NetworkRow, PendingEnrollment, RequestRow,
-    RevisionRow, RevokedEnrollment, RouteReceiptRow, VerifiedDecision, VerifiedRequest,
-    VerifiedRevision, VerifiedRouteReceipt, WireDecisionKind, WireRevisionKind,
+    CandidateRequestAttribution, VerifiedDecision, VerifiedRequest, VerifiedRevision,
+    VerifiedRouteReceipt,
 };
+use super::GraphqlEnrollmentStore;
 use gents_store::graphql::rows;
 
 type MemberScope = (String, String);
