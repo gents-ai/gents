@@ -577,6 +577,7 @@ mod tests {
             tone: Tone::Plain,
             item: None,
             change: None,
+            under: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "本");
@@ -663,6 +664,7 @@ mod tests {
             tone: Tone::Plain,
             item: None,
             change: None,
+            under: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "TEST");

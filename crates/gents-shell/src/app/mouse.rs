@@ -191,6 +191,10 @@ impl App {
             return;
         }
         self.focus_pane(Pane::Agent);
+        if let Some(item) = self.opener_at(pane, at) {
+            self.tabs[self.active].toggle(item);
+            return;
+        }
         if message_box_area(pane, message_rows).contains(at) {
             self.act(Action::EnterInput);
         } else if self.conversation_area(pane).contains(at) {
@@ -274,6 +278,18 @@ impl App {
             Tone::File(file) => Some(file),
             _ => None,
         }
+    }
+
+    /// The item a click at `at` opens or closes: a line that others open under.
+    fn opener_at(&self, pane: Rect, at: Position) -> Option<String> {
+        let area = self.conversation_area(pane);
+        if !area.contains(at) {
+            return None;
+        }
+        let tab = &self.tabs[self.active];
+        let total = self.conversation_rows(area.width).len();
+        let row = first_line(total, area.height, tab.scroll) + usize::from(at.y - area.y);
+        tab.opener_at(area.width, row)
     }
 
     fn wheel(&mut self, at: Position, down: bool) {
@@ -686,6 +702,57 @@ mod tests {
         let start = find(&screen(&app), "M cli/mod.rs").expect("a file row");
         drag(&mut app, start, (start.0 + 1, start.1 + 4));
         assert_eq!((app.diff, app.selection), (Some(1), None));
+    }
+
+    /// A command's line `c1`, its output under it and a reply, each followed by a blank.
+    fn command_tab(app: &mut App) {
+        use crate::app::transcript::ChatLine;
+        use crate::sample::Tone;
+        let line = |text: &str, item: &str, under: Option<&str>| ChatLine {
+            text: text.to_string(),
+            tone: Tone::Label,
+            item: Some(item.to_string()),
+            change: None,
+            under: under.map(str::to_string),
+        };
+        let tab = &mut app.tabs[0];
+        tab.lines.clear();
+        tab.put(line("  ✓ run   cargo check", "c1", None));
+        tab.put(line("Finished in 41s", "c1/output", Some("c1")));
+        tab.put(line("All good.", "m2", None));
+    }
+
+    #[test]
+    fn a_command_opens_its_output_on_click() {
+        let mut app = session_app(132, 36);
+        command_tab(&mut app);
+        let rows = |app: &App| {
+            let shown = app.tabs[0].wrapped_rows(80);
+            shown.into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(&app),
+            ["  ✓ run   cargo check  ▸", "", "All good.", ""]
+        );
+        click_text(&mut app, "cargo check");
+        let open = [
+            "  ✓ run   cargo check  ▾",
+            "",
+            "Finished in 41s",
+            "",
+            "All good.",
+            "",
+        ];
+        assert_eq!(rows(&app), open);
+        assert_eq!(
+            app.selection, None,
+            "the click opened the line, no selection"
+        );
+        click_text(&mut app, "cargo check");
+        assert_eq!(
+            rows(&app),
+            ["  ✓ run   cargo check  ▸", "", "All good.", ""]
+        );
     }
 
     #[test]

@@ -446,6 +446,7 @@ impl App {
                 tone,
                 item: Some(item),
                 change: None,
+                under: None,
             }),
         }
     }

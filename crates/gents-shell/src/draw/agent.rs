@@ -389,6 +389,7 @@ mod tests {
                 tone: Tone::Plain,
                 item: None,
                 change: None,
+                under: None,
             })
             .collect();
         tab
@@ -409,6 +410,7 @@ mod tests {
             tone: Tone::You,
             item: None,
             change: None,
+            under: None,
         }];
         let s = screen(&app);
         let (y, x) = find(&s, "first line").expect("the bubble");
@@ -565,6 +567,7 @@ mod tests {
             tone: Tone::You,
             item: None,
             change: None,
+            under: None,
         }];
         let rows = rows_at(&tab, 56);
         assert!(rows.len() > 1);
@@ -710,6 +713,7 @@ mod tests {
             tone,
             item: None,
             change: None,
+            under: None,
         };
         tab.lines = vec![
             line("one\ntwo three", Tone::Reply),

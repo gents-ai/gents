@@ -61,6 +61,7 @@ pub(super) fn line(text: &str, tone: Tone, item: &str) -> ChatLine {
         tone,
         item: Some(item.to_string()),
         change: None,
+        under: None,
     }
 }
 
@@ -70,6 +71,7 @@ fn blank() -> ChatLine {
         tone: Tone::Plain,
         item: None,
         change: None,
+        under: None,
     }
 }
 

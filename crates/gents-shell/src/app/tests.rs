@@ -567,6 +567,7 @@ fn a_sent_message_keeps_its_blank_lines_and_indent() {
         tone: Tone::You,
         item: None,
         change: None,
+        under: None,
     }];
     let rows: Vec<String> = tab
         .wrapped_rows(40)
@@ -2572,6 +2573,7 @@ fn said(text: &str, tone: Tone, item: &str) -> ChatLine {
         tone,
         item: Some(item.to_string()),
         change: None,
+        under: None,
     }
 }
 
@@ -2852,6 +2854,7 @@ fn wrapped_rows_follow_a_changed_line_and_width() {
         tone: Tone::Plain,
         item: None,
         change: None,
+        under: None,
     }];
     let rows = |tab: &Tab, width| -> Vec<String> {
         tab.wrapped_rows(width)

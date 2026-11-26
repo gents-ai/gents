@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
 
+use rapidhash::{HashSetExt, RapidHashSet};
 use ratatui::style::Style;
 use ratatui::text::Span;
 
@@ -16,6 +18,8 @@ pub struct ChatLine {
     pub item: Option<String>,
     /// The file change the line shows.
     pub change: Option<Change>,
+    /// The item this line opens under: it shows only while the tab has that item open.
+    pub under: Option<String>,
 }
 
 pub(super) fn blank() -> ChatLine {
@@ -24,6 +28,7 @@ pub(super) fn blank() -> ChatLine {
         tone: Tone::Plain,
         item: None,
         change: None,
+        under: None,
     }
 }
 
@@ -55,6 +60,8 @@ pub struct Tab {
     /// The tab sent a turn it has not seen end. The endpoint streams that turn here, and no
     /// other client's.
     pub following: bool,
+    /// The items whose lines are open, showing the lines under them. Not saved across runs.
+    pub open: RapidHashSet<String>,
     pub(super) wrapped: Wrapped,
 }
 
@@ -105,6 +112,7 @@ impl Tab {
             sidebar: false,
             prompts: Vec::new(),
             following: false,
+            open: RapidHashSet::new(),
             wrapped: Wrapped::default(),
         }
     }
@@ -112,6 +120,32 @@ impl Tab {
     /// The lines' rows with each ended turn's card in place. Cards are built on each call, from
     /// the lines, and never cached.
     pub fn wrapped_rows(&self, width: u16) -> Vec<(String, Tone)> {
+        let rows = self.rows_of_lines(width).into_iter();
+        rows.map(|(row, tone, _)| (row, tone)).collect()
+    }
+
+    /// The item whose line shows `row` of `wrapped_rows`, when lines open under it.
+    pub(super) fn opener_at(&self, width: u16, row: usize) -> Option<String> {
+        let line = &self.lines[self.rows_of_lines(width).get(row)?.2?];
+        let item = line.item.as_ref()?;
+        let opens = self
+            .lines
+            .iter()
+            .any(|under| under.under.as_ref() == Some(item));
+        opens.then(|| item.clone())
+    }
+
+    /// Opens a closed item and closes an open one.
+    pub(super) fn toggle(&mut self, item: String) {
+        if !self.open.remove(&item) {
+            self.open.insert(item);
+        }
+    }
+
+    /// `wrapped_rows`, each with the index of the line it shows; a card's rows have none. A line
+    /// under a closed item shows no rows, nor does the blank after it, and a line that others
+    /// open under ends in its open or closed mark.
+    fn rows_of_lines(&self, width: u16) -> Vec<(String, Tone, Option<usize>)> {
         let mut cards = self.cards(usize::from(width)).into_iter().peekable();
         let mut wrapped = self.wrapped.0.borrow_mut();
         let (wrapped_at, seen) = &mut *wrapped;
@@ -120,22 +154,57 @@ impl Tab {
             seen.clear();
         }
         seen.truncate(self.lines.len());
+        let openers: RapidHashSet<&str> = self
+            .lines
+            .iter()
+            .filter_map(|line| line.under.as_deref())
+            .collect();
         let mut rows = Vec::new();
+        let mut hid = false;
         for (at, line) in self.lines.iter().enumerate() {
             while let Some((_, card)) = cards.next_if(|(before, _)| *before == at) {
-                rows.extend(card);
+                rows.extend(card.into_iter().map(|(row, tone)| (row, tone, None)));
             }
-            if !matches!(seen.get(at), Some((was, _)) if was == line) {
-                let fresh = (line.clone(), line_rows(line, usize::from(width)));
+            let closed = line
+                .under
+                .as_deref()
+                .is_some_and(|item| !self.open.contains(item));
+            let hidden = closed || (hid && *line == blank());
+            hid = closed;
+            let shown = self.marked(line, &openers);
+            if !matches!(seen.get(at), Some((was, _)) if *was == *shown) {
+                let fresh = (
+                    shown.clone().into_owned(),
+                    line_rows(&shown, usize::from(width)),
+                );
                 match seen.get_mut(at) {
                     Some(slot) => *slot = fresh,
                     None => seen.push(fresh),
                 }
             }
-            rows.extend(seen[at].1.iter().map(|row| (row.clone(), line.tone)));
+            if !hidden {
+                let line_rows = seen[at].1.iter();
+                rows.extend(line_rows.map(|row| (row.clone(), line.tone, Some(at))));
+            }
         }
-        rows.extend(cards.flat_map(|(_, card)| card));
+        let cards = cards.flat_map(|(_, card)| card);
+        rows.extend(cards.map(|(row, tone)| (row, tone, None)));
         rows
+    }
+
+    fn marked<'a>(&self, line: &'a ChatLine, openers: &RapidHashSet<&str>) -> Cow<'a, ChatLine> {
+        let Some(item) = line.item.as_deref().filter(|item| openers.contains(item)) else {
+            return Cow::Borrowed(line);
+        };
+        let mark = if self.open.contains(item) {
+            "▾"
+        } else {
+            "▸"
+        };
+        Cow::Owned(ChatLine {
+            text: format!("{}  {mark}", line.text),
+            ..line.clone()
+        })
     }
 
     /// An unseen item appends its line and a blank, and a seen one replaces its line.
@@ -236,6 +305,7 @@ pub fn sample_chat() -> Vec<ChatLine> {
                 tone,
                 item: None,
                 change: None,
+                under: None,
             })
             .collect()
     };

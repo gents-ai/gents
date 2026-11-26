@@ -438,6 +438,11 @@ fn tool_lines(
         let first = first_prompt_line(name, arguments);
         return vec![line(format!("  ◆ {first}"), Tone::Label)];
     }
+    if name == SPAWN_PROCESS_TOOL_NAME {
+        if let Some(spawned) = subject(name, tool, arguments) {
+            return vec![line(format!("  {mark} spawn {spawned}"), tone)];
+        }
+    }
     if is_command(name, tool) {
         return vec![line(
             format!("  {mark} run   {}", command(name, arguments)),
@@ -450,6 +455,7 @@ fn tool_lines(
             tone,
             item: Some(format!("{id}/{n}")),
             change: None,
+            under: None,
         };
         return match changed {
             Some(changes) => changes
@@ -524,9 +530,9 @@ fn command(name: &str, arguments: &Value) -> String {
     }
 }
 
-/// A command's output line, none for no output. Its first line is the runner's metadata
-/// when it starts `gents_exec:`, and of the streams after it the line shows stdout, or
-/// stderr when stdout is empty.
+/// A command's output line, opening under its command's line `id`; none for no output. Its
+/// first line is the runner's metadata when it starts `gents_exec:`, and of the streams after
+/// it the line shows stdout, or stderr when stdout is empty.
 fn output(id: &str, result: &str) -> Option<ChatLine> {
     let shown = match result.strip_prefix("gents_exec:") {
         Some(rest) => {
@@ -542,7 +548,10 @@ fn output(id: &str, result: &str) -> Option<ChatLine> {
     };
     let shown = clean(shown);
     let shown = shown.trim_end();
-    (!shown.is_empty()).then(|| shown_line(capped(shown), Tone::Label, format!("{id}/output")))
+    (!shown.is_empty()).then(|| ChatLine {
+        under: Some(id.to_string()),
+        ..shown_line(capped(shown), Tone::Label, format!("{id}/output"))
+    })
 }
 
 /// The call a completion notification delivers to, and what its envelope says.
@@ -595,6 +604,7 @@ fn shown_line(text: String, tone: Tone, item: String) -> ChatLine {
         tone,
         item: Some(item),
         change: None,
+        under: None,
     }
 }
 
@@ -1050,6 +1060,27 @@ mod tests {
 
     type Edits = RapidHashMap<String, Option<Vec<Change>>>;
 
+    /// `line`, opening under item `parent`.
+    fn under(parent: &str, line: ChatLine) -> ChatLine {
+        ChatLine {
+            under: Some(parent.to_string()),
+            ..line
+        }
+    }
+
+    #[test]
+    fn a_spawned_process_shows_its_command() {
+        let mut page = Page::default();
+        let spawn = json!({
+            "tool_name": "bash",
+            "args": { "command": "cargo", "args": ["test", "-p", "gents"] },
+        });
+        page.tool(0, "p1", "spawn_process", spawn, "completed");
+        let read = page.read(&[], &Edits::new());
+        let spawned = line("  ✓ spawn cargo test -p gents", Tone::Label, "p1");
+        assert_eq!(read.lines, [spawned]);
+    }
+
     fn compacted(key: &str, through: i64) -> CompactionEntryRow {
         let entry = json!({ "compaction_key": key, "compacted_through_sequence": through });
         serde_json::from_value(entry).unwrap()
@@ -1086,7 +1117,7 @@ mod tests {
             line("hello", You, "m0"),
             line("hi\nthere", Reply, "m1"),
             line("  ✓ run   cargo test '--all targets'", Label, "t1"),
-            line("ok", Label, "t1/output"),
+            under("t1", line("ok", Label, "t1/output")),
             line("  … gents search", Warn, "t2"),
             line("  ✓ compacted the conversation", Label, "k1"),
             line("  ✗ run   false", Warn, "t3"),
@@ -1113,7 +1144,10 @@ mod tests {
             line("run the tests in the background", You, "m0"),
             line("  ✓ run   cargo test -p gents", Label, "t1"),
             line("  ✓ done  cargo test -p gents", Label, "m2"),
-            line("test result: ok. 412 passed", Label, "m2/output"),
+            under(
+                "m2",
+                line("test result: ok. 412 passed", Label, "m2/output"),
+            ),
             line("All 412 tests passed.", Reply, "m3"),
         ];
         assert_eq!(read.lines, expected);
@@ -1186,9 +1220,12 @@ mod tests {
 
         let expected = vec![
             line("  ✓ run   cargo test -p gents", Label, "t1"),
-            line("continues in the background", Label, "t1/output"),
+            under(
+                "t1",
+                line("continues in the background", Label, "t1/output"),
+            ),
             line("  ✓ done  cargo test -p gents", Label, "m2"),
-            line("test result: ok", Label, "m2/output"),
+            under("m2", line("test result: ok", Label, "m2/output")),
         ];
         assert_eq!(read.lines, expected);
     }
@@ -1223,7 +1260,7 @@ mod tests {
             read.lines[1..],
             [
                 line("  ✓ done  cargo test -p gents", Label, "m1"),
-                line("test result: ok", Label, "m1/output"),
+                under("m1", line("test result: ok", Label, "m1/output")),
             ]
         );
     }

@@ -2218,6 +2218,7 @@ fn blank() -> ChatLine {
         tone: Tone::Plain,
         item: None,
         change: None,
+        under: None,
     }
 }
 
