@@ -485,3 +485,4 @@
 {"timestamp":"2026-11-26T17:47:52Z","run_id":"45515243098","job":"ts-browser:1/3","steps":[{"step":"npm run build:packages","seconds":6.8},{"step":"npm --prefix apps/gents-desktop run build","seconds":28.2},{"step":"npm --prefix apps/gents-desktop run test:ui:e2e","seconds":544.5}],"total_seconds":579.5}
 {"timestamp":"2026-11-26T17:47:54Z","run_id":"45515243098","job":"fmt","steps":[{"step":"cargo fmt --all --check","seconds":9.5}],"total_seconds":9.5}
 {"timestamp":"2026-11-26T17:47:56Z","run_id":"45516449129","job":"fmt","steps":[{"step":"cargo fmt --all --check","seconds":10.6}],"total_seconds":10.6}
+{"timestamp":"2026-11-26T17:47:57Z","run_id":"45535803260","job":"build:portable:2","steps":[{"step":"build portable: 27 crates","seconds":415.3},{"step":"check portable build","seconds":2.5},{"step":"lake build Proofs.Conformance.Contracts:olean","seconds":417.9},{"step":"run portable","seconds":626.0}],"total_seconds":1461.7}
