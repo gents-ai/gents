@@ -61,11 +61,17 @@ async fn rename_agent(actors: &RequestActors, name: String) {
 
 #[derive(Clone, Copy)]
 enum Writer {
+    CompleteRelationships,
     Publish,
     ChangeBinding,
 }
 
 const MAP: SpecTraceMap<Writer> = SpecTraceMap {
+    spec: "ClientSubmissionContention",
+    constants: &[(
+        "Attempts",
+        gents_store::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+    )],
     action: |step| match step.action.as_str() {
         "AgentPublish" => Action::Environment(Writer::Publish),
         "BindingChange" => Action::Environment(Writer::ChangeBinding),
@@ -108,48 +114,65 @@ async fn replay(trace: &Trace) {
             .unwrap();
     }
     let replay = MAP
-        .drive(trace, db.graphql_endpoint(), {
-            let actors = actors.clone();
-            let session_doc = request.session_doc_id.clone();
-            move |action, index| {
-                let (actors, session_doc) = (actors.clone(), session_doc.clone());
-                async move {
-                    match action {
-                        Writer::Publish if reserves => {
-                            rename_agent(&actors, format!("Renamed {index}")).await
-                        }
-                        Writer::Publish => {
-                            actors
-                                .seed_session_observation(
-                                    SESSION,
-                                    &gents_protocol::session::SessionObservation {
-                                        last_activity_at: format!("2099-01-01T00:00:{index:02}Z"),
-                                        preview: None,
-                                        reply_preview: None,
-                                        latest_request: None,
-                                    },
+        .drive(
+            trace,
+            db.graphql_endpoint(),
+            (!reserves && !published).then_some(Writer::CompleteRelationships),
+            {
+                let actors = actors.clone();
+                let session_doc = request.session_doc_id.clone();
+                move |action, index| {
+                    let (actors, session_doc) = (actors.clone(), session_doc.clone());
+                    async move {
+                        match action {
+                            Writer::CompleteRelationships => {
+                                gents_session::session::grant_created_session_relationships(
+                                    &actors.agent_access,
+                                    session_doc.as_deref().unwrap(),
+                                    &actors.agent_doc,
+                                    actors.agent_did(),
                                 )
                                 .await
-                        }
-                        Writer::ChangeBinding => {
-                            let write = Update::doc(
-                                session_doc.as_deref().unwrap(),
-                                Input::new().set(session::REQUESTER_DID, actors.agent_did()),
-                            )
-                            .render();
-                            let changed = actors
-                                .agent_access
-                                .write_rendered("test.change_published_binding", &write)
-                                .await;
-                            assert!(
-                                changed.is_err(),
-                                "immutable session binding accepted a write: {changed:?}"
-                            );
+                                .unwrap();
+                            }
+                            Writer::Publish if reserves => {
+                                rename_agent(&actors, format!("Renamed {index}")).await
+                            }
+                            Writer::Publish => {
+                                actors
+                                    .seed_session_observation(
+                                        SESSION,
+                                        &gents_protocol::session::SessionObservation {
+                                            last_activity_at: format!(
+                                                "2099-01-01T00:00:{index:02}Z"
+                                            ),
+                                            preview: None,
+                                            reply_preview: None,
+                                            latest_request: None,
+                                        },
+                                    )
+                                    .await
+                            }
+                            Writer::ChangeBinding => {
+                                let write = Update::doc(
+                                    session_doc.as_deref().unwrap(),
+                                    Input::new().set(session::REQUESTER_DID, actors.agent_did()),
+                                )
+                                .render();
+                                let changed = actors
+                                    .agent_access
+                                    .write_rendered("test.change_published_binding", &write)
+                                    .await;
+                                assert!(
+                                    changed.is_err(),
+                                    "immutable session binding accepted a write: {changed:?}"
+                                );
+                            }
                         }
                     }
                 }
-            }
-        })
+            },
+        )
         .await;
     let access = replay.proxy.client_access(user);
     let result = if reserves {
@@ -248,6 +271,6 @@ async fn replays_client_submission_contention() {
         include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionPublishedBindingChanges.json"),
         include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionTwoPublicationsWitness.json"),
     ] {
-        replay(&Trace::load("ClientSubmissionContention", json)).await;
+        replay(&MAP.load(json)).await;
     }
 }

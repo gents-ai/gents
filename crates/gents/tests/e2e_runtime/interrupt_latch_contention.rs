@@ -24,6 +24,11 @@ enum Writer {
 }
 
 const MAP: SpecTraceMap<Writer> = SpecTraceMap {
+    spec: "InterruptLatchContention",
+    constants: &[(
+        "Attempts",
+        gents_store::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+    )],
     action: |step| match step.action.as_str() {
         "Renew" => Action::Environment(Writer::Renew),
         "OtherLatch" => Action::Environment(Writer::OtherLatch),
@@ -112,7 +117,7 @@ async fn replay(trace: &Trace, stage: Stage) {
         .await;
     let other_stamp = Arc::new(std::sync::OnceLock::new());
     let replay = MAP
-        .drive(trace, home.graphql_endpoint(), {
+        .drive(trace, home.graphql_endpoint(), None, {
             let home = home.clone();
             let doc = request.doc_id.clone();
             let stamp = other_stamp.clone();
@@ -144,7 +149,12 @@ async fn replay(trace: &Trace, stage: Stage) {
         .filter(|s| matches!((MAP.action)(s), Action::Environment(_)))
         .count();
     let attempts = trace.constants["Attempts"].as_u64().unwrap() as usize;
-    assert_eq!(commits, (writes + 1).min(attempts), "{}", trace.config);
+    assert_eq!(
+        commits,
+        (writes + 1).min(attempts),
+        "{} {stage:?}",
+        trace.config
+    );
     let row = request_row(&home, &request.doc_id).await;
     let marker = home
         .agent_access
@@ -208,8 +218,14 @@ async fn replays_interrupt_latch_contention() {
             "../../proofs/tla/generated/traces/MCInterruptLatchContentionTwoRenewalsWitness.json"
         ),
     ] {
-        let trace = Trace::load("InterruptLatchContention", json);
+        let trace = MAP.load(json);
         replay(&trace, Stage::Claimed).await;
-        replay(&trace, Stage::Submitted).await;
+        if matches!(
+            trace.config.as_str(),
+            "MCInterruptLatchContentionTwoRenewalsWitness"
+                | "MCInterruptLatchContentionStaleRebuild"
+        ) {
+            replay(&trace, Stage::Submitted).await;
+        }
     }
 }

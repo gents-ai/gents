@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
+use crate::support::commit_race_proxy::{CommitRaceProxy, ProxyHook, WriteCheckpoint};
 
 #[derive(Deserialize)]
 pub struct Step {
@@ -31,18 +31,6 @@ pub enum Red {
 }
 
 impl Trace {
-    pub fn load(spec: &str, json: &str) -> Self {
-        let trace: Self = serde_json::from_str(json).expect("TLC trace");
-        assert_eq!(trace.spec, spec);
-        assert_eq!(
-            trace.constants["Attempts"],
-            gents_store::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1,
-            "{} attempt bound",
-            trace.config
-        );
-        trace
-    }
-
     pub fn check(&self, red: Red, properties: &[(&str, bool)]) {
         let violated = self
             .expect
@@ -67,6 +55,8 @@ pub enum Action<E> {
 }
 
 pub struct SpecTraceMap<E> {
+    pub spec: &'static str,
+    pub constants: &'static [(&'static str, u32)],
     pub action: fn(&Step) -> Action<E>,
 }
 
@@ -92,7 +82,26 @@ impl<E> SpecTraceMap<E>
 where
     E: Clone + Send + Sync + 'static,
 {
-    pub async fn drive<F, Fut>(&self, trace: &Trace, upstream: &str, perform: F) -> CommitReplay
+    pub fn load(&self, json: &str) -> Trace {
+        let trace: Trace = serde_json::from_str(json).expect("TLC trace");
+        assert_eq!(trace.spec, self.spec);
+        for &(name, expected) in self.constants {
+            assert_eq!(
+                trace.constants[name], expected,
+                "{} constant {name}",
+                trace.config
+            );
+        }
+        trace
+    }
+
+    pub async fn drive<F, Fut>(
+        &self,
+        trace: &Trace,
+        upstream: &str,
+        before_first_begin: Option<E>,
+        perform: F,
+    ) -> CommitReplay
     where
         F: Fn(E, usize) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -117,11 +126,20 @@ where
             let commits = commits.clone();
             let checkpoints = Arc::new(checkpoints);
             let perform = Arc::new(perform);
-            Arc::new(move |method, path| {
+            let before_first_begin = std::sync::Mutex::new(before_first_begin);
+            Arc::new(move |checkpoint| {
                 let (commits, checkpoints, perform) =
                     (commits.clone(), checkpoints.clone(), perform.clone());
+                let begin = if checkpoint == WriteCheckpoint::Begin {
+                    before_first_begin.lock().unwrap().take()
+                } else {
+                    None
+                };
                 Box::pin(async move {
-                    if is_commit(&method, &path) {
+                    if let Some(action) = begin {
+                        perform(action, 0).await;
+                    }
+                    if checkpoint == WriteCheckpoint::Commit {
                         let index = commits.fetch_add(1, Ordering::SeqCst);
                         if let Some(actions) = checkpoints.get(index) {
                             for action in actions {
