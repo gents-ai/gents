@@ -27,6 +27,8 @@ owns everything it uses.
 | Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-shell`, `gents-eval`, `gents-desktop*`, `gents-client-host`, `gents-media-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
 | Unlayered leaves | `gents-chatgpt-login`, `gents-claude-login`, `gents-login-ui`, `gents-fs-runner`, `gents-core-packs`, `gents-lean-contract`, `gents-workspace-hack` | Login flows, the filesystem runner, core pack archives, the Lean contract loader, hakari feature unification |
 
+| Embedding leaf | `gents-memory-embed` | The bundled in-process multilingual embedder and its weights |
+
 Lean models live in `crates/gents/proofs/Proofs/`, one directory per layer,
 and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`; the
 [proof map](crates/gents/proofs/AGENTS.md) names the modelled surfaces. Read

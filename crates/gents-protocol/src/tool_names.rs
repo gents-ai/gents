@@ -8,6 +8,7 @@ pub const META_TOOL_NAMES: [&str; 3] = ["discover_tools", "describe_tool", "call
 
 pub const CONTEXT_BUDGET_TOOL_NAME: &str = "context_budget";
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
+pub const MEMORY_TOOL_NAME: &str = "memory";
 pub const LSP_TOOL_NAME: &str = "lsp";
 
 pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";

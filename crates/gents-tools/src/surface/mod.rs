@@ -571,6 +571,21 @@ impl ToolSurface {
                 )?,
             ));
         }
+        if let Some(agent) = runtime
+            .agent_identity
+            .as_ref()
+            .filter(|agent| agent.did() != runtime.node_did)
+        {
+            tools.push(
+                crate::memory::build_memory_tool(
+                    runtime.node.clone(),
+                    runtime.node_did.clone(),
+                    agent.did().to_owned(),
+                    agent.as_ref(),
+                )
+                .await?,
+            );
+        }
         let datastore_actor = if self.enable_defra_query
             || !self.application_write_collections.is_empty()
             || !self.query_tools.is_empty()

@@ -32,6 +32,7 @@ members = [
     "crates/gents-lean-contract",
     "crates/gents-lean-vocab",
     "crates/gents-loop",
+    "crates/gents-memory-embed",
     "crates/gents-callbacks/fixture_create_workspace",
     "crates/gents-fs-runner",
     "crates/gents-protocol",
@@ -121,6 +122,7 @@ gents-toolcalls = { path = "crates/gents-toolcalls" }
 gents-automation = { path = "crates/gents-automation" }
 gents-observe = { path = "crates/gents-observe" }
 gents-loop = { path = "crates/gents-loop" }
+gents-memory-embed = { path = "crates/gents-memory-embed" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-login-ui = { path = "crates/gents-login-ui" }
 gents-shell = { path = "crates/gents-shell" }

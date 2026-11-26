@@ -46,7 +46,7 @@ type Note {
 }
 ```
 Defaults: HNSW algorithm, COSINE metric. Choose one algorithm block; it selects the algorithm and holds its settings. @vectorIndex is not supported.
-Discover: help indexes vector dimensions | metrics | hnsw | flat | ivfpq | ivfflat | ssg.
+Discover: help indexes vector dimensions | metrics | hnsw | flat | ivfpq | ivfflat | ssg | diskann.
 For generated vectors: help embeddings. Rank by similarity with query search; see query help search."#
         }
         ["indexes", "vector", "dimensions"] => {
@@ -68,7 +68,7 @@ type Point {
   })
 }
 ```
-Put metric inside the selected algorithm block. HNSW, FLAT and SSG support all three metrics. IVF_PQ and IVF_FLAT support COSINE only. Use the same metric when querying.
+Put metric inside the selected algorithm block. HNSW, FLAT and SSG support all three metrics. IVF_PQ, IVF_FLAT and DISKANN support COSINE only. Use the same metric when querying.
 Next: help indexes vector hnsw; help indexes vector flat."#
         }
         ["indexes", "vector", "hnsw"] => {
@@ -124,6 +124,18 @@ type Note {
 ```
 Defaults: R: 50 maximum retained edges per node; angle: 60 degrees between retained edges; pool: 100 search candidates. Supports COSINE, EUCLIDEAN and DOT.
 Next: help indexes vector hnsw; help indexes vector metrics."#
+        }
+        ["indexes", "vector", "diskann"] => {
+            r#"DiskANN walks a Vamana graph over product-quantized codes, so a large collection stays usable with bounded resident memory. COSINE is the only supported metric.
+```graphql
+type Note {
+  embedding: [Float32!] @index(vector: {
+    dimensions: 768, diskann: {R: 64, lBuild: 100, lSearch: 100}
+  })
+}
+```
+Defaults: R: 64 maximum out-degree; lBuild: 100 candidates while inserting; lSearch: 100 candidates while searching; alphaPercent: 120 pruning slack in hundredths; m: 0 derives subquantizers from dimensions; sampleBytes: 134217728 caps the training sample; residentCodes: false. Set residentCodes: true to keep every code in memory and read less from disk, for m bytes per vector. Below the training threshold the index is exact; later searches are approximate. It does not generate embeddings.
+Next: help indexes vector metrics; help indexes vector dimensions."#
         }
         ["indexes", "fulltext"] => {
             r#"@fulltext declares a BM25 text-search index. It ranks matching words rather than embedding similarity.

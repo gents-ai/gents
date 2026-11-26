@@ -441,6 +441,30 @@ where
             ..
         } = preparation;
         let authored_prompt = request.input.authored_message(&request.content)?;
+        let reduction_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(request.agent_did.clone())?,
+            self.agent_config.agent_identity.as_ref(),
+        )?;
+        let request_context_message = match authored_prompt.rag_text() {
+            Some(prompt) => match gents_tools::memory::inject(
+                &self.node,
+                &request.node_did,
+                &request.agent_did,
+                &reduction_access,
+                &prompt,
+            )
+            .await
+            {
+                Some(section) => Some(gents_tools::memory::merge_context(
+                    (*request_context_message).clone(),
+                    section,
+                )),
+                None => (*request_context_message).clone(),
+            },
+            None => (*request_context_message).clone(),
+        };
+        loop_config.context_message = request_context_message.clone();
         let authored_input = |folded: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>| {
             crate::runtime::agent::loop_stream::AuthoredInput {
                 context: request_context_message.clone(),
@@ -449,11 +473,6 @@ where
             }
         };
         loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
-        let reduction_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-            self.node.clone(),
-            identity::Did::new(request.agent_did.clone())?,
-            self.agent_config.agent_identity.as_ref(),
-        )?;
         let restored =
             gents_session::session::provider_context_reduction::load_unconsumed_for_request(
                 &reduction_access,

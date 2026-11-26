@@ -2,6 +2,7 @@ pub mod builtin;
 mod collection_use;
 mod guided_failure;
 pub mod mcp;
+pub mod memory;
 pub mod native;
 pub mod plugin;
 pub mod plugin_host;

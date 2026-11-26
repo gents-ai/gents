@@ -46,6 +46,7 @@ fn concept_discovery_resolves_inventory_topics_without_failed_calls() {
         ("unique", "indexes unique"),
         ("index", "indexes"),
         ("index vector hnsw", "indexes vector hnsw"),
+        ("diskann", "indexes vector diskann"),
         ("concepts SDL", ""),
     ] {
         let words = |text: &str| {

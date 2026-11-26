@@ -109,14 +109,20 @@ license).
 | # | Phase | Status |
 |---|---|---|
 | 0 | Worktree, factual plan, decision log, WIP PR | done |
-| 1 | Expose DiskANN in schema help and discovery | pending |
-| 2 | `gents-memory-embed` crate, bundled int8 model, hakari update | pending |
-| 3 | `AgentMemory` collection, policy parent, install, ACP isolation | pending |
-| 4 | `memory` tool and bounded ingestion | pending |
-| 5 | Hybrid BM25 + DiskANN retrieval with RRF k=60 | pending |
-| 6 | Bounded automatic context injection | pending |
-| 7 | Measurement: embed/search latency, DiskANN recall vs FLAT, hybrid lift | pending |
-| 8 | Gate, verification, PR description with results | pending |
+| 1 | Expose DiskANN in schema help and discovery | done |
+| 2 | `gents-memory-embed` crate, bundled int8 model, hakari update | done (hakari at gate) |
+| 3 | `AgentMemory` collection, policy parent, install, ACP isolation | done (isolation test pending) |
+| 4 | `memory` tool and bounded ingestion | done |
+| 5 | Hybrid BM25 + DiskANN retrieval with RRF k=60 | done |
+| 6 | Bounded automatic context injection | done |
+| 7 | Measurement: embed/search latency, DiskANN recall vs FLAT, hybrid lift | deferred to the benchmark harness; DefraDB's engine recall is covered by its `vector_recall_gate` |
+| 8 | Gate, verification, PR description with results | in progress |
+
+## Verification so far
+
+- `cargo check -p gents-memory-embed -p gents-tools --profile fast-dev`: clean.
+- `cargo check -p gents --profile fast-dev`: clean.
+- Focused tests and the gate are run after the code is complete.
 
 Tests are written with each phase and run only after this plan is approved as
 complete. Each phase ends with a commit and push to `vclq/memory`.

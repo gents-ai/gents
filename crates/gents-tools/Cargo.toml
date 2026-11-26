@@ -42,6 +42,7 @@ defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-loop = { workspace = true, features = ["native"] }
+gents-memory-embed.workspace = true
 gents-protocol.workspace = true
 defra-node.workspace = true
 dirs.workspace = true

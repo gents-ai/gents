@@ -2,6 +2,54 @@
 
 Newest first. Each entry: decision, options, why, effect, reversible.
 
+## D15: Measurement deferred to the benchmark harness
+- Decision: phase 7 is deferred; the branch ships the retrieval path and the
+  unit tests. DefraDB's own `vector_recall_gate` covers engine recall.
+- Options: build a synthetic recall corpus in this branch; defer to the harness.
+- Why: a meaningful hybrid-vs-vector and DiskANN-vs-FLAT lift needs the AMB or
+  DolphinBench corpus, which is the harness phase. A synthetic micro-corpus would
+  not support a benchmark claim.
+- Effect: no benchmark number is claimed here. The plan records the deferral.
+  Reversible: yes.
+
+## D14: Tool always advertised; injection once per request
+- Decision: the memory tool is added for every managed agent, and the bounded
+  memory section is injected in `request_frontier` once per request.
+- Options: a new config field; gate behind session history; inject per turn.
+- Why: no config document churn in v1; `request_frontier` is the single place
+  that builds the provider context, and its context message persists across the
+  request's turns.
+- Effect: one extra tool and one retrieval per request. Reversible: yes.
+
+## D13: `children` policy and session parent, not `agent_children`
+- Decision: the collection uses `@policy(resource: "children")` and publishes its
+  `parent` relationship to the session document.
+- Options: `agent_children` with an agent parent; an ungoverned collection.
+- Why: `agent_children` has no wired parent publication for a new collection in
+  this tree; the session `children` path is already published and gives the agent
+  the same ACP boundary as its messages. An ungoverned collection is public.
+- Effect: memory documents are session children, filtered by `agent_did`; the
+  agent reads across its sessions through the session read permission. An
+  isolation test is the remaining release gate. Reversible: yes.
+
+## D12: Escaped GraphQL strings for memory queries
+- Decision: memory reads use `transact_local_readonly` with escaped GraphQL
+  strings, marked `vertexia:` in the code.
+- Options: `gents_protocol::document_query` typed fields.
+- Why: it follows the existing `session_history` owner and avoids a parallel typed
+  collection definition before the schema stabilizes.
+- Effect: one `vertexia:` shortcut to move to `document_query` later. Reversible.
+
+## D11: Session ingest reads `AgentMessage.blocks` directly
+- Decision: `ingest` extracts text from the stored `blocks` JSON, marked
+  `vertexia:`.
+- Options: the canonical transcript renderer.
+- Why: the transcript renderer is bounded to six messages and 8000 characters
+  per chunk, which is wrong for bulk ingest; direct extraction is bounded by the
+  ingest page and chunk sizes.
+- Effect: a shortcut to switch when a bounded plain-text projection exists.
+  Reversible.
+
 ## D10: No tests until the plan is approved
 - Decision: hold all test runs and code commits until the operator accepts the
   corrected plan as complete and factual.
