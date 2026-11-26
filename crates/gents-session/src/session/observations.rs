@@ -74,17 +74,42 @@ fn incoming_is_canonical_latest(
         .all(|row| *row == *incoming || !request_fact_newer(row, incoming)))
 }
 
-fn scoped_request_filter(
+fn request_fact_selection() -> gents_protocol::document_query::Selection<
+    gents_protocol::document_query::fields::agent_request::Doc,
+> {
+    use gents_protocol::document_query::{fields::agent_request as fields, Selection};
+    Selection::doc_id()
+        .field(fields::REQUEST_ID)
+        .field(fields::NODE_DID)
+        .field(fields::SESSION_ID)
+        .field(fields::REQUESTER_DID)
+        .field(fields::AGENT_DID)
+        .field(fields::CREATED_AT)
+        .field(fields::LIFECYCLE_STATE)
+        .field(fields::TERMINALIZED_AT)
+        .field(fields::REQUEST_HOP)
+}
+
+fn scoped_request_fact_query(
     node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
-) -> String {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let requester_filter = requester_filter(requester_scope);
-    format!(
-        r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
-    )
+) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{fields::agent_request as fields, Filter, Query};
+    let mut query = Query::select(request_fact_selection())
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::SESSION_ID, session_id))
+        .filter(Filter::eq(fields::PURPOSE, "normal"));
+    match requester_scope {
+        None => {}
+        Some(Some(requester_did)) => {
+            query = query.filter(Filter::eq(fields::REQUESTER_DID, requester_did));
+        }
+        Some(None) => {
+            query = query.filter(Filter::is_null(fields::REQUESTER_DID));
+        }
+    }
+    query.render()
 }
 
 fn scoped_request_sessions_filter(
@@ -139,12 +164,8 @@ async fn load_request_facts_in_txn(
     session_id: &str,
     requester_scope: Option<Option<&str>>,
 ) -> Result<Vec<SessionRequestFact>> {
-    let query = request_fact_query(&scoped_request_filter(
-        node_did,
-        session_id,
-        requester_scope,
-    ));
-    let response = txn.execute(&query).await?;
+    let query = scoped_request_fact_query(node_did, session_id, requester_scope);
+    let response = txn.run(&query).await?;
     decode_request_facts(&response)
 }
 
@@ -278,6 +299,17 @@ pub async fn load_session_current_hop(
         },
     )
     .await
+}
+
+pub async fn load_latest_request(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_scope: Option<Option<&str>>,
+) -> Result<Option<SessionRequestFact>> {
+    let query = scoped_request_fact_query(node_did, session_id, requester_scope);
+    let response = access.read(&query).await?;
+    latest_request_fact(decode_request_facts(&response)?)
 }
 
 pub async fn load_latest_request_in_txn(

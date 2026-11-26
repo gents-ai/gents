@@ -95,7 +95,7 @@ pub use observations::{
     session_needs_generated_title, update_session_title_with_source, GeneratedTitleNeed,
     SessionRequestRefresh, REFUSAL_PROJECTION_EVENT_TARGET,
 };
-pub use observations::{load_latest_request_in_txn, SessionRequestFact};
+pub use observations::{load_latest_request, load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]
 pub(crate) use output::count_capture_row_queries;
 #[cfg(any(test, feature = "test-fixtures"))]

@@ -350,6 +350,28 @@ def sessionSelectionClientStore : Family SelectionInput SelectionOutput where
     i.name ∈ ["newer_title_preserves_normal_head", "title_only_has_no_public_head"]
   model := selectionOutcome
 
+/-- `latest_session_request` selects the normal head within one node, session
+and exact requester scope, applying the model's purpose filter and same-second
+live/terminalized tie-breaks. -/
+def latestSessionRequestInputs : List SelectionInput :=
+  [ selectionInput "timestamp_tie_forward" [old, newerRequest] 1 10 (some (some 2)),
+    selectionInput "timestamp_tie_reverse" [newerRequest, old] 1 10 (some (some 2)),
+    selectionInput "newer_title_preserves_normal_head" [titleRequest, old] 1 10 (some (some 2)),
+    selectionInput "newer_access_review_preserves_normal_head" [accessReviewRequest, old] 1 10 (some (some 2)),
+    selectionInput "title_only_has_no_public_head" [titleRequest] 1 10 (some (some 2)),
+    selectionInput "foreign_requester_excluded" [foreignRequester, old] 1 10 (some (some 2)),
+    selectionInput "same_second_claim_after_completion" [finishedPredecessor, sameSecondClaim] 1 10 (some (some 2)),
+    selectionInput "same_second_claim_after_completion_reverse" [sameSecondClaim, finishedPredecessor] 1 10 (some (some 2)),
+    selectionInput "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 (some (some 2)),
+    selectionInput "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 (some (some 2)),
+    selectionInput "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 (some (some 2)),
+    selectionInput "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 (some (some 2)) ]
+
+@[conformance_family]
+def latestSessionRequest : Family SelectionInput SelectionOutput where
+  inputs := latestSessionRequestInputs
+  model := selectionOutcome
+
 structure EditMessage where
   key : String
   sequence : Nat
