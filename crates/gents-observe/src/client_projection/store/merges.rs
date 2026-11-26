@@ -146,15 +146,25 @@ impl ClientStore {
         ClientStore::from_rows(rows)
     }
 
-    /// The store with the requests of `scopes` replaced by `incoming`, as a
-    /// full reload replaces them: a scope's rows `incoming` lacks are gone,
-    /// and an unpersisted placeholder an incoming row answers is retired.
-    pub fn replace_session_requests(
+    /// The store with the session rows and requests of `scopes` replaced by
+    /// `sessions` and `incoming`, as a full reload replaces them: a scope's
+    /// rows the read lacks are gone, and an unpersisted placeholder an
+    /// incoming request answers is retired.
+    pub fn replace_session_scopes(
         &self,
         scopes: &std::collections::BTreeSet<gents_protocol::session::SessionScope>,
+        sessions: Vec<AgentSession>,
         incoming: Vec<AgentRequestRow>,
     ) -> Self {
         let mut rows = self.to_rows();
+        rows.sessions.retain(|row| {
+            !scopes.iter().any(|scope| {
+                row.node_did == scope.node_did
+                    && row.session_id == scope.session_id
+                    && row.requester_did == scope.requester_did
+            })
+        });
+        rows.sessions.extend(sessions);
         rows.requests
             .retain(|row| !scopes.iter().any(|scope| request_in_scope(row, scope)));
         retire_request_placeholders(&mut rows.requests, &incoming);
