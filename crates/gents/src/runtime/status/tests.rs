@@ -428,16 +428,26 @@ fn status_test_snapshot(
 
 #[tokio::test]
 async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_work() {
+    for claim in gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+        gents_protocol::node_readiness::NodeReadinessProcessState,
+    >() {
+        replay_startup_claim_case(&claim).await;
+    }
+}
+
+async fn replay_startup_claim_case(
+    claim: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ReadinessInput<
+            gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+            gents_protocol::node_readiness::NodeReadinessProcessState,
+        >,
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ClaimedRowOutput,
+    >,
+) {
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
-    let claim = gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
-        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
-        gents_protocol::node_readiness::NodeReadinessProcessState,
-    >()
-    .into_iter()
-    .find(|claim| claim.input.name == "restart_claim_demotes_stale_ready")
-    .expect("modeled restart claim case");
     let case = &claim.input;
     let (dispatcher, _requests) = mpsc::channel(1);
 

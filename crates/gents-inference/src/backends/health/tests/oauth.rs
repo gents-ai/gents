@@ -84,31 +84,16 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let doc = crate::backends::registry::capture_backend_document(&node, &configured)
         .await
         .unwrap();
-    let publication_allowed = |native_read: bool| {
-        gents_lean_vocab::families::household_backend_probe_access::cases()
-            .into_iter()
-            .find(|case| {
-                case.input.native_read == native_read
-                    && case.input.same_doc
-                    && case.input.same_connection
-                    && case.input.committed
-            })
-            .unwrap()
-            .check(native_read);
-        native_read
-    };
-    assert_eq!(
-        crate::backends::registry::set_backend_probe_status_for_connection(
-            &node,
-            &configured,
-            &doc,
-            "healthy",
-            Utc::now(),
-        )
-        .await
-        .is_ok(),
-        publication_allowed(true)
-    );
+    let published_with_reader = crate::backends::registry::set_backend_probe_status_for_connection(
+        &node,
+        &configured,
+        &doc,
+        "healthy",
+        Utc::now(),
+    )
+    .await
+    .is_ok();
+    assert!(published_with_reader);
     let observation = user_access
         .transact_readonly("test.runtime_probe.observation", |txn| {
             Box::pin(async move {
@@ -208,7 +193,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             .await
             .is_err()
     );
-    assert_eq!(
+    let published_without_reader =
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &configured,
@@ -217,9 +202,16 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             Utc::now(),
         )
         .await
-        .is_ok(),
-        publication_allowed(false)
-    );
+        .is_ok();
+    for case in gents_lean_vocab::families::household_backend_probe_access::cases() {
+        assert!(case.input.same_doc && case.input.same_connection && case.input.committed);
+        let published = if case.input.native_read {
+            published_with_reader
+        } else {
+            published_without_reader
+        };
+        case.check(published);
+    }
     assert!(
         crate::backends::registry::record_model_catalog_for_document(
             &node,
