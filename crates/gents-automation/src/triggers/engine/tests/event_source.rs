@@ -162,7 +162,7 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
         .unwrap()
         .to_owned();
     subs.publish_update(collection_id, doc_id);
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out waiting for the real document update")
         .expect("next_fire returned None for a real document update");
@@ -203,7 +203,7 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
         .unwrap()
         .to_owned();
 
-    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("a WorkspaceReceipt write must reach the event source")
         .expect("the receipt must deliver");
@@ -246,7 +246,7 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
         .execute(r#"mutation { create_ReadyInput(input: {value: "after"}) {_docID} }"#)
         .await;
     assert!(!submitted.has_errors());
-    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .unwrap()
         .unwrap();
@@ -841,7 +841,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             resp.errors
         );
     });
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out waiting for WebhookEvent")
         .expect("next_fire returned None instead of emitting a FireIntent");
@@ -972,7 +972,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
         }
     });
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out waiting for CallbackResult")
         .expect("next_fire returned None");
@@ -1045,7 +1045,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
     let mut source = EventSource::new(rx, node, CancellationToken::new());
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("startup recovery timeout")
         .expect("complete group must be recovered");
@@ -1154,7 +1154,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
     let mut source = EventSource::new(rx, node, CancellationToken::new());
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("durably elapsed timeout recovery")
         .expect("partial group above the floor must fire");
@@ -1240,7 +1240,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("follow-up correlation update timed out")
         .expect("follow-up correlation update must deliver the created document");
@@ -1323,7 +1323,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
             .expect("created document id")
             .to_string();
 
-        let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        let first = tokio::time::timeout(STALL_CEILING, source.next_fire())
             .await
             .expect("ready sibling delivery timed out")
             .expect("ready sibling must not be blocked by missing correlation");
@@ -1347,7 +1347,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:#?}", response.errors);
 
-        let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        let second = tokio::time::timeout(STALL_CEILING, source.next_fire())
             .await
             .expect("deferred sibling delivery timed out")
             .expect("deferred sibling must become eligible when correlation arrives");
@@ -1433,7 +1433,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("deferred seeded delivery timed out")
         .expect("only the correlation-incomplete trigger should remain eligible");
@@ -1704,7 +1704,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
         );
     });
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out; filter-probe must yield for the signup doc")
         .expect("next_fire returned None instead of emitting a FireIntent");
@@ -1784,7 +1784,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
         );
     });
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out; hydration path should yield on any created doc")
         .expect("next_fire returned None instead of emitting a FireIntent");
@@ -1988,7 +1988,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         );
     });
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out waiting for WebhookEvent")
         .expect("next_fire returned None instead of emitting a FireIntent");
@@ -2094,7 +2094,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         );
     });
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out waiting for WebhookEvent")
         .expect("next_fire returned None instead of emitting a FireIntent");
@@ -2204,13 +2204,13 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
         "create_WebhookEvent failed: {:?}",
         resp.errors,
     );
-    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let first = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out on the first fan-out intent")
         .expect("next_fire returned None instead of emitting the first intent");
     let result = admit_observed_event(&node, &first).await;
     (first.on_result)(result);
-    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let second = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out on the second fan-out intent; fan-out dropped it?")
         .expect("next_fire returned None instead of emitting the second intent");
@@ -2290,7 +2290,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             resp.errors,
         );
     });
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect(
             "next_fire timed out; trigger-a's filter miss silently dropped the \

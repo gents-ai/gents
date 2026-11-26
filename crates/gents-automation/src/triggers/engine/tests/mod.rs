@@ -26,6 +26,7 @@ use gents_lean_vocab::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, RuntimeNode};
 use gents_store::schema::ensure_runtime_schemas;
+use gents_store::test_support::STALL_CEILING;
 use gents_tools::surface::AgentToolSurfaceConfig;
 
 fn stub_principal() -> Arc<gents_store::identity::RuntimeNode> {
