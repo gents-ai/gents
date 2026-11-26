@@ -119,7 +119,21 @@ fn push(b: &mut Builder, v: &Value, t: ColType) -> bool {
 /// Declared column names and types, and the rows.
 type Declared = (Option<Vec<(String, Option<ColType>)>>, Vec<Value>);
 
+/// Unwraps a tool result envelope (`{"response": {"rows": ...}}`) so one
+/// call's output can be passed straight back in as an inline table.
+fn unwrap_response(v: &Value) -> &Value {
+    match v.as_object() {
+        Some(o) if !o.contains_key("rows") && o.keys().all(|k| k == "response" || k == "parts") => {
+            o.get("response")
+                .filter(|inner| inner.as_object().is_some_and(|m| m.contains_key("rows")))
+                .unwrap_or(v)
+        }
+        _ => v,
+    }
+}
+
 fn read_one(name: &str, v: &Value) -> Res<Declared> {
+    let v = unwrap_response(v);
     let obj = v
         .as_object()
         .ok_or_else(|| format!("inline table {name} must be an object with rows"))?;
@@ -156,10 +170,12 @@ fn read_one(name: &str, v: &Value) -> Res<Declared> {
 
 /// Builds the tables the request carries, named and made unique.
 pub fn parse_tables(v: &Value, warn: &Arc<Warnings>) -> Res<Vec<(String, InlineTable)>> {
+    let v = unwrap_response(v);
     let mut items: Vec<(String, &Value)> = Vec::new();
     match v {
         Value::Array(list) => {
             for (i, t) in list.iter().enumerate() {
+                let t = unwrap_response(t);
                 let n = t
                     .get("name")
                     .and_then(Value::as_str)
@@ -543,6 +559,13 @@ mod tests {
             ),
             (json!({"name": "solo", "rows": [[1]]}), vec!["solo"]),
             (json!({"rows": [[1]]}), vec!["data"]),
+            (
+                json!({"response": {"columns": [{"name": "a", "type": "int64"}], "rows": [[1]]}}),
+                vec!["data"],
+            ),
+            (json!([{"response": {"rows": [[1]]}}]), vec!["data1"]),
+            (json!({"prev": {"response": {"rows": [[1]]}}}), vec!["prev"]),
+            (json!({"response": [[1]]}), vec!["response"]),
             (json!({"x": {"rows": [[1]]}, "y": [[2]]}), vec!["x", "y"]),
             (json!({"a b": [[1]], "a-b": [[2]]}), vec!["a_b", "a_b_2"]),
         ] {

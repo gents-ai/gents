@@ -8,9 +8,11 @@ use crate::engine::explain;
 use crate::query::{MAX_CELL_BYTES, OUTPUT_BUDGET};
 use crate::testkit::{Dir, query, rows, run};
 
-/// The bytes a result takes on the wire.
+/// The bytes a result takes on the wire, including the `{"response":...}` envelope.
 fn wire(v: &Value) -> usize {
-    serde_json::to_string(v).unwrap().len()
+    serde_json::to_string(&json!({"response": v}))
+        .unwrap()
+        .len()
 }
 
 fn err(d: &Dir, sql: &str) -> String {

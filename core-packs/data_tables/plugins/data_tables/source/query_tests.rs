@@ -616,10 +616,20 @@ fn long_text_cells_are_cut_and_said() {
 
 #[test]
 fn inline_tables_are_queried_like_files_and_a_result_feeds_the_next_call() {
-    let first = run(json!({"tables": [{"name": "t", "rows": [{"a": 1, "g": "x"}, {"a": 2, "g": "x"}, {"a": 4, "g": "y"}]}], "sql": "SELECT g, sum(a) AS s FROM t GROUP BY g"})).unwrap();
+    let first_raw = crate::testkit::run_raw(json!({"tables": [{"name": "t", "rows": [{"a": 1, "g": "x"}, {"a": 2, "g": "x"}, {"a": 4, "g": "y"}]}], "sql": "SELECT g, sum(a) AS s FROM t GROUP BY g"})).unwrap();
+    let first = &first_raw["response"];
     assert_eq!(first["rows"], json!([["x", 3], ["y", 4]]));
     let second = run(json!({"tables": {"r": {"columns": first["columns"], "rows": first["rows"]}}, "sql": "SELECT max(s) AS m FROM r"})).unwrap();
     assert_eq!(second["rows"], json!([[4]]));
+    // Passing the full wrapped result unchanged works directly, in a list, or as a named table.
+    let direct = run(json!({"tables": first_raw, "sql": "SELECT max(s) AS m FROM data"})).unwrap();
+    assert_eq!(direct["rows"], json!([[4]]));
+    let named =
+        run(json!({"tables": {"r": first_raw}, "sql": "SELECT max(s) AS m FROM r"})).unwrap();
+    assert_eq!(named["rows"], json!([[4]]));
+    let listed =
+        run(json!({"tables": [first_raw], "sql": "SELECT max(s) AS m FROM data1"})).unwrap();
+    assert_eq!(listed["rows"], json!([[4]]));
     let folder = shop();
     let both = run(json!({"path": folder.s(), "tables": {"extra": [[1]]}, "sql": "SELECT count(*) AS n FROM extra"})).unwrap();
     assert_eq!(both["rows"], json!([[1]]));
