@@ -29,6 +29,13 @@ test.describe("the browser page seen through the app", () => {
       const internals = ((
         window as unknown as { __TAURI_INTERNALS__?: Record<string, unknown> }
       ).__TAURI_INTERNALS__ ??= {});
+      internals.metadata ??= {
+        currentWindow: { label: "browser-see-through" },
+        currentWebview: {
+          label: "browser-see-through",
+          windowLabel: "browser-see-through",
+        },
+      };
       internals.invoke = async (cmd: string, args: unknown) => {
         calls.push({ cmd, args });
         return null;

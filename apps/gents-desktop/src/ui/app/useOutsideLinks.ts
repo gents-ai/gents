@@ -17,14 +17,18 @@ export type LinkSource = {
 };
 
 let native: LinkSource | null | undefined;
-const nativeLinks = (): LinkSource | null =>
-  (native ??=
-    inNativeShell() && windowLabel() === "main"
-      ? {
-          take: takeOpenedLinks,
-          onArrived: (arrived) => listenToWindow(OPEN_LINK_EVENT, arrived),
-        }
-      : null);
+const nativeLinks = (): LinkSource | null => {
+  if (native === undefined) {
+    native =
+      inNativeShell() && windowLabel() === "main"
+        ? {
+            take: takeOpenedLinks,
+            onArrived: (arrived) => listenToWindow(OPEN_LINK_EVENT, arrived),
+          }
+        : null;
+  }
+  return native;
+};
 
 /** Follows the `gents:` links the system opens the app with (the one it was
     launched with, and each one after), once `ready`: the shell holds them

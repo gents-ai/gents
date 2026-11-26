@@ -446,6 +446,8 @@ def goalProgressResultField : Family GoalProgressResultFieldInput GoalProgressRe
     , { name := "next_pending_retry_in_ms", key := "next_pending_retry_in_ms" }
     , { name := "lease_remaining_days", key := "lease_remaining_days" }
     , { name := "duration_ms", key := "duration_ms" }
+    , { name := "elapsed_ms", key := "elapsed_ms" }
+    , { name := "hint", key := "hint" }
     , { name := "status", key := "status" }
     , { name := "ok", key := "ok" }
     , { name := "result", key := "result" }
@@ -456,6 +458,181 @@ def goalProgressResultField : Family GoalProgressResultFieldInput GoalProgressRe
     , { name := "terminal_elapsed_seconds", key := "terminal_elapsed_seconds" }
     , { name := "error", key := "error" } ]
   model := fun i => { volatile := GoalProgress.isVolatileResultField i.key }
+
+structure GoalProgressObservationInput where
+  name : String
+  tool : String
+  arguments : String
+  turns : List String
+  deriving Lean.ToJson
+
+/-- `GoalProgress.canonicalizeResultText` + `GoalProgress.step`: canonicalized
+tool results and per-turn no-progress streaks across consecutive raw tool
+outputs. -/
+structure GoalProgressObservationOutput where
+  canonical_results : List String
+  streaks : List Nat
+  paused : Bool
+  deriving Lean.ToJson
+
+private def runRawObservationTurns (tool arguments : String) :
+    GoalProgress.Record → List String → List Nat × Bool
+  | _, [] => ([], false)
+  | record, raw :: rest =>
+      let canonical := GoalProgress.canonicalizeResultText raw
+      let call : GoalProgress.CallPrint := ⟨tool, arguments, canonical⟩
+      let (next, pause) := GoalProgress.step record ⟨[call], false⟩ none 10
+      let (tailStreaks, tailPaused) := runRawObservationTurns tool arguments next rest
+      (next.streak :: tailStreaks, pause || tailPaused)
+
+@[conformance_family]
+def goalProgressObservation : Family GoalProgressObservationInput GoalProgressObservationOutput where
+  inputs :=
+    let listPoll (readAt : String) (elapsed : Nat) (bytes : Nat) (preview : String) : String :=
+      "{\"ok\":true,\"read_at\":\"" ++ readAt ++ "\",\"truncated\":false," ++
+      "\"entries\":[{\"tool_call_id\":\"job-1\",\"status\":\"running\"," ++
+      "\"elapsed_seconds\":" ++ toString elapsed ++ "," ++
+      "\"available_bytes\":" ++ toString bytes ++ "," ++
+      "\"preview\":\"" ++ preview ++ "\"}]}"
+    let waitPoll (readAt : String) (elapsed : Nat) (bytes : Nat) : String :=
+      "{\"ok\":false,\"tool_call_id\":\"job-1\",\"await_mode\":\"background\"," ++
+      "\"status\":\"running\",\"started_at\":\"2026-11-25T09:59:56Z\"," ++
+      "\"elapsed_seconds\":" ++ toString elapsed ++ "," ++
+      "\"available_bytes\":" ++ toString bytes ++ "," ++
+      "\"read_at\":\"" ++ readAt ++ "\",\"result\":null," ++
+      "\"error\":{\"reason\":\"wait_timeout\",\"failure_class\":\"external\"}}"
+    let getGoalPoll (activeSecs tokens : Nat) : String :=
+      "{\"objective\":\"monitor build\",\"status\":\"active\",\"read_only\":false," ++
+      "\"tokens_used\":" ++ toString tokens ++ ",\"token_budget\":null," ++
+      "\"active_time_seconds\":" ++ toString activeSecs ++ "}"
+    let execTimeout (durationMs : Nat) (hintSecs : String) (stdout : String) : String :=
+      "gents_exec: {\"ok\":false,\"status\":\"timeout\",\"command\":\"sleep 10\"," ++
+      "\"exit_code\":null,\"timed_out\":true,\"duration_ms\":" ++ toString durationMs ++
+      ",\"timeout_ms\":5000,\"hint\":\"timed out after " ++ hintSecs ++
+      "s; stdout and stderr below were captured before it was stopped.\"}\n" ++
+      "stdout:\n" ++ stdout ++ "\nstderr:\n(empty)"
+    let fsWalk (elapsedMs visited : Nat) (body : String) : String :=
+      "gents_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"list_files\",\"path\":\".\"," ++
+      "\"walk\":{\"entries_visited\":" ++ toString visited ++ ",\"elapsed_ms\":" ++
+      toString elapsedMs ++ ",\"budget_exhausted\":false,\"stopped_at\":null}}\n" ++
+      "entries:\n" ++ body
+    let p2pStatus (retryMs leaseDays pendingDags : Nat) : String :=
+      "{\"sync\":{\"pending_dags\":" ++ toString pendingDags ++
+      ",\"next_pending_retry_in_ms\":" ++ toString retryMs ++ "}," ++
+      "\"history\":[{\"request_id\":\"r1\",\"lease_state\":\"active\"," ++
+      "\"lease_remaining_days\":" ++ toString leaseDays ++ "}]}"
+    [ { name := "list_processes_volatile_clock_pauses"
+      , tool := "list_processes"
+      , arguments := "{}"
+      , turns :=
+          [ listPoll "2026-11-25T10:00:00.000000001Z" 4 12 "booting"
+          , listPoll "2026-11-25T10:00:15.123456789Z" 19 12 "booting"
+          , listPoll "2026-11-25T10:00:30.234567890Z" 34 12 "booting"
+          , listPoll "2026-11-25T10:00:45.345678901Z" 49 12 "booting" ] }
+    , { name := "list_processes_non_volatile_growth_resets_streak"
+      , tool := "list_processes"
+      , arguments := "{}"
+      , turns :=
+          [ listPoll "2026-11-25T10:00:00Z" 4 12 "booting"
+          , listPoll "2026-11-25T10:00:15Z" 19 12 "booting"
+          , listPoll "2026-11-25T10:00:30Z" 34 12 "booting"
+          , listPoll "2026-11-25T10:00:45Z" 49 48 "ready" ] }
+    , { name := "wait_process_volatile_fields_pause"
+      , tool := "wait_process"
+      , arguments := "{\"tool_call_id\":\"job-1\"}"
+      , turns :=
+          [ waitPoll "2026-11-25T10:00:00Z" 4 0
+          , waitPoll "2026-11-25T10:00:05Z" 9 0
+          , waitPoll "2026-11-25T10:00:10Z" 14 0
+          , waitPoll "2026-11-25T10:00:15Z" 19 0 ] }
+    , { name := "get_goal_volatile_active_time_pauses"
+      , tool := "get_goal"
+      , arguments := "{}"
+      , turns :=
+          [ getGoalPoll 10 317
+          , getGoalPoll 25 317
+          , getGoalPoll 40 317
+          , getGoalPoll 55 317 ] }
+    , { name := "bash_exec_envelope_volatile_duration_and_hint_pauses"
+      , tool := "bash"
+      , arguments := "{\"args\":[\"10\"],\"command\":\"sleep\"}"
+      , turns :=
+          [ execTimeout 5001 "5.0" "waiting"
+          , execTimeout 5017 "5.0" "waiting"
+          , execTimeout 5054 "5.1" "waiting"
+          , execTimeout 5189 "5.2" "waiting" ] }
+    , { name := "bash_exec_envelope_stdout_change_resets_streak"
+      , tool := "bash"
+      , arguments := "{\"args\":[\"10\"],\"command\":\"sleep\"}"
+      , turns :=
+          [ execTimeout 5001 "5.0" "waiting"
+          , execTimeout 5017 "5.0" "waiting"
+          , execTimeout 5054 "5.1" "waiting"
+          , execTimeout 5189 "5.2" "waiting\nstep 2" ] }
+    , { name := "fs_envelope_volatile_walk_elapsed_ms_pauses"
+      , tool := "list_files"
+      , arguments := "{\"path\":\".\"}"
+      , turns :=
+          [ fsWalk 4 3 "file a.rs"
+          , fsWalk 17 3 "file a.rs"
+          , fsWalk 9 3 "file a.rs"
+          , fsWalk 23 3 "file a.rs" ] }
+    , { name := "fs_envelope_non_volatile_walk_change_resets_streak"
+      , tool := "list_files"
+      , arguments := "{\"path\":\".\"}"
+      , turns :=
+          [ fsWalk 4 3 "file a.rs"
+          , fsWalk 17 3 "file a.rs"
+          , fsWalk 9 3 "file a.rs"
+          , fsWalk 23 4 "file a.rs\nfile b.rs" ] }
+    , { name := "p2p_sync_and_lease_countdowns_pause"
+      , tool := "p2p"
+      , arguments := "{\"action\":\"status\"}"
+      , turns :=
+          [ p2pStatus 1500 29 0
+          , p2pStatus 1200 29 0
+          , p2pStatus 900 28 0
+          , p2pStatus 600 28 0 ] }
+    , { name := "reordered_json_keys_with_volatile_diff_pause"
+      , tool := "list_processes"
+      , arguments := "{}"
+      , turns :=
+          [ "{\"z\":2,\"read_at\":\"t1\",\"a\":1}"
+          , "{\"a\":1,\"read_at\":\"t2\",\"z\":2}"
+          , "{\"read_at\":\"t3\",\"z\":2,\"a\":1}"
+          , "{\"z\":2,\"a\":1,\"read_at\":\"t4\"}" ] }
+    , { name := "non_command_hint_change_is_progress"
+      , tool := "lsp"
+      , arguments := "{\"action\":\"diagnostics\"}"
+      , turns :=
+          [ "{\"ok\":true,\"hint\":\"check line 1\"}"
+          , "{\"ok\":true,\"hint\":\"check line 2\"}"
+          , "{\"ok\":true,\"hint\":\"check line 3\"}" ] }
+    , { name := "terminal_timestamps_and_durations_reset_streak"
+      , tool := "list_processes"
+      , arguments := "{}"
+      , turns :=
+          [ "{\"status\":\"completed\",\"started_at\":\"2026-11-25T10:00:00Z\",\"completed_at\":\"2026-11-25T10:00:01Z\",\"terminal_elapsed_seconds\":1}"
+          , "{\"status\":\"completed\",\"started_at\":\"2026-11-25T10:00:00Z\",\"completed_at\":\"2026-11-25T10:00:02Z\",\"terminal_elapsed_seconds\":2}" ] }
+    , { name := "plain_text_repeats_pause_and_change_resets"
+      , tool := "grep"
+      , arguments := "{\"pattern\":\"TODO\"}"
+      , turns :=
+          [ "no matches"
+          , "no matches"
+          , "no matches"
+          , "1 match" ] }
+    , { name := "malformed_envelope_header_stays_verbatim"
+      , tool := "bash"
+      , arguments := "{}"
+      , turns :=
+          [ "gents_exec: {unparseable\nstdout:\nok"
+          , "gents_exec: {unparseable\nstdout:\nchanged" ] } ]
+  model := fun i =>
+    let (streaks, paused) := runRawObservationTurns i.tool i.arguments GoalProgress.Record.fresh i.turns
+    { canonical_results := i.turns.map GoalProgress.canonicalizeResultText
+    , streaks
+    , paused }
 
 def onBlockedName : GoalStopPolicy.OnBlocked → String
   | .stopFirst => "stop_first"
