@@ -223,6 +223,7 @@ fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
     let field = Regex::new(r"([A-Z][A-Za-z0-9_]*|\$GENTS_[^$]*\$)\s*\(").unwrap();
     let ordered = Regex::new(r"\border\s*:").unwrap();
     let bounded = Regex::new(r"\b(?:limit|offset)\s*:").unwrap();
+    let ranked = Regex::new(r"\border\s*:\s*(?:\[\s*)?\{\s*_alias\s*:").unwrap();
     field
         .captures_iter(&template)
         .filter_map(|capture| {
@@ -233,7 +234,10 @@ fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
             let start = capture.get(0).unwrap().end() - 1;
             let end = matching_paren(&template, start)?;
             let arguments = &template[start + 1..end];
-            (ordered.is_match(arguments) && bounded.is_match(arguments)).then(|| Read {
+            (ordered.is_match(arguments)
+                && bounded.is_match(arguments)
+                && !ranked.is_match(arguments))
+            .then(|| Read {
                 path: path.to_owned(),
                 collection: capture[1].to_owned(),
                 arguments: canonical_whitespace(arguments),
@@ -606,6 +610,23 @@ query = f"""{{ AgentRequest(order: {{request_id: ASC}}, limit: {limit}) {{_docID
 }
 
 #[test]
+fn ranked_alias_order_is_outside_the_index_plan_screen() {
+    let path = Path::new("fixture.rs");
+    let source = r#"fn search() {
+        let query = "{AgentMemory(filter: {agent_did: {_eq: \"a\"}}, limit: 8, order: [{_alias: {_score: DESC}}]) { _docID }}";
+    }"#;
+    let syntax = syn::parse_file(source).unwrap();
+    let mut literals = Literals::default();
+    literals.visit_file(&syntax);
+    let found: Vec<_> = literals
+        .0
+        .into_iter()
+        .flat_map(|(literal, formatted)| reads(&path.display().to_string(), &literal, formatted))
+        .collect();
+    assert!(found.is_empty());
+}
+
+#[test]
 fn typed_ordered_bounded_read_detection_follows_the_builder_chain() {
     let ordered_bounded = r#"fn read() {
         let rendered = Query::select(Selection::doc_id())
@@ -680,6 +701,12 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
     gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_tools::memory::MEMORY_SDL),
+    )
+    .await
+    .unwrap();
     let unsafe_query = r#"query @explain { AgentRequest(filter: {request_id: {_eq: "probe"}, content: {_eq: "probe"}}, order: {request_id: ASC}, limit: 1) {_docID} }"#;
     let unsafe_plan = gents_store::graphql::graphql_with_transaction_retry(
         &node,

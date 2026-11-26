@@ -624,5 +624,33 @@
         "limit": "65"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory.rs",
+      "collection": "AgentMemory",
+      "arguments": "filter: {agent_did: {_eq: \"$GENTS_0$\"}}, order: [{created_at: DESC}], limit: $GENTS_limit$"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "limit": "10"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory.rs",
+      "collection": "AgentMessage",
+      "arguments": "filter: {session_id: {_eq: \"$GENTS_0$\"}, node_did: {_eq: \"$GENTS_1$\"}}, order: [{sequence: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "1": "probe",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
   }
 ]
