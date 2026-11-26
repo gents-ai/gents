@@ -63,8 +63,8 @@ fn render_healthz_payload_at(
                 ProjectedNodeReadinessSummary::Observed(summary) => !summary.is_ready(),
                 ProjectedNodeReadinessSummary::Unknown(_) => true,
             };
-            // Measured backend health is never persisted to `InferenceBackend`
-            // (#640), so degradation comes only from the readiness projection.
+            // Measured backend health is never persisted to `InferenceBackend`,
+            // so degradation comes only from the readiness projection.
             let backend_degraded = match &readiness {
                 ProjectedNodeReadinessSummary::Observed(summary) => {
                     summary.unavailable_agents.values().any(|reason| {

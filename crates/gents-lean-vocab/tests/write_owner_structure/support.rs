@@ -312,8 +312,7 @@ pub(crate) const NATIVE_E2E: &str = "native-e2e";
 /// The feature that cuts a test build off the machine's service manager
 /// (`gents_service::native_service::isolation`). The per-user service label
 /// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
-/// otherwise addresses the user's own node: on 2026-11-13 test binaries
-/// stopped the maintainer's nodes through it.
+/// otherwise addresses and stops the user's own node.
 pub(crate) const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-guard");
 
 /// The features only test builds enable: `cfg_test` treats what they gate as

@@ -82,7 +82,7 @@ pub(crate) fn file_content_hash(context: &ToolContext, path: &Path) -> Result<Op
 /// match → write; write_file hash-check → overwrite): without it a concurrent
 /// in-process mutation can land inside the validated window and be silently
 /// overwritten. External writers are outside the lock — they are caught by
-/// the expected_content_hash check; there is no OS-level file lock (#724).
+/// the expected_content_hash check; there is no OS-level file lock.
 static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<rapidhash::RapidHashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);

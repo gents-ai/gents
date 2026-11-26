@@ -234,7 +234,7 @@ const LEASE_STARTS: &[&str] = &[
 /// starting a lease without having awaited `gents_lean_vocab::snapshot()` or
 /// read the model before the lease.
 /// Such a read can be the process's first, which runs Lean on the runtime
-/// thread for minutes and starves the lease renewal (#3704, #3891, #3892).
+/// thread for minutes and starves the lease renewal.
 struct LeanReadAfterLeaseVisitor {
     starts: BTreeSet<String>,
     events: Vec<(usize, usize, LeanEvent)>,

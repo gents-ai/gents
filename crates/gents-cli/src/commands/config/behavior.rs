@@ -588,7 +588,7 @@ mod tests {
         Ok(rows.into_iter().next())
     }
 
-    /// #3330 "Done when": slug resolution with a replicated peer row present.
+    /// Slug resolution with a replicated peer row present.
     /// A bare ID prefers the local node's row; a genuine ambiguity names the
     /// candidate rows instead of counting them.
     #[tokio::test]

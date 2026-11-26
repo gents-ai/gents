@@ -726,7 +726,7 @@ impl super::ToolCallLifecycle {
 mod tests {
     use super::*;
 
-    /// The one deadline-expiry predicate (#1334), shared by tool-call
+    /// The one deadline-expiry predicate, shared by tool-call
     /// recovery here and by `gents-cli`'s fleet-slot and liveness snapshots.
     /// Past deadlines (including exactly `now`) are expired; future, missing,
     /// and malformed deadlines are documented as not expired.

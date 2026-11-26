@@ -140,7 +140,7 @@ pub struct ServeArgs {
     pub command_timeout_secs: u64,
     #[arg(
         long,
-        help = "Foreground cap in seconds for explicit Bash timeout_secs requests. Defaults to --command-timeout-secs; values below it are raised to it (#1018)"
+        help = "Foreground cap in seconds for explicit Bash timeout_secs requests. Defaults to --command-timeout-secs; values below it are raised to it"
     )]
     pub command_timeout_max_secs: Option<u64>,
     #[arg(long = "cli-tool")]

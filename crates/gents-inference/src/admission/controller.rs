@@ -323,7 +323,7 @@ impl BackendAdmissionController {
         }
 
         let call = self.call_record(pending, queue_depth, slot_connection);
-        // Armed only after the queued row is durable (#1001): a persist error
+        // Ordering: armed only after the queued row is durable; a persist error
         // must still release the waiter unit.
         let mut queued_guard = QueuedCallGuard {
             node: node.clone(),

@@ -1,5 +1,5 @@
-/// SDK build guidance uses debug WASM because optimized lens_sdk 0.8 transport
-/// buffers can be corrupted (https://github.com/sourcenetwork/lens/issues/166).
+/// External premise: optimized `lens_sdk` 0.8 transport buffers can be
+/// corrupted, so SDK build guidance uses debug WASM.
 pub(super) fn page(path: &[&str]) -> Option<&'static str> {
     Some(match path {
         ["migration", "workflow"] => {
