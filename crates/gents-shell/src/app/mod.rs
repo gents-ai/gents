@@ -6,7 +6,7 @@ pub mod layers;
 mod mouse;
 mod prompt;
 pub mod search;
-mod selection;
+pub(crate) mod selection;
 pub mod setup;
 pub mod transcript;
 pub mod work;

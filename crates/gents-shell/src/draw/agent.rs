@@ -1,12 +1,13 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Margin, Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::input::TAB;
+use crate::app::selection::Selection;
 use crate::app::transcript::Tab;
 use crate::app::{App, Mode, Pane};
 use crate::keys::KeySet;
@@ -39,7 +40,11 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
         startup(area, message.y, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
-        chat(&app.conversation_rows(rows.width), tab.scroll, rows, buf);
+        let shown = app.conversation_rows(rows.width);
+        chat(&shown, tab.scroll, rows, buf);
+        if let Some(selection) = app.selection {
+            selected(selection, shown.len(), tab.scroll, rows, buf);
+        }
     }
     running_rows(app, tab, area, buf);
     message_box(app, message, focused, buf);
@@ -170,6 +175,23 @@ pub fn chat(rows: &[(String, Tone)], scroll: usize, area: Rect, buf: &mut Buffer
             let mark = Rect::new(area.x + 1, y, 1, 1);
             buf.set_style(mark, theme::tone(Tone::Accent));
         }
+    }
+}
+
+/// Reverses the cells `selection` covers of the `total` rows `chat` drew in `area`, so it shows
+/// on every tone, the reply's highlight included.
+fn selected(selection: Selection, total: usize, scroll: usize, area: Rect, buf: &mut Buffer) {
+    let ((top, from), (bottom, to)) = selection.ordered();
+    let first = first_line(total, area.height, scroll);
+    for (row, y) in (first..total).zip(area.top()..area.bottom()) {
+        if !(top..=bottom).contains(&row) {
+            continue;
+        }
+        let left = if row == top { from } else { 0 };
+        let right = if row == bottom { to + 1 } else { area.width };
+        let width = right.min(area.width).saturating_sub(left);
+        let cells = Rect::new(area.x + left, y, width, 1);
+        buf.set_style(cells, Style::new().add_modifier(Modifier::REVERSED));
     }
 }
 
@@ -477,6 +499,35 @@ mod tests {
         assert_eq!(buf[(column - 1, row)].bg, theme::YOU_BG);
         assert_eq!(buf[(95, row)].bg, theme::YOU_BG);
         assert_ne!(buf[(column - 2, row)].bg, theme::YOU_BG);
+    }
+
+    #[test]
+    fn a_selection_is_drawn_reversed() {
+        use ratatui::crossterm::event::{
+            Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        use ratatui::style::Modifier;
+        let mut app = chat_app();
+        let s = screen(&app);
+        let (row, start) = find(&s, "Moving them").expect("the reply");
+        let (last_row, column) = find(&s, "beside them.").expect("its second row");
+        let end = column + "beside them.".len() as u16 - 1;
+        for (kind, (column, row)) in [
+            (MouseEventKind::Down(MouseButton::Left), (start, row)),
+            (MouseEventKind::Drag(MouseButton::Left), (end, last_row)),
+        ] {
+            let modifiers = KeyModifiers::NONE;
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers,
+            }));
+        }
+        let buf = buffer(&app);
+        let reversed = |x, y| buf[(x, y)].modifier.contains(Modifier::REVERSED);
+        assert!(reversed(start, row) && reversed(end, last_row));
+        assert!(!reversed(start - 1, row) && !reversed(end + 1, last_row));
     }
 
     #[test]
