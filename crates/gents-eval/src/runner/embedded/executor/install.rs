@@ -533,6 +533,7 @@ async fn install_fixtures(
             .await
             .context("installing a fixture schema")?;
     }
+    let mut configuration_docs = Vec::new();
     for fixture in &fixtures.documents {
         let document = bind_fixture_owner(&fixture.document, trial_did);
         if fixture.expired_client_request {
@@ -592,6 +593,14 @@ async fn install_fixtures(
             install_session_fixture(creator, &document, &fixture.session_readers).await?;
             continue;
         }
+        if let Some(collection) = Collection::ALL.into_iter().find(|collection| {
+            collection.graphql_type() == fixture.collection
+                && gents_protocol::schemas::identity_policy_resource(collection.graphql_type())
+                    == Some("configuration")
+        }) {
+            configuration_docs.push(desired(collection, document));
+            continue;
+        }
         let schema = match pack {
             Some((manifest, assets)) => Some(trusted_fixture_schema(
                 manifest,
@@ -610,6 +619,13 @@ async fn install_fixtures(
             schema.as_deref(),
         )
         .await?;
+    }
+    if !configuration_docs.is_empty() {
+        let plan = DesiredStateApplyPlan::new(configuration_docs)
+            .context("planning configuration fixture documents")?;
+        apply(access, "eval.trial.fixture_configuration", &plan)
+            .await
+            .context("applying configuration fixture documents")?;
     }
     for file in &fixtures.files {
         let path = workspace_path(workspace, &file.path)?;

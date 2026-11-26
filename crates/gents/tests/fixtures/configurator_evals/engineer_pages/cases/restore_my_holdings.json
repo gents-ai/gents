@@ -30,125 +30,88 @@
           "box": "HB-236",
           "status": "recalled"
         }
+      },
+      {
+        "collection": "DatastoreToolSurface",
+        "document": {
+          "surface_id": "archive_desk",
+          "node_did": "$trial",
+          "display_name": "Archive desk",
+          "entries": [
+            {
+              "kind": "query",
+              "tool_name": "list_holdings",
+              "collection": "Holding",
+              "description": "Archive holdings by shelf and box.",
+              "fields": [
+                "shelf",
+                "box",
+                "status"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "collection": "Page",
+        "document": {
+          "page_id": "my_holdings",
+          "node_did": "$trial",
+          "display_name": "My Holdings",
+          "module": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Holdings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'My Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\n}\n\nexport default {\n  id: 'my_holdings',\n  name: 'My Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_holdings:nav', label: 'My Holdings', icon: 'archive', to: { name: 'plugin', pluginId: 'my_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\n    ])\n  },\n}\n",
+          "data": [
+            {
+              "surface": "archive_desk",
+              "tools": [
+                "list_holdings"
+              ]
+            }
+          ],
+          "css": ".holdings-note { color: var(--text-muted); }",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "Page",
+        "document": {
+          "page_id": "team_holdings",
+          "node_did": "$trial",
+          "display_name": "Team Holdings",
+          "module": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction TeamHoldings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'Team Holdings', description: 'Every box the archive holds.', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box' }) })\n}\n\nexport default {\n  id: 'team_holdings',\n  name: 'Team Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_holdings:nav', label: 'Team Holdings', icon: 'users', to: { name: 'plugin', pluginId: 'team_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamHoldings, { ctx }) },\n    ])\n  },\n}\n",
+          "data": [
+            {
+              "surface": "archive_desk",
+              "tools": [
+                "list_holdings"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "collection": "Page",
+        "document": {
+          "page_id": "old_holdings",
+          "node_did": "$trial",
+          "display_name": "Old Holdings",
+          "module": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Holdings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'Old Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\n}\n\nexport default {\n  id: 'old_holdings',\n  name: 'Old Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'old_holdings:nav', label: 'Old Holdings', icon: 'history', to: { name: 'plugin', pluginId: 'old_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\n    ])\n  },\n}\n",
+          "data": [
+            {
+              "surface": "archive_desk",
+              "tools": [
+                "list_holdings"
+              ]
+            }
+          ],
+          "enabled": false
+        }
       }
     ]
   },
   "stages": [
     {
-      "stage_id": "setup",
-      "prompt": "Before my real request, set this up exactly as written with one config call, then reply done. Do not check, lint or change anything else: {\"argv\": [\"batch\"], \"options\": {\"operations\": [{\"argv\": [\"datastore\", \"create\"], \"target_id\": \"archive_desk\", \"set\": {\"display_name\": \"Archive desk\", \"entries\": [{\"kind\": \"query\", \"tool_name\": \"list_holdings\", \"collection\": \"Holding\", \"description\": \"Archive holdings by shelf and box.\", \"fields\": [\"shelf\", \"box\", \"status\"]}]}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"my_holdings\", \"set\": {\"display_name\": \"My Holdings\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\\nimport { jsx } from 'react/jsx-runtime'\\n\\nfunction Holdings({ ctx }) {\\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\\n  const rows = q.data?.results ?? []\\n  return jsx(Page, { title: 'My Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\\n}\\n\\nexport default {\\n  id: 'my_holdings',\\n  name: 'My Holdings',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_holdings:nav', label: 'My Holdings', icon: 'archive', to: { name: 'plugin', pluginId: 'my_holdings' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"archive_desk\", \"tools\": [\"list_holdings\"]}], \"css\": \".holdings-note { color: var(--text-muted); }\", \"enabled\": false}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"team_holdings\", \"set\": {\"display_name\": \"Team Holdings\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\\nimport { jsx } from 'react/jsx-runtime'\\n\\nfunction TeamHoldings({ ctx }) {\\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\\n  const rows = q.data?.results ?? []\\n  return jsx(Page, { title: 'Team Holdings', description: 'Every box the archive holds.', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box' }) })\\n}\\n\\nexport default {\\n  id: 'team_holdings',\\n  name: 'Team Holdings',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_holdings:nav', label: 'Team Holdings', icon: 'users', to: { name: 'plugin', pluginId: 'team_holdings' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamHoldings, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"archive_desk\", \"tools\": [\"list_holdings\"]}]}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"old_holdings\", \"set\": {\"display_name\": \"Old Holdings\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\\nimport { jsx } from 'react/jsx-runtime'\\n\\nfunction Holdings({ ctx }) {\\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\\n  const rows = q.data?.results ?? []\\n  return jsx(Page, { title: 'Old Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\\n}\\n\\nexport default {\\n  id: 'old_holdings',\\n  name: 'Old Holdings',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'old_holdings:nav', label: 'Old Holdings', icon: 'history', to: { name: 'plugin', pluginId: 'old_holdings' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"archive_desk\", \"tools\": [\"list_holdings\"]}], \"enabled\": false}}]}}",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "pages",
-          "collection": "Page",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "page_id",
-            "display_name",
-            "module",
-            "css",
-            "data",
-            "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "surface_id": {
-              "_ne": "engineer-mailbox"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "display_name",
-            "entries",
-            "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "development",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "page_id",
-                "id": "my_holdings",
-                "expect": [
-                  {
-                    "field": "module",
-                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Holdings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'My Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\n}\n\nexport default {\n  id: 'my_holdings',\n  name: 'My Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_holdings:nav', label: 'My Holdings', icon: 'archive', to: { name: 'plugin', pluginId: 'my_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\n    ])\n  },\n}\n"
-                  }
-                ]
-              },
-              {
-                "capture": "pages",
-                "key": "page_id",
-                "id": "team_holdings",
-                "expect": [
-                  {
-                    "field": "module",
-                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction TeamHoldings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'Team Holdings', description: 'Every box the archive holds.', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box' }) })\n}\n\nexport default {\n  id: 'team_holdings',\n  name: 'Team Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_holdings:nav', label: 'Team Holdings', icon: 'users', to: { name: 'plugin', pluginId: 'team_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamHoldings, { ctx }) },\n    ])\n  },\n}\n"
-                  }
-                ]
-              },
-              {
-                "capture": "pages",
-                "key": "page_id",
-                "id": "old_holdings",
-                "expect": [
-                  {
-                    "field": "module",
-                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Holdings({ ctx }) {\n  const q = useQuery(ctx, 'archive_desk', 'list_holdings', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsx(Page, { title: 'Old Holdings', children: jsx(Table, { columns: ['shelf', 'box', 'status'], rows, rowKey: 'box', empty: 'No holdings.' }) })\n}\n\nexport default {\n  id: 'old_holdings',\n  name: 'Old Holdings',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'old_holdings:nav', label: 'Old Holdings', icon: 'history', to: { name: 'plugin', pluginId: 'old_holdings' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Holdings, { ctx }) },\n    ])\n  },\n}\n"
-                  }
-                ]
-              }
-            ]
-          },
-          "tier": "development",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "stage_id": "restore",
-      "prompt": "My Holdings disappeared from my navigation, although the archive holdings and the team page are still there. Restore my existing page and leave its layout, queries and access alone. Old Holdings was retired on purpose; keep it hidden.",
+      "prompt": "My Holdings disappeared from my navigation, although the archive holdings and the team page are still there. Restore my existing page and leave its layout, queries and access alone. Old Holdings was retired on purpose; keep it hidden. Lint My Holdings when you're done.",
       "capture": [
         {
           "kind": "documents",
@@ -272,6 +235,23 @@
                     "matches": "\"list_holdings\""
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "page",
+                "equals": "my_holdings"
+              },
+              {
+                "field": "admitted",
+                "equals": true
               }
             ]
           },

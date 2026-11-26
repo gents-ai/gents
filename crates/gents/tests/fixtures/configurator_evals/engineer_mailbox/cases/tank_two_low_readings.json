@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "watch",
-      "prompt": "I'll pass you tank B's level readings one at a time. Its minimum is 30 cm, but one low reading can be a sensor blip, so flag my inbox only once two readings in a row are below 30 cm, titled \"Tank B low\" with the note \"Tank B has read below 30 cm twice in a row.\" One flag is enough while it stays low. First reading: 41 cm.",
+      "prompt": "I'll send tank B's level readings one by one (minimum 30 cm). Ignore a single low blip; flag my inbox once after two consecutive readings under 30 cm, titled \"Tank B low\" with note \"Tank B has read below 30 cm twice in a row.\" Don't re-flag while it stays low. First reading: 41 cm.",
       "capture": [
         {
           "kind": "documents",

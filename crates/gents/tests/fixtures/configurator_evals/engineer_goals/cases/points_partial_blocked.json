@@ -25,7 +25,7 @@
   "stages": [
     {
       "stage_id": "goal",
-      "prompt": "Make it a goal with a 500,000-token budget: write points.json mapping each member id in members/ to their spend times their tier's multiplier from tiers/multipliers.json. Platinum's multiplier isn't announced yet and only I can get it, so leave out anyone you can't score and don't guess. Do what you can, tell me once in my inbox what's missing, and mark the goal blocked.",
+      "prompt": "Make it a goal (500,000-token budget): write points.json mapping each member id in members/ to spend times tier multiplier from tiers/multipliers.json. Only I can get Platinum's unannounced multiplier; skip unscorable members, don't guess, tell my inbox once what's missing, and mark blocked.",
       "settle": true,
       "checks": [
         {

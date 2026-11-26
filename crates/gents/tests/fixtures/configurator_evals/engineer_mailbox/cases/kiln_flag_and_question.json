@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "both",
-      "prompt": "Two things from the kiln room. Kiln K3 failed its door seal check: flag it in my inbox titled \"K3 door seal\" with the note \"K3 failed the door seal check and is out of service.\" And ask me in my inbox, titled \"Glaze supplier\", whether to reorder glaze from Marlow Ceramics or Tidewell Supply, with just those two choices; I may not care, so let me skip it.",
+      "prompt": "Two inbox items: flag \"K3 door seal\" with note \"K3 failed the door seal check and is out of service.\" And ask me, titled \"Glaze supplier\", whether to reorder glaze from Marlow Ceramics or Tidewell Supply (just those two choices, optional so I can skip it).",
       "capture": [
         {
           "kind": "documents",

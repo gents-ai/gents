@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "coverage",
-      "prompt": "How many minutes was each beacon live during the shift? The shift runs from minute 0 up to but not including minute 40. Each beacon has a TSV under stations/<site>/ named after it; count only rows whose mode is live, merge overlapping or touching intervals, and clip them to the shift. Save coverage/live_minutes.json mapping each beacon's file name without .tsv to its minutes, including beacons that were never live. Don't edit the station files.",
+      "prompt": "Count each beacon's live minutes in shift [0, 40) from TSVs under stations/<site>/: include only mode=live rows, merge overlapping/touching intervals, clip to [0, 40). Save coverage/live_minutes.json mapping beacon name (without .tsv) to minutes, including 0. Don't edit stations/.",
       "capture": [
         {
           "kind": "file",

@@ -25,7 +25,7 @@
   "stages": [
     {
       "stage_id": "goal",
-      "prompt": "Make this a goal with an 800,000-token budget: print the jobs in queue/ in alphabetical order of job name, one job per turn, starting with one now. For each, append {\"job\": NAME, \"pages\": N} to the JSON array in printed.json (create it with the first job). Leave the queue files alone, and finish the goal after the last job.",
+      "prompt": "Make this a goal (800,000-token budget): print jobs in queue/ alphabetically by name, one per turn, starting now. For each, append {\"job\": NAME, \"pages\": N} to the JSON array in printed.json (creating it on the first). Leave queue/ untouched and finish after the last job.",
       "settle": true,
       "checks": [
         {

@@ -33,7 +33,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Lab lock audit: audit/locks/inventory.csv lists every lock and its zone, and the event logs are the .ndjson files somewhere under audit/locks/events/. A lock's current state is the status of its event with the highest sequence number, whichever log it's in. How many lab locks are open right now or have no events at all, and which?",
+      "prompt": "Audit lab locks from audit/locks/inventory.csv (locks and zones) and .ndjson logs under audit/locks/events/. Each lock's current state is its highest-sequence event's status across all logs. How many lab locks are open or have no events, and which? Don't edit the files.",
       "capture": [
         {
           "kind": "file",

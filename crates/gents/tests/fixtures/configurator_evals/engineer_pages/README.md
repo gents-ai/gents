@@ -7,11 +7,10 @@ test, every core pack installed as init installs them (`scripts/evals/suites.py`
 `config` (pages, datastore surfaces), and `charts` and `data_tables`, which
 its Tools hide behind `script`.
 
-A case that repairs or edits a page starts with a `setup` stage in which the
-Engineer writes the starting surface and Page documents itself, in one
-dictated `config` batch: a Page or DatastoreToolSurface the evaluator writes
-as a fixture is not the Engineer's to read or edit. Setup checks are
-development tier; fixtures supply only the app collections and their rows.
+A case that repairs or edits a page seeds its starting `DatastoreToolSurface`
+and `Page` documents through `fixtures.documents`, which the trial runner
+applies via desired state under the trial Node so the Engineer can read and
+edit them natively under ACP alongside the fixture app collections and rows.
 
 Page cases grade the stored Page and DatastoreToolSurface documents and, where
 the user asks for it, a passing page lint. The trial image has no page
@@ -29,8 +28,8 @@ any file the user asked for.
 | --- | --- | --- | --- |
 | ticket-board-page | a page listing tickets with a maintenance count | `config` page create, a datastore surface, page lint | one Ticket Board page reading a Ticket query surface, showing title, lane and the maintenance count; lint admitted |
 | rename-read-tool | rename a read tool and keep its page working | surface update, page data and module update, lint | the surface holds only the renamed tool; the page declares and queries it; lint admitted |
-| restore-my-holdings | bring back a hidden page, keep a retired one hidden | page update | My Holdings enabled and otherwise unchanged; the other two pages untouched |
-| fix-stale-calibrations | a page that shows no rows | page data declaration repair | the page declares the surface its module queries; module and the team page unchanged |
+| restore-my-holdings | bring back a hidden page, keep a retired one hidden | page update, lint | My Holdings enabled and otherwise unchanged; the other two pages untouched; lint admitted |
+| fix-stale-calibrations | a page that shows no rows | page data declaration repair, lint | the page declares the surface its module queries; module and the team page unchanged; lint admitted |
 | clear-lint-finding | fix what lint flags without changing the page | page lint, module and CSS edit | the page still shows the same table and badge; colours use theme variables; lint admitted |
 | dock-totals-bar | crates per dock as bars across two files | `charts` bar with aggregation | a completed charts call; each dock's combined total in the reply |
 | tide-line | each day's high water as a line | `charts` line over a per-day maximum, a non-numeric reading | a completed charts call; each day's high in the reply |
