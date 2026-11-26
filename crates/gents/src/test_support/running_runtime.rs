@@ -61,12 +61,219 @@ impl AgentRuntimeHome {
 
     /// The Agent's own access, which reads the documents it owns.
     pub fn agent_access(&self) -> gents_store::config_client::ConfigAccess {
+        self.access_for_agent(self.agent.as_ref())
+    }
+
+    /// Managed-agent access for any Agent identity provisioned on this home.
+    pub fn access_for_agent(
+        &self,
+        agent: &dyn NodeIdentity,
+    ) -> gents_store::config_client::ConfigAccess {
         gents_store::config_client::ConfigAccess::local_managed_agent(
             self.home.node.clone(),
-            self.agent.did().parse().unwrap(),
-            self.agent.as_ref(),
+            agent.did().parse().unwrap(),
+            agent,
         )
         .unwrap()
+    }
+
+    /// Provisions an additional Agent on this home with its own backend and
+    /// auth configuration, through the User's signed desired-state transaction.
+    pub async fn add_agent_with_backend(
+        &self,
+        backend_id: &str,
+        endpoint: &str,
+        max_concurrent: i64,
+        auth: serde_json::Value,
+        probe_status: &str,
+    ) -> (AgentIdentityBinding, Arc<dyn NodeIdentity>) {
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::collection::Collection;
+        let node_did = self.home.node_did();
+        let binding = gents_store::identity::provision_agent_identity_authorized(
+            &self.home.node,
+            self.home.store.node_identity.as_ref(),
+            &self.home.user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(
+            self.home.store.node_identity.as_ref(),
+            &binding,
+        )
+        .unwrap();
+        let agent_did = binding.agent_did.as_str();
+        let context_id = format!("{agent_did}:context");
+        let tools_id = format!("{agent_did}:tools");
+        let profile_id = format!("{agent_did}:inference");
+        let documents = [
+            (
+                Collection::Agent,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "agent_did": agent_did,
+                    "creation_nonce": binding.creation_nonce,
+                    "context_id": context_id,
+                    "inference_profile_id": profile_id,
+                }),
+            ),
+            (
+                Collection::AgentContext,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "context_id": context_id,
+                    "tools_id": tools_id,
+                }),
+            ),
+            (
+                Collection::Tools,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "tools_id": tools_id,
+                }),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "profile_id": profile_id,
+                    "backend_id": backend_id,
+                    "model_name": "default",
+                }),
+            ),
+            (
+                Collection::InferenceBackend,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "backend_id": backend_id,
+                    "name": backend_id,
+                    "provider_kind": "OpenAiCompatible",
+                    "endpoint": endpoint,
+                    "max_concurrent": max_concurrent,
+                    "auth": auth,
+                }),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        self.home
+            .user_access
+            .transact_signed_conflict_rebuild("test.running_runtime.add_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        gents_inference::backends::registry::set_backend_probe_status_as(
+            &self.home.node_access(),
+            node_did,
+            backend_id,
+            probe_status,
+        )
+        .await
+        .unwrap();
+        (binding, agent)
+    }
+
+    /// Provisions an additional Agent on this home sharing the default Agent's
+    /// inference profile, with custom `Tools` fields merged into its tools doc.
+    pub async fn add_agent_with_tools(
+        &self,
+        extra_tools_fields: serde_json::Value,
+    ) -> (AgentIdentityBinding, Arc<dyn NodeIdentity>) {
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::collection::Collection;
+        let node_did = self.home.node_did();
+        let binding = gents_store::identity::provision_agent_identity_authorized(
+            &self.home.node,
+            self.home.store.node_identity.as_ref(),
+            &self.home.user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(
+            self.home.store.node_identity.as_ref(),
+            &binding,
+        )
+        .unwrap();
+        let agent_did = binding.agent_did.as_str();
+        let context_id = format!("{agent_did}:context");
+        let tools_id = format!("{agent_did}:tools");
+        let mut tools = serde_json::json!({
+            "node_did": node_did,
+            "tools_id": tools_id,
+        });
+        if let (Some(target), Some(source)) =
+            (tools.as_object_mut(), extra_tools_fields.as_object())
+        {
+            for (key, value) in source {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        let documents = [
+            (
+                Collection::Agent,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "agent_did": agent_did,
+                    "creation_nonce": binding.creation_nonce,
+                    "context_id": context_id,
+                    "inference_profile_id": format!("{}:inference", self.binding.agent_did),
+                }),
+            ),
+            (
+                Collection::AgentContext,
+                serde_json::json!({
+                    "node_did": node_did,
+                    "context_id": context_id,
+                    "tools_id": tools_id,
+                }),
+            ),
+            (Collection::Tools, tools),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        self.home
+            .user_access
+            .transact_signed_conflict_rebuild("test.running_runtime.add_agent_tools", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        (binding, agent)
     }
 
     /// Rewrites the Agent's backend document as its User, probed healthy; a
@@ -251,6 +458,12 @@ impl BootedRuntime {
 
     pub fn node_did(&self) -> &str {
         &self.node_did
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.handle.is_finished())
     }
 
     pub async fn readiness(&self) -> Option<NodeReadinessSnapshot> {

@@ -40,18 +40,6 @@ impl AgentAdmissionObservation {
     pub(crate) fn demotions(&self) -> &BTreeMap<String, String> {
         &self.demotions
     }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        source_generation: u64,
-        demotions: impl IntoIterator<Item = (String, String)>,
-    ) -> Self {
-        Self {
-            process_state: NodeReadinessProcessState::Ready,
-            source_generation,
-            demotions: demotions.into_iter().collect(),
-        }
-    }
 }
 
 impl Default for AgentAdmissionObservation {
