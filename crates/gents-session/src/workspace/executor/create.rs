@@ -10,16 +10,15 @@ use super::super::adapter::{
 };
 use super::super::documents::{
     new_isolated_workspace, ProvisioningObservation, WorkspaceDocuments, WorkspacePlacementDoc,
-    WorkspaceProvenance, ADAPTER_VERSION, LIFECYCLE_CLEANED, LIFECYCLE_CLEANING,
-    LIFECYCLE_PROVISION_FAILED, LIFECYCLE_READY, LIFECYCLE_SEALED,
+    WorkspaceProvenance, ADAPTER_VERSION, LIFECYCLE_PROVISIONING,
 };
 use super::super::instructions::is_empty_manifest;
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
+use super::super::transition::{transition_workspace_lifecycle, WorkspaceLifecycleState};
 use super::{
     workspace_host_path, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext,
     LogicalWorkspaceIdentity,
 };
-use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 pub fn prepare_workspace_reservation(
     action: &CreateWorkspaceAction,
@@ -47,7 +46,7 @@ pub fn prepare_workspace_reservation(
         action.creation_policy,
         action.adapter,
         provenance,
-        "provisioning",
+        LIFECYCLE_PROVISIONING,
         manifest,
     ))
 }
@@ -204,7 +203,7 @@ fn create_workspace_action(
                             tree_hash: String::new(),
                             dirty_base,
                         },
-                        LIFECYCLE_PROVISION_FAILED,
+                        WorkspaceLifecycleState::ProvisionFailed,
                     )
                     .map_err(|persist_err| {
                         HostExecuteError::failed(
@@ -249,7 +248,7 @@ fn create_workspace_action(
                             tree_hash,
                             dirty_base,
                         },
-                        LIFECYCLE_PROVISION_FAILED,
+                        WorkspaceLifecycleState::ProvisionFailed,
                     )
                     .map_err(|persist_err| {
                         HostExecuteError::failed(
@@ -289,7 +288,7 @@ fn create_workspace_action(
                     tree_hash: String::new(),
                     dirty_base,
                 },
-                LIFECYCLE_PROVISION_FAILED,
+                WorkspaceLifecycleState::ProvisionFailed,
             )
             .map_err(|err| HostExecuteError::failed(err.to_string(), true, None))?;
             journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
@@ -298,8 +297,15 @@ fn create_workspace_action(
     };
 
     journal::advance(journal, 0, ActionJournalState::EffectObserved);
-    let outcome = persist_docs(action, &identity, ctx, &dest, observed, LIFECYCLE_READY)
-        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    let outcome = persist_docs(
+        action,
+        &identity,
+        ctx,
+        &dest,
+        observed,
+        WorkspaceLifecycleState::Ready,
+    )
+    .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
     Ok(outcome)
 }
@@ -317,14 +323,14 @@ fn persist_docs(
     ctx: &mut HostExecutorContext<'_>,
     dest: &Path,
     observed: ObservedProvisioning,
-    lifecycle_state: &str,
+    target_state: WorkspaceLifecycleState,
 ) -> Result<CreateWorkspaceOutcome> {
     let ObservedProvisioning {
         observation,
         tree_hash,
         dirty_base,
     } = observed;
-    if let Some(existing) = ctx
+    let next_state = if let Some(existing) = ctx
         .documents
         .load_isolated_workspace(&identity.workspace_id)?
     {
@@ -334,32 +340,18 @@ fn persist_docs(
                 identity.workspace_id
             );
         }
-        let existing_state = normalize_workspace_lifecycle_state(&existing.lifecycle_state);
-        if existing_state == Some(LIFECYCLE_READY) && lifecycle_state != LIFECYCLE_READY {
-            bail!(
-                "refusing to overwrite Ready IsolatedWorkspace {}",
-                identity.workspace_id
-            );
+        if WorkspaceLifecycleState::parse(&existing.lifecycle_state) == Some(target_state) {
+            target_state
+        } else {
+            transition_workspace_lifecycle(
+                &existing.lifecycle_state,
+                target_state.as_str(),
+                existing.seal_hash.as_deref(),
+            )?
         }
-        if existing_state == Some(LIFECYCLE_PROVISION_FAILED)
-            && lifecycle_state != LIFECYCLE_PROVISION_FAILED
-        {
-            bail!(
-                "IsolatedWorkspace {} is provisionFailed; refusing {lifecycle_state} without cleanup",
-                identity.workspace_id
-            );
-        }
-        if matches!(
-            existing_state,
-            Some(LIFECYCLE_SEALED) | Some(LIFECYCLE_CLEANING) | Some(LIFECYCLE_CLEANED)
-        ) {
-            bail!(
-                "IsolatedWorkspace {} is {}; refusing {lifecycle_state} without cleanup",
-                identity.workspace_id,
-                existing.lifecycle_state
-            );
-        }
-    }
+    } else {
+        transition_workspace_lifecycle(LIFECYCLE_PROVISIONING, target_state.as_str(), None)?
+    };
 
     let instruction_manifest = instruction_manifest_for_persist(
         ctx.documents,
@@ -372,7 +364,7 @@ fn persist_docs(
         action.creation_policy,
         action.adapter,
         &ctx.provenance,
-        lifecycle_state,
+        next_state.as_str(),
         instruction_manifest,
     );
     let host_path = dest
@@ -406,7 +398,8 @@ fn instruction_manifest_for_persist(
     base_sha: &str,
 ) -> Result<String> {
     if let Some(existing) = documents.load_isolated_workspace(workspace_id)? {
-        if normalize_workspace_lifecycle_state(&existing.lifecycle_state) == Some("provisioning")
+        if WorkspaceLifecycleState::parse(&existing.lifecycle_state)
+            == Some(WorkspaceLifecycleState::Provisioning)
             || !is_empty_manifest(&existing.instruction_manifest)
         {
             return Ok(existing.instruction_manifest);

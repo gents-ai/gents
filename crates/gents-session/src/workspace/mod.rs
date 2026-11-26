@@ -14,6 +14,7 @@ mod quickstart;
 pub mod root_resolution;
 pub mod runtime;
 pub mod sandbox;
+mod transition;
 
 pub use action_plan::{
     action_plan_canonical_json, canonical_json_string, parse_action_plan_json, ACTION_PLAN_ABI,
@@ -62,6 +63,10 @@ pub use runtime::cleanup_workspace;
 pub use runtime::{
     integrate_on_integrator_success, materialize_workspace_binding, release_writer_binding,
     seal_on_writer_success, stamp_workspace_lineage, writer_request_already_sealed_with_identity,
+};
+pub use transition::{
+    step_isolated_workspace, transition_workspace_lifecycle, WorkspaceLifecycleState,
+    WorkspaceTransitionError,
 };
 
 pub use overlay::{

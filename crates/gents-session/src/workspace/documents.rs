@@ -14,6 +14,7 @@ use super::executor::RepositoryPlacementRef;
 use super::LogicalWorkspaceIdentity;
 
 pub(crate) const ADAPTER_VERSION: &str = "gents-workspace-adapter/1";
+pub(crate) const LIFECYCLE_PROVISIONING: &str = "provisioning";
 pub(crate) const LIFECYCLE_READY: &str = "ready";
 pub(crate) const LIFECYCLE_PROVISION_FAILED: &str = "provisionFailed";
 pub(crate) const LIFECYCLE_SEALED: &str = "sealed";
