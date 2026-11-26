@@ -1,0 +1,3 @@
+---- MODULE MCTranscriptPassiveWheelCaptureStaleSeen ----
+EXTENDS TranscriptPassiveWheelCapture
+====
