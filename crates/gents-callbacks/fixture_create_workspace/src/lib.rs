@@ -1,3 +1,7 @@
+//! Test fixture: WASI callback producer turning a source document and args into a workspace action plan.
+//!
+//! Used to test Afterburner callback execution without external packs.
+
 use serde_json::{json, Map, Value};
 
 pub const ACTION_PLAN_ABI: u32 = 1;

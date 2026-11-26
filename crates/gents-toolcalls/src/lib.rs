@@ -1,3 +1,7 @@
+//! Tool calls layer: tool-call dispatch, lifecycle, background jobs, and plugin host calls.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/ToolCalls/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 #[cfg(test)]
 mod backend_observation_read_tests;
 pub mod background;

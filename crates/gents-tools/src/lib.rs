@@ -1,3 +1,7 @@
+//! Tools layer: builtin, native, plugin, and MCP tool surfaces plus self-configuration grants.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Tools/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 pub mod builtin;
 mod collection_use;
 mod guided_failure;

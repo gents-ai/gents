@@ -1,3 +1,7 @@
+//! Host layer: runtime preparation, HTTP serving, P2P relay status, and readiness checks.
+//!
+//! Test fixtures live in `src/test_support.rs` (`test-fixtures`).
+
 pub mod args;
 pub mod cli_process;
 pub mod defaults;

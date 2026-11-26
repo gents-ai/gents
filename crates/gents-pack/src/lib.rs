@@ -1,3 +1,7 @@
+//! Packs layer: capability packs, plugin grants, and the WASM plugin runner.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Pack/`; test fixtures live in `src/test_support.rs` (`test-fixtures`).
+
 pub mod operations;
 pub mod pack;
 pub mod plugin;

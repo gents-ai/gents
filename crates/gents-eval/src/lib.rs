@@ -1,3 +1,7 @@
+//! Client adapter layer: evaluation authoring, checks, runners, and optimization drivers.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Runtime/`; unit test doubles live in `src/test_support/`.
+
 pub mod authoring;
 pub mod checks;
 pub mod optimization;
