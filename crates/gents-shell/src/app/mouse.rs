@@ -2,6 +2,7 @@ use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::layers::LayerKind;
+use super::selection::Selection;
 use super::{App, Pane};
 use crate::draw::agent::{chip_at, first_line, message_box_area, slash_area, slash_rows, ChipHit};
 use crate::draw::layers::{list_area, list_start};
@@ -14,7 +15,12 @@ impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => self.click(at),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.selection = None;
+                self.click(at);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => self.drag(at),
+            MouseEventKind::Up(MouseButton::Left) => self.release(),
             MouseEventKind::ScrollUp => self.wheel(at, false),
             MouseEventKind::ScrollDown => self.wheel(at, true),
             _ => {}
@@ -187,7 +193,48 @@ impl App {
         self.focus_pane(Pane::Agent);
         if message_box_area(pane, message_rows).contains(at) {
             self.act(Action::EnterInput);
+        } else if self.conversation_area(pane).contains(at) {
+            let point = self.conversation_point(pane, at);
+            self.selection = Some(Selection {
+                anchor: point,
+                end: point,
+            });
         }
+    }
+
+    fn drag(&mut self, at: Position) {
+        let (Some(panes), Some(selection)) = (self.panes(), self.selection) else {
+            return;
+        };
+        let end = self.conversation_point(panes.agent, at);
+        self.selection = Some(Selection { end, ..selection });
+    }
+
+    fn release(&mut self) {
+        let (Some(panes), Some(selection)) = (self.panes(), self.selection) else {
+            return;
+        };
+        if selection.anchor == selection.end {
+            self.selection = None;
+            return;
+        }
+        let rows = self.conversation_rows(self.conversation_area(panes.agent).width);
+        self.clipboard = Some(selection.text(&rows));
+        self.notice = Some("copied the selection".to_string());
+    }
+
+    fn conversation_area(&self, pane: Rect) -> Rect {
+        self.visible_rows(Pane::Agent, self.conversation_rect(pane))
+    }
+
+    /// `at` as a (row index, column) of the conversation's rows, held inside its area.
+    fn conversation_point(&self, pane: Rect, at: Position) -> (usize, u16) {
+        let area = self.conversation_area(pane);
+        let total = self.conversation_rows(area.width).len();
+        let first = first_line(total, area.height, self.tabs[self.active].scroll);
+        let y = at.y.min(area.bottom().saturating_sub(1)).max(area.top());
+        let x = at.x.min(area.right().saturating_sub(1)).max(area.left());
+        (first + usize::from(y - area.y), x - area.x)
     }
 
     fn click_slash(&mut self, list: Rect, at: Position) {
@@ -539,6 +586,69 @@ mod tests {
             mouse(&mut app, kind, column, row);
             assert_eq!(app.subagent, None);
         }
+    }
+
+    /// Presses the left button at `from`, drags to `to` and releases there, as (row, column).
+    fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) {
+        mouse(app, MouseEventKind::Down(MouseButton::Left), from.1, from.0);
+        mouse(app, MouseEventKind::Drag(MouseButton::Left), to.1, to.0);
+        mouse(app, MouseEventKind::Up(MouseButton::Left), to.1, to.0);
+    }
+
+    /// The sample reply's first character and its last.
+    fn reply_ends(app: &App) -> ((u16, u16), (u16, u16)) {
+        let shown = screen(app);
+        let start = find(&shown, "Moving them under").expect("the reply");
+        let (row, column) = find(&shown, "beside them.").expect("its second row");
+        (start, (row, column + "beside them.".len() as u16 - 1))
+    }
+
+    const REPLY: &str = "Moving them under `gents auth`, one subcommand per provider,\n and folding the probes in beside them.";
+
+    #[test]
+    fn a_drag_across_rows_copies_their_text() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, start, end);
+        assert_eq!(app.take_clipboard().as_deref(), Some(REPLY));
+        assert_eq!(app.notice.as_deref(), Some("copied the selection"));
+    }
+
+    #[test]
+    fn a_drag_upward_copies_the_same_text() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, end, start);
+        assert_eq!(app.take_clipboard().as_deref(), Some(REPLY));
+    }
+
+    #[test]
+    fn a_drag_past_the_conversation_clamps() {
+        let mut app = session_app(132, 36);
+        let (start, _) = reply_ends(&app);
+        drag(&mut app, start, (35, start.1));
+        let copied = app.take_clipboard().expect("a selection");
+        assert!(copied.starts_with("Moving them under"), "{copied}");
+    }
+
+    #[test]
+    fn a_click_copies_nothing_and_a_key_ends_the_selection() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, start, start);
+        assert_eq!((app.take_clipboard(), app.selection), (None, None));
+        drag(&mut app, start, end);
+        assert!(app.selection.is_some());
+        press(&mut app, "j");
+        assert_eq!(app.selection, None);
+    }
+
+    #[test]
+    fn a_drag_from_a_file_row_opens_the_file() {
+        let mut app = session_app(132, 36);
+        let start = find(&screen(&app), "M cli/mod.rs").expect("a file row");
+        drag(&mut app, start, (start.0 + 1, start.1 + 4));
+        assert_eq!((app.diff, app.selection), (Some(1), None));
     }
 
     #[test]

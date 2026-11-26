@@ -6,6 +6,7 @@ pub mod layers;
 mod mouse;
 mod prompt;
 pub mod search;
+mod selection;
 pub mod setup;
 pub mod transcript;
 pub mod work;
@@ -175,6 +176,8 @@ pub struct App {
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
     pub branch: Option<String>,
+    /// The conversation text a left drag covers; kept after the release until the next press.
+    pub(crate) selection: Option<selection::Selection>,
     /// Text the terminal copies after this input.
     clipboard: Option<String>,
     next_tab: u64,
@@ -280,6 +283,7 @@ impl App {
             intents: None,
             connection: Connection::Sample,
             branch: None,
+            selection: None,
             clipboard: None,
             next_tab: 0,
             quit: false,
@@ -630,7 +634,10 @@ impl App {
 
     pub fn handle(&mut self, event: Event) {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.selection = None;
+                self.handle_key(key);
+            }
             Event::Paste(text) => self.paste(&text),
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Resize(width, height) => {

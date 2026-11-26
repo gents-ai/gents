@@ -174,14 +174,17 @@ where
     }
 }
 
-/// Inputs `App::handle` ignores: pointer motion, releases, and key releases.
+/// Inputs `App::handle` ignores: pointer motion, drags and releases of other buttons than the
+/// left, and key releases.
 fn inert(input: &Input) -> bool {
-    use event::{KeyEventKind, MouseEventKind};
+    use event::{KeyEventKind, MouseButton, MouseEventKind};
     match input {
-        Input::Terminal(Event::Mouse(mouse)) => matches!(
-            mouse.kind,
-            MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
-        ),
+        Input::Terminal(Event::Mouse(mouse)) => match mouse.kind {
+            MouseEventKind::Drag(button) | MouseEventKind::Up(button) => {
+                button != MouseButton::Left
+            }
+            kind => kind == MouseEventKind::Moved,
+        },
         Input::Terminal(Event::Key(key)) => key.kind != KeyEventKind::Press,
         _ => false,
     }
@@ -297,6 +300,22 @@ mod tests {
         assert_eq!(error.to_string(), "the tty went away");
         assert_eq!(renders, 1, "one render before the queued inputs");
         drop(sender);
+    }
+
+    #[test]
+    fn a_left_drag_redraws_and_other_motion_does_not() {
+        use event::MouseButton::{Left, Right};
+        use event::MouseEventKind::{Drag, Moved, Up};
+        let at = |kind| {
+            Input::Terminal(Event::Mouse(event::MouseEvent {
+                kind,
+                column: 3,
+                row: 3,
+                modifiers: event::KeyModifiers::NONE,
+            }))
+        };
+        assert!(!inert(&at(Drag(Left))) && !inert(&at(Up(Left))));
+        assert!(inert(&at(Moved)) && inert(&at(Drag(Right))) && inert(&at(Up(Right))));
     }
 
     #[test]
