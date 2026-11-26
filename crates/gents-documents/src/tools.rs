@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{BashMode, FileToolMode};
 use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode};
-pub use gents_protocol::row::RetiredKey;
 
 mod persistence;
 
@@ -442,12 +441,6 @@ pub struct AgentTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BuiltInTools {
-    /// Tools documents stored before graph tools were removed carry this key;
-    /// it is accepted and ignored, and the canonical serializer drops it on next write.
-    #[serde(default, rename = "enable_graph_tools", skip_serializing)]
-    #[cfg_attr(feature = "typescript", ts(skip))]
-    #[schemars(extend("deprecated" = true))]
-    pub retired_graph_tools: RetiredKey,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

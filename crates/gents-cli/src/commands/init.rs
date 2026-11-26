@@ -1873,7 +1873,6 @@ fn tools_for_package(
             enable_p2p_tool: None,
             enable_p2p_mutations: None,
             enable_context_budget: Some(true),
-            ..Default::default()
         }),
         datastore: Some(DatastoreTools {
             write_collections: None,

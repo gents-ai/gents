@@ -304,9 +304,13 @@ source consistency checks, not a separate runtime compatibility version.
   being retried indefinitely, and a title audit whose session row is not
   readable is logged instead of silently counting as already titled (#3657).
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
-  converted or migrated. Starting on one stops before any write and says to
-  back it up or delete it and run `gents`; see
-  [docs/upgrade-from-rc1.md](docs/upgrade-from-rc1.md).
+  converted or migrated. Starting on one stops before any write (exit code 65)
+  and says to back it up or delete it and run `gents`: export any configuration
+  you want to keep with the release that created it
+  (`gents config export --root <dir>`), move or delete the old home, run
+  `gents` to set up a fresh one, and re-apply with
+  `gents config apply --root <dir>` (sessions, transcripts, and peer/client
+  enrollments do not carry over).
 - The Engineer builds what you ask for on its node: the data, the pages you
   open in the desktop, and the agents and schedules that keep it running. It
   was a configuration guide; its prompt and description are rewritten for
