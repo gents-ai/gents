@@ -2,100 +2,12 @@ use crate::call::hook::fixtures::r4c_private_support::{
     accepted_call, assert_accepted_control_rows, setup_private_hook,
 };
 use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook};
+use crate::test_support::doubles::{GatedTool, PendingTool, SilentChanges, StaticTool};
 use gents_inference::llm::ToolCallHookAction;
-use gents_loop::tool::BoxFuture;
-use gents_loop::tool::ToolDefinition;
-use gents_loop::tool::{ToolDyn, ToolError};
+use gents_loop::tool::ToolDyn;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::test_support::TestStore;
 use serde_json::{json, Value};
-
-struct StaticTool {
-    name: &'static str,
-    result: &'static str,
-}
-
-impl ToolDyn for StaticTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.name.to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.to_string(),
-                description: "test tool".to_string(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { Ok(self.result.to_string()) })
-    }
-}
-
-struct PendingTool;
-
-struct GatedTool(std::sync::Arc<tokio::sync::Semaphore>);
-
-impl ToolDyn for GatedTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "gated_tool".to_owned()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "gated_tool".to_owned(),
-                description: "gated tool".to_owned(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async {
-            let _permit = self.0.acquire().await.unwrap();
-            Ok("wake-completed".to_owned())
-        })
-    }
-}
-
-struct SilentChanges {
-    waiting: std::sync::Arc<tokio::sync::Notify>,
-    closed: bool,
-}
-
-impl futures::Stream for SilentChanges {
-    type Item = events::DocumentChangeBatch;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        _context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.waiting.notify_one();
-        if self.closed {
-            std::task::Poll::Ready(None)
-        } else {
-            std::task::Poll::Pending
-        }
-    }
-}
 
 async fn background_wait_recovers_without_notification(closed: bool) {
     let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
@@ -151,33 +63,6 @@ async fn background_wait_recovers_after_a_lost_notification() {
 #[tokio::test]
 async fn background_wait_recovers_after_the_change_feed_closes() {
     background_wait_recovers_without_notification(true).await;
-}
-
-impl ToolDyn for PendingTool {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "slow_tool".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "slow_tool".to_string(),
-                description: "test tool".to_string(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        _args: String,
-        _context: &'a gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
 }
 
 async fn setup_hook(
@@ -380,7 +265,7 @@ async fn create_foreground_tool_call(hook: &DefraSessionHook) {
 async fn list_background_tools_returns_running_bg_tools() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-list-bg-running",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let handle_a = background_tool(&hook, "bg-a", "slow_tool").await;
@@ -464,46 +349,61 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
     // The gated child stays running with exactly the 4 bytes of "live" until
-    // the release, so the poll ends on that observation; a terminal row
+    // the release, so the wait ends on that observation; a terminal row
     // before it means the child ended on its own, which fails with the
     // evidence (`NoWindowFailure`).
-    let mut observations: Vec<(String, u64, String)> = Vec::new();
-    let mut attempt = 0;
-    let entry = loop {
-        attempt += 1;
-        let result =
-            list_background_tools(&hook, &format!("list-live-output-{attempt}"), json!({})).await;
-        let entries = result["entries"].as_array().expect("entries");
-        if let Some(candidate) = entries
-            .iter()
-            .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
-        {
-            let status = candidate["status"].as_str().unwrap_or("<missing>");
-            observations.push((
-                status.to_string(),
-                candidate["stdout_bytes"].as_u64().unwrap_or(u64::MAX),
-                candidate["available_bytes"]
-                    .as_u64()
-                    .map(|bytes| bytes.to_string())
-                    .unwrap_or_else(|| "<missing>".to_string()),
-            ));
-            if status == "running" && candidate["stdout_bytes"].as_u64() == Some(4) {
-                break candidate.clone();
-            }
+    let access = hook.actor_access().expect("selected agent");
+    let escaped_id = escape_graphql_string(tool_call_id);
+    gents_store::test_support::read_when_changed(
+        &access,
+        "AgentOutputSegment",
+        "live output bytes",
+        async || {
+            let response = access
+                .execute(&format!(
+                    r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_id}" }} }}, limit: 1) {{ _docID request_doc_id session_id node_did requester_did lifecycle_state }} }}"#
+                ))
+                .await
+                .expect("read background row");
+            let row = &response["data"]["AgentToolCall"][0];
+            let status = row["lifecycle_state"].as_str().unwrap_or("<missing>");
             if status != "running" && status != "pending" {
                 let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
                 panic!(
-                    "the gated child ended before the release; per-attempt status/bytes: \
-                     {observations:?}; last response: {result}; persisted-row snapshot: {}; \
+                    "the gated child ended before the release; status: {status}; persisted-row snapshot: {}; \
                      bounded read (min 64 tokens): {}",
                     serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await)
                         .unwrap(),
                     read_failure["output"].as_str().unwrap_or("<no output>")
                 );
             }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
+            let output = gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+                &access,
+                row["_docID"].as_str().unwrap(),
+                row["request_doc_id"].as_str().unwrap(),
+                row["session_id"].as_str().unwrap(),
+                row["node_did"].as_str().unwrap(),
+                row["requester_did"].as_str(),
+            )
+            .await
+            .expect("observe canonical output")
+            .into_text();
+            if status == "running" && output.len() == 4 {
+                Ok(())
+            } else {
+                Err(format!("{status}:{}", output.len()))
+            }
+        },
+    )
+    .await;
+    let result = list_background_tools(&hook, "list-live-output", json!({})).await;
+    let entry = result["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
+        .expect("live background entry")
+        .clone();
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
     assert_eq!(entry["status"].as_str(), Some("running"));
     assert_eq!(
@@ -551,14 +451,14 @@ async fn list_background_tools_rejects_sibling_requests() {
         &db,
         "parent-one",
         "session-one",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let (hook_2, _session_2, _request_2) = setup_hook_on_db(
         &db,
         "parent-two",
         "session-two",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     background_tool(&hook_2, "sibling-bg", "slow_tool").await;
@@ -588,7 +488,7 @@ async fn setup_hook_on_db(
 async fn list_background_tools_excludes_foreground_calls() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-list-bg-foreground",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     create_foreground_tool_call(&hook).await;
@@ -605,10 +505,10 @@ async fn list_background_tools_status_filter() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-list-bg-status",
         registry(
-            vec![Box::new(StaticTool {
-                name: "complete_tool",
-                result: "terminal output",
-            })],
+            vec![Box::new(StaticTool::new(
+                "complete_tool",
+                "terminal output",
+            ))],
             &["complete_tool"],
         ),
     )
@@ -636,7 +536,7 @@ async fn list_background_tools_status_filter() {
 async fn list_background_tools_limit_truncates() {
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-list-bg-limit",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     for index in 0..5 {
@@ -652,7 +552,7 @@ async fn list_background_tools_limit_truncates() {
 async fn list_background_tools_keeps_one_accepted_parent_control_row() {
     let (_db, hook, session_id, _request_id) = setup_hook(
         "r4c-list-bg-no-row",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     background_tool(&hook, "bg-no-row", "slow_tool").await;
@@ -669,7 +569,7 @@ async fn list_background_tools_keeps_one_accepted_parent_control_row() {
 async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     let (db, hook, session_id, _) = setup_hook(
         "r4c-private-agent-control",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(vec![Box::new(PendingTool::slow())], &["slow_tool"]),
     )
     .await;
     let handle = background_tool(&hook, "private-background", "slow_tool").await;

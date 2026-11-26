@@ -3,34 +3,13 @@ use crate::config_client::{
     client_authentication::runtime_authentication, runtime_endpoints::RuntimeEndpoints,
     ClientSigningCapability,
 };
+use crate::test_support::doubles::FailingTupleChanges;
+use crate::test_support::NoToolSources;
 use anyhow::Context;
 use defra_node::{EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment};
 use gents_protocol::client_authentication::ClientAuthentication;
 use identity::{FullIdentity as _, RawIdentity};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-struct NoToolSources;
-
-impl crate::local::ToolSourcePolicy for NoToolSources {
-    fn node_operation_sources(
-        &self,
-        _: &serde_json::Value,
-        _: &[serde_json::Value],
-    ) -> anyhow::Result<Vec<crate::local::ProjectedOperationSource>> {
-        Ok(Vec::new())
-    }
-
-    fn plugin_refs(
-        &self,
-        _: &serde_json::Value,
-    ) -> anyhow::Result<Vec<crate::local::ProjectedPluginRef>> {
-        Ok(Vec::new())
-    }
-
-    fn selected_tools(&self, _: &str, _: &serde_json::Value) -> Option<String> {
-        None
-    }
-}
 
 fn held_client() -> anyhow::Result<(RawIdentity, ClientSigningCapability)> {
     let key = RawIdentity::from_private_key(crypto::generate_ed25519()?)?;
@@ -474,37 +453,6 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     Ok(())
 }
 
-/// Native tuple changes that refuse the issue at `fail_at` and pass every
-/// other change through.
-struct FailingAt<'a> {
-    inner: crate::identity::enrollment_grant::NativeTuples<'a>,
-    fail_at: usize,
-    issues: std::sync::atomic::AtomicUsize,
-}
-
-impl crate::identity::enrollment_grant::TupleChanges for FailingAt<'_> {
-    async fn issue(
-        &self,
-        tuple: crate::identity::EnrollmentGrantTuple,
-    ) -> Result<(), crate::config_client::ConfigClientError> {
-        if self
-            .issues
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            == self.fail_at
-        {
-            return Err(crate::config_client::ConfigClientError::RelationshipActorRequired);
-        }
-        self.inner.issue(tuple).await
-    }
-
-    async fn remove(
-        &self,
-        tuple: crate::identity::EnrollmentGrantTuple,
-    ) -> Result<(), crate::config_client::ConfigClientError> {
-        self.inner.remove(tuple).await
-    }
-}
-
 /// An approval whose grant fails at any of its tuples, after the Node
 /// `administrator` relation was issued or later, leaves the client no
 /// administrator relationship and no node permission, its request pending,
@@ -562,7 +510,7 @@ async fn a_failed_approval_leaves_no_access_and_a_retry_approves() -> anyhow::Re
                 .state,
             ClientAccessState::Pending
         );
-        let tuples = FailingAt {
+        let tuples = FailingTupleChanges {
             inner: crate::identity::enrollment_grant::NativeTuples {
                 owner: &approver,
                 nac_owner: &runtime,

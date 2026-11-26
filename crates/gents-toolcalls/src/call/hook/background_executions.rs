@@ -120,6 +120,8 @@ pub struct BackgroundExecutionRegistry {
     service_admission: gents_store::service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    process_record_notify: Arc<tokio::sync::Notify>,
     #[cfg(any(test, feature = "test-fixtures"))]
     release_wait: Option<std::time::Duration>,
 }
@@ -154,6 +156,11 @@ impl BackgroundExecutionRegistry {
     pub(crate) fn with_stop_release_observer(mut self, observer: Arc<tokio::sync::Notify>) -> Self {
         self.stop_release_observer = Some(observer);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn process_record_notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.process_record_notify.notified()
     }
 
     pub fn service_admission(&self) -> &gents_store::service::RuntimeServiceAdmission {
@@ -207,6 +214,8 @@ impl BackgroundExecutionRegistry {
             .as_ref()
             .map(|execution| execution.process_identity.clone());
         let failure_owner = execution.map(|execution| execution.requested_stop);
+        #[cfg(test)]
+        let record_notify = self.process_record_notify.clone();
         let recorder = gents_session::exec::ownership::ProcessRecorder::new(move |identity| {
             if let Some(owner) = &identity_owner {
                 *owner
@@ -225,6 +234,8 @@ impl BackgroundExecutionRegistry {
                     "failed to record background process ownership; a runtime restart will settle it as lost"
                 );
             }
+            #[cfg(test)]
+            record_notify.notify_waiters();
         });
         let recorder = recorder.with_failure_decision(move || {
             if let Some(owner) = &failure_owner {

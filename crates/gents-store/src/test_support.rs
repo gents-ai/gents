@@ -1,5 +1,7 @@
 pub mod acp_policies;
 pub mod bounded_process;
+#[cfg(test)]
+pub(crate) mod doubles;
 #[cfg(unix)]
 mod executable_script;
 pub mod relationships;
@@ -9,7 +11,7 @@ pub mod wire_database;
 
 #[cfg(unix)]
 pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
-pub use test_store::TestStore;
+pub use test_store::{NoToolSources, TestStore};
 
 /// Hang detector for every wait without a deadline of its own: the longest a
 /// wait may observe no progress (no change to the documents it watches, no

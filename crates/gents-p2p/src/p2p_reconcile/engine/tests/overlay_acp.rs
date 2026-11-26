@@ -215,43 +215,6 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
     Ok(())
 }
 
-/// The prepared read and the read before the teardown name the application
-/// collection; the read before the install, after the teardown ran, no longer
-/// does (`MCPairingGrantRevocationNoRecheck`).
-struct WithdrawnBeforeInstall {
-    reads: Mutex<std::collections::VecDeque<PairingDesired>>,
-    applied: Mutex<PairingApplied>,
-}
-
-#[async_trait]
-impl PairingStateStore for WithdrawnBeforeInstall {
-    async fn load_desired(&self, _peer_id: &str) -> Result<Option<PairingDesired>> {
-        let mut reads = self.reads.lock().unwrap();
-        let read = if reads.len() > 1 {
-            reads.pop_front()
-        } else {
-            reads.front().cloned()
-        };
-        Ok(read)
-    }
-
-    async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
-        Ok(LoadedPairingApplied {
-            state: self.applied.lock().unwrap().clone(),
-            ..Default::default()
-        })
-    }
-
-    async fn persist_applied(&self, _peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
-        *self.applied.lock().unwrap() = applied.state.clone();
-        Ok(())
-    }
-
-    async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
-        Ok(set(&["peer-a"]))
-    }
-}
-
 #[tokio::test]
 async fn an_install_takes_its_scope_from_authority_read_after_the_teardown() {
     let address = "stable-peer@127.0.0.1:4100";
@@ -260,20 +223,17 @@ async fn an_install_takes_its_scope_from_authority_read_after_the_teardown() {
         replicator_collections: set(collections),
         ..Default::default()
     };
-    let store = WithdrawnBeforeInstall {
-        reads: Mutex::new(
-            [
-                route(&["AgentRequest", "ChangeProposed"]),
-                route(&["AgentRequest", "ChangeProposed"]),
-                route(&["AgentRequest"]),
-            ]
-            .into(),
-        ),
-        applied: Mutex::new(PairingApplied {
+    let store = MockStore::with_desired_reads(
+        [
+            route(&["AgentRequest", "ChangeProposed"]),
+            route(&["AgentRequest", "ChangeProposed"]),
+            route(&["AgentRequest"]),
+        ],
+        PairingApplied {
             replicator_addresses: set(&[address]),
             ..Default::default()
-        }),
-    };
+        },
+    );
     let admin = MockAdmin {
         active: Mutex::new(vec!["stable-peer".into()]),
         ..Default::default()
@@ -318,19 +278,16 @@ async fn a_reinstall_undone_before_its_teardown_leaves_the_route_standing() {
         replicator_collections: set(collections),
         ..Default::default()
     };
-    let store = WithdrawnBeforeInstall {
-        reads: Mutex::new(
-            [
-                route(&["AgentRequest", "ChangeProposed"]),
-                route(&["AgentRequest"]),
-            ]
-            .into(),
-        ),
-        applied: Mutex::new(PairingApplied {
+    let store = MockStore::with_desired_reads(
+        [
+            route(&["AgentRequest", "ChangeProposed"]),
+            route(&["AgentRequest"]),
+        ],
+        PairingApplied {
             replicator_addresses: set(&[address]),
             ..Default::default()
-        }),
-    };
+        },
+    );
     let admin = MockAdmin {
         active: Mutex::new(vec!["stable-peer".into()]),
         ..Default::default()

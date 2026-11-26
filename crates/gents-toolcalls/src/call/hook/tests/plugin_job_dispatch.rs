@@ -1499,15 +1499,24 @@ impl Step0 {
         let job = self.row().await["_docID"].as_str().unwrap().to_owned();
         // The step the adoption kicked ends with a second progress revision;
         // a reinstall before then would make it fail the job closed.
-        while read_progress(&self.access(), &job)
-            .await
-            .unwrap()
-            .unwrap()
-            .revision
-            < 2
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        gents_store::test_support::read_when_changed(
+            &self.access(),
+            "AgentToolCall",
+            "adopted job progress revision >= 2",
+            async || {
+                let revision = read_progress(&self.access(), &job)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .revision;
+                if revision >= 2 {
+                    Ok(())
+                } else {
+                    Err(revision)
+                }
+            },
+        )
+        .await;
         let child = self.child_request(&job, "s").await["_docID"]
             .as_str()
             .unwrap()

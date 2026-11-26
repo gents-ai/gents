@@ -1,45 +1,8 @@
 use super::*;
+use crate::test_support::doubles::ReadScope;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct ReadScope {
-    rows: Vec<AgentRequestRow>,
-    refuse_history: bool,
-    history_reads: AtomicUsize,
-}
-
-#[async_trait::async_trait]
-impl gents_store::config_client::ConfigRead for ReadScope {
-    async fn execute_read(
-        &self,
-        query: &str,
-    ) -> Result<Value, gents_store::config_client::ConfigClientError> {
-        if query.contains("AgentRequest(") {
-            let rows = self
-                .rows
-                .iter()
-                .map(|row| {
-                    let mut value = serde_json::to_value(row).unwrap();
-                    value["_docID"] = json!(row.doc_id);
-                    value
-                })
-                .collect::<Vec<_>>();
-            return Ok(json!({"data":{"AgentRequest":rows}}));
-        }
-        self.history_reads.fetch_add(1, Ordering::Relaxed);
-        if self.refuse_history {
-            return Err(gents_store::graphql::GraphqlResponseError::from(
-                gents_protocol::database_error::GraphqlFailure::new(
-                    "Goal",
-                    json!([{"message": "retained Goal history is unavailable"}]),
-                ),
-            )
-            .into());
-        }
-        Ok(json!({"data":{"Goal":[]}}))
-    }
-}
 
 #[tokio::test]
 async fn signed_scope_reads_use_the_executed_assignment_contract_without_history() {

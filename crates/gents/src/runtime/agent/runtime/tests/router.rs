@@ -791,6 +791,9 @@ async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) 
         }}"#,
         node_did = escape_graphql_string(&node_did),
     );
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&node, ["NodeReadiness"])
+            .expect("subscribe NodeReadiness");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     let published = loop {
         let response = node.execute(&query).await;
@@ -811,12 +814,12 @@ async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) 
             .map(|snapshot| snapshot.router_generation)
             .unwrap_or_default();
         if router_generation != input.pre_router_generation
-            || tokio::time::Instant::now() >= deadline
+            || tokio::time::timeout_at(deadline, changes.recv())
+                .await
+                .is_err()
         {
             break router_generation;
         }
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(10)).await;
     };
 
     let _ = shutdown_tx.send(true);

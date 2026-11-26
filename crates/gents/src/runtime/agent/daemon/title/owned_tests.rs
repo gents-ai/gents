@@ -2446,18 +2446,21 @@ fn buffered_reasoning_title_provider() -> (
 }
 
 async fn wait_for_first_title_reasoning(fixture: &TitleFixture) {
-    tokio::time::timeout(Duration::from_secs(12), async {
-        loop {
+    gents_store::test_support::read_when_changed(
+        &fixture.node,
+        "AgentOutputSegment",
+        "first title reasoning never became durable",
+        async || {
             let (rows, _) = fixture.output_rows().await;
             if rows.iter().any(|row| !row.segment.runs.is_empty()) {
                 assert_eq!(open_title_reasoning(fixture).await, ["first"]);
-                return;
+                Ok(())
+            } else {
+                Err("no title reasoning runs yet")
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("first title reasoning never became durable");
+        },
+    )
+    .await;
 }
 
 async fn open_title_reasoning(fixture: &TitleFixture) -> Vec<String> {

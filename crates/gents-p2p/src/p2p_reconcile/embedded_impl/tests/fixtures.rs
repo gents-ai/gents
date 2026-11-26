@@ -11,31 +11,8 @@ pub(in crate::p2p_reconcile) struct TestNode {
     pub(super) _tempdir: tempfile::TempDir,
 }
 
-struct NoToolSources;
-
 pub(super) fn no_tool_sources() -> Arc<dyn gents_store::local::ToolSourcePolicy> {
-    Arc::new(NoToolSources)
-}
-
-impl gents_store::local::ToolSourcePolicy for NoToolSources {
-    fn node_operation_sources(
-        &self,
-        _tools: &serde_json::Value,
-        _surfaces: &[serde_json::Value],
-    ) -> anyhow::Result<Vec<gents_store::local::ProjectedOperationSource>> {
-        Ok(Vec::new())
-    }
-
-    fn plugin_refs(
-        &self,
-        _tools: &serde_json::Value,
-    ) -> anyhow::Result<Vec<gents_store::local::ProjectedPluginRef>> {
-        Ok(Vec::new())
-    }
-
-    fn selected_tools(&self, _node: &str, _context: &serde_json::Value) -> Option<String> {
-        None
-    }
+    crate::test_support::doubles::no_tool_sources()
 }
 
 async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
@@ -141,11 +118,11 @@ pub(super) async fn runtime_test_node_with_signing_key(
 pub(super) async fn signed_p2p_node_without_schemas(
     identity: &dyn NodeIdentity,
     key: Vec<u8>,
-    address: std::net::SocketAddr,
+    listener: std::net::TcpListener,
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(defra_node::HttpConfig::with_addr(address)),
+        Some(defra_node::HttpConfig::with_listener(listener).expect("p2p test http listener")),
         Some(defra_node::SigningKey::Ed25519(key)),
         None,
     )
@@ -155,11 +132,11 @@ pub(super) async fn signed_p2p_node_without_schemas(
 pub(super) async fn signed_p2p_node_with_projector(
     identity: Arc<dyn NodeIdentity>,
     key: Vec<u8>,
-    address: std::net::SocketAddr,
+    listener: std::net::TcpListener,
 ) -> TestNode {
     p2p_node_with_options(
         Some(identity.did()),
-        Some(defra_node::HttpConfig::with_addr(address)),
+        Some(defra_node::HttpConfig::with_listener(listener).expect("p2p test http listener")),
         Some(defra_node::SigningKey::Ed25519(key)),
         Some(identity.clone()),
     )

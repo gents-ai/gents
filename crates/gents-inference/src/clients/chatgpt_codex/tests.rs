@@ -3,8 +3,6 @@ use super::*;
 use rig::http_client::HttpClientExt;
 use rig::wasm_compat::WasmCompatSend;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 #[tokio::test]
 async fn routing_affinity_follows_the_lean_model() {
     use crate::auth::http::OAuthHttpPolicy;
@@ -87,32 +85,7 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
     assert_eq!(next.token(), None);
 }
 
-struct CountingBearer {
-    token: String,
-    calls: AtomicUsize,
-    invalidations: AtomicUsize,
-}
-
-impl CountingBearer {
-    fn new(token: &str) -> Arc<Self> {
-        Arc::new(Self {
-            token: token.to_string(),
-            calls: AtomicUsize::new(0),
-            invalidations: AtomicUsize::new(0),
-        })
-    }
-}
-
-impl BearerSource for CountingBearer {
-    async fn current_bearer(&self) -> Result<String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(self.token.clone())
-    }
-
-    async fn invalidate(&self) {
-        self.invalidations.fetch_add(1, Ordering::SeqCst);
-    }
-}
+use crate::test_support::StaticBearer;
 
 #[derive(Clone, Debug)]
 struct StatusInjectingClient {
@@ -193,7 +166,7 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
 
     let terminal = CountingInner::default();
     let client = ChatGptCodexHttpClient::with_inner(
-        CountingBearer::new("tok"),
+        Arc::new(StaticBearer::new("tok")),
         crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
     );
 
@@ -292,8 +265,8 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
     assert_eq!(terminal.send_count(), 1);
 }
 
-async fn send_through(status: u16) -> Arc<CountingBearer> {
-    let bearer = CountingBearer::new("tok");
+async fn send_through(status: u16) -> Arc<StaticBearer> {
+    let bearer = Arc::new(StaticBearer::new("tok"));
     let client =
         ChatGptCodexHttpClient::with_inner(bearer.clone(), StatusInjectingClient { status });
     let req = Request::builder()
@@ -309,7 +282,7 @@ async fn send_through(status: u16) -> Arc<CountingBearer> {
 async fn provider_401_invalidates_the_bearer() {
     let bearer = send_through(401).await;
     assert_eq!(
-        bearer.invalidations.load(Ordering::SeqCst),
+        bearer.invalidations(),
         1,
         "a 401 from the provider must invalidate the bearer so the next request refreshes"
     );
@@ -317,7 +290,7 @@ async fn provider_401_invalidates_the_bearer() {
 
 #[tokio::test]
 async fn injects_fresh_bearer_on_each_request() {
-    let bearer = CountingBearer::new("tok-123");
+    let bearer = Arc::new(StaticBearer::new("tok-123"));
     let client = ChatGptCodexHttpClient::new(bearer.clone());
 
     let req = Request::builder()
@@ -336,11 +309,7 @@ async fn injects_fresh_bearer_on_each_request() {
         .unwrap();
 
     assert_eq!(auth, "Bearer tok-123", "stale bearer was replaced");
-    assert_eq!(
-        bearer.calls.load(Ordering::SeqCst),
-        1,
-        "refreshed once per request"
-    );
+    assert_eq!(bearer.bearer_calls(), 1, "refreshed once per request");
 }
 
 #[test]

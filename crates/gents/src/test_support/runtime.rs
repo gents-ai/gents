@@ -121,6 +121,7 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
 
 pub(crate) struct RecordingSlotFailurePolicy {
     pub(crate) retired: Mutex<Vec<(String, bool)>>,
+    pub(crate) retired_notify: Notify,
     pub(crate) demote_calls: AtomicUsize,
 }
 
@@ -144,6 +145,7 @@ impl SlotFailurePolicy for RecordingSlotFailurePolicy {
             .lock()
             .expect("retired mutex")
             .push((agent_did.to_string(), recreated));
+        self.retired_notify.notify_waiters();
     }
 }
 

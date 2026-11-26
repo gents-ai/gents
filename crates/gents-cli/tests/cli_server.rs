@@ -68,7 +68,16 @@ async fn wait_for_inference_call_state(
     request_id: &str,
     expected_state: &str,
 ) -> Result<Value> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        support::graphql::served_endpoint(graphql),
+    );
+    let mut changes =
+        gents_store::test_support::snapshot_reader::SnapshotReader::subscribe_changes(
+            &access,
+            "InferenceCall",
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let response = graphql_query(
             graphql,
@@ -100,13 +109,15 @@ async fn wait_for_inference_call_state(
             return Ok(row.clone());
         }
 
-        if Instant::now() >= deadline {
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
             return Err(anyhow!(
                 "timed out waiting for InferenceCall request_id={request_id} call_state={expected_state}; last rows={}",
                 Value::Array(rows)
             ));
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -155,27 +166,22 @@ fn count_inference_calls(rows: &[Value], agent_did: Option<&str>, call_state: &s
         .count() as i64
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous harness bounding a std child process exit in real time"
-)]
 fn wait_for_server_exit(
     serve: &mut ServeProcess,
     timeout: Duration,
 ) -> Result<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = serve.child.try_wait().context("checking server exit")? {
-            return Ok(status);
-        }
-        if Instant::now() >= deadline {
-            let (stdout, stderr) = serve.captured_output()?;
-            return Err(anyhow!(
-                "server did not exit within {timeout:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    use wait_timeout::ChildExt as _;
+    if let Some(status) = serve
+        .child
+        .wait_timeout(timeout)
+        .context("waiting for server exit")?
+    {
+        return Ok(status);
     }
+    let (stdout, stderr) = serve.captured_output()?;
+    Err(anyhow!(
+        "server did not exit within {timeout:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    ))
 }
 
 #[cfg(unix)]
@@ -1262,6 +1268,15 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /fleet to list this agent in ready state: {fleet}"
     );
 
+    let node_access = gents_store::config_client::ConfigAccess::Graphql(
+        support::graphql::node_principal_endpoint(&graphql),
+    );
+    let mut health_changes =
+        gents_store::test_support::snapshot_reader::SnapshotReader::subscribe_changes(
+            &node_access,
+            "ToolServiceHealth",
+        )
+        .await;
     let mcp_pool: Value = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let response = client
@@ -1283,7 +1298,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             }) {
                 break Ok::<_, anyhow::Error>(snapshot);
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            health_changes.recv().await;
         }
     })
     .await
@@ -1508,7 +1523,16 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let client = reqwest::Client::builder()
         .default_headers(headers)
         .build()?;
-    let stable_deadline = Instant::now() + Duration::from_secs(5);
+    let call_access = gents_store::config_client::ConfigAccess::Graphql(
+        support::graphql::served_endpoint(&graphql),
+    );
+    let mut call_changes =
+        gents_store::test_support::snapshot_reader::SnapshotReader::subscribe_changes(
+            &call_access,
+            "InferenceCall",
+        )
+        .await;
+    let stable_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let (
         snapshot,
         active_calls,
@@ -1542,13 +1566,15 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
                 count_inference_calls(&active_calls, Some(&default_agent_did), "queued"),
             );
         }
-        if Instant::now() >= stable_deadline {
+        if tokio::time::timeout_at(stable_deadline, call_changes.recv())
+            .await
+            .is_err()
+        {
             return Err(anyhow!(
                 "fleet slot snapshot did not stabilize with active inference calls; snapshot={snapshot}; active_calls={}",
                 Value::Array(active_calls)
             ));
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     };
     let expected_available = 1_i64.saturating_sub(expected_backend_running);
     assert!(

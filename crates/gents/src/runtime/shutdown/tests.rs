@@ -13,11 +13,30 @@ struct StageRecord {
 }
 
 #[derive(Clone, Default)]
-struct StageRecords(Arc<Mutex<Vec<StageRecord>>>);
+struct StageRecords {
+    entries: Arc<Mutex<Vec<StageRecord>>>,
+    notify: Arc<tokio::sync::Notify>,
+}
 
 impl StageRecords {
+    fn len(&self) -> usize {
+        self.entries.lock().unwrap().len()
+    }
+
+    async fn wait_for_len(&self, target: usize) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.len() >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     fn matching(&self, message: &str) -> Vec<StageRecord> {
-        self.0
+        self.entries
             .lock()
             .unwrap()
             .iter()
@@ -64,12 +83,13 @@ where
         }
         let mut fields = Fields::default();
         event.record(&mut fields);
-        self.0.lock().unwrap().push(StageRecord {
+        self.entries.lock().unwrap().push(StageRecord {
             level: *event.metadata().level(),
             message: fields.message,
             stage: fields.stage,
             elapsed_ms: fields.elapsed_ms,
         });
+        self.notify.notify_waiters();
     }
 }
 
@@ -80,14 +100,40 @@ fn captured() -> (StageRecords, tracing::subscriber::DefaultGuard) {
     (records, guard)
 }
 
+async fn drive_stage<T>(
+    records: &StageRecords,
+    stage_name: &'static str,
+    budget: Duration,
+    ticks: usize,
+    output: T,
+) -> T
+where
+    T: Send + 'static,
+{
+    let base = records.len();
+    let done = Arc::new(tokio::sync::Notify::new());
+    let done_wait = Arc::clone(&done);
+    let task = tokio::spawn(async move {
+        observe_stage(stage_name, budget, async move {
+            done_wait.notified().await;
+            output
+        })
+        .await
+    });
+    records.wait_for_len(base + 1).await;
+    for tick in 1..=ticks {
+        tokio::time::advance(STAGE_OBSERVATION_INTERVAL).await;
+        records.wait_for_len(base + 1 + tick).await;
+    }
+    done.notify_one();
+    task.await.expect("observed stage task should join")
+}
+
 #[tokio::test(start_paused = true)]
 async fn an_outstanding_stage_names_itself_while_it_still_runs() {
     let (records, _guard) = captured();
 
-    observe_stage("node_close", Duration::from_secs(600), async {
-        tokio::time::sleep(STAGE_OBSERVATION_INTERVAL * 3).await;
-    })
-    .await;
+    drive_stage(&records, "node_close", Duration::from_secs(600), 3, ()).await;
 
     let outstanding = records.matching("still outstanding");
     assert!(
@@ -117,10 +163,7 @@ async fn an_outstanding_stage_names_itself_while_it_still_runs() {
 async fn a_stage_past_its_budget_is_reported_against_that_budget() {
     let (records, _guard) = captured();
 
-    observe_stage("agent_drain", STAGE_OBSERVATION_INTERVAL, async {
-        tokio::time::sleep(STAGE_OBSERVATION_INTERVAL * 2).await;
-    })
-    .await;
+    drive_stage(&records, "agent_drain", STAGE_OBSERVATION_INTERVAL, 2, ()).await;
 
     let exceeded = records.matching("exceeded its budget");
     assert!(
@@ -139,13 +182,9 @@ async fn a_stage_past_its_budget_is_reported_against_that_budget() {
 /// store release both require the work under them to have finished.
 #[tokio::test(start_paused = true)]
 async fn observation_leaves_the_stage_to_finish_on_its_own() {
-    let (_records, _guard) = captured();
+    let (records, _guard) = captured();
 
-    let settled = observe_stage("node_close", Duration::ZERO, async {
-        tokio::time::sleep(STAGE_OBSERVATION_INTERVAL * 4).await;
-        "settled"
-    })
-    .await;
+    let settled = drive_stage(&records, "node_close", Duration::ZERO, 4, "settled").await;
 
     assert_eq!(settled, "settled");
 }

@@ -1,36 +1,5 @@
 use super::*;
-
-struct StageReporting {
-    run_dir: PathBuf,
-    seen: Mutex<Vec<Option<Progress>>>,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for StageReporting {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
-        spec.progress.stage_started("check");
-        let during = read_progress(&self.run_dir);
-        spec.progress.stage_ended("check");
-        self.seen.lock().unwrap().push(during);
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
-}
+use crate::test_support::doubles::{ReportsLive, StageReporting};
 
 #[tokio::test]
 async fn progress_names_the_stage_an_in_flight_slot_is_in_and_forgets_it_at_the_end() {
@@ -80,11 +49,6 @@ async fn progress_names_the_stage_an_in_flight_slot_is_in_and_forgets_it_at_the_
     assert!(!running_elsewhere(&run_dir));
 }
 
-struct ReportsLive {
-    run_dir: PathBuf,
-    seen: Mutex<Option<InFlight>>,
-}
-
 fn snapshot(requests: u64) -> LiveSnapshot {
     LiveSnapshot {
         stages: Default::default(),
@@ -113,34 +77,6 @@ fn snapshot(requests: u64) -> LiveSnapshot {
     }
 }
 
-#[async_trait::async_trait]
-impl TrialExecutor for ReportsLive {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
-        assert!(spec.progress.attached(), "the loop watches every trial");
-        spec.progress.live(snapshot(1));
-        *self.seen.lock().unwrap() = read_progress(&self.run_dir)
-            .and_then(|progress| progress.slots.values().next().cloned());
-        spec.progress.live(snapshot(2));
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
-}
-
 #[tokio::test]
 async fn a_slots_live_snapshot_is_in_progress_and_its_last_is_kept_with_its_evidence() {
     let (launching, pack) = launching("captured_rows_count").await;
@@ -156,6 +92,8 @@ async fn a_slots_live_snapshot_is_in_progress_and_its_last_is_kept_with_its_evid
     let executor = ReportsLive {
         run_dir: run_dir.clone(),
         seen: Mutex::new(None),
+        first: snapshot(1),
+        second: snapshot(2),
     };
     run(
         &launching.access,

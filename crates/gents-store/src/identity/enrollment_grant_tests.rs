@@ -357,63 +357,12 @@ fn approval_step_matches_lean() {
     });
 }
 
-/// A member's tuples in memory, refusing the issue at `fail_at` and, when
-/// `removals_fail`, every removal.
-struct InMemoryTuples {
-    held: std::sync::Mutex<Vec<EnrollmentGrantTuple>>,
-    issues: std::sync::atomic::AtomicUsize,
-    fail_at: Option<usize>,
-    removals_fail: bool,
-}
-
-impl InMemoryTuples {
-    fn holding(held: &[EnrollmentGrantTuple], fail_at: Option<usize>, removals_fail: bool) -> Self {
-        Self {
-            held: std::sync::Mutex::new(held.to_vec()),
-            issues: std::sync::atomic::AtomicUsize::new(0),
-            fail_at,
-            removals_fail,
-        }
-    }
-
-    fn held(&self) -> Vec<EnrollmentGrantTuple> {
-        let held = self.held.lock().unwrap();
-        EnrollmentGrantTuple::derived()
-            .into_iter()
-            .filter(|tuple| held.contains(tuple))
-            .collect()
-    }
-}
-
-impl TupleChanges for InMemoryTuples {
-    async fn issue(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError> {
-        let call = self
-            .issues
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if self.fail_at == Some(call) {
-            return Err(ConfigClientError::RelationshipActorRequired);
-        }
-        let mut held = self.held.lock().unwrap();
-        if !held.contains(&tuple) {
-            held.push(tuple);
-        }
-        Ok(())
-    }
-
-    async fn remove(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError> {
-        if self.removals_fail {
-            return Err(ConfigClientError::RelationshipActorRequired);
-        }
-        self.held.lock().unwrap().retain(|held| *held != tuple);
-        Ok(())
-    }
-}
-
 /// A grant failing at each of its tuples removes everything it alone
 /// accounts for, keeps another enrollment's tuples, and a retry then holds
 /// every derived tuple (Lean `abandon`, `retried_approval_after_abandon_is_a_clean_approval`).
 #[tokio::test]
 async fn a_grant_failing_at_any_tuple_leaves_none_of_its_authority() {
+    use crate::test_support::doubles::InMemoryTuples;
     let member = "did:key:z6MkktTX7oEjtsXwBJXEBPnrDCj6J917M1ERALJQriozAes4";
     let derived = EnrollmentGrantTuple::derived();
     let other = EnrollmentGrantReceipt {
@@ -454,6 +403,7 @@ async fn a_grant_failing_at_any_tuple_leaves_none_of_its_authority() {
 /// tuple, and the revocation's withdrawal plan removes them.
 #[tokio::test]
 async fn a_grant_whose_abandon_fails_is_repaired_by_a_retry_or_a_revocation() {
+    use crate::test_support::doubles::InMemoryTuples;
     let member = "did:key:z6MkktTX7oEjtsXwBJXEBPnrDCj6J917M1ERALJQriozAes4";
     let derived = EnrollmentGrantTuple::derived();
     let this = EnrollmentGrantReceipt {

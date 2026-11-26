@@ -382,13 +382,12 @@ pub async fn wake_jobs_after_request_update(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
     use crate::background::job::driver::tests::{
-        start_running, stepper, write_step_tools, Stepper,
+        idle, start_running, stepper, write_step_tools, Stepper,
     };
     use crate::background::job::driver::StepOutcome;
     use crate::background::job::input::tests::{node_did, request_as, ChildRequest};
@@ -461,18 +460,20 @@ mod tests {
 
     /// Waits until the kicked row's step has observed `count` terminal children.
     async fn observed(step: &Stepper, row: &str, count: u32) {
-        for _ in 0..200 {
-            if step.progress(row).await.observed_terminal_children >= count {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        panic!("row {row} never observed {count} terminal children");
-    }
-
-    /// Long enough for a wrongly kicked step to have run.
-    async fn settle_time() {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        gents_store::test_support::read_when_changed(
+            &step.job.access,
+            "AgentToolCall",
+            "observed_terminal_children",
+            async || {
+                let observed = step.progress(row).await.observed_terminal_children;
+                if observed >= count {
+                    Ok(())
+                } else {
+                    Err(observed)
+                }
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -486,7 +487,8 @@ mod tests {
             .await
             .unwrap();
         observed(&step, &step.row, 1).await;
-        settle_time().await;
+        idle(&driver).await;
+        assert!(!driver.kicked.lock().unwrap().contains(&other));
         assert_eq!(step.progress(&other).await.observed_terminal_children, 0);
         assert_eq!(step.progress(&other).await.revision, 1);
         step.close().await;
@@ -533,7 +535,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        settle_time().await;
+        idle(&driver).await;
         assert!(driver.kicked.lock().unwrap().is_empty());
         let progress = step.progress(&step.row).await;
         assert_eq!(
@@ -680,7 +682,7 @@ mod tests {
         )
         .await
         .unwrap();
-        settle_time().await;
+        idle(&driver).await;
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         assert_eq!(step.progress(&step.row).await.revision, 1);
         step.close().await;
@@ -744,7 +746,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
-        settle_time().await;
+        idle(&driver).await;
         assert_eq!(step.progress(&step.row).await.revision, 2);
         step.close().await;
     }
@@ -917,7 +919,7 @@ mod tests {
             .unwrap(),
             2
         );
-        settle_time().await;
+        idle(&driver).await;
         for row in [&step.row, &other] {
             assert_eq!(step.row_json(row).await["lifecycle_state"], "running");
             assert_eq!(step.progress(row).await.revision, 2);
@@ -932,20 +934,27 @@ mod tests {
         assert!(matches!(first, Some(Ok(StepOutcome::Committed))));
         assert!(second.is_none());
         observed_revision(&step, &busy, 3).await;
-        settle_time().await;
+        idle(&driver).await;
         assert_eq!(step.progress(&busy).await.revision, 3);
         step.close().await;
     }
 
     /// Waits until the row's progress reaches `revision`.
     async fn observed_revision(step: &Stepper, row: &str, revision: u64) {
-        for _ in 0..200 {
-            if step.progress(row).await.revision >= revision {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        panic!("row {row} never reached revision {revision}");
+        gents_store::test_support::read_when_changed(
+            &step.job.access,
+            "AgentToolCall",
+            "job progress revision",
+            async || {
+                let current = step.progress(row).await.revision;
+                if current >= revision {
+                    Ok(())
+                } else {
+                    Err(current)
+                }
+            },
+        )
+        .await;
     }
 }
 

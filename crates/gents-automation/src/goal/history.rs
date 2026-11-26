@@ -14,7 +14,7 @@ struct GoalDocumentRef {
 }
 
 #[derive(Debug, Deserialize)]
-struct GoalCompositeCommit {
+pub(crate) struct GoalCompositeCommit {
     #[serde(default)]
     cid: String,
     #[serde(default)]
@@ -39,20 +39,20 @@ struct GoalCommitHead {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReuseFacts {
+pub(crate) struct ReuseFacts {
     parent_count: usize,
     metadata_complete: bool,
     assignment_written: bool,
 }
 
 impl ReuseFacts {
-    fn can_reuse(&self) -> bool {
+    pub(crate) fn can_reuse(&self) -> bool {
         self.parent_count == 1 && self.metadata_complete && !self.assignment_written
     }
 }
 
 impl GoalCompositeCommit {
-    fn reuse_facts(&self) -> ReuseFacts {
+    pub(crate) fn reuse_facts(&self) -> ReuseFacts {
         let complete = |link: &GoalCommitHead| {
             !link.cid.is_empty() && link.height.is_some_and(|height| height >= 0)
         };

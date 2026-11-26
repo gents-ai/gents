@@ -577,43 +577,43 @@ pub(super) async fn wait_for_runtime_process_state(
     expected_process_state: &str,
 ) {
     let escaped_node_did = escape_graphql_string(node_did);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    loop {
-        let query = format!(
-            r#"{{
+    gents_store::test_support::read_when_changed(
+        node,
+        "NodeReadiness",
+        &format!("NodeReadiness {node_did} reaching process_state={expected_process_state}"),
+        async || {
+            let query = format!(
+                r#"{{
                 NodeReadiness(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
                     snapshot_json
                 }}
             }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "NodeReadiness query failed: {:?}",
-            response.errors
-        );
-        let process_state = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("NodeReadiness"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("snapshot_json"))
-            .and_then(Value::as_str)
-            .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
-            .map(|snapshot| snapshot.process_state);
-        if process_state.map(NodeReadinessProcessState::as_str) == Some(expected_process_state) {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for NodeReadiness {} to reach process_state={}; last={:?}",
-            node_did,
-            expected_process_state,
-            process_state
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+            );
+            let response = node.execute(&query).await;
+            assert!(
+                !response.has_errors(),
+                "NodeReadiness query failed: {:?}",
+                response.errors
+            );
+            let process_state = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("NodeReadiness"))
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("snapshot_json"))
+                .and_then(Value::as_str)
+                .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
+                .map(|snapshot| snapshot.process_state);
+            if process_state.map(NodeReadinessProcessState::as_str) == Some(expected_process_state)
+            {
+                Ok(())
+            } else {
+                Err(format!("{process_state:?}"))
+            }
+        },
+    )
+    .await;
 }
 
 pub(super) async fn update_backend_probe_status(

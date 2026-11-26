@@ -173,6 +173,7 @@ pub struct PendingTool {
     name: String,
     description: String,
     entered: Option<Arc<AtomicBool>>,
+    entered_notify: Option<Arc<Notify>>,
 }
 
 impl PendingTool {
@@ -181,11 +182,17 @@ impl PendingTool {
             name: name.into(),
             description: description.into(),
             entered: None,
+            entered_notify: None,
         }
     }
 
     pub fn with_entered(mut self, entered: Arc<AtomicBool>) -> Self {
         self.entered = Some(entered);
+        self
+    }
+
+    pub fn with_entered_notify(mut self, entered_notify: Arc<Notify>) -> Self {
+        self.entered_notify = Some(entered_notify);
         self
     }
 }
@@ -215,9 +222,13 @@ impl ToolDyn for PendingTool {
         _context: &'a ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         let entered = self.entered.clone();
+        let entered_notify = self.entered_notify.clone();
         Box::pin(async move {
             if let Some(entered) = entered {
                 entered.store(true, Ordering::SeqCst);
+            }
+            if let Some(entered_notify) = entered_notify {
+                entered_notify.notify_waiters();
             }
             std::future::pending().await
         })

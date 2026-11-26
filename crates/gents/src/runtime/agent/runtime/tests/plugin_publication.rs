@@ -323,11 +323,14 @@ async fn a_store_created_after_the_watcher_started_never_stops_it() {
     for create in stages {
         create();
         health_tx.send(()).await.unwrap();
-        tokio::select! {
-            proposal = proposal_rx.recv() => assert!(proposal.is_some()),
-            finished = &mut watcher => panic!("the watcher stopped while its store was being created: {finished:?}"),
-            () = tokio::time::sleep(STALL_CEILING) => panic!("the watcher proposed nothing after a health event"),
-        }
+        tokio::time::timeout(STALL_CEILING, async {
+            tokio::select! {
+                proposal = proposal_rx.recv() => assert!(proposal.is_some()),
+                finished = &mut watcher => panic!("the watcher stopped while its store was being created: {finished:?}"),
+            }
+        })
+        .await
+        .expect("the watcher proposed nothing after a health event");
     }
     shutdown_tx.send(true).unwrap();
     tokio::time::timeout(STALL_CEILING, watcher)

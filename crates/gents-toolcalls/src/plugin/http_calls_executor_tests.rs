@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use futures::future::BoxFuture;
 use gents_pack::plugin::http_test_server::Server;
 use gents_pack::plugin::store;
 use gents_pack::plugin::PluginVerdict;
 use serde_json::{json, Value};
 
 use crate::plugin::executor::PluginExecutor;
+use crate::test_support::doubles::FixedModelResolver;
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 
 fn installed_asking(
@@ -114,8 +113,20 @@ async fn a_round_asking_both_services_is_bad_output() {
     record.granted =
         store::grant_on_install(home.path(), &record.namespace, &record.declaration, true).unwrap();
     store::write_record(home.path(), &record).unwrap();
+    let endpoint = FixedModelResolver::new(|| gents_pack::plugin::model_binding::ModelEndpoint {
+        url: "http://127.0.0.1:9/v1/chat/completions".into(),
+        api_key: None,
+        model: "m".into(),
+        max_concurrent: 1,
+        admission: gents_inference::admission::BackendCallPools::default()
+            .for_backend("node", "backend", 1, 0),
+        connect_timeout: Duration::from_secs(1),
+        request_timeout: Duration::from_secs(1),
+        max_output_tokens: None,
+        profile_visibility: None,
+    });
     let call = PluginExecutor::new(Some(home.path().to_owned()))
-        .with_models(Arc::new(Endpoint))
+        .with_models(Arc::new(endpoint))
         .call(
             &record,
             json!({}),
@@ -128,29 +139,4 @@ async fn a_round_asking_both_services_is_bad_output() {
         call.outcome.diagnostics,
         "one round asks for exactly one of model_calls, http_calls, tool_calls, data_calls or job_calls"
     );
-}
-
-struct Endpoint;
-
-impl gents_pack::plugin::model_binding::ModelResolver for Endpoint {
-    fn resolve<'a>(
-        &'a self,
-        _: &'a gents_pack::plugin::model_binding::ModelBinding,
-        _: Option<&'a identity::Did>,
-    ) -> BoxFuture<'a, Result<gents_pack::plugin::model_binding::ModelEndpoint>> {
-        Box::pin(async {
-            Ok(gents_pack::plugin::model_binding::ModelEndpoint {
-                url: "http://127.0.0.1:9/v1/chat/completions".into(),
-                api_key: None,
-                model: "m".into(),
-                max_concurrent: 1,
-                admission: gents_inference::admission::BackendCallPools::default()
-                    .for_backend("node", "backend", 1, 0),
-                connect_timeout: Duration::from_secs(1),
-                request_timeout: Duration::from_secs(1),
-                max_output_tokens: None,
-                profile_visibility: None,
-            })
-        })
-    }
 }

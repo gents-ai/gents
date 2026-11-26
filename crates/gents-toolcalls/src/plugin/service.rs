@@ -381,6 +381,8 @@ mod tests {
 
     #[tokio::test]
     async fn readiness_and_drop_own_the_process_group() {
+        use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation};
+
         let dir = tempfile::tempdir().unwrap();
         let mut service = Service::start(
             vec![
@@ -397,18 +399,21 @@ mod tests {
         .unwrap();
         let pid = service.data["pid"].as_i64().unwrap() as i32;
         assert!(!service.process.as_mut().unwrap().has_exited().unwrap());
+        let identity = ProcessIdentity::of_live(pid).expect("live service process");
         drop(service);
-        for _ in 0..100 {
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("managed service survived owner drop");
+        assert_eq!(
+            identity
+                .await_signalled_group_exit(Duration::from_secs(2))
+                .await,
+            ProcessObservation::Exited,
+            "managed service survived owner drop"
+        );
     }
 
     #[tokio::test]
     async fn exited_service_keeps_identity_until_cleanup_and_then_stays_retired() {
+        use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation};
+
         let dir = tempfile::tempdir().unwrap();
         let mut service = Service::start(
             vec![
@@ -424,14 +429,13 @@ mod tests {
         .await
         .unwrap();
         let pid = service.data["pid"].as_i64().unwrap() as i32;
+        let identity = ProcessIdentity::of_live(pid).expect("live service process");
         assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !service.process.as_mut().unwrap().has_exited().unwrap() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_ne!(
+            identity.await_leader_exit(Duration::from_secs(2)).await,
+            ProcessObservation::Running
+        );
+        assert!(service.process.as_mut().unwrap().has_exited().unwrap());
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
@@ -481,24 +485,21 @@ wait"#
     }
 
     async fn assert_stopped(pid: i32) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while unsafe { libc::kill(pid, 0) } == 0 {
-                #[cfg(target_os = "linux")]
-                if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
-                    stat.rsplit_once(") ")
-                        .is_some_and(|(_, fields)| fields.starts_with("Z "))
-                }) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("TERM-resistant descendant survived cleanup");
+        use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation};
+
+        if let Some(identity) = ProcessIdentity::of_live(pid) {
+            assert_ne!(
+                identity.await_leader_exit(Duration::from_secs(3)).await,
+                ProcessObservation::Running,
+                "TERM-resistant descendant survived cleanup"
+            );
+        }
     }
 
     #[tokio::test]
     async fn cancelled_cached_retirement_kills_descendants_without_restarting() {
+        use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation};
+
         let home = tempfile::tempdir().unwrap();
         let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({
             "namespace":"test", "name":"service", "version":"1", "digest":"sha256:test", "language":"rust",
@@ -533,19 +534,18 @@ wait"#
         .await
         .unwrap();
         let pid = service.data["pid"].as_i64().unwrap() as i32;
+        let identity = ProcessIdentity::of_live(pid).expect("live service process");
         let descendant: i32 = std::fs::read_to_string(home.path().join("descendant"))
             .unwrap()
             .trim()
             .parse()
             .unwrap();
         assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !service.process.as_mut().unwrap().has_exited().unwrap() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_ne!(
+            identity.await_leader_exit(Duration::from_secs(2)).await,
+            ProcessObservation::Running
+        );
+        assert!(service.process.as_mut().unwrap().has_exited().unwrap());
         let services = Services::default();
         services.0.lock().await.insert(key.clone(), service);
         assert!(tokio::time::timeout(

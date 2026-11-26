@@ -597,44 +597,8 @@ fn warn_nonobject_arguments_coerced(seam: &str, tool_name: &str, arguments: &ser
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::doubles::{ReceiptTool, RequestProbe};
     use serde::Deserialize;
-
-    struct ReceiptTool(std::sync::atomic::AtomicUsize);
-
-    impl Tool for ReceiptTool {
-        const NAME: &'static str = "receipt_test";
-        type Args = bool;
-        type Output = String;
-        type Error = std::io::Error;
-
-        async fn definition(&self, _prompt: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.into(),
-                description: String::new(),
-                parameters: serde_json::json!({"type": "boolean"}),
-            }
-        }
-
-        async fn call(
-            &self,
-            succeed: bool,
-            _context: &crate::tool::ToolCallEnvelope,
-        ) -> Result<String, Self::Error> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if succeed {
-                Ok("visible output".into())
-            } else {
-                Err(std::io::Error::other("failed operation"))
-            }
-        }
-
-        fn deferred_writes(
-            &self,
-            _output: &String,
-        ) -> Option<crate::live_output::DeferredToolWrites> {
-            Some(crate::live_output::DeferredToolWrites::new(17_u64))
-        }
-    }
 
     #[tokio::test]
     async fn typed_dispatch_emits_receipts_only_after_one_successful_call() {
@@ -682,44 +646,6 @@ mod tests {
             "visible output"
         );
         assert_eq!(tool.0.load(Ordering::SeqCst), 3);
-    }
-
-    struct RequestProbe;
-
-    impl Tool for RequestProbe {
-        const NAME: &'static str = "request_probe";
-        type Args = bool;
-        type Output = String;
-        type Error = std::io::Error;
-
-        async fn definition(&self, _: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.into(),
-                description: String::new(),
-                parameters: serde_json::json!({}),
-            }
-        }
-
-        async fn call(
-            &self,
-            _: bool,
-            _context: &crate::tool::ToolCallEnvelope,
-        ) -> Result<String, Self::Error> {
-            Err(std::io::Error::other("request required"))
-        }
-
-        async fn call_with_request(
-            &self,
-            _: bool,
-            _context: &crate::tool::ToolCallEnvelope,
-            request: &ToolRequestContext,
-        ) -> Result<String, Self::Error> {
-            Ok(format!(
-                "{}:{}",
-                request.request_doc_id,
-                request.admitted_client.as_ref().unwrap().signer_did
-            ))
-        }
     }
 
     #[tokio::test]

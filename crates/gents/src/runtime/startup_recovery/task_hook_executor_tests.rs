@@ -52,10 +52,17 @@ fn real_command(
     let script = match kind {
         "exited" => format!("{record}; exit {}", code.expect("an exit code")),
         "timed_out" => format!("{record}; exec sleep 30"),
-        "interrupted" => format!(
-            "{record}; : > {marker}; exec sleep 30",
-            marker = started_marker(dir, hook_id).display()
-        ),
+        "interrupted" => {
+            use std::os::unix::ffi::OsStrExt;
+            let marker = started_marker(dir, hook_id);
+            let marker_c = std::ffi::CString::new(marker.as_os_str().as_bytes()).unwrap();
+            // SAFETY: `marker_c` is a NUL-terminated path valid through mkfifo.
+            assert_eq!(unsafe { libc::mkfifo(marker_c.as_ptr(), 0o600) }, 0);
+            format!(
+                "{record}; printf 'started\\n' > {marker}; exec sleep 30",
+                marker = marker.display()
+            )
+        }
         "launch_failed" => {
             return vec![dir
                 .join("missing")
@@ -74,10 +81,25 @@ async fn cancel_held_commands(
     held: Vec<(String, TaskHookPhase)>,
     cancellation: TaskHookCancellation,
 ) {
-    for (hook_id, phase) in held {
-        while !started_marker(&dir, &hook_id).exists() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    struct UnblockFifo(PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
         }
+    }
+
+    for (hook_id, phase) in held {
+        let marker = started_marker(&dir, &hook_id);
+        let _unblock = UnblockFifo(marker.clone());
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(&marker))
+            .await
+            .expect("hook marker reader task")
+            .expect("read hook started fifo");
         match phase {
             TaskHookPhase::Finally => cancellation.shutdown(),
             _ => cancellation.interrupt(),

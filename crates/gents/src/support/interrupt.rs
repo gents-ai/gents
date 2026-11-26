@@ -11,7 +11,6 @@ use super::snapshots::fetch_request_snapshot;
 use gents_store::test_support::{read_when_changed, STALL_CEILING};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
-const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct BootedAgent {
@@ -475,15 +474,12 @@ async fn execute_mutation_with_transaction_retry(
     let mut last_response = None;
     for attempt in 0..=TEST_MUTATION_MAX_RETRIES {
         if attempt > 0 {
-            let backoff =
-                Duration::from_millis(TEST_MUTATION_INITIAL_BACKOFF_MS * (1u64 << (attempt - 1)));
             tracing::warn!(
                 operation = %operation,
                 attempt = attempt,
-                backoff_ms = backoff.as_millis() as u64,
                 "retrying test setup mutation after transaction conflict"
             );
-            tokio::time::sleep(backoff).await;
+            tokio::task::yield_now().await;
         }
 
         let response = node.execute(mutation).await;

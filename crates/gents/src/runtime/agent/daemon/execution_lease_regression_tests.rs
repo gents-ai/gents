@@ -8,7 +8,9 @@ const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
 /// it is.
 fn recovering_provider(available: Arc<AtomicBool>, fails_on_first_read: bool) -> ScriptedProvider {
     ScriptedProvider::responding(move |_| {
-        let unavailable = || rig::completion::CompletionError::ProviderError("HTTP status 503: unavailable".into());
+        let unavailable = || {
+            rig::completion::CompletionError::ProviderError("HTTP status 503: unavailable".into())
+        };
         match (available.load(Ordering::SeqCst), fails_on_first_read) {
             (true, _) => Reply::text("recovered reply"),
             (false, true) => Reply::Stream(vec![Step::Error(unavailable())]),
@@ -158,7 +160,9 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
 
 /// Streams two reasoning chunks, notifies `processed_two` once both were
 /// taken, then never answers again.
-fn buffered_reasoning_shutdown_provider(processed_two: Arc<tokio::sync::Notify>) -> ScriptedProvider {
+fn buffered_reasoning_shutdown_provider(
+    processed_two: Arc<tokio::sync::Notify>,
+) -> ScriptedProvider {
     ScriptedProvider::responding(move |_| {
         Reply::Stream(vec![
             Step::Chunk(rig::streaming::RawStreamingChoice::ReasoningDelta {
@@ -180,11 +184,13 @@ fn buffered_reasoning_shutdown_provider(processed_two: Arc<tokio::sync::Notify>)
 fn lease_loss_provider() -> ScriptedProvider {
     ScriptedProvider::responding(|_| {
         Reply::turn(vec![
-            rig::streaming::RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
-                "lease-tool".into(),
-                "lease_block".into(),
-                serde_json::json!({}),
-            )),
+            rig::streaming::RawStreamingChoice::ToolCall(
+                rig::streaming::RawStreamingToolCall::new(
+                    "lease-tool".into(),
+                    "lease_block".into(),
+                    serde_json::json!({}),
+                ),
+            ),
             rig::streaming::RawStreamingChoice::FinalResponse(()),
         ])
     })
@@ -216,11 +222,13 @@ fn non_terminal_provider(
         if let Some(chunks) = active_chunks {
             for index in 1..=chunks {
                 steps.push(Step::Delay(ACTIVE_STREAM_INTERVAL));
-                steps.push(Step::Chunk(rig::streaming::RawStreamingChoice::Message(format!(
-                    " chunk-{index}"
-                ))));
+                steps.push(Step::Chunk(rig::streaming::RawStreamingChoice::Message(
+                    format!(" chunk-{index}"),
+                )));
             }
-            steps.push(Step::Chunk(rig::streaming::RawStreamingChoice::FinalResponse(())));
+            steps.push(Step::Chunk(
+                rig::streaming::RawStreamingChoice::FinalResponse(()),
+            ));
         } else if empty_forever {
             steps.push(Step::Repeat {
                 chunk: rig::streaming::RawStreamingChoice::Message(String::new()),
@@ -642,14 +650,17 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     let process = daemon.process_request(request, shutdown_rx);
     tokio::pin!(process);
     tokio::time::timeout(Duration::from_secs(10), async {
-        let observe_running = async {
-            loop {
-                let response = held_daemon_query(&agent_access, "{ AgentToolCall(filter:{tool_name:{_eq:\"lease_block\"}}){_docID lifecycle_state tool_failure_class cancel_cause} }").await;
-                let rows = response.data.as_ref().unwrap()["AgentToolCall"].as_array().unwrap();
-                if rows.first().is_some_and(|row| row["lifecycle_state"] == "running") { break; }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        };
+        let observe_running = gents_store::test_support::rows_when(
+            &agent_access,
+            "AgentToolCall",
+            r#"{ AgentToolCall(filter:{tool_name:{_eq:"lease_block"}}){_docID lifecycle_state tool_failure_class cancel_cause} }"#,
+            |data| {
+                data["AgentToolCall"]
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                    .is_some_and(|row| row["lifecycle_state"] == "running")
+            },
+        );
         tokio::pin!(observe_running);
         tokio::select! {
             _ = &mut observe_running => {}
@@ -748,11 +759,17 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             tokio::pin!(process);
             let mut observed_renewal = false;
             {
+                let mut changes =
+                    gents_store::subscription_source::subscribe_collections(&node, ["AgentRequest"])
+                        .expect("subscribe AgentRequest");
                 let maintenance = async {
                     let mut initial_owner: Option<(String, chrono::DateTime<chrono::FixedOffset>)> =
                         None;
                     loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        let Some(_) = changes.recv().await else {
+                            std::future::pending::<()>().await;
+                            unreachable!();
+                        };
                         let recovered = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                             .await
                             .unwrap();
@@ -915,6 +932,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let tool_entered = Arc::new(AtomicBool::new(false));
+    let tool_entered_notify = Arc::new(tokio::sync::Notify::new());
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -931,7 +949,8 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(
             crate::test_support::tools::PendingTool::new("lease_block", "wait for lease replacement")
-                .with_entered(tool_entered.clone()),
+                .with_entered(tool_entered.clone())
+                .with_entered_notify(tool_entered_notify.clone()),
         ) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
@@ -969,7 +988,15 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let escaped_request_doc = gents_store::graphql::escape_graphql_string(&request_doc_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         let wait_for_blocked_tool = async {
+            let mut changes = gents_store::subscription_source::subscribe_collections(
+                &node,
+                ["AgentRequest", "AgentToolCall"],
+            )
+            .expect("subscribe blocked tool collections");
             loop {
+                let notified = tool_entered_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 let response = access
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state }} AgentToolCall(filter: {{ tool_name: {{ _eq: "lease_block" }} }}) {{ lifecycle_state request_doc_id }} }}"#
@@ -990,7 +1017,10 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
                 {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                tokio::select! {
+                    () = notified => {}
+                    changed = changes.recv() => assert!(changed.is_some()),
+                }
             }
         };
         tokio::pin!(wait_for_blocked_tool);
@@ -1272,9 +1302,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         ) => {}
     }
     cut.notify_one();
-    process
-        .await
-        .expect("deadline request handling completes");
+    process.await.expect("deadline request handling completes");
 
     let response = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#

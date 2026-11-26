@@ -1289,8 +1289,9 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
     );
 
     tokio::select! {
+        biased;
         _ = &mut waiting => panic!("waiter completed while the owner holds the gate"),
-        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        _ = tokio::task::yield_now() => {}
     }
     tokio::time::advance(super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
     let error = match waiting.as_mut().await {

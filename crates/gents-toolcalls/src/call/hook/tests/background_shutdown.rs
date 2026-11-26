@@ -29,12 +29,14 @@ async fn shutdown_terminates_a_live_background_process_group() {
     let directory = tempfile::tempdir().unwrap();
     let ready = directory.path().join("ready");
     let gate = directory.path().join("gate");
-    assert!(tokio::process::Command::new("mkfifo")
-        .arg(&gate)
-        .status()
-        .await
-        .unwrap()
-        .success());
+    for pipe in [&ready, &gate] {
+        assert!(tokio::process::Command::new("mkfifo")
+            .arg(pipe)
+            .status()
+            .await
+            .unwrap()
+            .success());
+    }
 
     let registry =
         BackgroundExecutionRegistry::default().with_process_records(directory.path().to_owned());
@@ -77,13 +79,19 @@ async fn shutdown_terminates_a_live_background_process_group() {
     });
 
     let identity = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut ready_pipe = tokio::net::unix::pipe::OpenOptions::new()
+            .open_receiver(&ready)
+            .unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut ready_pipe, &mut buf)
+            .await
+            .unwrap();
         loop {
-            if tokio::fs::try_exists(&ready).await.unwrap() {
-                if let Some(record) = registry.process_record("shutdown-call", "shutdown-doc") {
-                    return record.identity;
-                }
+            let notified = registry.process_record_notified();
+            if let Some(record) = registry.process_record("shutdown-call", "shutdown-doc") {
+                return record.identity;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            notified.await;
         }
     })
     .await

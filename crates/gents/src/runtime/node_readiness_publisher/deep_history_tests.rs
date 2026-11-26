@@ -43,24 +43,16 @@ async fn fresh_peer() -> Result<EmbeddedHome> {
 }
 
 async fn loopback_address(node: &EmbeddedNode) -> Result<String> {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let addresses = node
-                .p2p()
-                .context("P2P enabled")?
-                .listen_addresses()
-                .await?;
-            if let Some(address) = addresses
-                .into_iter()
-                .find(|address| address.starts_with("127.0.0.1:"))
-            {
-                return Ok(address);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
+    let addresses = tokio::time::timeout(
+        Duration::from_secs(10),
+        node.p2p().context("P2P enabled")?.listen_addresses(),
+    )
     .await
-    .context("loopback P2P listener")?
+    .context("loopback P2P listener")??;
+    addresses
+        .into_iter()
+        .find(|address| address.starts_with("127.0.0.1:"))
+        .context("missing loopback P2P listen address")
 }
 
 async fn readiness_row(node: &EmbeddedNode, did: &str) -> Result<Option<serde_json::Value>> {
@@ -90,24 +82,29 @@ async fn await_snapshot(
     doc_id: &str,
     expected: &NodeReadinessSnapshot,
 ) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(180), async {
-        loop {
-            if let Some(row) = readiness_row(node, did).await? {
-                ensure!(
-                    row["_docID"] == doc_id,
-                    "readiness document identity changed"
-                );
-                let snapshot: NodeReadinessSnapshot =
-                    serde_json::from_str(row["snapshot_json"].as_str().context("snapshot JSON")?)?;
-                if snapshot == *expected {
-                    return Ok(());
-                }
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(node, ["NodeReadiness"])?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(row) = readiness_row(node, did).await? {
+            ensure!(
+                row["_docID"] == doc_id,
+                "readiness document identity changed"
+            );
+            let snapshot: NodeReadinessSnapshot =
+                serde_json::from_str(row["snapshot_json"].as_str().context("snapshot JSON")?)?;
+            if snapshot == *expected {
+                return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    })
-    .await
-    .context("fresh peer did not converge on the complete readiness snapshot")?
+        let changed = tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .context("fresh peer did not converge on the complete readiness snapshot")?;
+        ensure!(
+            changed.is_some(),
+            "NodeReadiness subscription closed before peer converged"
+        );
+    }
 }
 
 async fn readiness_history(node: &EmbeddedNode, doc_id: &str) -> Result<Vec<CompositeCommit>> {

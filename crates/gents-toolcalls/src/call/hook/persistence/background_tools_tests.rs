@@ -554,32 +554,11 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
     for case in
         gents_lean_vocab::families::process_stop_timeout_before_cleanup::cases::<String, String>()
     {
-        use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-        struct PendingNative;
-        impl ToolDyn for PendingNative {
-            fn hidden(&self) -> bool {
-                false
-            }
-            fn name(&self) -> String {
-                "pending-native".into()
-            }
-            fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-                Box::pin(async {
-                    ToolDefinition {
-                        name: "pending-native".into(),
-                        description: String::new(),
-                        parameters: serde_json::json!({}),
-                    }
-                })
-            }
-            fn call<'a>(
-                &'a self,
-                _: String,
-                _context: &'a gents_loop::tool::ToolCallEnvelope,
-            ) -> BoxFuture<'a, Result<String, ToolError>> {
-                Box::pin(std::future::pending())
-            }
-        }
+        let pending_native = crate::test_support::doubles::PendingTool::new(
+            "pending-native",
+            "",
+            serde_json::json!({}),
+        );
         let registry = BackgroundExecutionRegistry::default();
         let reservation = registry
             .reserve(
@@ -603,7 +582,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
             )
             .call();
             gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                &PendingNative,
+                &pending_native,
                 "{}".into(),
                 &scope_call,
                 move |outcome| {

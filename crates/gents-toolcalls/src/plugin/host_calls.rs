@@ -321,10 +321,8 @@ mod script_e2e;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_loop::tool_call_lifecycle::ToolOutcome;
-    use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
-
-    struct Tools;
+    use crate::test_support::doubles::{BatchOnlyToolEffects, QueryToolEffects};
+    use gents_loop::tool_effects::ToolEffectDispatcher;
 
     #[tokio::test]
     #[ignore = "set GENTS_SCRIPT_WASM to the script pack's compiled WASM"]
@@ -341,7 +339,9 @@ mod tests {
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
         let context = gents_loop::tool::ToolCallEnvelope::default()
-            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+            .with_effects(Some(
+                Arc::new(QueryToolEffects) as Arc<dyn ToolEffectDispatcher>
+            ));
         let call = executor.call_data_bound_for(
 &record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), crate::plugin::executor::ToolInvocation { tool_root: None, own_folder: None, tool_calls: true, context: &context }, None);
         let result = call.await.unwrap();
@@ -369,36 +369,6 @@ mod tests {
         assert_eq!(result.outcome.output, "undefined");
     }
 
-    impl ToolEffectDispatcher for Tools {
-        fn call<'a>(
-            &'a self,
-            _parent: &'a gents_loop::tool::ToolCallEnvelope,
-            ordinal: u32,
-            name: &'a str,
-            arguments: &'a str,
-        ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-            Box::pin(async move {
-                assert_eq!(name, "query");
-                assert_eq!(arguments, "{}");
-                Ok(ToolOutcome::Completed(
-                    json!({"ordinal": ordinal}).to_string(),
-                ))
-            })
-        }
-
-        fn definitions<'a>(
-            &'a self,
-        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
-            Box::pin(async {
-                vec![gents_loop::tool::ToolDefinition {
-                    name: "query".into(),
-                    description: "Reads rows.".into(),
-                    parameters: json!({"type": "object"}),
-                }]
-            })
-        }
-    }
-
     async fn execute(request: Value, count: u32, grant: bool, input: Value) -> PluginOutcome {
         execute_in(None, request, count, grant, input).await
     }
@@ -417,8 +387,11 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        let context = gents_loop::tool::ToolCallEnvelope::new(runtime)
-            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+        let context =
+            gents_loop::tool::ToolCallEnvelope::new(runtime)
+                .with_effects(Some(
+                    Arc::new(QueryToolEffects) as Arc<dyn ToolEffectDispatcher>
+                ));
         executor
             .call_data_bound_for(
                 &record,
@@ -504,8 +477,11 @@ mod tests {
             let tool =
                 crate::plugin::tool::PluginTool::for_run(executor.clone(), &coordinate, &selected)
                     .unwrap();
-            let context = gents_loop::tool::ToolCallEnvelope::default()
-                .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+            let context =
+                gents_loop::tool::ToolCallEnvelope::default()
+                    .with_effects(Some(
+                        Arc::new(QueryToolEffects) as Arc<dyn ToolEffectDispatcher>
+                    ));
             let (output, unserved, _) = tool.run_once(json!({}), &context).await.unwrap();
             assert_eq!(output, expected, "tool_calls {tool_calls}");
             assert_eq!(unserved, None);
@@ -537,47 +513,12 @@ mod tests {
         assert_eq!(results.len(), 4);
     }
 
-    struct BatchOnly;
-
-    impl ToolEffectDispatcher for BatchOnly {
-        fn call<'a>(
-            &'a self,
-            _: &'a gents_loop::tool::ToolCallEnvelope,
-            _: u32,
-            _: &'a str,
-            _: &'a str,
-        ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-            Box::pin(async { panic!("the host split a batch into single calls") })
-        }
-
-        fn batch<'a>(
-            &'a self,
-            _: &'a gents_loop::tool::ToolCallEnvelope,
-            calls: Vec<gents_loop::tool_effects::ToolEffectCall>,
-        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool_effects::EffectResult>> {
-            Box::pin(async move {
-                calls
-                    .into_iter()
-                    .map(|call| {
-                        Ok(ToolOutcome::Completed(
-                            json!({"ordinal": call.ordinal, "name": call.name}).to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-        }
-
-        fn definitions<'a>(
-            &'a self,
-        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
-            Box::pin(async { Vec::new() })
-        }
-    }
-
     #[tokio::test]
     async fn consecutive_tool_members_reach_the_dispatcher_as_one_batch() {
         let parent = gents_loop::tool::ToolCallEnvelope::default()
-            .with_effects(Some(Arc::new(BatchOnly) as Arc<dyn ToolEffectDispatcher>));
+            .with_effects(Some(
+                Arc::new(BatchOnlyToolEffects) as Arc<dyn ToolEffectDispatcher>
+            ));
         let mut tools = tool_calls::Session::for_call(true, &parent);
         let request = json!({"batch": [
             {"tool_name": "a", "arguments": {}},

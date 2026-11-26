@@ -205,73 +205,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone, Debug, Default)]
-    struct CapturingHttpClient {
-        bodies: Arc<Mutex<Vec<serde_json::Value>>>,
-    }
-
-    impl CapturingHttpClient {
-        fn bodies(&self) -> Vec<serde_json::Value> {
-            self.bodies.lock().expect("capture lock").clone()
-        }
-    }
-
-    impl Transport for CapturingHttpClient {
-        fn send(
-            &self,
-            _call: &ProviderCall,
-            req: Request<Bytes>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
-        {
-            let bodies = Arc::clone(&self.bodies);
-            let body = req.into_body();
-            async move {
-                bodies
-                    .lock()
-                    .expect("capture lock")
-                    .push(serde_json::from_slice(&body).expect("captured JSON body"));
-                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
-                Ok(Response::builder().status(200).body(body)?)
-            }
-        }
-
-        fn send_multipart(
-            &self,
-            _call: &ProviderCall,
-            req: Request<MultipartForm>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
-        {
-            let _ = req;
-            async move {
-                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
-                Ok(Response::builder().status(200).body(body)?)
-            }
-        }
-
-        fn send_streaming(
-            &self,
-            _call: &ProviderCall,
-            req: Request<Bytes>,
-        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
-            let bodies = Arc::clone(&self.bodies);
-            let body = req.into_body();
-            async move {
-                bodies
-                    .lock()
-                    .expect("capture lock")
-                    .push(serde_json::from_slice(&body).expect("captured JSON body"));
-                let stream: http_client::BoxedStream =
-                    Box::pin(futures::stream::empty::<http_client::Result<Bytes>>());
-                Ok(Response::builder().status(200).body(stream)?)
-            }
-        }
-    }
+    use crate::test_support::doubles::RecordingTransport;
 
     #[tokio::test]
     async fn responses_normalizing_client_normalizes_send_body() {
-        let inner = CapturingHttpClient::default();
+        let inner = RecordingTransport::default();
         let client = ResponsesNormalizingHttpClient::new(inner.clone());
         let req = Request::builder()
             .uri("http://example.test/v1/responses")
@@ -297,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_normalizing_client_normalizes_streaming_body() {
-        let inner = CapturingHttpClient::default();
+        let inner = RecordingTransport::default();
         let client = ResponsesNormalizingHttpClient::new(inner.clone());
         let req = Request::builder()
             .uri("http://example.test/v1/responses")
@@ -323,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_normalizing_client_leaves_other_paths_unchanged() {
-        let inner = CapturingHttpClient::default();
+        let inner = RecordingTransport::default();
         let client = ResponsesNormalizingHttpClient::new(inner.clone());
         let original = serde_json::json!({
             "input": [{

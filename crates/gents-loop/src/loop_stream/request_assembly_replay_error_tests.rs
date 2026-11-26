@@ -1190,39 +1190,14 @@ async fn a_reduction_that_drops_a_stubbed_row_drops_its_stub_from_the_dispatch()
     );
 }
 
-struct Named(&'static str);
-
-impl ToolDyn for Named {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        self.0.into()
-    }
-    fn definition<'a>(
-        &'a self,
-        _: String,
-    ) -> crate::tool::BoxFuture<'a, crate::tool::ToolDefinition> {
-        Box::pin(async move {
-            crate::tool::ToolDefinition {
-                name: self.0.into(),
-                description: String::new(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _: &'a crate::tool::ToolCallEnvelope,
-    ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
-        Box::pin(async { Ok(String::new()) })
-    }
-}
-
 #[tokio::test]
 async fn hidden_tools_stay_out_of_the_provider_request_through_request_binding() {
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(Named("script")), Box::new(Named("query"))];
+    use crate::test_support::fixed_tool::FixedTool;
+
+    let tools: Vec<Box<dyn ToolDyn>> = vec![
+        Box::new(FixedTool::new("script", "").with_description("")),
+        Box::new(FixedTool::new("query", "").with_description("")),
+    ];
     let tools = crate::tool::bind_request_tools(
         Arc::new(crate::tool_policy::presentation::present_tools(
             tools,

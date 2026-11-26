@@ -396,7 +396,7 @@ async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
     let (delivery, intent) = first_delivery(false).await;
     let engine = TriggerEngine::new(
         delivery.snapshot_tx.subscribe(),
-        Arc::new(PanicMaterializer),
+        SpyMaterializer::panicking(),
     );
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -441,58 +441,6 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
             .is_some_and(|error| error.contains("acknowledged transient failure")),
         "{trigger}"
     );
-}
-
-struct PanicMaterializer;
-
-impl MaterializerHandle for PanicMaterializer {
-    fn materialize(
-        &self,
-        _fire: FireMaterialization<'_>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
-                + Send
-                + '_,
-        >,
-    > {
-        Box::pin(async { panic!("injected materializer panic") })
-    }
-
-    fn has_active_runtime_request_for_trigger(
-        &self,
-        _node_did: &str,
-        _trigger_id: &str,
-        _excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
-        Box::pin(async { Ok(false) })
-    }
-
-    fn supersede_active_runtime_requests_for_trigger(
-        &self,
-        _node_did: &str,
-        _trigger_id: &str,
-        _excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
-        Box::pin(async { Ok(0) })
-    }
-
-    fn recover_goal_task_fire(
-        &self,
-        _task: &gents_documents::automation::ResolvedTask,
-        _durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
-        Box::pin(async { Ok(None) })
-    }
-
-    fn has_materialized_group_request(
-        &self,
-        _node_did: &str,
-        _trigger_id: &str,
-        _durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
-        Box::pin(async { Ok(false) })
-    }
 }
 
 #[tokio::test]

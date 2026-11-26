@@ -1,6 +1,6 @@
 use gents_documents::views::tasks::TaskList;
-use gents_protocol::document_query::{fields::task, Create, Delete, Input, Query};
-use gents_protocol::views::View;
+use gents_inference::test_support::document_fixtures::TaskCount;
+use gents_protocol::document_query::{fields::task, Create, Delete, Input};
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{GrantSet, NodeIdentity};
 use gents_store::views::ViewError;
@@ -20,26 +20,6 @@ enum DocumentSelection {
     Matching,
     Other,
     Missing,
-}
-
-struct TaskCount {
-    view: TaskList,
-    document_id: Option<String>,
-    counted_first: bool,
-}
-
-impl View for TaskCount {
-    type Collection = task::Doc;
-    type Row = u64;
-
-    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
-        let query = self.view.query(reader_did);
-        match (&self.document_id, self.counted_first) {
-            (Some(id), true) => query.counted().doc_id(id),
-            (Some(id), false) => query.doc_id(id).counted(),
-            (None, _) => query.counted(),
-        }
-    }
 }
 
 fn task_id(same_node: bool, same_agent: bool, readable: bool) -> String {

@@ -206,13 +206,10 @@ async fn filter_doc_id_and_limit_variables_bind_in_reads_and_writes() {
         json!([{"_docID": doc_ids[0], "label": "after"}])
     );
 
+    use crate::test_support::doubles::FilterVariableProbe as Probe;
     use gents_protocol::document_query::{
-        kind, Collection, Direction, Field, Filter, Input, Query, Selection, Update,
+        kind, Direction, Field, Filter, Input, Query, Selection, Update,
     };
-    enum Probe {}
-    impl Collection for Probe {
-        const NAME: &'static str = "FilterVariableProbe";
-    }
     const KEY: Field<Probe, kind::Str> = Field::new("key");
     const LABEL: Field<Probe, kind::Str> = Field::new("label");
     const COUNT: Field<Probe, kind::Int> = Field::new("count");

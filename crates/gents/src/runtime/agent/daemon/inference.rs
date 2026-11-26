@@ -1326,29 +1326,21 @@ pub(super) mod tests {
         );
         // The auxiliary title request is the Agent's own work, read as it.
         let agent_reader = admission.tool.access().unwrap();
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let response = agent_reader
-                    .execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
-                    ))
-                    .await
-                    .expect("observe pending title request");
-                let rows = response["data"]["AgentRequest"]
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
+        );
+        let data =
+            gents_store::test_support::rows_when(&agent_reader, "AgentRequest", &query, |data| {
+                data["AgentRequest"]
                     .as_array()
-                    .expect("title request rows");
-                if !rows.is_empty() {
-                    assert_eq!(rows.len(), 1, "one title request for the wake session");
-                    assert_eq!(rows[0]["lifecycle_state"], "pending");
-                    assert_eq!(rows[0]["caused_by_parent_request_id"], wake.request_id);
-                    assert_eq!(rows[0]["caused_by_parent_request_doc_id"], wake.doc_id);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("daemon must persist pending title work before test shutdown");
+                    .is_some_and(|rows| !rows.is_empty())
+            })
+            .await;
+        let rows = data["AgentRequest"].as_array().expect("title request rows");
+        assert_eq!(rows.len(), 1, "one title request for the wake session");
+        assert_eq!(rows[0]["lifecycle_state"], "pending");
+        assert_eq!(rows[0]["caused_by_parent_request_id"], wake.request_id);
+        assert_eq!(rows[0]["caused_by_parent_request_doc_id"], wake.doc_id);
         assert_eq!(
             gents_session::session::session_needs_generated_title(
                 &admission.client,

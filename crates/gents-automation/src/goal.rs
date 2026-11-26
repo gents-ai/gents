@@ -18,7 +18,7 @@ mod controller;
 mod creation;
 mod document;
 mod first_request_binding;
-mod history;
+pub(crate) mod history;
 pub mod lifecycle_hooks;
 mod load;
 mod observation;

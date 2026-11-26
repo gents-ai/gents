@@ -306,13 +306,14 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         request.execution_origin.as_deref(),
     )
     .expect("a created request carries a canonical execution origin");
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request.clone(),
-        agent_config.deadline_duration.as_secs(),
-        origin,
-        agent_config.backend_id.clone().unwrap_or_default(),
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            request.clone(),
+            agent_config.deadline_duration.as_secs(),
+            origin,
+            agent_config.backend_id.clone().unwrap_or_default(),
+        );
     lifecycle
         .bind_managed_agent(agent_config.agent_identity.as_ref())
         .unwrap();
@@ -343,8 +344,9 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         "the window under test runs before execution begins: {claimed}"
     );
 
-    let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel::<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >(None);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let _observer = tokio_util::task::AbortOnDropHandle::new(
         gents_session::request::interrupt::spawn_request_interrupt_observer(
@@ -576,12 +578,28 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     git(dir, &["add", "tracked.txt"]);
     git(dir, &["commit", "-q", "-m", "base"]);
 
-    let marker = probe.path().join("filter.pid");
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let marker = probe.path().join("filter.pid.fifo");
+    let marker_c = std::ffi::CString::new(marker.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `marker_c` is a NUL-terminated path valid through mkfifo.
+    assert_eq!(unsafe { libc::mkfifo(marker_c.as_ptr(), 0o600) }, 0);
+    struct UnblockFifo(std::path::PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
+        }
+    }
+    let _unblock = UnblockFifo(marker.clone());
     let filter = probe.path().join("park-filter");
     gents_store::test_support::write_executable_script(
         &filter,
         &format!(
-            "#!/bin/sh\necho $$ > '{}.tmp' && mv '{0}.tmp' '{0}'\nexec sleep 30\n",
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
             marker.display()
         ),
     )
@@ -593,8 +611,9 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     std::fs::write(dir.join(".git/info/attributes"), "* filter=park\n").unwrap();
     let index_before = std::fs::read(dir.join(".git/index")).unwrap();
 
-    let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel::<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >(None);
     let dest = dir.to_path_buf();
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
@@ -605,19 +624,18 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
         .map(|hashed| hashed.map_err(|error| format!("{error:#}")))
     });
 
-    let filter_pid = tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            if let Some(pid) = std::fs::read_to_string(&marker)
-                .ok()
-                .and_then(|pid| pid.trim().parse::<i32>().ok())
-            {
-                return pid;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+    let marker_reader = marker.clone();
+    let filter_pid = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(&marker_reader)),
+    )
     .await
-    .expect("git add must reach the parking clean filter");
+    .expect("git add must reach the parking clean filter")
+    .expect("filter pid reader task")
+    .expect("read filter pid fifo")
+    .trim()
+    .parse::<i32>()
+    .expect("filter pid integer");
 
     let filter = ProcessIdentity::of_live(filter_pid).expect("the parked clean filter is running");
     interrupt_tx

@@ -10,69 +10,12 @@ use crate::config_client::client_authentication::{runtime_authentication, Client
 use crate::config_client::runtime_endpoints::RuntimeEndpoints;
 use crate::config_client::{ClientSigningCapability, GraphqlEndpoint};
 use crate::identity::NodeIdentity as _;
+use crate::test_support::doubles::AssignmentTestRuntime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Provider {
     Local,
     Vera,
-}
-
-#[derive(Default)]
-struct AssignmentTestRuntime {
-    active: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
-    bodies: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
-    fail_stop: std::sync::atomic::AtomicBool,
-    block_after_stop: std::sync::atomic::AtomicBool,
-    stopped: tokio::sync::Notify,
-    block_active: std::sync::atomic::AtomicBool,
-    active_entered: tokio::sync::Notify,
-    changed: tokio::sync::Notify,
-}
-
-#[async_trait::async_trait]
-impl crate::config_client::assignment_receiver::AssignmentRuntime for AssignmentTestRuntime {
-    async fn active(&self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        if self.block_active.load(std::sync::atomic::Ordering::SeqCst) {
-            self.active_entered.notify_one();
-            std::future::pending::<()>().await;
-        }
-        Ok(self.active.lock().await.iter().cloned().collect())
-    }
-
-    async fn stop(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.fail_stop.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(std::io::Error::other("stop failed").into());
-        }
-        self.active.lock().await.remove(id);
-        if self
-            .block_after_stop
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            self.stopped.notify_one();
-            std::future::pending::<()>().await;
-        }
-        self.changed.notify_one();
-        Ok(())
-    }
-
-    async fn has_verified_body(
-        &self,
-        id: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.bodies.lock().await.contains(id))
-    }
-
-    async fn start_if_verified(
-        &self,
-        id: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if !self.bodies.lock().await.contains(id) {
-            return Ok(false);
-        }
-        self.active.lock().await.insert(id.to_owned());
-        self.changed.notify_one();
-        Ok(true)
-    }
 }
 
 #[tokio::test]

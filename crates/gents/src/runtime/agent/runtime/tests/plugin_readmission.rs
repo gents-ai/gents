@@ -10,20 +10,22 @@ async fn wait_for_agent_state(
     state: AgentReadinessState,
     reason: Option<AgentReadinessUnavailableReason>,
 ) -> NodeReadinessSnapshot {
-    let deadline = tokio::time::Instant::now() + READINESS_DEADLOCK_GUARD;
-    loop {
-        let readiness = fetch_node_readiness(node, node_did).await;
-        if readiness.agents.iter().any(|entry| {
-            entry.agent_did == agent_did && entry.state == state && entry.reason == reason
-        }) {
-            return readiness;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {agent_did} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    gents_store::test_support::read_when_changed(
+        node,
+        "NodeReadiness",
+        &format!("{agent_did} reaching {state:?}/{reason:?}"),
+        async || {
+            let readiness = fetch_node_readiness(node, node_did).await;
+            if readiness.agents.iter().any(|entry| {
+                entry.agent_did == agent_did && entry.state == state && entry.reason == reason
+            }) {
+                Ok(readiness)
+            } else {
+                Err(format!("{readiness:?}"))
+            }
+        },
+    )
+    .await
 }
 
 pub(super) fn install_fixture_plugin(

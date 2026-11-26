@@ -66,6 +66,15 @@ async fn loaded_launchd_job_restarts_after_clean_exit_and_stays_unloaded_after_s
     let uid: u32 = std::str::from_utf8(&uid.stdout)?.trim().parse()?;
     let domain = format!("gui/{uid}");
     let mut job = LoadedJob(Some(format!("{domain}/{label}")));
+    let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = changes_tx.send(event);
+    })?;
+    notify::Watcher::watch(
+        &mut watcher,
+        temp.path(),
+        notify::RecursiveMode::NonRecursive,
+    )?;
     let bootstrap = Command::new("/bin/launchctl")
         .args(["bootstrap", &domain])
         .arg(&path)
@@ -81,7 +90,10 @@ async fn loaded_launchd_job_restarts_after_clean_exit_and_stays_unloaded_after_s
             if starts(&counter).await? >= 2 {
                 return Ok::<_, anyhow::Error>(());
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            changes_rx
+                .recv()
+                .await
+                .context("counter directory watcher closed")??;
         }
     })
     .await
@@ -97,10 +109,24 @@ async fn loaded_launchd_job_restarts_after_clean_exit_and_stays_unloaded_after_s
     );
     job.0 = None;
     let after_stop = starts(&counter).await?;
-    tokio::time::sleep(Duration::from_secs(12)).await;
-    ensure!(
-        starts(&counter).await? == after_stop,
-        "unloaded job restarted"
-    );
+    match tokio::time::timeout(Duration::from_secs(12), async {
+        loop {
+            if starts(&counter).await? > after_stop {
+                anyhow::bail!("unloaded job restarted");
+            }
+            changes_rx
+                .recv()
+                .await
+                .context("counter directory watcher closed")??;
+        }
+    })
+    .await
+    {
+        Ok(result) => return result,
+        Err(_elapsed) => ensure!(
+            starts(&counter).await? == after_stop,
+            "unloaded job restarted"
+        ),
+    }
     Ok(())
 }

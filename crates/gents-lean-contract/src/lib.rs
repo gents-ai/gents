@@ -771,22 +771,18 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "OS threads hold the in-process flight for real time"
-    )]
     fn concurrent_threads_single_flight_same_payload() {
         let proofs_dir = unique_temp_dir("single-flight");
         let cache = OnceLock::new();
         let flight = Mutex::new(());
         let build_count = AtomicUsize::new(0);
         let generate_count = AtomicUsize::new(0);
+        let barrier = std::sync::Barrier::new(8);
         let payload =
             format!("{CONTRACT_JSON_BEGIN}\n{{\"thread_test\":true}}\n{CONTRACT_JSON_END}\n");
 
         let build = |_: &Path| -> Result<()> {
             build_count.fetch_add(1, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(100));
             Ok(())
         };
         let generate = |_: &Path| -> Result<String> {
@@ -798,6 +794,7 @@ mod tests {
             let mut handles = Vec::new();
             for _ in 0..8 {
                 handles.push(scope.spawn(|| {
+                    barrier.wait();
                     load_contract_stdout_for(&proofs_dir, &cache, &flight, &build, &generate)
                         .unwrap()
                 }));
@@ -1086,14 +1083,11 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "OS threads hold the lock for real time"
-    )]
     fn concurrent_threads_under_lock_never_overlap_mutation() {
         let proofs_dir = unique_temp_dir("thread-overlap");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
+        let barrier = std::sync::Barrier::new(6);
 
         thread::scope(|scope| {
             let mut handles = Vec::new();
@@ -1101,11 +1095,13 @@ mod tests {
                 let proofs_dir = &proofs_dir;
                 let active = Arc::clone(&active);
                 let max_active = Arc::clone(&max_active);
+                let barrier = &barrier;
                 handles.push(scope.spawn(move || {
+                    barrier.wait();
                     let build = |_: &Path| -> Result<()> {
                         let now = active.fetch_add(1, Ordering::SeqCst) + 1;
                         max_active.fetch_max(now, Ordering::SeqCst);
-                        thread::sleep(Duration::from_millis(50));
+                        thread::yield_now();
                         active.fetch_sub(1, Ordering::SeqCst);
                         Ok(())
                     };

@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{mpsc, Arc};
+
 use crate::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::{PluginBudget, PluginRunner, PluginVerdict};
 
@@ -15,22 +18,35 @@ const OUT_OF_BOUNDS_WAT: &str = r#"
     "#;
 
 const CHILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+static SIGNAL_PIPE_WRITE: AtomicI32 = AtomicI32::new(-1);
 
-extern "C" fn ignore_signal(_: libc::c_int) {}
+extern "C" fn ignore_signal(_: libc::c_int) {
+    let fd = SIGNAL_PIPE_WRITE.load(Ordering::Relaxed);
+    if fd >= 0 {
+        let byte = 1_u8;
+        // SAFETY: `write` on a valid pipe descriptor is async-signal-safe.
+        unsafe {
+            libc::write(fd, std::ptr::from_ref(&byte).cast(), 1);
+        }
+    }
+}
 
 extern "C" {
     static mach_task_self_: libc::mach_port_t;
     fn mach_port_deallocate(task: libc::mach_port_t, name: libc::mach_port_t) -> libc::c_int;
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "gives signalled OS threads real time to run their handlers"
-)]
 fn signal_every_other_thread() {
-    // SAFETY: plain libc/mach calls on this process's own threads; the port
-    // rights and thread array `task_threads` hands out are released below.
+    let mut pipe_fds = [-1_i32; 2];
+    let mut sent = 0_usize;
+    // SAFETY: plain libc/mach calls on this process's own threads; the pipe
+    // descriptors, port rights and thread array `task_threads` hands out are
+    // released before returning.
     unsafe {
+        assert_eq!(libc::pipe(pipe_fds.as_mut_ptr()), 0);
+        assert_eq!(libc::fcntl(pipe_fds[1], libc::F_SETFL, libc::O_NONBLOCK), 0);
+        SIGNAL_PIPE_WRITE.store(pipe_fds[1], Ordering::Release);
+
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = ignore_signal as *const () as libc::sighandler_t;
         action.sa_flags = libc::SA_RESTART;
@@ -48,8 +64,11 @@ fn signal_every_other_thread() {
         for index in 0..count as usize {
             let port = *threads.add(index);
             let thread = libc::pthread_from_mach_thread_np(port);
-            if thread != 0 as libc::pthread_t && libc::pthread_equal(thread, me) == 0 {
-                libc::pthread_kill(thread, libc::SIGUSR2);
+            if thread != 0 as libc::pthread_t
+                && libc::pthread_equal(thread, me) == 0
+                && libc::pthread_kill(thread, libc::SIGUSR2) == 0
+            {
+                sent += 1;
             }
             mach_port_deallocate(task, port);
         }
@@ -58,8 +77,39 @@ fn signal_every_other_thread() {
             threads as libc::vm_address_t,
             count as libc::vm_size_t * std::mem::size_of::<libc::thread_act_t>(),
         );
+
+        let mut received = 0_usize;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        while received < sent {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                break;
+            };
+            let timeout_ms = i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX);
+            let mut pfd = libc::pollfd {
+                fd: pipe_fds[0],
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = libc::poll(&mut pfd, 1, timeout_ms.max(1));
+            if ready <= 0 {
+                if ready < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                {
+                    continue;
+                }
+                break;
+            }
+            let mut buf = [0_u8; 64];
+            let n = libc::read(pipe_fds[0], buf.as_mut_ptr().cast(), buf.len());
+            if n > 0 {
+                received += n as usize;
+            } else {
+                break;
+            }
+        }
+        SIGNAL_PIPE_WRITE.store(-1, Ordering::Release);
+        libc::close(pipe_fds[0]);
+        libc::close(pipe_fds[1]);
     }
-    std::thread::sleep(std::time::Duration::from_millis(200));
 }
 
 fn echo_once(runner: &PluginRunner, n: u64) {
@@ -72,10 +122,6 @@ fn echo_once(runner: &PluginRunner, n: u64) {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous test bounding a child process exit in real time"
-)]
 fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
     if std::env::var_os(CHILD_ENV).is_some() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -105,26 +151,35 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         runtime.block_on(node.shutdown()).expect("node shutdown");
         return;
     }
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawns the child test");
-    let deadline = std::time::Instant::now() + CHILD_TIMEOUT;
-    while child.try_wait().expect("polls the child").is_none() {
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child.wait_with_output().expect("reaps the child");
-            panic!(
-                "the child test did not finish within {CHILD_TIMEOUT:?}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+    let pid = child.id() as libc::pid_t;
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let watchdog_timed_out = Arc::clone(&timed_out);
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if done_rx.recv_timeout(CHILD_TIMEOUT).is_err() {
+            watchdog_timed_out.store(true, Ordering::SeqCst);
+            // SAFETY: `pid` is our spawned child that has not been reaped yet.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    });
     let output = child.wait_with_output().expect("reaps the child");
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+    if timed_out.load(Ordering::SeqCst) {
+        panic!(
+            "the child test did not finish within {CHILD_TIMEOUT:?}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),

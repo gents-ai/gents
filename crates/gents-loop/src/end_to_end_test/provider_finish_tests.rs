@@ -220,56 +220,6 @@ async fn late_token_limit_from_superseded_attempt_does_not_change_retry() {
     .await;
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct ResponsesArgs {
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mode: Option<ResponsesMode>,
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-enum ResponsesMode {
-    Normal,
-}
-
-struct ResponsesTool(Arc<Mutex<Vec<String>>>);
-
-impl Tool for ResponsesTool {
-    const NAME: &'static str = "echo";
-    type Error = crate::tool::ToolError;
-    type Args = ResponsesArgs;
-    type Output = String;
-
-    async fn definition(&self, _: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.into(),
-            description: String::new(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "required": ["text"],
-                "properties": {
-                    "text": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["Normal"]}
-                },
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    async fn call(
-        &self,
-        args: Self::Args,
-        _context: &crate::tool::ToolCallEnvelope,
-    ) -> Result<String, Self::Error> {
-        self.0
-            .lock()
-            .unwrap()
-            .push(serde_json::to_string(&args).unwrap());
-        Ok(args.text.to_uppercase())
-    }
-}
-
 fn responses_turn(
     kind: &str,
     reason: Option<&str>,

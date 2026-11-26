@@ -1,5 +1,4 @@
 mod decisions;
-mod doubles;
 mod drift;
 pub(crate) mod fixtures;
 mod journal;
@@ -11,7 +10,6 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use self::doubles::CancellingProposer;
 use self::fixtures::{
     base_executor, budgets, context, definition, fail, policy, repeating_proposer, script, tools,
     BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, FEEDBACK_DEFINITION, SMALL_DEFINITION,
@@ -25,6 +23,7 @@ use crate::optimization::proposer::Proposer;
 use crate::optimization::target::JobTarget;
 use crate::runner::freeze::tests::Launching;
 use crate::runner::{Capture, RunOptions, ScriptedExecutor, TrialExecutor};
+use crate::test_support::doubles::CancellingProposer;
 use gents_documents::EvalSplit;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;

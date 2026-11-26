@@ -1,44 +1,12 @@
 use std::sync::Arc;
 
-use gents_loop::tool::{BoxFuture, Tool, ToolDefinition};
-use gents_loop::tool_call_lifecycle::ToolOutcome;
-use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
+use crate::test_support::doubles::FileReadEffects;
+use gents_loop::tool_effects::ToolEffectDispatcher;
 use gents_pack::plugin::PluginVerdict;
 use gents_tools::native::file_tools::read_tools::ReadFileTool;
 use gents_tools::native::shared::ToolContext;
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::Digest;
-
-struct Files(ReadFileTool, std::sync::atomic::AtomicU32);
-
-impl ToolEffectDispatcher for Files {
-    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
-        Box::pin(async { vec![self.0.definition(String::new()).await] })
-    }
-
-    fn call<'a>(
-        &'a self,
-        parent: &'a gents_loop::tool::ToolCallEnvelope,
-        ordinal: u32,
-        name: &'a str,
-        arguments: &'a str,
-    ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-        Box::pin(async move {
-            assert_eq!(name, "read_file");
-            assert_eq!(
-                ordinal,
-                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
-            );
-            let args: Value = serde_json::from_str(arguments).unwrap();
-            assert_eq!(args["raw_json"], true);
-            self.0
-                .call(serde_json::from_value(args).unwrap(), parent)
-                .await
-                .map(ToolOutcome::Completed)
-                .map_err(|error| ToolEffectError::Unavailable(error.to_string()))
-        })
-    }
-}
 
 #[tokio::test]
 #[ignore = "set GENTS_SCRIPT_WASM to the script pack's compiled WASM"]
@@ -54,7 +22,7 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
     std::fs::write(home.path().join("a.json"), "{\"rows\": [1, 2]}\n").unwrap();
     std::fs::write(home.path().join("b.txt"), "beta\r\ngamma").unwrap();
-    let files = Files(
+    let files = FileReadEffects(
         ReadFileTool::new(
             ToolContext::new(home.path().to_owned(), false).unwrap(),
             32000,

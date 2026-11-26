@@ -88,62 +88,7 @@ fn request_cancel_refuses_a_missing_run_directory_and_a_path_for_an_id() {
     );
 }
 
-struct DrainsSlowly {
-    runs_dir: PathBuf,
-    run_id: String,
-    seen: Mutex<Vec<Option<String>>>,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for DrainsSlowly {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
-        request_cancel(&self.runs_dir, &self.run_id).unwrap();
-        let run_dir = self.runs_dir.join(&self.run_id);
-        if tokio::time::timeout(STALL_CEILING, cancel.cancelled())
-            .await
-            .is_err()
-        {
-            panic!(
-                "the loop did not see the marker for {STALL_CEILING:?}: {:?}",
-                read_progress(&run_dir)
-            );
-        }
-        let first = read_progress(&run_dir)
-            .and_then(|progress| progress.holder)
-            .map(|holder| holder.written_at);
-        let second = match &first {
-            Some(first) => Some(
-                progress_when(&run_dir, "the heartbeat refreshes the holder", |progress| {
-                    progress
-                        .holder
-                        .as_ref()
-                        .map(|holder| holder.written_at.clone())
-                        .filter(|written_at| written_at > first)
-                })
-                .await,
-            ),
-            None => None,
-        };
-        self.seen.lock().unwrap().extend([first, second]);
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
-}
+use crate::test_support::doubles::{DrainsSlowly, WatchesHeartbeat};
 
 #[tokio::test]
 async fn the_holder_stays_fresh_while_a_cancelled_pass_drains() {
@@ -175,55 +120,6 @@ async fn the_holder_stays_fresh_while_a_cancelled_pass_drains() {
     );
     let after = read_progress(&launching.runs_dir().join("run-drain")).unwrap();
     assert_eq!(after.holder, None);
-}
-
-struct WatchesHeartbeat {
-    run_dir: PathBuf,
-    seen: Mutex<Vec<String>>,
-}
-
-#[async_trait::async_trait]
-impl TrialExecutor for WatchesHeartbeat {
-    fn isolation(&self) -> Isolation {
-        Isolation::Embedded
-    }
-
-    async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
-        TrialLocator {
-            trial_node_did: "did:key:trial".into(),
-            session_id: "session".into(),
-            home_hint: None,
-        }
-    }
-
-    async fn execute(&self, _spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
-        let written_at = || {
-            read_progress(&self.run_dir)
-                .and_then(|progress| progress.slots.values().next().cloned())
-                .map(|slot| slot.written_at)
-                .unwrap_or_default()
-        };
-        let first = written_at();
-        let second = progress_when(
-            &self.run_dir,
-            "the heartbeat refreshes the slot",
-            |progress| {
-                progress
-                    .slots
-                    .values()
-                    .next()
-                    .map(|slot| slot.written_at.clone())
-                    .filter(|written_at| *written_at > first)
-            },
-        )
-        .await;
-        self.seen.lock().unwrap().extend([first, second]);
-        passed()
-    }
-
-    async fn recollect(&self, _at: &TrialLocator, _captures: &[Capture]) -> Option<TrialEvidence> {
-        None
-    }
 }
 
 #[tokio::test]

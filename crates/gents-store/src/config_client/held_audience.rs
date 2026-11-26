@@ -443,86 +443,17 @@ mod tests {
     use std::sync::Arc;
 
     use base64::Engine as _;
-    use futures::future::BoxFuture;
     use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
     use std::sync::Mutex;
 
     use axum::http::{HeaderMap, StatusCode};
 
-    use super::ResolveAudience;
     use crate::config_client::GraphqlEndpoint;
-
-    /// The home's status, signed by its node key for each read.
-    struct Status {
-        node: crate::identity::KeyIdentity,
-        reports: ReportedDelegationAudience,
-        provider_time: Option<u64>,
-        reads: AtomicUsize,
-    }
-
-    impl ResolveAudience for Status {
-        fn resolve<'a>(
-            &'a self,
-            nonce: &'a gents_protocol::home_attestation::HomeNonce,
-        ) -> BoxFuture<'a, Option<serde_json::Value>> {
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Some(
-                    crate::test_support::signed_home_status(
-                        &self.node,
-                        &self.reports,
-                        self.provider_time,
-                        nonce,
-                    )
-                    .await,
-                )
-            })
-        }
-    }
-
-    struct Contradictory {
-        node: crate::identity::KeyIdentity,
-        reads: AtomicUsize,
-    }
-
-    impl ResolveAudience for Contradictory {
-        fn resolve<'a>(
-            &'a self,
-            nonce: &'a gents_protocol::home_attestation::HomeNonce,
-        ) -> BoxFuture<'a, Option<serde_json::Value>> {
-            use crate::identity::NodeIdentity as _;
-            use gents_protocol::home_attestation::{
-                AttestedAudience, HomeAttestation, HomeStatement, HOME_ATTESTATION_VERSION,
-                STATUS_HOME_ATTESTATION_FIELD,
-            };
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                let statement = HomeStatement {
-                    version: HOME_ATTESTATION_VERSION,
-                    nonce: nonce.as_str().to_owned(),
-                    node_did: self.node.did().to_owned(),
-                    client_authentication:
-                        gents_protocol::client_authentication::ClientAuthentication::Vera {
-                            publisher_node: None,
-                            worker: audience(2).worker,
-                            deployment: 2,
-                        },
-                    delegation_audience: AttestedAudience::Named {
-                        audience: DelegationAudience {
-                            genesis_id: Some("0x03".into()),
-                            ..audience(3)
-                        },
-                    },
-                    provider_time: Some(1_000),
-                };
-                let signature = self.node.sign(&statement.signing_payload()).await.unwrap();
-                Some(serde_json::json!({
-                    "node_did": self.node.did(),
-                    STATUS_HOME_ATTESTATION_FIELD: HomeAttestation::signed(statement, &signature),
-                }))
-            })
-        }
-    }
+    use crate::test_support::doubles::{
+        test_delegation_audience as audience, AudienceForgery as Forgery,
+        ContradictoryStatusResolver as Contradictory, ImpostorStatusResolver as Impostor,
+        SignedStatusResolver as Status,
+    };
 
     #[tokio::test]
     async fn a_signed_status_that_contradicts_itself_is_refused_not_read_as_absent() {
@@ -571,14 +502,6 @@ mod tests {
         tokio::task::spawn_blocking(|| crate::test_support::test_identity("held-home"))
             .await
             .unwrap()
-    }
-
-    fn audience(deployment: u64) -> DelegationAudience {
-        DelegationAudience {
-            worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
-            deployment,
-            genesis_id: None,
-        }
     }
 
     fn presented_for(headers: &HeaderMap) -> Option<u64> {
@@ -661,63 +584,6 @@ mod tests {
             provider_time: None,
             reads: AtomicUsize::new(0),
         })
-    }
-
-    /// What answers at the home's address naming the home's node and the
-    /// audience the node there takes, without the home's signature for the
-    /// read: unsigned, signed by another key, or the home's own status
-    /// signed for an earlier read.
-    #[derive(Clone, Copy, Debug)]
-    enum Forgery {
-        Unsigned,
-        OtherKey,
-        Replayed,
-    }
-
-    struct Impostor {
-        home: crate::identity::KeyIdentity,
-        other: crate::identity::KeyIdentity,
-        forgery: Forgery,
-        reports: DelegationAudience,
-        reads: AtomicUsize,
-    }
-
-    impl ResolveAudience for Impostor {
-        fn resolve<'a>(
-            &'a self,
-            nonce: &'a gents_protocol::home_attestation::HomeNonce,
-        ) -> BoxFuture<'a, Option<serde_json::Value>> {
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                let mut status = serde_json::json!({
-                    "node_did": crate::identity::NodeIdentity::did(&self.home),
-                    "client_authentication": {
-                        "kind": "vera",
-                        "worker": self.reports.worker,
-                        "deployment": self.reports.deployment,
-                    },
-                    "delegation_audience": self.reports,
-                });
-                match self.forgery {
-                    Forgery::Unsigned => {}
-                    Forgery::OtherKey => {
-                        crate::identity::home_status::attest(Some(&self.other), nonce, &mut status)
-                            .await;
-                    }
-                    Forgery::Replayed => {
-                        let earlier =
-                            gents_protocol::home_attestation::HomeNonce::from_bytes([9; 32]);
-                        crate::identity::home_status::attest(
-                            Some(&self.home),
-                            &earlier,
-                            &mut status,
-                        )
-                        .await;
-                    }
-                }
-                Some(status)
-            })
-        }
     }
 
     #[tokio::test]

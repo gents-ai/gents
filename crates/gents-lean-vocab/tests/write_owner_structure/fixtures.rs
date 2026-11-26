@@ -36,36 +36,20 @@ const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[];
 /// Test-only implementations of production traits outside a `src/test_support`
 /// module, per crate.
 #[rustfmt::skip]
-const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
-    ("gents-automation", 15, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-eval", 23, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-inference", 17, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-loop", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-p2p", 9, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-store", 10, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-    ("gents-toolcalls", 27, "doubles of owner traits written beside their tests; drive the production owner or move the double into the crate's src/test_support"),
-];
+const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[];
 
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
-    ("gents", 53, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-automation", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-cli", 4, "external tiny_http port release, TCP bind readiness, startup-gate HTTP readiness, and a 2 s P2P lsof observation window"),
     ("gents-client-host", 2, "cross-process IPC/HTTP readiness where no OS notification seam exists (local listener connect and Windows ConPTY runtime status)"),
-    ("gents-desktop-tauri", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-eval", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-fs-runner", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-host", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-lean-contract", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-loop", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-media-host", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-pack", 3, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-protocol", 1, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-service", 2, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-session", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-store", 9, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
-    ("gents-toolcalls", 20, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-fs-runner", 2, "cross-process file-gate polling and wall-budget pause in the synchronous fs-runner"),
+    ("gents-lean-contract", 1, "cross-process file-lock contention hold"),
+    ("gents-loop", 9, "virtual-time start_paused timers, Utc::now() deadline regression polls, and ScriptedProvider Delay/Repeat steps"),
+    ("gents-session", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents-store", 8, "bounded child/stdout polling, cross-process marker files, JWT real-clock second/expiry boundaries, and paused virtual-clock tests"),
     ("gents-tools", 6, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
 ];
 

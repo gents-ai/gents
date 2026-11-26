@@ -1,14 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use gents_lean_vocab::families::tool_policy_call_envelope_derive::{Input, Seen};
 use gents_loop::live_output::{LiveToolOutputRegistry, LiveToolOutputWriter};
-use gents_loop::tool::{BoxFuture, ToolCallEnvelope};
+use gents_loop::tool::ToolCallEnvelope;
 use gents_loop::tool_call_lifecycle::runtime::{
     CurrentToolRuntimeContext, ToolRequestIdentity, ToolScopeEntry,
 };
-use gents_loop::tool_call_lifecycle::ToolOutcome;
-use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
+use gents_loop::tool_effects::ToolEffectDispatcher;
 use gents_session::exec::ownership::{process_recorder, with_process_recorder, ProcessRecorder};
 use gents_tools::plugin::approval::workspace::Context as ApprovalContext;
 use gents_tools::runtime_context::{host, ToolHostContext};
@@ -42,34 +41,7 @@ enum Cancel {
     Fresh,
 }
 
-/// Remembers the parent envelope each child call is dispatched under.
-#[derive(Default)]
-struct Captures(Mutex<Option<ToolCallEnvelope>>);
-
-impl ToolEffectDispatcher for Captures {
-    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
-        Box::pin(async {
-            vec![gents_loop::tool::ToolDefinition {
-                name: "read_file".into(),
-                description: String::new(),
-                parameters: serde_json::json!({"type":"object"}),
-            }]
-        })
-    }
-
-    fn call<'a>(
-        &'a self,
-        parent: &'a ToolCallEnvelope,
-        _ordinal: u32,
-        _name: &'a str,
-        _arguments: &'a str,
-    ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-        Box::pin(async move {
-            *self.0.lock().unwrap() = Some(parent.clone());
-            Ok(ToolOutcome::Completed("{}".to_owned()))
-        })
-    }
-}
+use crate::test_support::doubles::CapturedEffects;
 
 struct World {
     parent_deadline: DateTime<Utc>,
@@ -150,10 +122,11 @@ impl World {
         input: &Input<Path>,
         parent_token: &CancellationToken,
     ) -> Option<ToolCallEnvelope> {
-        let captures = Arc::new(Captures::default());
+        let captures = Arc::new(CapturedEffects::default());
         let parent = self.parent(input, parent_token, captures.clone());
-        let offered: Option<Arc<dyn ToolEffectDispatcher>> =
-            input.offered.then(|| Arc::new(Captures::default()) as _);
+        let offered: Option<Arc<dyn ToolEffectDispatcher>> = input
+            .offered
+            .then(|| Arc::new(CapturedEffects::default()) as _);
         async {
             match input.path {
                 Path::Foreground => Some(

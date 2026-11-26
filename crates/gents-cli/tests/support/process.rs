@@ -116,10 +116,6 @@ pub fn spawn_server_with_ready_json_recovering(
     spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true)
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous harness polling a std child process and its log files"
-)]
 fn spawn_server_with_ready_json_inner(
     home_dir: &Path,
     port: u16,
@@ -154,6 +150,27 @@ fn spawn_server_with_ready_json_inner(
         configure_foreground_server_env(&mut command, envs);
         let child = command.spawn().context("spawning gents runtime server")?;
         let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
+        let (log_tx, log_rx) = std::sync::mpsc::channel();
+        let mut log_watch = notify::recommended_watcher(move |event| {
+            let _ = log_tx.send(event);
+        })
+        .context("watching server startup logs")?;
+        if let Some(stdout) = serve.stdout_log.as_ref() {
+            notify::Watcher::watch(
+                &mut log_watch,
+                stdout.path(),
+                notify::RecursiveMode::NonRecursive,
+            )
+            .context("watching server stdout log")?;
+        }
+        if let Some(stderr) = serve.stderr_log.as_ref() {
+            notify::Watcher::watch(
+                &mut log_watch,
+                stderr.path(),
+                notify::RecursiveMode::NonRecursive,
+            )
+            .context("watching server stderr log")?;
+        }
 
         loop {
             let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
@@ -207,7 +224,7 @@ fn spawn_server_with_ready_json_inner(
                     stderr
                 );
             }
-            thread::sleep(Duration::from_millis(100));
+            let _ = log_rx.recv_timeout(Duration::from_millis(250));
         }
     }
 }

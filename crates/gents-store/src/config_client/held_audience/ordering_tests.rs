@@ -2,72 +2,17 @@
 //! thread: a gated status read stays unanswered until the test opens it, and
 //! the other readers run until they can make no progress.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use futures::future::BoxFuture;
-use gents_protocol::delegation_audience::{
-    CredentialAnswer, DelegationAudience, ReportedDelegationAudience,
-};
+use gents_protocol::delegation_audience::{CredentialAnswer, ReportedDelegationAudience};
 use tokio::sync::Notify;
 
-use super::ResolveAudience;
 use crate::config_client::GraphqlEndpoint;
-
-/// What one status read answers: the audience and provider's time the home
-/// signs, once `gate` (when there is one) is opened.
-struct Answer {
-    audience: u64,
-    provider_time: Option<u64>,
-    gate: Option<Arc<Notify>>,
-}
-
-/// The home: each read takes the next scripted answer.
-struct Scripted {
-    node: crate::identity::KeyIdentity,
-    answers: Mutex<VecDeque<Answer>>,
-    entered: Notify,
-    reads: AtomicUsize,
-}
-
-impl ResolveAudience for Scripted {
-    fn resolve<'a>(
-        &'a self,
-        nonce: &'a gents_protocol::home_attestation::HomeNonce,
-    ) -> BoxFuture<'a, Option<serde_json::Value>> {
-        let answer = self
-            .answers
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("a scripted answer for every read");
-        self.reads.fetch_add(1, Ordering::SeqCst);
-        self.entered.notify_one();
-        Box::pin(async move {
-            if let Some(gate) = &answer.gate {
-                gate.notified().await;
-            }
-            Some(
-                crate::test_support::signed_home_status(
-                    &self.node,
-                    &ReportedDelegationAudience::Named(audience(answer.audience)),
-                    answer.provider_time,
-                    nonce,
-                )
-                .await,
-            )
-        })
-    }
-}
-
-fn audience(deployment: u64) -> DelegationAudience {
-    DelegationAudience {
-        worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
-        deployment,
-        genesis_id: None,
-    }
-}
+use crate::test_support::doubles::{
+    test_delegation_audience as audience, ScriptedAudienceAnswer as Answer,
+    ScriptedAudienceResolver as Scripted,
+};
 
 async fn home(answers: Vec<Answer>) -> Arc<Scripted> {
     Arc::new(Scripted {

@@ -65,22 +65,33 @@ async fn an_interrupt_cancels_ordinary_phases_before_launch_but_not_cleanup() {
     assert!(!marker("late").exists());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn an_interrupt_stops_a_running_hook() {
     let directory = tempfile::tempdir().expect("hook marker directory");
     let started = directory.path().join("started");
     let finished = directory.path().join("finished");
+    assert!(tokio::process::Command::new("mkfifo")
+        .arg(&started)
+        .status()
+        .await
+        .unwrap()
+        .success());
     let cancellation = TaskHookCancellation::default();
     let exec = ManagedTaskHookExec::new(directory.path().to_path_buf(), cancellation.clone());
     let script = format!(
-        "touch {}; sleep 30; touch {}",
+        ": > {}; sleep 30; touch {}",
         started.display(),
         finished.display()
     );
     let interrupt = async {
-        while !started.exists() {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        let mut pipe = tokio::net::unix::pipe::OpenOptions::new()
+            .open_receiver(&started)
+            .unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf)
+            .await
+            .unwrap();
         cancellation.interrupt();
     };
     let held = hook("held", &["sh", "-c", &script], Some(60));

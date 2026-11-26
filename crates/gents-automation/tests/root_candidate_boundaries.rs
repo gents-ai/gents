@@ -465,37 +465,6 @@ async fn repeated_failures_are_identified_as_the_lean_model_derives_them() {
 
 #[tokio::test]
 async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
-    use gents_loop::tool::{Tool, ToolDefinition};
-
-    struct DescribeTool;
-    #[derive(Debug, thiserror::Error)]
-    #[error("describe tool error")]
-    struct DescribeToolError;
-    #[derive(serde::Deserialize)]
-    struct DescribeArgs {
-        tool_name: String,
-    }
-    impl Tool for DescribeTool {
-        const NAME: &'static str = "describe_tool";
-        type Error = DescribeToolError;
-        type Args = DescribeArgs;
-        type Output = String;
-        async fn definition(&self, _prompt: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.to_string(),
-                description: String::new(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        }
-        async fn call(
-            &self,
-            args: Self::Args,
-            _context: &gents_loop::tool::ToolCallEnvelope,
-        ) -> Result<Self::Output, Self::Error> {
-            Ok(format!("described:{}", args.tool_name))
-        }
-    }
-
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
 
@@ -515,7 +484,9 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(DescribeTool)];
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(DescribeTool {
+        panic_on_call: false,
+    })];
 
     let stream = run_loop_stream(
         model.clone(),
@@ -549,40 +520,6 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
 #[tokio::test]
 async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
-    use gents_loop::tool::{Tool, ToolDefinition};
-
-    struct StrictTool;
-    #[derive(Debug, thiserror::Error)]
-    #[error("strict tool error")]
-    struct StrictToolError;
-    #[derive(serde::Deserialize)]
-    struct StrictArgs {
-        tool_name: String,
-    }
-    impl Tool for StrictTool {
-        const NAME: &'static str = "describe_tool";
-        type Error = StrictToolError;
-        type Args = StrictArgs;
-        type Output = String;
-        async fn definition(&self, _prompt: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.to_string(),
-                description: String::new(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        }
-        async fn call(
-            &self,
-            args: Self::Args,
-            _context: &gents_loop::tool::ToolCallEnvelope,
-        ) -> Result<Self::Output, Self::Error> {
-            panic!(
-                "the tool must not run on non-object arguments; it parsed tool_name {:?}",
-                args.tool_name
-            );
-        }
-    }
-
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = scripted(vec![
@@ -599,7 +536,9 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictTool)];
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(DescribeTool {
+        panic_on_call: true,
+    })];
 
     let stream = run_loop_stream(
         model.clone(),
