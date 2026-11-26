@@ -330,11 +330,38 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
 
 #[tokio::test]
 async fn modeled_publication_retries_pending_receipt_relationships() {
-    let seeds = receipt_cases();
-    let seed = &seeds[0].input;
+    let initial = serde_json::json!({
+        "goal": {
+            "revision": { "document": "goal-document", "composite": "revision-current" },
+            "execution": {
+                "children": [],
+                "last_continued_from": null,
+                "latest_request": 10,
+                "sequence": 0,
+                "status": "active",
+                "token_budget": 1000,
+                "tokens_used": 37,
+                "wrapup_completed": false,
+                "wrapup_requested": false
+            },
+            "objective": "ship"
+        },
+        "receipts": []
+    });
+    let command_fixture = serde_json::json!({
+        "digest": 20,
+        "expected": { "composite": "revision-current", "document": "goal-document" },
+        "expires_at": 10,
+        "has_peer": false,
+        "id": 10,
+        "issued_at": 1,
+        "operation": { "kind": "pause" },
+        "session_document": "session-document"
+    });
+    let now = 2;
     for trace in gents_lean_vocab::families::identity_publication_receipt::cases() {
-        let mut driver = Driver::new(&seed.initial.0).await;
-        let (command_doc, command) = driver.command(&seed.command.0).await;
+        let mut driver = Driver::new(&initial).await;
+        let (command_doc, command) = driver.command(&command_fixture).await;
         let node = &driver.fixture.node;
         let actor = ::identity::Did::new(&command.agent_did).unwrap();
         let agent_access = driver.fixture.agent_access();
@@ -351,7 +378,7 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
             outcome: GoalControlOutcome::Rejected {
                 reason: "fixture".into(),
             },
-            processed_at: stamp(seed.now).to_rfc3339(),
+            processed_at: stamp(now).to_rfc3339(),
             signature: Vec::new(),
         };
         result.signature = signer
@@ -411,7 +438,7 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
             }
             if step.parent_ok && step.reader_ok {
                 let identity: Arc<dyn NodeIdentity> = driver.fixture.identity.clone();
-                process_command_at(node, &identity, &command_doc, &actor, stamp(seed.now))
+                process_command_at(node, &identity, &command_doc, &actor, stamp(now))
                     .await
                     .unwrap();
             }

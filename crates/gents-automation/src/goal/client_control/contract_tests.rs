@@ -85,7 +85,7 @@ fn control_cases() -> Vec<ControlCase> {
 
 #[test]
 fn generated_goal_client_control_shards_replay_every_case_once() {
-    gents_lean_vocab::family::assert_shards_cover(control_cases().len(), SHARD_TESTS, SHARDS);
+    gents_lean_vocab::family::assert_shards_cover(control_cases(), SHARD_TESTS, SHARDS);
 }
 
 async fn drive_client_control_shard(shard: usize) {

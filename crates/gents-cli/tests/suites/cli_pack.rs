@@ -1838,8 +1838,6 @@ fn readiness_of(
 /// the pack's plugin tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
-    use gents_pack::pack::core_packs::CorePack;
-    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let tempdir = tempfile::tempdir()?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
@@ -1889,16 +1887,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         _ => anyhow::bail!("the not-enabled pack's worker is the one agent off: {status}"),
     };
     let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
-    for case in gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
-        CorePack,
-        Reason,
-    >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows {
-            case.check(serde_json::from_value::<Option<Reason>>(
-                reason.clone().unwrap_or_default(),
-            )?);
-        }
-    }
+    assert_eq!(reason, Some(serde_json::json!("agent_disabled")));
 
     starter_step(scratch, &home, "enable-running")?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
@@ -1921,16 +1910,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
             break reason;
         }
     };
-    for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
-        CorePack,
-        Reason,
-    >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows {
-            case.check(serde_json::from_value::<Option<Reason>>(
-                reason.clone().unwrap_or_default(),
-            )?);
-        }
-    }
+    assert_eq!(reason, None);
     let explained = run_cli_json(
         scratch,
         &[
