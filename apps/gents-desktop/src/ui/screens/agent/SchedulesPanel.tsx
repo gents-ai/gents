@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { toast } from "sonner";
 import type { Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
@@ -231,7 +231,7 @@ export function ScheduleEditor({
       {!embedded && !draft && (
         <DeleteButton
           label={schedule.display_name ?? schedule.schedule_id}
-          warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
+          blocked={deleteBlocker(deployment, "schedule", schedule.schedule_id)}
           base={base}
           onDelete={() =>
             changeConfig("deleteScheduleConfig", {
@@ -298,7 +298,7 @@ export function SchedulesPanel({
                 nodeDid: deployment.nodeDid,
               })
             }
-            warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
+            blocked={deleteBlocker(deployment, "schedule", s.schedule_id)}
           />
         ),
       }))}

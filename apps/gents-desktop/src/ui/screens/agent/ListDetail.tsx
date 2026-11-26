@@ -25,6 +25,7 @@ import { FieldLegend, FieldRows, FieldSet } from "@gents/ui/components/field";
 import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
 import { Row } from "./rows";
+import type { DeleteBlocker } from "./dependents";
 import { toastFailure } from "@/lib/failure";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 
@@ -523,6 +524,7 @@ export function ConfirmDelete({
   onDelete,
   after,
   warning,
+  blocked,
   companion,
 }: {
   label: string;
@@ -532,6 +534,7 @@ export function ConfirmDelete({
   onDelete: () => Promise<unknown>;
   after?: Route;
   warning?: string;
+  blocked?: DeleteBlocker;
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
   const [typed, setTyped] = useState("");
@@ -547,7 +550,7 @@ export function ConfirmDelete({
     }
   };
   async function remove() {
-    if (!confirmed || deleting) return;
+    if (blocked || !confirmed || deleting) return;
     setDeleting(true);
     try {
       await onDelete();
@@ -570,41 +573,75 @@ export function ConfirmDelete({
   return (
     <AlertDialog open={open} onOpenChange={close}>
       <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This removes the {noun} for good.{warning ? ` ${warning}` : ""} To confirm,
-            type its name: <span className="font-medium text-foreground">{label}</span>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <Input
-          autoFocus
-          aria-label={`Type ${label} to confirm`}
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void remove();
-          }}
-        />
-        {companion && (
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={alsoDelete}
-              onCheckedChange={(v) => setAlsoDelete(Boolean(v))}
+        {blocked ? (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Can’t delete {label}</AlertDialogTitle>
+              <AlertDialogDescription>{blocked.summary}</AlertDialogDescription>
+            </AlertDialogHeader>
+            {blocked.items.length > 0 && (
+              <ul className="max-h-48 list-disc space-y-1 overflow-y-auto pl-5 text-sm">
+                {blocked.items.map((dep) => (
+                  <li key={dep.key}>
+                    {dep.href ? (
+                      <a
+                        href={dep.href}
+                        onClick={() => close(false)}
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        {dep.label}
+                      </a>
+                    ) : (
+                      dep.label
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Close</AlertDialogCancel>
+            </AlertDialogFooter>
+          </>
+        ) : (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This removes the {noun} for good.{warning ? ` ${warning}` : ""} To
+                confirm, type its name:{" "}
+                <span className="font-medium text-foreground">{label}</span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <Input
+              autoFocus
+              aria-label={`Type ${label} to confirm`}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void remove();
+              }}
             />
-            {companion.label}
-          </label>
+            {companion && (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={alsoDelete}
+                  onCheckedChange={(v) => setAlsoDelete(Boolean(v))}
+                />
+                {companion.label}
+              </label>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                disabled={!confirmed || deleting}
+                onClick={() => void remove()}
+              >
+                {deleting ? "Deleting…" : `Delete ${noun}`}
+              </Button>
+            </AlertDialogFooter>
+          </>
         )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={!confirmed || deleting}
-            onClick={() => void remove()}
-          >
-            {deleting ? "Deleting…" : `Delete ${noun}`}
-          </Button>
-        </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   );
@@ -617,6 +654,7 @@ export function DeleteButton({
   noun = NOUNS[base.section] ?? "item",
   after,
   warning,
+  blocked,
   companion,
 }: {
   label: string;
@@ -625,6 +663,7 @@ export function DeleteButton({
   noun?: string;
   after?: Route;
   warning?: string;
+  blocked?: DeleteBlocker;
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
   const [open, setOpen] = useState(false);
@@ -653,6 +692,7 @@ export function DeleteButton({
         onDelete={onDelete}
         after={after ?? { ...base, item: undefined }}
         warning={warning}
+        blocked={blocked}
         companion={companion}
       />
     </FieldSet>

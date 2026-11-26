@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import type { InferenceProfile } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
 import { ProfileSheet } from "./ProfileSheet";
@@ -76,7 +76,7 @@ export function ProfilesPanel({
               nodeDid: deployment.nodeDid,
             })
           }
-          warning={dependentsWarning(deployment, "profile", p.profile_id)}
+          blocked={deleteBlocker(deployment, "profile", p.profile_id)}
         />
       ),
     };

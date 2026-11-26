@@ -13,6 +13,7 @@ import {
 import { Switch } from "@gents/ui/components/switch";
 import { href, navigate, type Route } from "@/lib/router";
 import { ConfirmDelete, NOUNS } from "./ListDetail";
+import type { DeleteBlocker } from "./dependents";
 import { toastFailure } from "@/lib/failure";
 
 export function RowMenu({
@@ -23,6 +24,7 @@ export function RowMenu({
   onDuplicate,
   onDelete,
   warning,
+  blocked,
   children,
 }: {
   name: string;
@@ -37,6 +39,7 @@ export function RowMenu({
   onDuplicate?: () => Promise<string>;
   onDelete?: () => Promise<unknown>;
   warning?: string;
+  blocked?: DeleteBlocker;
   children?: React.ReactNode;
 }) {
   const noun =
@@ -126,6 +129,7 @@ export function RowMenu({
           onOpenChange={setConfirm}
           onDelete={onDelete}
           warning={warning}
+          blocked={blocked}
         />
       )}
     </div>
