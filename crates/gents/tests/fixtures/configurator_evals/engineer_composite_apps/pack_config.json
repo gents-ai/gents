@@ -28,12 +28,15 @@
         "./cases/library_desk_pack.json",
         "./cases/market_vendor_board.json",
         "./cases/clinic_intake_triage.json",
+        "./cases/recipe_vector_kitchen.json",
         "./cases/dock_cargo_control.json",
         "./cases/patent_review_desk.json",
         "./cases/bakery_batch_pack.json",
+        "./cases/material_alloy_finder.json",
         "./cases/solar_grid_dispatch.json",
         "./cases/museum_loan_vault.json",
-        "./cases/orchard_harvest_pack.json"
+        "./cases/orchard_harvest_pack.json",
+        "./cases/audio_sample_vault.json"
       ]
     }
   ]

@@ -1,0 +1,294 @@
+{
+  "case_id": "audio-sample-vault",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "clips.json",
+        "contents": "[\n  {\n    \"clipId\": \"SND-1\",\n    \"category\": \"foley\",\n    \"caption\": \"Crisp gravel footsteps recorded along a damp coastal trail at dawn.\",\n    \"features\": [\n      0.9,\n      0.1,\n      0.2\n    ]\n  },\n  {\n    \"clipId\": \"SND-2\",\n    \"category\": \"synth\",\n    \"caption\": \"Warm analog bass arpeggio pulsing through a vintage tape delay.\",\n    \"features\": [\n      0.1,\n      0.9,\n      0.3\n    ]\n  },\n  {\n    \"clipId\": \"SND-3\",\n    \"category\": \"ambient\",\n    \"caption\": \"Distant thunderstorm rolling over pine forest with steady rainfall.\",\n    \"features\": [\n      0.2,\n      0.2,\n      0.95\n    ]\n  },\n  {\n    \"clipId\": \"SND-4\",\n    \"category\": \"percussion\",\n    \"caption\": \"Tight brass snare rimshot layered with dry studio room reverb.\",\n    \"features\": [\n      0.6,\n      0.6,\n      0.1\n    ]\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create SoundClip(clipId, category, English fulltext caption, 3-dim features HNSW cosine vector index) and import clips.json. Build and lint an \"Audio Vault\" page with a grid of cards, search input, table of clips, and a form to add a clip.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "SoundClip"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "clips",
+          "collection": "SoundClip",
+          "filter": {},
+          "fields": [
+            "clipId",
+            "category",
+            "caption",
+            "features"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type SoundClip { clipId: String category: String caption: String @fulltext(language:\"english\") features: [Float32!] @index(vector:{dimensions:3,hnsw:{metric:COSINE}}) }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "clips",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "clips",
+                "key": "clipId",
+                "id": "SND-3",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "ambient"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)audio[- ]?vault"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bGrid\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcategory\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcaption\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "vector_search",
+      "prompt": "Run a vector similarity search on SoundClip features for [0.15, 0.25, 0.92] and tell me the closest clipId and category.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "SoundClip"
+              },
+              {
+                "field": "ranking",
+                "equals": "similarity"
+              },
+              {
+                "field": "results",
+                "contains": "SND-3"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)SND-3"
+              },
+              {
+                "matches": "(?i)ambient"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "bm25_search",
+      "prompt": "Search SoundClip caption with keyword search for \"vintage tape delay\" and tell me the top clipId.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "SoundClip"
+              },
+              {
+                "field": "ranking",
+                "equals": "bm25"
+              },
+              {
+                "field": "results",
+                "contains": "SND-2"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)SND-2"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
