@@ -365,8 +365,12 @@ impl<'a> FreshBackendStore<'a> {
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
                 let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
                 let route = crate::config_client::OwnerStagedRoute::new();
+                let fence_route = route.clone();
                 let http = defra_node::HttpConfig::with_listener(listener)?
-                    .with_authenticated_routes(route.router());
+                    .with_authenticated_routes(route.router())
+                    .with_router_transform(Arc::new(move |router| {
+                        fence_route.wrap_relationship_fence(router)
+                    }));
                 (
                     builder.with_http(http),
                     Some((url, signer, route, node.clone())),

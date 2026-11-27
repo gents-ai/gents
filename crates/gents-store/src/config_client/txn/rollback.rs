@@ -272,8 +272,8 @@ pub(super) async fn begin_http_owned(
     endpoint: GraphqlEndpoint,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     read_only: bool,
-) -> Result<(reqwest::Client, String, RollbackOnDrop)> {
-    let (client, id) = graphql::txn_begin(&endpoint, read_only)
+) -> Result<(reqwest::Client, String, u64, RollbackOnDrop)> {
+    let (client, id, fence_epoch) = graphql::txn_begin(&endpoint, read_only)
         .await
         .map_err(retry::transaction_storage_failure)?;
     let rollback = RollbackOnDrop::Http {
@@ -284,5 +284,5 @@ pub(super) async fn begin_http_owned(
         armed: true,
     };
     cancellation_rollback_scheduled.store(true, Ordering::Release);
-    Ok((client, id, rollback))
+    Ok((client, id, fence_epoch, rollback))
 }

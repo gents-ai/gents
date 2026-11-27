@@ -42,7 +42,11 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) operation: Option<&'static str>,
     pub(super) contends_with_request_siblings: AtomicBool,
     pub(super) client_signed_write_dispatched: AtomicBool,
+    pub(super) relationship_fence_epoch: u64,
+    pub(super) relationship_grant_seq: u64,
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
+    pub(super) revoked_relationships:
+        Mutex<Vec<crate::config_client::relationship_fence::StagedRevocation>>,
     pub(super) owed_deliveries: Mutex<Vec<gents_protocol::owed_delivery::OwedDeliveryRow>>,
     pub(super) rerun_notes: Vec<super::super::RerunNote>,
     pub(super) owner_staged_revocations: Mutex<super::OwnerStagedRevocations>,
@@ -65,6 +69,22 @@ pub struct ConfigApplyTxn<'a> {
     /// document it creates for its User, by that document, once admitted.
     pub(super) stored_creates:
         Mutex<rapidhash::RapidHashMap<String, Arc<crate::config_client::user_write::StoredCreate>>>,
+}
+
+pub(super) struct RevocationCommitGuard {
+    node: Arc<EmbeddedNode>,
+    fence: Arc<crate::config_client::relationship_fence::RelationshipRevocationFence>,
+    _gate: tokio::sync::OwnedMutexGuard<()>,
+    tx_begin_grant_seq: u64,
+    staged: Vec<crate::config_client::relationship_fence::StagedRevocation>,
+}
+
+impl RevocationCommitGuard {
+    pub(super) async fn committed(self) {
+        self.fence
+            .reconcile_committed_revocations(&self.node, self.tx_begin_grant_seq, self.staged)
+            .await;
+    }
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -301,6 +321,10 @@ impl<'a> ConfigApplyTxn<'a> {
             | EmbeddedTransactionPurpose::VerifiedClient
             | EmbeddedTransactionPurpose::ReadOnly => Arc::new(NativeOperationTracker::default()),
         };
+        let fence =
+            crate::config_client::relationship_fence::RelationshipRevocationFence::for_node(node);
+        let relationship_fence_epoch = fence.current_epoch();
+        let relationship_grant_seq = fence.detached_grant_seq();
         let (rollback_on_drop, handle) = begin_embedded_owned(
             EmbeddedOwnerHandles {
                 node: Arc::clone(node),
@@ -328,7 +352,10 @@ impl<'a> ConfigApplyTxn<'a> {
             affected_documents: AtomicU64::new(0),
             contends_with_request_siblings: AtomicBool::new(false),
             client_signed_write_dispatched: AtomicBool::new(false),
+            relationship_fence_epoch,
+            relationship_grant_seq,
             relationship_grants: Mutex::new(Vec::new()),
+            revoked_relationships: Mutex::new(Vec::new()),
             owed_deliveries: Mutex::new(Vec::new()),
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
@@ -457,7 +484,10 @@ impl<'a> ConfigApplyTxn<'a> {
                 affected_documents: AtomicU64::new(0),
                 contends_with_request_siblings: AtomicBool::new(false),
                 client_signed_write_dispatched: AtomicBool::new(false),
+                relationship_fence_epoch: 0,
+                relationship_grant_seq: 0,
                 relationship_grants: Mutex::new(Vec::new()),
+                revoked_relationships: Mutex::new(Vec::new()),
                 owed_deliveries: Mutex::new(Vec::new()),
                 rerun_notes: Vec::new(),
                 owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
@@ -472,11 +502,9 @@ impl<'a> ConfigApplyTxn<'a> {
                 operation: None,
             });
         }
-        let (client, id, rollback_on_drop) = tokio::spawn(begin_http_owned(
-            endpoint.clone(),
-            cancellation_rollback_scheduled,
-            read_only,
-        ))
+        let (client, id, relationship_fence_epoch, rollback_on_drop) = tokio::spawn(
+            begin_http_owned(endpoint.clone(), cancellation_rollback_scheduled, read_only),
+        )
         .await
         .map_err(ConfigClientError::BeginTask)??;
         let txn = Self {
@@ -489,7 +517,10 @@ impl<'a> ConfigApplyTxn<'a> {
             affected_documents: AtomicU64::new(0),
             contends_with_request_siblings: AtomicBool::new(false),
             client_signed_write_dispatched: AtomicBool::new(false),
+            relationship_fence_epoch,
+            relationship_grant_seq: 0,
             relationship_grants: Mutex::new(Vec::new()),
+            revoked_relationships: Mutex::new(Vec::new()),
             owed_deliveries: Mutex::new(Vec::new()),
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
@@ -559,6 +590,42 @@ impl<'a> ConfigApplyTxn<'a> {
         super::super::owed_delivery::publish_owed(node, rows).await;
     }
 
+    pub(super) fn record_staged_revocation(
+        &self,
+        revocation: crate::config_client::relationship_fence::StagedRevocation,
+    ) {
+        self.revoked_relationships
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(revocation);
+    }
+
+    pub(super) async fn begin_revocation_commit(&self) -> Option<RevocationCommitGuard> {
+        let staged = std::mem::take(
+            &mut *self
+                .revoked_relationships
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        if staged.is_empty() {
+            return None;
+        }
+        let node = match &self.backend {
+            TxnBackend::Embedded { node, .. } => Arc::clone(node),
+            TxnBackend::Http { .. } => return None,
+        };
+        let fence =
+            crate::config_client::relationship_fence::RelationshipRevocationFence::for_node(&node);
+        let gate = fence.lock_gate().await;
+        Some(RevocationCommitGuard {
+            node,
+            fence,
+            _gate: gate,
+            tx_begin_grant_seq: self.relationship_grant_seq,
+            staged,
+        })
+    }
+
     pub(super) async fn complete_relationship_grants(&self) -> Result<()> {
         let grants = std::mem::take(
             &mut *self
@@ -594,7 +661,11 @@ impl<'a> ConfigApplyTxn<'a> {
                     ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(error))
                 })?;
                 if let Err(error) = access
-                    .complete_relationship_grants(creator, std::slice::from_ref(grant))
+                    .complete_relationship_grants_since(
+                        creator,
+                        std::slice::from_ref(grant),
+                        self.relationship_fence_epoch,
+                    )
                     .await
                 {
                     return Err(ConfigClientError::ClientAgentPublicationUnconfirmed(
@@ -609,7 +680,9 @@ impl<'a> ConfigApplyTxn<'a> {
             }
             Ok(())
         } else {
-            access.complete_relationship_grants(creator, &grants).await
+            access
+                .complete_relationship_grants_since(creator, &grants, self.relationship_fence_epoch)
+                .await
         }
     }
 

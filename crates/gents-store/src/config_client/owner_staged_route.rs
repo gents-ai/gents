@@ -36,6 +36,23 @@ pub(super) async fn request(
     change: &OwnerStagedChange,
     grant: bool,
 ) -> Result<()> {
+    request_with_detached_epoch(endpoint, change, grant, None).await
+}
+
+pub(super) async fn request_detached(
+    endpoint: &GraphqlEndpoint,
+    change: &OwnerStagedChange,
+    baseline_epoch: u64,
+) -> Result<()> {
+    request_with_detached_epoch(endpoint, change, true, Some(baseline_epoch)).await
+}
+
+async fn request_with_detached_epoch(
+    endpoint: &GraphqlEndpoint,
+    change: &OwnerStagedChange,
+    grant: bool,
+    detached_epoch: Option<u64>,
+) -> Result<()> {
     let staged = StagedRelation::of(change)?;
     let capability = endpoint.held_client_signing_capability()?.clone();
     let mut command = OwnerStagedCommand {
@@ -60,7 +77,16 @@ pub(super) async fn request(
     url.set_fragment(None);
     let client = super::graphql::http_client().await?;
     let response = endpoint
-        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(&command)))
+        .send_resolving(|endpoint| {
+            let mut request = client.post(url.clone()).json(&command);
+            if let Some(epoch) = detached_epoch {
+                request = request.header(
+                    super::relationship_fence::DETACHED_GRANT_EPOCH_HEADER,
+                    epoch.to_string(),
+                );
+            }
+            endpoint.authorize(request)
+        })
         .await??;
     let status = response.status();
     if status.is_success() {
@@ -140,7 +166,14 @@ impl OwnerStagedRoute {
             )
     }
 
-    fn node(
+    /// Wraps `router` so HTTP relationship revocations and detached grant
+    /// completions share this node's revocation fence
+    /// (`tla/DetachedGrantRevocationFence.tla`).
+    pub fn wrap_relationship_fence(&self, router: axum::Router) -> axum::Router {
+        super::relationship_fence::wrap_relationship_fence(self.clone(), router)
+    }
+
+    pub(super) fn node(
         &self,
     ) -> Option<(
         Arc<EmbeddedNode>,

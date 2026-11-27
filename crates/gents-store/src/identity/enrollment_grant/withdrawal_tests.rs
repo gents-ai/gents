@@ -574,6 +574,7 @@ async fn home_with_storage(provider: Provider, persistent: bool) -> anyhow::Resu
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let grants = crate::config_client::OwnerStagedRoute::new();
+    let fence_route = grants.clone();
     let mut builder = defra_node::Node::builder()
         .with_node_acp_owner(owner.did())
         .with_signing_key(defra_node::SigningKey::Ed25519(
@@ -582,7 +583,10 @@ async fn home_with_storage(provider: Provider, persistent: bool) -> anyhow::Resu
         .with_node_acp_enabled()
         .with_http(
             defra_node::HttpConfig::with_listener(listener)?
-                .with_authenticated_routes(status.merge(grants.router())),
+                .with_authenticated_routes(status.merge(grants.router()))
+                .with_router_transform(Arc::new(move |router| {
+                    fence_route.wrap_relationship_fence(router)
+                })),
         );
     if persistent {
         builder = builder.data_path(directory.path().join("db"));

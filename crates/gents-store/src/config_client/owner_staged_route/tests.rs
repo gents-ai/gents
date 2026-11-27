@@ -78,6 +78,7 @@ impl Fixture {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let route = OwnerStagedRoute::new();
+        let fence_route = route.clone();
         let node = Arc::new(
             defra_node::Node::builder()
                 .enable_signing()
@@ -86,7 +87,10 @@ impl Fixture {
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener)
                         .unwrap()
-                        .with_authenticated_routes(route.router()),
+                        .with_authenticated_routes(route.router())
+                        .with_router_transform(Arc::new(move |router| {
+                            fence_route.wrap_relationship_fence(router)
+                        })),
                 )
                 .build()
                 .await
