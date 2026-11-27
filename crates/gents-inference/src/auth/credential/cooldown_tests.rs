@@ -7,80 +7,6 @@ use super::test_support::{
 };
 use super::*;
 
-#[tokio::test]
-async fn failed_refresh_is_not_retried_during_the_cooldown() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-cooldown",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
-    let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    let bearer = DbCredentialBearer::new(
-        node,
-        did,
-        provider,
-        oauth_credential_id(did, provider),
-        true,
-        OAuthRefreshKind::Xai,
-        XAI_OAUTH_PRODUCT,
-    )
-    .with_token_url(&url);
-    let first = bearer.current_bearer().await.expect_err("revoked");
-    let request = handle.await.expect("server");
-    let second = bearer.current_bearer().await.expect_err("cooldown");
-
-    assert!(request.contains("grant_type=refresh_token"), "{request}");
-    assert!(
-        first.to_string().contains("is expired or revoked"),
-        "{first}"
-    );
-    assert_eq!(first.to_string(), second.to_string());
-}
-
-#[tokio::test]
-async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-cooldown",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    let provider = crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    seed_credential(&access, did, provider, Utc::now() + Duration::hours(1)).await;
-    let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    let bearer = DbCredentialBearer::new(
-        node,
-        did,
-        provider,
-        oauth_credential_id(did, provider),
-        true,
-        OAuthRefreshKind::ChatGpt,
-        CHATGPT_OAUTH_PRODUCT,
-    )
-    .with_token_url(&url);
-    bearer.invalidate().await;
-    let first = bearer.current_bearer().await;
-    handle.await.expect("server");
-    let second = bearer.current_bearer().await;
-
-    let first = first.expect_err("rejected refresh");
-    let second = second.expect_err("cooldown must not re-serve the rejected token");
-    assert!(
-        first.to_string().contains("is expired or revoked"),
-        "{first}"
-    );
-    assert_eq!(first.to_string(), second.to_string());
-}
-
 fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
     let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
     DbCredentialBearer::new(
@@ -123,6 +49,34 @@ async fn set_label(
         .unwrap();
 }
 
+async fn remove_credential(
+    access: &gents_store::config_client::ConfigAccess,
+    did: &str,
+    credential_id: &str,
+) {
+    access
+        .transact_write("test.remove", |txn| {
+            let credential_id = credential_id.to_owned();
+            Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+        })
+        .await
+        .unwrap();
+}
+
+async fn clear_credential(
+    access: &gents_store::config_client::ConfigAccess,
+    did: &str,
+    credential_id: &str,
+) {
+    if lookup_oauth_credential_by_id_on(access, credential_id)
+        .await
+        .unwrap()
+        .is_some()
+    {
+        remove_credential(access, did, credential_id).await;
+    }
+}
+
 async fn revoked_twice(bearer: DbCredentialBearer) -> (String, String, String) {
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
     let bearer = bearer.with_token_url(url);
@@ -133,21 +87,60 @@ async fn revoked_twice(bearer: DbCredentialBearer) -> (String, String, String) {
 }
 
 #[tokio::test]
-async fn a_revoked_refresh_names_the_account() {
+async fn credential_cooldown_and_account_error_naming() {
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    let grok = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let grok_id = oauth_credential_id(did, grok);
+
+    // Failed refresh is not retried during the cooldown.
+    seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
+    let (first, second, request) = revoked_twice(grok_bearer(node.clone(), did)).await;
+    assert!(request.contains("grant_type=refresh_token"), "{request}");
+    assert!(first.contains("is expired or revoked"), "{first}");
+    assert_eq!(first, second);
+
+    // Failed refresh keeps the bearer forced and never re-serves the bad token.
+    let chatgpt = crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    seed_credential(&access, did, chatgpt, Utc::now() + Duration::hours(1)).await;
+    let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
+    let bearer = DbCredentialBearer::new(
+        node.clone(),
+        did,
+        chatgpt,
+        oauth_credential_id(did, chatgpt),
+        true,
+        OAuthRefreshKind::ChatGpt,
+        CHATGPT_OAUTH_PRODUCT,
+    )
+    .with_token_url(&url);
+    bearer.invalidate().await;
+    let first = bearer.current_bearer().await.expect_err("rejected refresh");
+    handle.await.expect("server");
+    let second = bearer
+        .current_bearer()
+        .await
+        .expect_err("cooldown must not re-serve the rejected token");
+    assert!(
+        first.to_string().contains("is expired or revoked"),
+        "{first}"
+    );
+    assert_eq!(first.to_string(), second.to_string());
+
+    // A revoked refresh names the account (or default product name when unlabeled).
     for (label, named) in [(Some("label-a"), "label-a"), (None, "Grok")] {
-        let db = gents_documents::test_support::SignedHome::start(
-            "credential-cooldown",
-            gents_store::node_extension::Extensions::none(),
-        )
-        .await;
-        let _binding = crate::test_support::default_agent(&db).await;
-        let node = db.node.clone();
-        let did = db.node_identity.did();
-        let access = super::rows::runtime_credential_access(&node, did).unwrap();
-        let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-        seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
+        remove_credential(&access, did, &grok_id).await;
+        seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
         set_label(&access, did, label).await;
-        let (first, second, _) = revoked_twice(grok_bearer(node, did)).await;
+        let (first, second, _) = revoked_twice(grok_bearer(node.clone(), did)).await;
         for error in [&first, &second] {
             assert!(
                 error.starts_with(&format!(
@@ -166,22 +159,11 @@ async fn a_revoked_refresh_names_the_account() {
             );
         }
     }
-}
 
-#[tokio::test]
-async fn a_revoked_refresh_never_uses_another_account() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-cooldown",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
-    let mut other = lookup_oauth_credential_by_id(&node, &oauth_credential_id(did, provider))
+    // A revoked refresh never uses another account.
+    remove_credential(&access, did, &grok_id).await;
+    seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
+    let mut other = lookup_oauth_credential_by_id(&node, &grok_id)
         .await
         .unwrap()
         .unwrap();
@@ -191,52 +173,25 @@ async fn a_revoked_refresh_never_uses_another_account() {
     other.refresh_token = "refresh-B".into();
     other.access_token_expires_at = Utc::now() + Duration::hours(1);
     upsert_oauth_credential_on(&access, &other).await.unwrap();
-    let (_, _, request) = revoked_twice(grok_bearer(node, did)).await;
+    let (_, _, request) = revoked_twice(grok_bearer(node.clone(), did)).await;
     assert!(request.contains("refresh-TEST"), "{request}");
     assert!(!request.contains("refresh-B"), "{request}");
-}
+    remove_credential(&access, did, &other.credential_id).await;
 
-#[tokio::test]
-async fn a_reused_slot_names_the_new_account() {
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "credential-cooldown",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&signed_home).await;
-    let (db, _user, _user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    let credential_id = oauth_credential_id(did, provider);
-    seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
+    // A reused slot names the new account.
+    remove_credential(&access, did, &grok_id).await;
+    seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
     set_label(&access, did, Some("label-a")).await;
-    let cached = lookup_oauth_credential_by_id(&node, &credential_id)
+    let cached = lookup_oauth_credential_by_id(&node, &grok_id)
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::new(
-        node.clone(),
-        did,
-        provider,
-        credential_id.clone(),
-        true,
-        OAuthRefreshKind::Xai,
-        XAI_OAUTH_PRODUCT,
-    )
-    .with_cache_seed(cached);
-    access
-        .transact_write("test.remove", |txn| {
-            let credential_id = credential_id.clone();
-            Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
-        })
-        .await
-        .unwrap();
+    let bearer = grok_bearer(node.clone(), did).with_cache_seed(cached);
+    remove_credential(&access, did, &grok_id).await;
     seed_credential_with_refresh_token(
         &access,
         did,
-        provider,
+        grok,
         Utc::now() - Duration::minutes(1),
         "refresh-NEW",
     )
@@ -249,39 +204,17 @@ async fn a_reused_slot_names_the_new_account() {
         !first.contains("label-a") && !first.contains("removed"),
         "{first}"
     );
-}
 
-#[tokio::test]
-async fn a_disabled_or_removed_row_names_the_account() {
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "credential-cooldown",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&signed_home).await;
-    let (db, _user, user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    let credential_id = oauth_credential_id(did, provider);
-    seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
+    // A disabled or removed row names the account.
+    remove_credential(&access, did, &grok_id).await;
+    seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
     set_label(&access, did, Some("label-a")).await;
-    let cached = lookup_oauth_credential_by_id(&node, &credential_id)
+    let cached = lookup_oauth_credential_by_id(&node, &grok_id)
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::new(
-        node.clone(),
-        did,
-        provider,
-        credential_id.clone(),
-        true,
-        OAuthRefreshKind::Xai,
-        XAI_OAUTH_PRODUCT,
-    )
-    .with_cache_seed(cached);
-    set_account_enabled(&user_access, did, &credential_id, false)
+    let bearer = grok_bearer(node.clone(), did).with_cache_seed(cached);
+    set_account_enabled(&user_access, did, &grok_id, false)
         .await
         .unwrap();
     let disabled = bearer
@@ -294,14 +227,7 @@ async fn a_disabled_or_removed_row_names_the_account() {
         "{disabled}"
     );
     assert!(disabled.contains("set-account"), "{disabled}");
-
-    access
-        .transact_write("test.remove", |txn| {
-            let credential_id = credential_id.clone();
-            Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
-        })
-        .await
-        .unwrap();
+    remove_credential(&access, did, &grok_id).await;
     let removed = bearer
         .current_bearer()
         .await
@@ -317,24 +243,13 @@ async fn a_disabled_or_removed_row_names_the_account() {
         !removed.contains(XAI_OAUTH_PRODUCT.login_command),
         "{removed}"
     );
-}
 
-#[tokio::test]
-async fn a_limit_like_label_is_not_a_limit() {
+    // A limit-like label is not classified as a provider limit.
     for label in ["usage limit", "maximum context length"] {
-        let db = gents_documents::test_support::SignedHome::start(
-            "credential-cooldown",
-            gents_store::node_extension::Extensions::none(),
-        )
-        .await;
-        let _binding = crate::test_support::default_agent(&db).await;
-        let node = db.node.clone();
-        let did = db.node_identity.did();
-        let access = super::rows::runtime_credential_access(&node, did).unwrap();
-        let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
-        seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
+        clear_credential(&access, did, &grok_id).await;
+        seed_credential(&access, did, grok, Utc::now() - Duration::minutes(1)).await;
         set_label(&access, did, Some(label)).await;
-        let (first, _, _) = revoked_twice(grok_bearer(node, did)).await;
+        let (first, _, _) = revoked_twice(grok_bearer(node.clone(), did)).await;
         assert!(first.starts_with("Grok account \"Grok\""), "{first}");
         assert!(!first.contains(label), "{first}");
         assert!(

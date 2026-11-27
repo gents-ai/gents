@@ -11,39 +11,518 @@ use crate::{
     triggers::engine::goal_source::GoalSource, triggers::engine::FireIntent,
     triggers::engine::TriggerSource, triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
-use defra_node::Node as EmbeddedNode;
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
+};
+use gents_session::request::lifecycle::{
+    build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+    RequestSigner, RequestSpec,
+};
+use gents_session::test_support::AgentHome;
+use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::RuntimeNode;
+use gents_store::identity::{NodeIdentity, RuntimeNode};
 use gents_store::subscription_source::UpdateSubscriptionSource;
-use gents_store::test_support::TestStore;
-use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-async fn test_db(name: &str) -> TestStore {
-    gents_store::test_support::TestStore::start(name, crate::lifecycle_hooks::composition()).await
+const RESCAN: Duration = Duration::from_millis(20);
+const SETTLED_PASSES: usize = 8;
+const RENDERED_LIMIT: &str =
+    "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
+
+struct GoalFixture {
+    home: AgentHome,
 }
 
-fn test_node_for(
-    identity: Arc<dyn gents_store::identity::NodeIdentity>,
-    default_agent_did: impl Into<String>,
-) -> Arc<RuntimeNode> {
-    Arc::new(RuntimeNode {
-        node_did: identity.did().to_string(),
-        identity,
-        default_agent_did: default_agent_did.into(),
-        display_name: None,
-        enabled: true,
-    })
+impl GoalFixture {
+    async fn start(name: &str) -> Self {
+        let home = AgentHome::start_with(name, crate::lifecycle_hooks::composition()).await;
+        let admin =
+            ConfigAccess::local_as(home.node.clone(), home.node_identity.did().parse().unwrap());
+        for actor in [home.user.did(), home.agent_did()] {
+            for permission in [
+                NodePermission::DocumentDelete,
+                NodePermission::CollectionGet,
+                NodePermission::DacRelationDelete,
+            ] {
+                admin
+                    .grant_node_permission(&actor.parse().unwrap(), permission)
+                    .await
+                    .unwrap();
+            }
+        }
+        Self { home }
+    }
+
+    fn did(&self) -> &str {
+        self.home.node_identity.did()
+    }
+
+    fn agent_did(&self) -> &str {
+        self.home.agent_did()
+    }
+
+    fn agent_access(&self) -> &ConfigAccess {
+        &self.home.agent_access
+    }
+
+    fn client_access(&self) -> &ConfigAccess {
+        &self.home.user_access
+    }
+
+    async fn reserve_session(&self, session: &str) -> String {
+        let create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            format!("goal-session-reservation-{session}"),
+            RequestScope::new(self.did(), self.home.user.did(), self.agent_did(), session),
+            "reserve session",
+            "interactive",
+            "2026-07-14T00:00:00Z",
+            AgentRequestAdmissionRecord::client(self.home.user.did()),
+        );
+        gents_session::request::lifecycle::reserve_goal_session(self.client_access(), &create)
+            .await
+            .expect("reserve user-owned goal session")
+    }
+
+    async fn clear_goal(&self, session: &str) {
+        let escaped = escape_graphql_string(session);
+        let del_goal = format!(
+            r#"mutation {{ delete_Goal(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        );
+        let del_claim = format!(
+            r#"mutation {{ delete_GoalCreationClaim(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        );
+        for access in [self.agent_access(), self.client_access()] {
+            let _ = access.write("test.goal_clear", &del_goal).await;
+            let _ = access.write("test.goal_claim_clear", &del_claim).await;
+        }
+    }
+
+    async fn load_goal(
+        &self,
+        access: &ConfigAccess,
+        session: &str,
+    ) -> Option<crate::goal::GoalDocument> {
+        let did = self.did();
+        access
+            .transact_readonly("test.load_client_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(txn, did, session))
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn seed_request(&self, session: &str, request_id: &str, state: &str) -> String {
+        self.seed_request_at(session, request_id, state, "2026-07-15T00:00:00Z")
+            .await
+    }
+
+    async fn seed_request_at(
+        &self,
+        session: &str,
+        request_id: &str,
+        state: &str,
+        created_at: &str,
+    ) -> String {
+        let spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                node_did: self.did().into(),
+                requester_did: Some(self.home.user.did().into()),
+                agent_did: self.agent_did().into(),
+                session_id: session.into(),
+                request_id: request_id.into(),
+                content: "completed baseline request".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: created_at.into(),
+            },
+            AgentRequestAdmissionRecord::client(self.home.user.did()),
+        );
+        let create = build_signed_client_request(
+            self.client_access(),
+            spec,
+            RequestSigner::Identity(&self.home.user),
+        )
+        .await
+        .unwrap();
+        submit_client_request(self.client_access(), &create)
+            .await
+            .unwrap();
+        let request = escape_graphql_string(request_id);
+        let rows = self
+            .client_access()
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}}}}"#
+            ))
+            .await
+            .unwrap();
+        let doc = rows["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        set_request_state_as(self.agent_access(), &doc, state).await;
+        doc
+    }
+
+    async fn seed_recovery_parent(&self, session: &str, request_id: &str, state: &str) -> String {
+        self.reserve_session(session).await;
+        let doc = self.seed_request(session, request_id, state).await;
+        if state == "completed" {
+            publish_owned_terminal_activity(
+                self.agent_access(),
+                self.home.agent_identity.as_ref(),
+                &doc,
+                "durable progress",
+            )
+            .await;
+        }
+        doc
+    }
+
+    async fn seed_usage(
+        &self,
+        session: &str,
+        request_id: &str,
+        request_doc: &str,
+        call_id: &str,
+        tokens: (i64, i64, i64),
+    ) {
+        let (prompt_tokens, completion_tokens, cached_input_tokens) = tokens;
+        let node_did = self.did();
+        let agent_did = self.agent_did();
+        self.agent_access().transact_write("test.goal_baseline_usage", |txn| {
+            Box::pin(async move {
+                let rows = txn.execute(&format!(
+                    r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+                    escape_graphql_string(node_did),
+                    escape_graphql_string(session)
+                )).await?;
+                let session_doc = rows["data"]["AgentSession"][0]["_docID"]
+                    .as_str()
+                    .expect("baseline session document");
+                let input = serde_json::json!({
+                    "call_id": call_id, "runtime_instance_id": "goal-baseline-test",
+                    "request_id": request_id, "request_doc_id": request_doc,
+                    "session_id": session, "call_seq": 1, "backend_id": "backend-test",
+                    "agent_did": agent_did, "node_did": node_did, "call_kind": "inference",
+                    "attempt": 1, "call_state": "completed",
+                    "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
+                    "ended_at": "2026-07-15T00:00:01Z", "priority": 0, "queue_depth_at_enqueue": 0,
+                    "controller_generation": 1, "backend_config_fingerprint": "goal-baseline-test",
+                    "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+                    "cached_input_tokens": cached_input_tokens,
+                });
+                let created = txn.execute_with_variables(
+                    "mutation($input: InferenceCallMutationInputArg!) { add_InferenceCall(input: $input) { _docID } }",
+                    &serde_json::json!({"input": input}),
+                ).await?;
+                let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
+                txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.expect("seed agent-owned usage linked to the session");
+    }
+
+    async fn seed_failed_call(
+        &self,
+        session: &str,
+        request_id: &str,
+        request_doc: &str,
+        session_doc: &str,
+        call: FailedInferenceCall<'_>,
+    ) {
+        let node_did = self.did();
+        let agent_did = self.agent_did();
+        let (_, provider_limit, provider_limit_resets_at) =
+            crate::goal::blocked_turn::permit_recorded(call.failure_reason, chrono::Utc::now());
+        let (provider_limit, provider_limit_resets_at) =
+            (&provider_limit, &provider_limit_resets_at);
+        self.agent_access().transact_write("test.goal_failed_call", |txn| {
+            Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input: $input) {_docID}}",
+                    &serde_json::json!({"input": {
+                        "call_id": call.call_id, "node_did": node_did, "request_id": request_id,
+                        "request_doc_id": request_doc, "session_id": session, "agent_did": agent_did,
+                        "backend_id": format!("{agent_did}:backend"), "call_seq": 1,
+                        "call_kind": call.call_kind, "attempt": call.attempt, "call_state": "failed",
+                        "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
+                        "ended_at": call.ended_at, "failure_reason": call.failure_reason,
+                        "provider_limit": provider_limit,
+                        "provider_limit_resets_at": provider_limit_resets_at,
+                    }}),
+                ).await?;
+                let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
+                txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+    }
+
+    async fn publish_readiness(
+        &self,
+        process_state: gents_protocol::row::NodeReadinessProcessState,
+        behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
+    ) {
+        use gents_protocol::row::{
+            AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
+            NODE_READINESS_FORMAT_VERSION,
+        };
+        let snapshot = NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: self.agent_did().to_string(),
+            agents: vec![AgentReadinessEntry {
+                effective_inference: None,
+                agent_did: self.agent_did().to_string(),
+                state: if behavior.is_some() {
+                    AgentReadinessState::Unavailable
+                } else {
+                    AgentReadinessState::Ready
+                },
+                reason: behavior,
+            }],
+        };
+        let did = escape_graphql_string(self.did());
+        let snapshot_json = escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+        let updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let access = ConfigAccess::local_as(self.home.node.clone(), self.did().parse().unwrap());
+        let response = access
+            .execute(&format!(
+                r#"{{ Node(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}}
+                NodeReadiness(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}} }}"#
+            ))
+            .await
+            .unwrap();
+        let parent = response["data"]["Node"][0]["_docID"]
+            .as_str()
+            .expect("visible readiness Node");
+        let readiness = response["data"]["NodeReadiness"].as_array().unwrap();
+        if let Some(existing) = readiness.first() {
+            assert_eq!(readiness.len(), 1);
+            let doc = escape_graphql_string(existing["_docID"].as_str().unwrap());
+            let response = access
+                .write(
+                    "test.goal_readiness.update",
+                    &format!(
+                        r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response["data"]["update_NodeReadiness"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        } else {
+            let escaped_parent = escape_graphql_string(parent);
+            let response = access
+                .write(
+                    "test.goal_readiness.create",
+                    &format!(
+                        r#"mutation {{create_NodeReadiness(input: {{node_did: "{did}", node_doc_id: "{escaped_parent}", parent_linked: false, snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#
+                    ),
+                )
+                .await
+                .unwrap();
+            let doc = gents_store::graphql::created_doc_id(&response, "NodeReadiness").unwrap();
+            access
+                .add_resource_relationship("NodeReadiness", &doc, "parent", "nodes", parent)
+                .await
+                .unwrap();
+            let doc = escape_graphql_string(&doc);
+            let response = access
+                .write(
+                    "test.goal_readiness.linked",
+                    &format!(
+                        r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{parent_linked: true}}) {{_docID}}}}"#
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response["data"]["update_NodeReadiness"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+
+    fn agent_snapshot(&self) -> Arc<ActiveRuntimeSnapshot> {
+        let node = Arc::new(RuntimeNode {
+            node_did: self.did().to_string(),
+            identity: self.home.node_identity.clone(),
+            default_agent_did: self.agent_did().to_string(),
+            display_name: None,
+            enabled: true,
+        });
+        let agent = test_agent_with_identity(node.clone(), self.home.agent_identity.clone());
+        let mut agents = RapidHashMap::new();
+        agents.insert(self.agent_did().to_owned(), Arc::new(agent));
+        Arc::new(ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
+            generation: 1,
+            node: Some(node),
+            local_did: self.did().to_string(),
+            default_agent_did: self.agent_did().to_string(),
+            tool_configs: Default::default(),
+            agents,
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: RapidHashSet::new(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: RapidHashSet::new(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        })
+    }
+
+    fn unready_source(&self) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+        let (tx, rx) = watch::channel(self.agent_snapshot());
+        let subscriptions: Arc<dyn UpdateSubscriptionSource> =
+            Arc::new(MockUpdateSubscriptionSource::new());
+        (
+            GoalSource::with_subscription_source(
+                subscriptions,
+                rx,
+                self.home.node.clone(),
+                CancellationToken::new(),
+            )
+            .with_rescan_interval(RESCAN),
+            tx,
+        )
+    }
+
+    async fn ready_source(&self) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+        self.publish_readiness(gents_protocol::row::NodeReadinessProcessState::Ready, None)
+            .await;
+        self.unready_source()
+    }
+
+    async fn signed_goal_backed_request(
+        &self,
+        session: &str,
+        request_id: &str,
+    ) -> AgentRequestCreate {
+        let did = self.did();
+        let agent_did = self.agent_did();
+        let mut create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            request_id,
+            RequestScope::new(did, agent_did, agent_did, session),
+            "Begin durable work",
+            "interactive",
+            "2026-07-15T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self(agent_did),
+        );
+        create.retry_key = Some(format!("goal-submit:{session}"));
+        create.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: gents_protocol::goal::deterministic_goal_id(did, session),
+            root_request_doc_id: None,
+        });
+        create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::User,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            delivery: gents_protocol::request_input::QueueDelivery::Queue,
+            position: None,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        });
+        create.session_doc_id = Some(
+            gents_session::request::lifecycle::reserve_goal_session(self.agent_access(), &create)
+                .await
+                .expect("reserve Agent-owned session"),
+        );
+        create.agent_doc_id = Some(
+            self.agent_access()
+                .transact_readonly("test.goal_backed.agent", |txn| {
+                    Box::pin(async move {
+                        Ok::<_, anyhow::Error>(
+                            gents_documents::read_desired_state_record_in_txn(
+                                txn,
+                                gents_store::collection::Collection::Agent,
+                                did,
+                                agent_did,
+                            )
+                            .await?
+                            .expect("goal-backed request Agent")
+                            .0,
+                        )
+                    })
+                })
+                .await
+                .expect("read goal-backed request Agent"),
+        );
+        gents_session::request::admission::sign_agent_request_create(
+            self.home.agent_identity.as_ref(),
+            &mut create,
+        )
+        .await
+        .expect("sign goal-backed request");
+        create
+    }
+
+    async fn request_doc_and_session(&self, request_id: &str) -> (String, String) {
+        let escaped = escape_graphql_string(request_id);
+        let rows = self
+            .agent_access()
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID session_doc_id}}}}"#
+            ))
+            .await
+            .unwrap();
+        let row = &rows["data"]["AgentRequest"][0];
+        (
+            row["_docID"].as_str().unwrap().to_owned(),
+            row["session_doc_id"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    async fn wait_for_goal(
+        &self,
+        session: &str,
+        source: &mut GoalSource,
+        description: &str,
+        reached: impl Fn(&crate::goal::GoalDocument) -> bool,
+    ) -> crate::goal::GoalDocument {
+        for _ in 0..SETTLED_PASSES {
+            if source.rescan_to_settled(true).await.is_some() {
+                panic!("unexpected goal fire while waiting for {description}");
+            }
+            let goal = self
+                .load_goal(self.agent_access(), session)
+                .await
+                .expect("Goal exists");
+            if reached(&goal) {
+                return goal;
+            }
+        }
+        panic!("goal transition did not complete in {SETTLED_PASSES} settled passes: {description}")
+    }
 }
 
 fn test_agent_with_identity(
     principal: Arc<RuntimeNode>,
-    agent_identity: Arc<dyn gents_store::identity::NodeIdentity>,
+    agent_identity: Arc<dyn NodeIdentity>,
 ) -> ResolvedAgent {
     let agent_did = agent_identity.did().to_owned();
     ResolvedAgent {
@@ -91,10 +570,7 @@ fn test_agent_with_identity(
     }
 }
 
-/// The verified signer of `cid`, read under document ACP as `reader`: a
-/// private row's block is visible only to an actor its policy admits, so an
-/// anonymous node read of it fails closed.
-async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) -> String {
+async fn verified_block_signer_as(node: &defra_node::Node, reader: &str, cid: &str) -> String {
     let (block, signature) = node
         .authorized_signed_block_bytes(cid, Some(reader))
         .await
@@ -104,302 +580,6 @@ async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) 
         defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
     db::block::verify::verified_signature_signer_did(&block, &signature)
         .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
-}
-
-const SESSION: &str = "goal-session";
-
-const RESCAN: Duration = Duration::from_millis(20);
-
-async fn goal_creation_actors(
-    db: &TestStore,
-) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
-    let user = gents_store::test_support::test_identity("goal-creation-user");
-    let runtime = db.node_identity.as_ref();
-    assert_ne!(user.did(), runtime.did());
-    let access = db.client_access(&user);
-    gents_documents::test_support::enroll_test_user(&db.node, runtime, &user, &access).await;
-    let (agent, _) = gents_documents::test_support::create_agent_on(
-        db,
-        &user,
-        &access,
-        "Test agent",
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await;
-    let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
-    for actor in [user.did(), agent.did()] {
-        for permission in [
-            gents_store::config_client::NodePermission::DocumentDelete,
-            gents_store::config_client::NodePermission::CollectionGet,
-            gents_store::config_client::NodePermission::DacRelationDelete,
-        ] {
-            admin
-                .grant_node_permission(&actor.parse().unwrap(), permission)
-                .await
-                .unwrap();
-        }
-    }
-    reserve_goal_session(db, &user, &agent, SESSION).await;
-    (user, agent)
-}
-
-async fn goal_fixture_request(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-) -> String {
-    goal_fixture_request_with_state(db, user, agent, request_id, "completed").await
-}
-
-async fn goal_fixture_usage(
-    db: &TestStore,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-    request_doc: &str,
-    call_id: &str,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-) {
-    goal_fixture_usage_for_node(
-        &db.node,
-        db.node_identity.did(),
-        SESSION,
-        agent,
-        FixtureUsage {
-            request_id,
-            request_doc,
-            call_id,
-            prompt_tokens,
-            completion_tokens,
-            cached_input_tokens: 0,
-        },
-    )
-    .await;
-}
-
-/// One completed inference call and the tokens it used.
-struct FixtureUsage<'a> {
-    request_id: &'a str,
-    request_doc: &'a str,
-    call_id: &'a str,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-    cached_input_tokens: i64,
-}
-
-async fn goal_fixture_usage_for_node(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    session_id: &str,
-    agent: &Arc<dyn NodeIdentity>,
-    usage: FixtureUsage<'_>,
-) {
-    let FixtureUsage {
-        request_id,
-        request_doc,
-        call_id,
-        prompt_tokens,
-        completion_tokens,
-        cached_input_tokens,
-    } = usage;
-    let access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    access.transact_write("test.goal_baseline_usage", |txn| {
-        Box::pin(async move {
-            let session = txn.execute(&format!(r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-                escape_graphql_string(node_did), escape_graphql_string(session_id))).await?;
-            let session_doc = session["data"]["AgentSession"][0]["_docID"].as_str().expect("baseline session document");
-            let input = serde_json::json!({
-                "call_id": call_id, "runtime_instance_id": "goal-baseline-test", "request_id": request_id,
-                "request_doc_id": request_doc, "session_id": session_id, "call_seq": 1,
-                "backend_id": "backend-test", "agent_did": agent.did(), "node_did": node_did,
-                "call_kind": "inference", "attempt": 1, "call_state": "completed",
-                "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
-                "ended_at": "2026-07-15T00:00:01Z", "priority": 0, "queue_depth_at_enqueue": 0,
-                "controller_generation": 1, "backend_config_fingerprint": "goal-baseline-test",
-                "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "cached_input_tokens": cached_input_tokens,
-            });
-            let created = txn.execute_with_variables(
-                "mutation($input: InferenceCallMutationInputArg!) { add_InferenceCall(input: $input) { _docID } }",
-                &serde_json::json!({"input": input}),
-            ).await?;
-            let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
-            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.expect("seed agent-owned usage linked to the session");
-}
-
-/// The working Agent's own signed access, the only actor its controller writes run as.
-fn agent_access(db: &TestStore, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
-    ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap()
-}
-
-async fn load_goal_as(access: &ConfigAccess, node_did: &str) -> Option<crate::goal::GoalDocument> {
-    access
-        .transact_readonly("test.load_client_goal", |txn| {
-            Box::pin(crate::goal::load_canonical_goal_in_txn(
-                txn, node_did, SESSION,
-            ))
-        })
-        .await
-        .unwrap()
-}
-
-fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
-    Arc::new(ActiveRuntimeSnapshot {
-        placement_basis: Default::default(),
-        generation: 1,
-        node: None,
-        local_did: local_did.to_string(),
-        default_agent_did: agent_did.to_string(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    })
-}
-
-async fn publish_node_readiness_for_agent(
-    db: &TestStore,
-    process_state: gents_protocol::row::NodeReadinessProcessState,
-    behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
-    agent_did: &str,
-) {
-    use gents_protocol::row::{
-        AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
-        NODE_READINESS_FORMAT_VERSION,
-    };
-    let snapshot = NodeReadinessSnapshot {
-        format_version: NODE_READINESS_FORMAT_VERSION,
-        process_state,
-        active_generation: 1,
-        router_generation: 1,
-        default_agent_did: agent_did.to_string(),
-        agents: vec![AgentReadinessEntry {
-            effective_inference: None,
-
-            agent_did: agent_did.to_string(),
-            state: if behavior.is_some() {
-                AgentReadinessState::Unavailable
-            } else {
-                AgentReadinessState::Ready
-            },
-            reason: behavior,
-        }],
-    };
-    let did = gents_store::graphql::escape_graphql_string(db.node_identity.did());
-    let snapshot_json =
-        gents_store::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
-    let updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let access = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
-    let response = access
-        .execute(&format!(
-            r#"{{ Node(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}}
-            NodeReadiness(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}} }}"#
-        ))
-        .await
-        .unwrap();
-    let parent = response["data"]["Node"][0]["_docID"]
-        .as_str()
-        .expect("visible readiness Node");
-    let readiness = response["data"]["NodeReadiness"].as_array().unwrap();
-    if let Some(existing) = readiness.first() {
-        assert_eq!(readiness.len(), 1);
-        let doc = escape_graphql_string(existing["_docID"].as_str().unwrap());
-        let response = access.write("test.goal_readiness.update", &format!(r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#)).await.unwrap();
-        assert_eq!(
-            response["data"]["update_NodeReadiness"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-    } else {
-        let escaped_parent = escape_graphql_string(parent);
-        let response = access.write("test.goal_readiness.create", &format!(r#"mutation {{create_NodeReadiness(input: {{node_did: "{did}", node_doc_id: "{escaped_parent}", parent_linked: false, snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#)).await.unwrap();
-        let doc = gents_store::graphql::created_doc_id(&response, "NodeReadiness").unwrap();
-        access
-            .add_resource_relationship("NodeReadiness", &doc, "parent", "nodes", parent)
-            .await
-            .unwrap();
-        let doc = escape_graphql_string(&doc);
-        let response = access.write("test.goal_readiness.linked", &format!(r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{parent_linked: true}}) {{_docID}}}}"#)).await.unwrap();
-        assert_eq!(
-            response["data"]["update_NodeReadiness"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-}
-
-async fn source_for_agent(
-    db: &TestStore,
-    agent_identity: &Arc<dyn NodeIdentity>,
-) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    publish_node_readiness_for_agent(
-        db,
-        gents_protocol::row::NodeReadinessProcessState::Ready,
-        None,
-        agent_identity.did(),
-    )
-    .await;
-    unready_source_for_agent(db, agent_identity)
-}
-
-fn agent_snapshot(
-    db: &TestStore,
-    agent_identity: &Arc<dyn NodeIdentity>,
-) -> Arc<ActiveRuntimeSnapshot> {
-    let node = test_node_for(db.node_identity.clone(), agent_identity.did());
-    let agent = test_agent_with_identity(node.clone(), agent_identity.clone());
-    let mut current = (*snapshot(db.node_identity.did(), agent_identity.did())).clone();
-    current.node = Some(node);
-    current.default_agent_did = agent_identity.did().to_owned();
-    current
-        .agents
-        .insert(agent_identity.did().to_owned(), Arc::new(agent));
-    Arc::new(current)
-}
-
-fn unready_source_for_agent(
-    db: &TestStore,
-    agent_identity: &Arc<dyn NodeIdentity>,
-) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
-    let subscriptions: Arc<dyn UpdateSubscriptionSource> =
-        Arc::new(MockUpdateSubscriptionSource::new());
-    (
-        GoalSource::with_subscription_source(
-            subscriptions,
-            rx,
-            db.node.clone(),
-            CancellationToken::new(),
-        )
-        .with_rescan_interval(RESCAN),
-        tx,
-    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -422,410 +602,68 @@ struct ChildRow {
     workspace_seal_hash: Option<String>,
 }
 
-async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStatus) {
-    let db = test_db("goal-controller-continuation-cas").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    goal_fixture_request(&db, &user, &agent, "newly-claimed-parent").await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let stale = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Preserve the newer continuation from stale controller decisions"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set active goal");
-    assert_eq!(stale.continuation_sequence(), 0);
-    assert!(crate::goal::claim_continuation_from_access(
-        &agent_access(&db, &agent),
-        &stale,
-        "newly-claimed-parent"
-    )
-    .await
-    .expect("claim newer continuation"));
-    let claimed = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(claimed.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(claimed.continuation_sequence(), 1);
-    assert_eq!(
-        claimed.last_continued_from_request_id.as_deref(),
-        Some("newly-claimed-parent")
-    );
-    let fields = format!(
-        r#"status: "{}", last_failure: "stale controller observation""#,
-        status.as_str()
-    );
-    assert!(
-        !crate::goal::update_goal_fields_if_status_from_access(
-            &agent_access(&db, &agent),
-            &stale,
-            GoalStatus::Active,
-            &fields,
-        )
-        .await
-        .expect("stale controller mutation returns cleanly"),
-        "same status must not authorize an older continuation snapshot"
-    );
-    let current = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(current.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(
-        current.continuation_sequence(),
-        claimed.continuation_sequence()
-    );
-    assert_eq!(
-        current.last_continued_from_request_id,
-        claimed.last_continued_from_request_id
-    );
-    assert_eq!(current.last_failure, claimed.last_failure);
-    assert!(crate::goal::update_goal_fields_if_status_from_access(
-        &agent_access(&db, &agent),
-        &current,
-        GoalStatus::Active,
-        &fields,
-    )
-    .await
-    .expect("current controller mutation"));
-    let updated = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(updated.parsed_status(), Some(status));
-    assert_eq!(updated.continuation_sequence(), 1);
+struct FailedInferenceCall<'a> {
+    call_id: &'a str,
+    call_kind: &'a str,
+    attempt: i64,
+    ended_at: &'a str,
+    failure_reason: &'a str,
 }
 
-async fn signed_goal_backed_request(
-    db: &TestStore,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-) -> gents_protocol::request_admission::AgentRequestCreate {
-    let did = db.node_identity.did();
-    let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did());
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        gents_protocol::request_admission::RequestScope::new(
-            did,
-            agent.did(),
-            agent.did(),
-            SESSION,
-        ),
-        "Begin durable work",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        admission,
-    );
-    create.retry_key = Some(format!("goal-submit:{SESSION}"));
-    create.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
-        goal_id: gents_protocol::goal::deterministic_goal_id(did, SESSION),
-        root_request_doc_id: None,
-    });
-    create.input.queue = Some(gents_protocol::request_input::RequestQueue {
-        source: gents_protocol::request_input::QueueSource::User,
-        policy: gents_protocol::request_input::QueuePolicy::Append,
-        delivery: gents_protocol::request_input::QueueDelivery::Queue,
-        position: None,
-        key: None,
-        queued_after_request_id: None,
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    });
-    // A goal-backed submission binds the Agent's existing session and its
-    // Agent document; the Agent reserves its own local-self session first.
-    let access = agent_access(db, agent);
-    create.session_doc_id = Some(
-        gents_session::request::lifecycle::reserve_goal_session(&access, &create)
-            .await
-            .expect("reserve Agent-owned session"),
-    );
-    create.agent_doc_id = Some(
-        access
-            .transact_readonly("test.goal_backed.agent", |txn| {
-                let agent_did = agent.did();
-                Box::pin(async move {
-                    Ok::<_, anyhow::Error>(
-                        gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            gents_store::collection::Collection::Agent,
-                            did,
-                            agent_did,
-                        )
-                        .await?
-                        .expect("goal-backed request Agent")
-                        .0,
-                    )
-                })
-            })
-            .await
-            .expect("read goal-backed request Agent"),
-    );
-    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut create)
+async fn goal_children_in_session(access: &ConfigAccess, session: &str) -> Vec<ChildRow> {
+    let escaped = escape_graphql_string(session);
+    let response = access
+        .execute(&format!(
+            r#"{{
+                AgentRequest(filter: {{ caused_by_trigger_kind: {{ _eq: "goal" }}, session_id: {{ _eq: "{escaped}" }} }}) {{
+                    _docID request_id node_did requester_did session_id agent_did
+                    caused_by_parent_request_id caused_by_parent_request_doc_id
+                    caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
+                    retry_key request_hop workspace_id workspace_authority
+                    workspace_owner_node_did workspace_seal_hash
+                }}
+            }}"#
+        ))
         .await
-        .expect("sign goal-backed request");
-    create
+        .expect("query selected Agent's goal children");
+    serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")
 }
 
-const RENDERED_LIMIT: &str =
-    "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
-
-async fn usage_limited_goal_after_failed_request(
-    db: &TestStore,
-    agent: &Arc<dyn NodeIdentity>,
+async fn seed_goal_fields_from_access(
     access: &ConfigAccess,
-) -> Option<String> {
-    seed_goal_from_access(
-        access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Stop on the call that ended the request"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    let (mut source, _snapshot_tx) = source_for_agent(db, agent).await;
-    let goal = wait_for_goal_transition_as(
-        access,
-        db.node_identity.did(),
-        &mut source,
-        "usage limit of the failed request",
-        |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
-    )
-    .await;
-    assert_settles_without_fire(&mut source, "a usage-limited goal must not continue").await;
-    goal.last_failure
-}
-
-async fn seed_a_passed_reset(
-    db: &TestStore,
-    opted_in: bool,
-) -> (
-    gents_store::identity::KeyIdentity,
-    Arc<dyn NodeIdentity>,
-    ConfigAccess,
+    goal: &crate::goal::GoalDocument,
+    fields: &str,
 ) {
-    let (user, agent, access) = goal_recovery_actors(db, "usage-limited-request", "failed").await;
-    let result = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
-    let parent = &result["data"]["AgentRequest"][0];
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        parent["_docID"].as_str().unwrap(),
-        parent["session_doc_id"].as_str().unwrap(),
-        FailedInferenceCall {
-            call_id: "limited-call",
-            call_kind: "inference",
-            attempt: 1,
-            ended_at: "2026-07-15T00:00:10Z",
-            failure_reason: RENDERED_LIMIT,
-        },
-    )
-    .await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Resume at the reported reset"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    if opted_in {
-        seed_goal_from_access(
-            &db.client_access(&user),
-            db.node_identity.did(),
-            SESSION,
-            None,
-            None,
-            None,
-            Some(true),
+    let doc = escape_graphql_string(&goal.doc_id);
+    let response = access
+        .write(
+            "test.goal_fixture_fields",
+            &format!(r#"mutation {{update_Goal(docID: "{doc}", input: {{{fields}}}) {{_docID}}}}"#),
         )
-        .await
-        .expect("opt in");
-    }
-    (user, agent, access)
-}
-
-async fn goal_and_children(db: &TestStore, access: &ConfigAccess) -> (Option<GoalStatus>, usize) {
-    let goal = load_goal_as(access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    (
-        goal.parsed_status(),
-        goal_children_from_access(access).await.len(),
-    )
-}
-
-async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
-    let db = test_db(name).await;
-    let (_user, agent, access) = seed_a_passed_reset(&db, opted_in).await;
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "provider reset decision",
-        |goal| {
-            if opted_in {
-                goal.parsed_status() == Some(GoalStatus::Active)
-                    && goal.continuation_sequence == Some(1)
-            } else {
-                goal.parsed_status() == Some(GoalStatus::UsageLimited)
-            }
-        },
-    )
-    .await;
-    if opted_in {
-        assert_settles_without_fire(&mut source, "reset must not publish a second continuation")
-            .await;
-    }
-    goal_and_children(&db, &access).await
-}
-
-async fn seed_same_second_canonical_goal_child(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    access: &ConfigAccess,
-    parent_id: &str,
-    paused: bool,
-) -> (String, String) {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
-    };
-    use sha2::{Digest, Sha256};
-    let did = db.node_identity.did();
-    let parent_doc = goal_fixture_request_with_state_at(
-        db,
-        user,
-        agent,
-        parent_id,
-        "completed",
-        "2026-07-15T00:00:00Z",
-    )
-    .await;
-    let goal = seed_goal_from_access(
-        access,
-        did,
-        SESSION,
-        Some("Continue from the actual causal head"),
-        Some(if paused {
-            GoalStatus::Paused
-        } else {
-            GoalStatus::Active
-        }),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let digest = Sha256::digest(format!("{}\0{parent_id}", goal.goal_id).as_bytes());
-    let suffix = digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let child_id = format!("goal-cont-{:020}-{suffix}", 1);
-    assert!(
-        child_id.as_str() < parent_id,
-        "fixture must defeat lexical head selection"
-    );
-    let identity = RequestIdentity {
-        requester_did: Some(user.did().into()),
-        request_id: child_id.clone(),
-        node_did: did.to_owned(),
-        agent_did: agent.did().into(),
-        session_id: SESSION.to_owned(),
-        content: "The canonical continuation made durable progress".to_owned(),
-        execution_origin: ExecutionOrigin::Scheduled,
-        created_at: "2026-07-15T00:00:00Z".into(),
-    };
-    let mut spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        identity,
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
-    spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
-    spec.parent = Some(gents_session::request::lifecycle::ParentLink {
-        parent_request_id: parent_id.to_owned(),
-        parent_request_doc_id: parent_doc.clone(),
-        ..Default::default()
-    });
-    spec.retry_key = Some(format!("goal-continuation:{suffix}"));
-    spec.input = serde_json::from_value(serde_json::json!({
-        "queue": {"source":"goal", "policy":"coalesce", "key":format!("goal:{suffix}"), "queued_after_request_id":parent_id},
-        "goal_continuation": {"sequence":1, "wrapup":false},
-        "goal_assignment": {"goal_id":goal.goal_id, "root_request_doc_id":goal.assignment_root_request_doc_id}
-    })).unwrap();
-    let client = db.client_access(user);
-    let child = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
         .await
         .unwrap();
-    submit_client_request(&client, &child).await.unwrap();
-    let children = goal_children_from_access(access).await;
-    assert_eq!(children.len(), 1);
-    let child_doc = children[0].doc_id.clone();
-    set_request_state_as(
-        access,
-        &child_doc,
-        if paused { "interrupted" } else { "completed" },
-    )
-    .await;
-    if paused {
-        let terminal = gents_protocol::graphql::graphql_input_literal(
-            &serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap(),
+    assert_eq!(response["data"]["update_Goal"].as_array().unwrap().len(), 1);
+}
+
+async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
+    let response = access
+        .write(
+            "test.goal_request_state",
+            &format!(
+                r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
+                escape_graphql_string(doc),
+                escape_graphql_string(state),
+            ),
         )
+        .await
         .unwrap();
-        let changed = access.write("test.goal_no_terminal_message", &format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{terminal_output: {terminal}}}) {{_docID}}}}"#, escape_graphql_string(&child_doc))).await.unwrap();
-        assert_eq!(
-            changed["data"]["update_AgentRequest"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-    } else {
-        publish_owned_terminal_activity(
-            access,
-            agent.as_ref(),
-            &child_doc,
-            "canonical child produced durable activity",
-        )
-        .await;
-    }
-    // The goal source binds an unbound Goal's assignment root to the first
-    // continuation it publishes; the client-submitted fixture child does not.
-    let root = goal
-        .assignment_root_request_doc_id
-        .clone()
-        .unwrap_or_else(|| child_doc.clone());
-    seed_goal_fields_from_access(
-        access,
-        &goal,
-        &format!(
-            "continuation_sequence: 1, last_continued_from_request_id: \"{}\", assignment_root_request_doc_id: \"{}\"",
-            escape_graphql_string(parent_id),
-            escape_graphql_string(&root)
-        ),
-    )
-    .await;
-    (child_id, child_doc)
+    assert_eq!(
+        response["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 async fn reject_before_claim(access: &ConfigAccess, doc_id: &str, reason: &str) {
@@ -841,115 +679,39 @@ async fn reject_before_claim(access: &ConfigAccess, doc_id: &str, reason: &str) 
     assert!(rows[0]["execution_generation"].is_null());
 }
 
-async fn goal_fixture_request_with_state(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-    state: &str,
-) -> String {
-    goal_fixture_request_with_state_at(db, user, agent, request_id, state, "2026-07-15T00:00:00Z")
-        .await
+async fn next_intent(source: &mut GoalSource, description: &str) -> FireIntent {
+    for _ in 0..SETTLED_PASSES {
+        if let Some(intent) = source.rescan_to_settled(true).await {
+            return intent;
+        }
+    }
+    panic!("{description}: the goal owner settled {SETTLED_PASSES} times without firing")
 }
 
-async fn goal_fixture_request_with_state_at(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-    state: &str,
-    created_at: &str,
-) -> String {
-    goal_fixture_request_in_session_at(db, user, agent, SESSION, request_id, state, created_at)
-        .await
+async fn assert_settles_without_fire(source: &mut GoalSource, description: &str) {
+    for _ in 0..2 {
+        assert!(
+            source.rescan_to_settled(true).await.is_none(),
+            "{description}"
+        );
+    }
 }
 
-async fn goal_fixture_request_in_session_at(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    session: &str,
-    request_id: &str,
-    state: &str,
-    created_at: &str,
-) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
-    };
-    let client = db.client_access(user);
-    let spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: agent.did().into(),
-            session_id: session.into(),
-            request_id: request_id.into(),
-            content: "completed baseline request".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: created_at.into(),
-        },
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let create = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
-        .await
-        .unwrap();
-    submit_client_request(&client, &create).await.unwrap();
-    let request = escape_graphql_string(request_id);
-    let rows = client
-        .execute(&format!(
-            r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}}}}"#
-        ))
-        .await
-        .unwrap();
-    let doc = rows["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let escaped = escape_graphql_string(&doc);
-    let state = escape_graphql_string(state);
-    let changed = agent_access.write("test.goal_baseline_complete", &format!(r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{lifecycle_state: "{state}"}}) {{_docID}}}}"#)).await.unwrap();
-    assert_eq!(
-        changed["data"]["update_AgentRequest"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    doc
-}
-
-async fn reserve_goal_session(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    session: &str,
-) -> String {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-
-    let access = db.client_access(user);
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        format!("goal-session-reservation-{session}"),
-        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session),
-        "reserve session",
-        "interactive",
-        "2026-07-14T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    gents_session::request::lifecycle::reserve_goal_session(&access, &create)
-        .await
-        .expect("reserve user-owned goal session")
+async fn operator_resume_child_row_from_access(
+    access: &ConfigAccess,
+    doc_id: &str,
+) -> serde_json::Value {
+    let doc = escape_graphql_string(doc_id);
+    let response = access.execute(&format!(r#"{{AgentRequest(docID: "{doc}") {{
+        _docID request_id node_did requester_did session_id agent_did lifecycle_state
+        content created_at execution_origin retry_key input admission_kind admission_signer_did
+        admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
+        caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation
+        caused_by_source_doc_id caused_by_trigger_context caused_by_parent_request_id caused_by_parent_request_doc_id
+        caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id request_hop workspace_id workspace_authority
+        workspace_owner_node_did workspace_seal_hash
+    }}}}"#)).await.unwrap();
+    response["data"]["AgentRequest"][0].clone()
 }
 
 async fn publish_owned_terminal_activity(
@@ -1035,11 +797,18 @@ async fn publish_owned_terminal_activity(
             txn.add_resource_relationship("AgentOutputSegment", &close_doc_id, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentOutputSegment", &close_doc_id, "working_agent", &agent.did().parse()?).await?;
             let message = TranscriptMessage {
-                native_request_id: None, message_key: gents_session::session::sequence_message_key(node_did, session_id, requester_did, sequence),
-                session_id: session_id.into(), node_did: node_did.into(), requester_did: requester_did.map(Into::into),
-                request_doc_id: Some(request_doc_id.into()), publication: MessagePublication::RequestExecution {execution_generation: generation.clone()},
-                outcome: OutputOutcome::Complete, sequence, role: MessageRole::Assistant, native_id: Some(format!("goal-terminal-{sequence}")),
-                blocks: vec![MessageBlock::Text { text: PresentedPayload {output: PayloadRef {close_doc_id, stream: 0}, presentation: PayloadPresentation::Full} }],
+                native_request_id: None,
+                message_key: gents_session::session::sequence_message_key(node_did, session_id, requester_did, sequence),
+                session_id: session_id.into(),
+                node_did: node_did.into(),
+                requester_did: requester_did.map(Into::into),
+                request_doc_id: Some(request_doc_id.into()),
+                publication: MessagePublication::RequestExecution { execution_generation: generation.clone() },
+                outcome: OutputOutcome::Complete,
+                sequence,
+                role: MessageRole::Assistant,
+                native_id: Some(format!("goal-terminal-{sequence}")),
+                blocks: vec![MessageBlock::Text { text: PresentedPayload { output: PayloadRef { close_doc_id, stream: 0 }, presentation: PayloadPresentation::Full } }],
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             let mut variables = transcript_message_create_variables(&message)?;
@@ -1051,201 +820,150 @@ async fn publish_owned_terminal_activity(
             let message_doc_id = gents_store::graphql::created_doc_id(&created, "AgentMessage")?;
             txn.add_resource_relationship("AgentMessage", &message_doc_id, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentMessage", &message_doc_id, "working_agent", &agent.did().parse()?).await?;
-            let terminal = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(TerminalOutput::Message {message_doc_id})?)?;
+            let terminal = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(TerminalOutput::Message { message_doc_id })?)?;
             txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{execution_generation: "{}", terminal_output: {terminal}}}) {{_docID}}}}"#, escape_graphql_string(generation))).await?;
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
 }
 
-async fn goal_recovery_actors(
-    db: &TestStore,
-    request_id: &str,
-    state: &str,
-) -> (
-    gents_store::identity::KeyIdentity,
-    Arc<dyn NodeIdentity>,
-    ConfigAccess,
-) {
-    let (user, agent) = goal_creation_actors(db).await;
-    let doc = goal_fixture_request_with_state(db, &user, &agent, request_id, state).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    if state == "completed" {
-        publish_owned_terminal_activity(&access, agent.as_ref(), &doc, "durable progress").await;
-    }
-    (user, agent, access)
-}
-
-async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
-    let response = access.execute(r#"{
-        AgentRequest(filter: {caused_by_trigger_kind: {_eq: "goal"}}) {
-            _docID request_id node_did requester_did session_id agent_did caused_by_parent_request_id caused_by_parent_request_doc_id
-            caused_by_trigger_id caused_by_trigger_kind input lifecycle_state retry_key request_hop workspace_id workspace_authority
-            workspace_owner_node_did workspace_seal_hash
-        }
-    }"#).await.expect("query selected Agent's goal children");
-    serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")
-}
-
-async fn seed_goal_fields_from_access(
-    access: &ConfigAccess,
-    goal: &crate::goal::GoalDocument,
-    fields: &str,
-) {
-    let doc = escape_graphql_string(&goal.doc_id);
-    let response = access
-        .write(
-            "test.goal_fixture_fields",
-            &format!(r#"mutation {{update_Goal(docID: "{doc}", input: {{{fields}}}) {{_docID}}}}"#),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response["data"]["update_Goal"].as_array().unwrap().len(), 1);
-}
-
-/// Owner passes a test grants before it calls an expected decision missing.
-/// The bound counts settled rescans, not wall time, so load cannot exhaust it.
-const SETTLED_PASSES: usize = 8;
-
-async fn wait_for_goal_transition_as(
-    access: &ConfigAccess,
-    node_did: &str,
-    source: &mut GoalSource,
-    description: &str,
-    reached: impl Fn(&crate::goal::GoalDocument) -> bool,
-) -> crate::goal::GoalDocument {
-    for _ in 0..SETTLED_PASSES {
-        if source.rescan_to_settled(true).await.is_some() {
-            panic!("unexpected goal fire while waiting for {description}");
-        }
-        let goal = load_goal_as(access, node_did).await.expect("Goal exists");
-        if reached(&goal) {
-            return goal;
-        }
-    }
-    panic!("goal transition did not complete in {SETTLED_PASSES} settled passes: {description}")
-}
-
-/// The owner's next continuation, from settled rescans.
-async fn next_intent(source: &mut GoalSource, description: &str) -> FireIntent {
-    for _ in 0..SETTLED_PASSES {
-        if let Some(intent) = source.rescan_to_settled(true).await {
-            return intent;
-        }
-    }
-    panic!("{description}: the goal owner settled {SETTLED_PASSES} times without firing")
-}
-
-/// The owner, run to its settled point twice, publishes nothing.
-async fn assert_settles_without_fire(source: &mut GoalSource, description: &str) {
-    for _ in 0..2 {
-        assert!(
-            source.rescan_to_settled(true).await.is_none(),
-            "{description}"
-        );
-    }
-}
-
-/// One failed inference call: which attempt of which kind, when it ended
-/// and why.
-struct FailedInferenceCall<'a> {
-    call_id: &'a str,
-    call_kind: &'a str,
-    attempt: i64,
-    ended_at: &'a str,
-    failure_reason: &'a str,
-}
-
-async fn seed_failed_call_from_access(
-    access: &ConfigAccess,
-    agent: &Arc<dyn NodeIdentity>,
-    node_did: &str,
-    request_doc: &str,
-    session_doc: &str,
-    call: FailedInferenceCall<'_>,
-) {
-    let FailedInferenceCall {
-        call_id,
-        call_kind,
-        attempt,
-        ended_at,
-        failure_reason,
-    } = call;
-    let (_, provider_limit, provider_limit_resets_at) =
-        crate::goal::blocked_turn::permit_recorded(failure_reason, chrono::Utc::now());
-    let (provider_limit, provider_limit_resets_at) = (&provider_limit, &provider_limit_resets_at);
-    access.transact_write("test.goal_failed_call", |txn| {
-        Box::pin(async move {
-            let response = txn.execute_with_variables(
-                "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input: $input) {_docID}}",
-                &serde_json::json!({"input": {"call_id": call_id, "node_did": node_did,
-                    "request_id": "usage-limited-request", "request_doc_id": request_doc,
-                    "session_id": SESSION, "agent_did": agent.did(), "backend_id": format!("{}:backend", agent.did()),
-                    "call_seq": 1, "call_kind": call_kind, "attempt": attempt, "call_state": "failed",
-                    "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
-                    "ended_at": ended_at, "failure_reason": failure_reason,
-                    "provider_limit": provider_limit, "provider_limit_resets_at": provider_limit_resets_at}}),
-            ).await?;
-            let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
-            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
-}
-
-async fn operator_resume_child_row_from_access(
-    access: &ConfigAccess,
-    doc_id: &str,
-) -> serde_json::Value {
-    let doc = escape_graphql_string(doc_id);
-    let response = access.execute(&format!(r#"{{AgentRequest(docID: "{doc}") {{
-        _docID request_id node_did requester_did session_id agent_did lifecycle_state
-        content created_at execution_origin retry_key input admission_kind admission_signer_did
-        admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
-        caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation
-        caused_by_source_doc_id caused_by_trigger_context caused_by_parent_request_id caused_by_parent_request_doc_id
-        caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id request_hop workspace_id workspace_authority
-        workspace_owner_node_did workspace_seal_hash
-    }}}}"#)).await.unwrap();
-    response["data"]["AgentRequest"][0].clone()
-}
-
-async fn seed_operator_resume_parent_with_actors(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-) -> String {
-    goal_fixture_request_with_state_at(
-        db,
-        user,
-        agent,
-        request_id,
-        "interrupted",
-        "2026-07-15T00:00:00Z",
+async fn seed_same_second_canonical_goal_child(
+    f: &GoalFixture,
+    session: &str,
+    parent_id: &str,
+    paused: bool,
+) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    f.reserve_session(session).await;
+    let did = f.did();
+    let parent_doc = f
+        .seed_request_at(session, parent_id, "completed", "2026-07-15T00:00:00Z")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        did,
+        session,
+        Some("Continue from the actual causal head"),
+        Some(if paused {
+            GoalStatus::Paused
+        } else {
+            GoalStatus::Active
+        }),
+        None,
+        None,
     )
     .await
+    .unwrap();
+    let digest = Sha256::digest(format!("{}\0{parent_id}", goal.goal_id).as_bytes());
+    let suffix = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let child_id = format!("goal-cont-{:020}-{suffix}", 1);
+    assert!(
+        child_id.as_str() < parent_id,
+        "fixture must defeat lexical head selection"
+    );
+    let mut spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            requester_did: Some(f.home.user.did().into()),
+            request_id: child_id.clone(),
+            node_did: did.to_owned(),
+            agent_did: f.agent_did().into(),
+            session_id: session.to_owned(),
+            content: "The canonical continuation made durable progress".to_owned(),
+            execution_origin: ExecutionOrigin::Scheduled,
+            created_at: "2026-07-15T00:00:00Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(f.home.user.did()),
+    );
+    spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
+    spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
+    spec.parent = Some(gents_session::request::lifecycle::ParentLink {
+        parent_request_id: parent_id.to_owned(),
+        parent_request_doc_id: parent_doc.clone(),
+        ..Default::default()
+    });
+    spec.retry_key = Some(format!("goal-continuation:{suffix}"));
+    spec.input = serde_json::from_value(serde_json::json!({
+        "queue": {"source":"goal", "policy":"coalesce", "key":format!("goal:{suffix}"), "queued_after_request_id":parent_id},
+        "goal_continuation": {"sequence":1, "wrapup":false},
+        "goal_assignment": {"goal_id":goal.goal_id, "root_request_doc_id":goal.assignment_root_request_doc_id}
+    })).unwrap();
+    let child = build_signed_client_request(
+        f.client_access(),
+        spec,
+        RequestSigner::Identity(&f.home.user),
+    )
+    .await
+    .unwrap();
+    submit_client_request(f.client_access(), &child)
+        .await
+        .unwrap();
+    let children = goal_children_in_session(f.agent_access(), session).await;
+    assert_eq!(children.len(), 1);
+    let child_doc = children[0].doc_id.clone();
+    set_request_state_as(
+        f.agent_access(),
+        &child_doc,
+        if paused { "interrupted" } else { "completed" },
+    )
+    .await;
+    if paused {
+        let terminal = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap(),
+        )
+        .unwrap();
+        let changed = f
+            .agent_access()
+            .write(
+                "test.goal_no_terminal_message",
+                &format!(
+                    r#"mutation {{update_AgentRequest(docID: "{}", input: {{terminal_output: {terminal}}}) {{_docID}}}}"#,
+                    escape_graphql_string(&child_doc)
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            changed["data"]["update_AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    } else {
+        publish_owned_terminal_activity(
+            f.agent_access(),
+            f.home.agent_identity.as_ref(),
+            &child_doc,
+            "canonical child produced durable activity",
+        )
+        .await;
+    }
+    let root = goal
+        .assignment_root_request_doc_id
+        .clone()
+        .unwrap_or_else(|| child_doc.clone());
+    seed_goal_fields_from_access(
+        f.agent_access(),
+        &goal,
+        &format!(
+            "continuation_sequence: 1, last_continued_from_request_id: \"{}\", assignment_root_request_doc_id: \"{}\"",
+            escape_graphql_string(parent_id),
+            escape_graphql_string(&root)
+        ),
+    )
+    .await;
+    (child_id, child_doc)
 }
 
-/// A foreign Node's User submits a colliding request here; it stays pending,
-/// since only that Node's own Agent signs its lifecycle and P2P carries only
-/// discovery and enrollment, so no foreign terminal row can reach this runtime.
 async fn create_visible_foreign_collision(
-    db: &TestStore,
-    observer: &dyn NodeIdentity,
+    f: &GoalFixture,
     request_id: &str,
     retry_key: Option<&str>,
 ) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
-    };
     let directory = tempfile::tempdir().unwrap();
     let foreign_node = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("foreign-node.key"),
@@ -1260,14 +978,14 @@ async fn create_visible_foreign_collision(
         None,
     )
     .unwrap();
-    let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let admin = ConfigAccess::local_as(f.home.node.clone(), f.did().parse().unwrap());
     for actor in [foreign_user.did(), foreign_agent.did()] {
         for permission in [
-            gents_store::config_client::NodePermission::DocumentRead,
-            gents_store::config_client::NodePermission::DocumentUpdate,
-            gents_store::config_client::NodePermission::CollectionGet,
-            gents_store::config_client::NodePermission::DacRelationAdd,
-            gents_store::config_client::NodePermission::DacRelationDelete,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::CollectionGet,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -1275,30 +993,32 @@ async fn create_visible_foreign_collision(
                 .unwrap();
         }
     }
-    let client = db.client_access(&foreign_user);
-    let node = serde_json::json!({"node_did": foreign_node.did()});
+    let client = f.home.client_access(&foreign_user);
     let backend_id = format!("{}:backend", foreign_agent.did());
     let profile_id = format!("{}:inference", foreign_agent.did());
-    let backend = serde_json::json!({"node_did": foreign_node.did(), "backend_id": backend_id,
-        "name": "Foreign inference", "provider_kind": "OpenAiCompatible",
-        "endpoint": "http://127.0.0.1:1/v1", "auth": {"kind": "unauthenticated"}});
-    let profile = serde_json::json!({"node_did": foreign_node.did(), "profile_id": profile_id,
-        "backend_id": backend_id, "model_name": "test-model"});
-    let agent = serde_json::json!({"node_did": foreign_node.did(), "agent_did": foreign_agent.did(),
-        "creation_nonce": binding.creation_nonce, "display_name": "Foreign collision Agent",
-        "inference_profile_id": profile_id, "enabled": true});
     let plan = gents_documents::DesiredStateApplyPlan::new(
         [
-            (gents_store::collection::Collection::Node, node),
+            (
+                gents_store::collection::Collection::Node,
+                serde_json::json!({"node_did": foreign_node.did()}),
+            ),
             (
                 gents_store::collection::Collection::InferenceBackend,
-                backend,
+                serde_json::json!({"node_did": foreign_node.did(), "backend_id": backend_id,
+                    "name": "Foreign inference", "provider_kind": "OpenAiCompatible",
+                    "endpoint": "http://127.0.0.1:1/v1", "auth": {"kind": "unauthenticated"}}),
             ),
             (
                 gents_store::collection::Collection::InferenceProfile,
-                profile,
+                serde_json::json!({"node_did": foreign_node.did(), "profile_id": profile_id,
+                    "backend_id": backend_id, "model_name": "test-model"}),
             ),
-            (gents_store::collection::Collection::Agent, agent),
+            (
+                gents_store::collection::Collection::Agent,
+                serde_json::json!({"node_did": foreign_node.did(), "agent_did": foreign_agent.did(),
+                    "creation_nonce": binding.creation_nonce, "display_name": "Foreign collision Agent",
+                    "inference_profile_id": profile_id, "enabled": true}),
+            ),
         ]
         .into_iter()
         .map(
@@ -1364,21 +1084,15 @@ async fn create_visible_foreign_collision(
             "AgentRequest",
             &doc,
             "reader",
-            &observer.did().parse().unwrap(),
+            &f.agent_did().parse().unwrap(),
         )
         .await
         .unwrap();
-    let observer_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        observer.did().parse().unwrap(),
-        observer,
-    )
-    .unwrap();
     let query = format!(
         r#"{{AgentRequest(docID: "{}") {{_docID node_did}}}}"#,
         escape_graphql_string(&doc)
     );
-    let visible = observer_access.execute(&query).await.unwrap();
+    let visible = f.agent_access().execute(&query).await.unwrap();
     assert_eq!(
         visible["data"]["AgentRequest"][0]["node_did"],
         foreign_node.did()
@@ -1386,122 +1100,19 @@ async fn create_visible_foreign_collision(
     doc
 }
 
-async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
-    let response = access.write("test.goal_request_state", &format!(
-        r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
-        escape_graphql_string(doc), escape_graphql_string(state),
-    )).await.unwrap();
-    assert_eq!(
-        response["data"]["update_AgentRequest"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
-async fn seed_foreign_goal_usage(
-    access: &ConfigAccess,
-    agent: &Arc<dyn NodeIdentity>,
-    foreign_node: &str,
-    request_doc: &str,
-    session_doc: &str,
-) {
-    let doc = access.transact_write("test.goal_foreign_usage", |txn| {
-        Box::pin(async move {
-            let input = serde_json::json!({"call_id":"goal-budget-call-foreign", "node_did":foreign_node,
-                "agent_did":agent.did(), "session_id":SESSION, "request_id":"parent-budget",
-                "request_doc_id":request_doc, "call_seq":1, "call_kind":"inference", "attempt":1,
-                "call_state":"completed", "prompt_tokens":10000, "completion_tokens":10000, "cached_input_tokens":0});
-            let result = txn.execute_with_variables("mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents_store::graphql::created_doc_id(&result, "InferenceCall")?;
-            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
-            Ok::<_, anyhow::Error>(doc)
-        })
-    }).await.unwrap();
-    let observed = access
-        .execute(&format!(
-            r#"{{InferenceCall(docID: "{}") {{_docID node_did request_doc_id}}}}"#,
-            escape_graphql_string(&doc)
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        observed["data"]["InferenceCall"][0]["node_did"],
-        foreign_node
-    );
-    assert_eq!(
-        observed["data"]["InferenceCall"][0]["request_doc_id"],
-        request_doc
-    );
-}
-
-async fn seed_lineage_tool(
-    access: &ConfigAccess,
-    agent: &Arc<dyn NodeIdentity>,
-    user: &gents_store::identity::KeyIdentity,
-    node_did: &str,
-    request_id: &str,
-    request_doc: &str,
-    tool_id: &str,
-) -> String {
-    let response = access
-        .execute(&format!(
-            r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#,
-            escape_graphql_string(request_doc)
-        ))
-        .await
-        .unwrap();
-    let session_doc = response["data"]["AgentRequest"][0]["session_doc_id"]
-        .as_str()
-        .unwrap();
-    access.transact_write("test.goal_lineage_tool", |txn| {
-        Box::pin(async move {
-            let input = serde_json::json!({"tool_call_key":tool_id, "tool_call_id":tool_id,
-                "node_did":node_did,"requester_did":user.did(),"session_id":SESSION,"session_doc_id":session_doc,
-                "agent_did":agent.did(),"creator_did":agent.did(),"parent_linked":true,
-                "request_id":request_id,"request_doc_id":request_doc,"tool_name":"agent_message",
-                "status":"completed","lifecycle_state":"completed"});
-            let result = txn.execute_with_variables("mutation($input: AgentToolCallMutationInputArg!) {create_AgentToolCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents_store::graphql::created_doc_id(&result, "AgentToolCall")?;
-            txn.add_resource_relationship("AgentToolCall", &doc, "parent", "sessions", session_doc).await?;
-            txn.add_actor_relationship("AgentToolCall", &doc, "working_agent", &agent.did().parse()?).await?;
-            Ok::<_, anyhow::Error>(doc)
-        })
-    }).await.unwrap()
-}
-
 async fn seed_lineage_parent(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
+    f: &GoalFixture,
+    session: &str,
     request_id: &str,
     terminal: &str,
     workspace_id: &str,
     seal_hash: &str,
 ) -> (String, String) {
-    let access = &ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
-    };
-    let client = db.client_access(user);
+    f.reserve_session(session).await;
     let root_id = "upstream-root";
-    let root = goal_fixture_request_with_state_at(
-        db,
-        user,
-        agent,
-        root_id,
-        "completed",
-        "2026-07-14T23:59:58Z",
-    )
-    .await;
+    let root = f
+        .seed_request_at(session, root_id, "completed", "2026-07-14T23:59:58Z")
+        .await;
     let mut predecessor_id = root_id.to_owned();
     let mut predecessor_doc = root.clone();
     for (id, created_at, hop, tool_id) in [
@@ -1518,33 +1129,64 @@ async fn seed_lineage_parent(
             "upstream-middle-call",
         ),
     ] {
-        let tool_doc = seed_lineage_tool(
-            access,
-            agent,
-            user,
-            db.node_identity.did(),
-            &predecessor_id,
-            &predecessor_doc,
-            tool_id,
-        )
-        .await;
+        let resp = f
+            .agent_access()
+            .execute(&format!(
+                r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#,
+                escape_graphql_string(&predecessor_doc)
+            ))
+            .await
+            .unwrap();
+        let session_doc = resp["data"]["AgentRequest"][0]["session_doc_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let node_did = f.did();
+        let user_did = f.home.user.did();
+        let agent_did = f.agent_did();
+        let pred_id = predecessor_id.as_str();
+        let pred_doc = predecessor_doc.as_str();
+        let tool_doc = f.agent_access().transact_write("test.goal_lineage_tool", |txn| {
+            let session_doc = &session_doc;
+            Box::pin(async move {
+                let input = serde_json::json!({
+                    "tool_call_key": tool_id, "tool_call_id": tool_id, "node_did": node_did,
+                    "requester_did": user_did, "session_id": session, "session_doc_id": session_doc,
+                    "agent_did": agent_did, "creator_did": agent_did, "parent_linked": true,
+                    "request_id": pred_id, "request_doc_id": pred_doc, "tool_name": "agent_message",
+                    "status": "completed", "lifecycle_state": "completed"
+                });
+                let result = txn.execute_with_variables(
+                    "mutation($input: AgentToolCallMutationInputArg!) {create_AgentToolCall(input:$input) {_docID}}",
+                    &serde_json::json!({"input": input}),
+                ).await?;
+                let doc = gents_store::graphql::created_doc_id(&result, "AgentToolCall")?;
+                txn.add_resource_relationship("AgentToolCall", &doc, "parent", "sessions", session_doc).await?;
+                txn.add_actor_relationship("AgentToolCall", &doc, "working_agent", &agent_did.parse()?).await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await.unwrap();
         let spec = RequestSpec::new(
             RequestPurpose::Normal,
             RequestIdentity {
-                requester_did: Some(user.did().into()),
+                requester_did: Some(f.home.user.did().into()),
                 request_id: id.into(),
-                node_did: db.node_identity.did().into(),
-                agent_did: agent.did().into(),
-                session_id: SESSION.into(),
+                node_did: f.did().into(),
+                agent_did: f.agent_did().into(),
+                session_id: session.into(),
                 content: "Continue the original graph work".into(),
                 execution_origin: ExecutionOrigin::Interactive,
                 created_at: created_at.into(),
             },
-            AgentRequestAdmissionRecord::client(user.did()),
+            AgentRequestAdmissionRecord::client(f.home.user.did()),
         );
-        let mut request = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
-            .await
-            .unwrap();
+        let mut request = build_signed_client_request(
+            f.client_access(),
+            spec,
+            RequestSigner::Identity(&f.home.user),
+        )
+        .await
+        .unwrap();
         request.request_hop = hop;
         request.caused_by_parent_request_id = Some(predecessor_id.clone());
         request.caused_by_parent_request_doc_id = Some(predecessor_doc.clone());
@@ -1559,20 +1201,28 @@ async fn seed_lineage_parent(
                 Some(r#"{"source_fields":{"artifact":"original"}}"#.into());
             request.workspace_id = Some(workspace_id.into());
             request.workspace_authority = Some("readOnly".into());
-            request.workspace_owner_node_did = Some(db.node_identity.did().into());
+            request.workspace_owner_node_did = Some(f.did().into());
             request.workspace_seal_hash = Some(seal_hash.into());
         }
-        gents_session::request::admission::sign_agent_request_create(user, &mut request)
+        gents_session::request::admission::sign_agent_request_create(&f.home.user, &mut request)
             .await
             .unwrap();
-        submit_client_request(&client, &request).await.unwrap();
-        let id_escaped = escape_graphql_string(id);
-        let response = client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{id_escaped}"}}}}, limit: 2) {{_docID}}}}"#)).await.unwrap();
+        submit_client_request(f.client_access(), &request)
+            .await
+            .unwrap();
+        let response = f
+            .client_access()
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+                escape_graphql_string(id)
+            ))
+            .await
+            .unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         predecessor_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
         set_request_state_as(
-            access,
+            f.agent_access(),
             &predecessor_doc,
             if hop == 2 { terminal } else { "completed" },
         )
@@ -1583,530 +1233,29 @@ async fn seed_lineage_parent(
 }
 
 #[tokio::test]
-async fn goal_continuation_preserves_nested_workspace_lineage() {
-    let db = test_db("goal-nested-workspace-lineage").await;
-    let (user, agent_identity) = goal_creation_actors(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent_identity.did().parse().unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    let did = db.node_identity.did();
-    let (parent_doc_id, _source_doc) = seed_lineage_parent(
-        &db,
-        &user,
-        &agent_identity,
-        "parent-nested-workspace",
-        "completed",
-        "workspace-goal",
-        "seal-hash",
-    )
-    .await;
-    publish_owned_terminal_activity(
-        &access,
-        agent_identity.as_ref(),
-        &parent_doc_id,
-        "durable progress",
-    )
-    .await;
-    seed_goal_from_access(
-        &access,
-        did,
-        SESSION,
-        Some("Preserve nested workspace scope"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-
-    let (mut source, _tx) = source_for_agent(&db, &agent_identity).await;
-    next_intent(&mut source, "lineage continuation").await;
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    let child = &children[0];
-    let visible = goal_children_from_access(&db.client_access(&user)).await;
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].doc_id, child.doc_id);
-    assert_eq!(child.request_hop, Some(2));
-    assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
-    assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-    assert_eq!(child.workspace_owner_node_did.as_deref(), Some(did));
-    assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
-    let child_identity = (
-        child.doc_id.clone(),
-        child.request_id.clone(),
-        child.retry_key.clone(),
-    );
-    let continuation_sequence = load_goal_as(&access, did)
-        .await
-        .unwrap()
-        .continuation_sequence;
-    drop(source);
-    for _ in 0..2 {
-        let recovered =
-            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
-                &db.node,
-                did,
-                std::slice::from_ref(&agent_identity),
-            )
-            .await
-            .unwrap();
-        assert_eq!(recovered.requests_recovered, 0);
-        let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
-        assert_settles_without_fire(
-            &mut restarted,
-            "repeated maintenance and source reconciliation must not emit another continuation",
-        )
-        .await;
-        let children = goal_children_from_access(&access).await;
-        assert_eq!(children.len(), 1);
-        let child = &children[0];
-        assert_eq!(
-            (
-                child.doc_id.clone(),
-                child.request_id.clone(),
-                child.retry_key.clone()
-            ),
-            child_identity
-        );
-        assert_eq!(child.request_hop, Some(2));
-        assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
-        assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-        assert_eq!(child.workspace_owner_node_did.as_deref(), Some(did));
-        assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
-        assert_eq!(
-            load_goal_as(&access, did)
-                .await
-                .unwrap()
-                .continuation_sequence,
-            continuation_sequence
-        );
-    }
-}
-
-#[tokio::test]
-async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
-    let db = test_db("goal-delimiter-safe-key").await;
-    let did = db.node_identity.did();
-    let (user, agent) = goal_creation_actors(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    for (session, parent) in [("b:c", "d"), ("b", "c:d")] {
-        reserve_goal_session(&db, &user, &agent, session).await;
-        let doc_id = goal_fixture_request_in_session_at(
-            &db,
-            &user,
-            &agent,
-            session,
-            parent,
-            "completed",
-            "2026-11-04T00:00:00Z",
-        )
-        .await;
-        publish_owned_terminal_activity(&access, agent.as_ref(), &doc_id, "progress").await;
-        assert!(!doc_id.is_empty());
-        seed_goal_from_access(
-            &access,
-            did,
-            session,
-            Some(&format!("goal for {session}")),
-            Some(GoalStatus::Active),
-            None,
-            None,
-        )
-        .await
-        .expect("set delimiter goal");
-    }
-
-    let (mut source, _tx) = source_for_agent(&db, &agent).await;
-    for _ in 0..2 {
-        next_intent(&mut source, "delimiter continuation").await;
-    }
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 2);
-    let keys = children
-        .iter()
-        .map(|child| child.retry_key.as_deref().expect("retry key"))
-        .collect::<RapidHashSet<_>>();
-    assert_eq!(keys.len(), 2);
-}
-
-#[tokio::test]
-async fn completed_request_materializes_exactly_one_same_session_goal_child() {
-    let db = test_db("goal-exactly-once").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let parent_doc = goal_fixture_request(&db, &user, &agent, "parent-complete").await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    publish_owned_terminal_activity(&access, agent.as_ref(), &parent_doc, "durable progress").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Finish the durable objective"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    let intent = next_intent(&mut source, "goal continuation").await;
-    assert!(intent.pre_materialized_request_id.is_some());
-
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    let child = &children[0];
-    let visible = goal_children_from_access(&db.client_access(&user)).await;
-    assert_eq!(
-        visible.len(),
-        1,
-        "the session owner must see the continuation"
-    );
-    assert_eq!(visible[0].doc_id, child.doc_id);
-    assert_eq!(child.session_id, SESSION);
-    assert_eq!(child.agent_did.as_deref(), Some(agent.did()));
-    assert_eq!(
-        child.caused_by_parent_request_id.as_deref(),
-        Some("parent-complete")
-    );
-    assert_eq!(
-        child.caused_by_trigger_id.as_deref(),
-        Some(goal.goal_id.as_str())
-    );
-    assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("goal"));
-
-    assert_settles_without_fire(
-        &mut source,
-        "a pending child must suppress duplicate continuation",
-    )
-    .await;
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
-}
-
-#[tokio::test]
-async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
-    use sha2::{Digest, Sha256};
-
-    let db = test_db("goal-foreign-request-id-collision").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-owned-collision", "completed").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Ignore foreign request IDs"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    let digest =
-        Sha256::digest(format!("{}\0{}", goal.goal_id, "parent-owned-collision").as_bytes());
-    let collision_id = format!(
-        "goal-cont-{:020}-{}",
-        1,
-        digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    create_visible_foreign_collision(&db, agent.as_ref(), &collision_id, None).await;
-
-    let (mut source, _tx) = source_for_agent(&db, &agent).await;
-    let mut fired = None;
-    for _ in 0..SETTLED_PASSES {
-        fired = source.rescan_to_settled(true).await;
-        if fired.is_some() {
-            break;
-        }
-    }
-    if fired.is_none() {
-        let state = access
-            .execute("{ Goal { goal_id status last_continued_from_request_id continuation_sequence } AgentRequest { request_id node_did session_id retry_key caused_by_trigger_kind } }")
-            .await;
-        panic!(
-            "owned continuation did not fire in {SETTLED_PASSES} settled passes; state={state:?}"
-        );
-    }
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].request_id, collision_id);
-    assert_eq!(children[0].session_id, SESSION);
-}
-
-#[tokio::test]
-async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
-    use sha2::{Digest, Sha256};
-
-    let db = test_db("goal-foreign-retry-key-collision").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-owned-retry-collision", "completed").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Reject foreign retry keys"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    let digest =
-        Sha256::digest(format!("{}\0{}", goal.goal_id, "parent-owned-retry-collision").as_bytes());
-    let retry_key = format!(
-        "goal-continuation:{}",
-        digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    create_visible_foreign_collision(
-        &db,
-        agent.as_ref(),
-        "foreign-retry-collision",
-        Some(&retry_key),
-    )
-    .await;
-
-    let (mut source, _tx) = source_for_agent(&db, &agent).await;
-    assert_settles_without_fire(
-        &mut source,
-        "a conflicting retry key must not be reported as an owned continuation",
-    )
-    .await;
-    assert!(goal_children_from_access(&access).await.is_empty());
-}
-
-#[tokio::test]
-async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
-    let db = test_db("goal-restart-no-duplicate").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "parent-restart", "completed").await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Continue exactly once across restart"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-
-    let (mut first, _first_tx) = source_for_agent(&db, &agent).await;
-    next_intent(&mut first, "first source").await;
-    drop(first);
-
-    let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    assert_settles_without_fire(&mut restarted, "restart must not emit a second child").await;
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
-}
-
-#[tokio::test]
-async fn restart_materializes_a_claimed_continuation_after_crash() {
-    let db = test_db("goal-restart-claimed").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "parent-claimed", "completed").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Recover the claimed continuation"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    assert!(crate::goal::claim_continuation_from_access(
-        &agent_access(&db, &agent),
-        &goal,
-        "parent-claimed"
-    )
-    .await
-    .expect("claim continuation"));
-    assert!(goal_children_from_access(&access).await.is_empty());
-
-    let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    next_intent(&mut restarted, "recovery source").await;
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
-}
-
-#[tokio::test]
-async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
-    let db = test_db("goal-restart-claimed-wrapup-retry").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-claimed-wrapup-retry", "failed").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Recover one charged wrap-up retry"),
-        Some(GoalStatus::BudgetLimited),
-        None,
-        None,
-    )
-    .await
-    .expect("set budget-limited goal");
-    assert!(crate::goal::claim_retry_continuation_from_access(
-        &agent_access(&db, &agent),
-        &goal,
-        "parent-claimed-wrapup-retry",
-        1,
-        "failed",
-    )
-    .await
-    .expect("atomically charge and claim wrap-up retry"));
-
-    let (mut restarted, _tx) = source_for_agent(&db, &agent).await;
-    next_intent(&mut restarted, "wrap-up retry recovery").await;
-    let recovered = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(recovered.infrastructure_retry_count, Some(1));
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    let input = children[0].input.as_ref().expect("goal continuation input");
-    assert_eq!(input["goal_continuation"]["wrapup"], true);
-}
-
-#[tokio::test]
-async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
-    let db = test_db("goal-claim-status-cas").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    goal_fixture_request(&db, &user, &agent, "parent-stale").await;
-    let client = db.client_access(&user);
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let stale = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Do not race an operator pause"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    seed_goal_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        None,
-        Some(GoalStatus::Paused),
-        None,
-        None,
-    )
-    .await
-    .expect("user pauses goal");
-    assert!(!crate::goal::claim_continuation_from_access(
-        &agent_access(&db, &agent),
-        &stale,
-        "parent-stale"
-    )
-    .await
-    .expect("stale claim returns cleanly"));
-}
-
-#[tokio::test]
-async fn controller_status_cas_never_overwrites_a_newer_completion() {
-    let db = test_db("goal-controller-status-cas").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let stale = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Completion wins controller races"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    seed_goal_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        None,
-        Some(GoalStatus::Complete),
-        None,
-        None,
-    )
-    .await
-    .expect("user completes goal");
-    assert!(!crate::goal::update_goal_fields_if_status_from_access(
-        &agent_access(&db, &agent),
-        &stale,
-        GoalStatus::Active,
-        r#"status: "paused", last_failure: "stale controller""#,
-    )
-    .await
-    .expect("conditional controller update"));
-    let current = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(current.parsed_status(), Some(GoalStatus::Complete));
-}
-
-#[tokio::test]
-async fn controller_pause_rejects_same_status_from_an_older_continuation() {
-    assert_stale_controller_cannot_mutate_new_continuation(GoalStatus::Paused).await;
-}
-
-#[tokio::test]
-async fn controller_block_rejects_same_status_from_an_older_continuation() {
-    assert_stale_controller_cannot_mutate_new_continuation(GoalStatus::Blocked).await;
-}
-
-#[tokio::test]
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
-    let db = test_db("goal-model-create").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
+    let f = GoalFixture::start("goal-model-create").await;
+    let session = "goal-model-create";
+    f.reserve_session(session).await;
+    let client = f.client_access();
     let created = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
+        client,
+        f.did(),
+        session,
         "Ship the feature",
         Some(1_000),
     )
     .await
     .expect("create model goal");
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
-    assert_ne!(user.did(), db.node_identity.did());
-    assert_ne!(user.did(), agent.did());
+    assert_ne!(f.home.user.did(), f.did());
+    assert_ne!(f.home.user.did(), f.agent_did());
     let rows = client.execute("{ Goal { _docID session_doc_id agent_did creator_did parent_linked } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } }").await.unwrap();
     for case in gents_lean_vocab::families::goal_links_session_goal::cases() {
         let collection = case.input.collection.as_str();
         let row = &rows["data"][collection][0];
-        assert_eq!(row["agent_did"], agent.did());
-        assert_eq!(row["creator_did"], user.did());
+        assert_eq!(row["agent_did"], f.agent_did());
+        assert_eq!(row["creator_did"], f.home.user.did());
         case.check(row["parent_linked"].as_bool().unwrap());
         let doc = row["_docID"].as_str().unwrap().to_owned();
         let owners = client
@@ -2121,21 +1270,21 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
             .unwrap();
         assert_eq!(
             owners[0].owner.as_ref().map(|owner| owner.as_str()),
-            Some(user.did())
+            Some(f.home.user.did())
         );
         let escaped = escape_graphql_string(&doc);
         let history = client.execute(&format!(r#"{{ _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
         let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
         assert_eq!(
-            verified_block_signer_as(&db.node, user.did(), cid).await,
-            user.did()
+            verified_block_signer_as(&f.home.node, f.home.user.did(), cid).await,
+            f.home.user.did()
         );
     }
 
     let duplicate = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
+        client,
+        f.did(),
+        session,
         " Ship the feature ",
         Some(1_000),
     )
@@ -2154,9 +1303,9 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     );
 
     let error = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
+        client,
+        f.did(),
+        session,
         "Different objective",
         Some(1_000),
     )
@@ -2166,296 +1315,33 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
         matches!(error, CreateGoalForSessionError::Conflict),
         "{error:?}"
     );
-    let unchanged = load_goal_as(&client, db.node_identity.did())
-        .await
-        .expect("goal remains");
+    let unchanged = f.load_goal(client, session).await.expect("goal remains");
     assert_eq!(unchanged.objective, "Ship the feature");
     assert_eq!(unchanged.token_budget, Some(1_000));
 }
 
 #[tokio::test]
-async fn clearing_a_goal_also_clears_its_creation_claim() {
-    let db = test_db("goal-model-create-clear").await;
-    let (_user, agent) = goal_creation_actors(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    crate::goal::create_goal_for_session_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        "First objective",
-        None,
-    )
-    .await
-    .expect("create first goal");
-    let cleared = access.transact_write("test.clear_agent_goal", |txn| {
-        Box::pin(async move {
-            let goal = txn.execute(r#"mutation { delete_Goal(filter: {session_id: {_eq: "goal-session"}}) {_docID} }"#).await?;
-            let claim = txn.execute(r#"mutation { delete_GoalCreationClaim(filter: {session_id: {_eq: "goal-session"}}) {_docID} }"#).await?;
-            let goals = goal["data"]["delete_Goal"].as_array().map_or(0, Vec::len);
-            let claims = claim["data"]["delete_GoalCreationClaim"].as_array().map_or(0, Vec::len);
-            Ok::<_, anyhow::Error>((goals, claims))
-        })
-    }).await.expect("clear Goal and creation claim as their Agent owner");
-    assert_eq!(cleared, (1, 1));
-    let replacement = crate::goal::create_goal_for_session_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        "Replacement objective",
-        None,
-    )
-    .await
-    .expect("create replacement goal");
-    assert!(matches!(
-        replacement,
-        CreateGoalForSessionOutcome::Created(_)
-    ));
-}
-
-#[tokio::test]
-async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
-    let db = test_db("goal-baseline-prior-usage").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-baseline").await;
-    goal_fixture_usage(
-        &db,
-        &agent,
-        "parent-baseline",
-        &request_doc,
-        "baseline-call",
-        1000,
-        50,
-    )
-    .await;
-
-    // The fresh create must snapshot the session's usage at creation time so
-    // pre-goal spend is never charged against the new goal.
-    let created = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        "Baseline prior usage",
-        Some(10_000),
-    )
-    .await
-    .expect("create goal");
-    let goal = match created {
-        CreateGoalForSessionOutcome::Created(goal) => goal,
-        outcome => panic!("expected fresh create, got {outcome:?}"),
-    };
-    assert_eq!(goal.token_usage_baseline, Some(1050));
-    assert_eq!(goal.tokens_used, Some(0));
-
-    // Only spend arriving after creation is charged.
-    goal_fixture_usage(
-        &db,
-        &agent,
-        "parent-baseline",
-        &request_doc,
-        "post-goal-call",
-        400,
-        50,
-    )
-    .await;
-    let refreshed = load_goal_as(&client, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(refreshed.token_usage_baseline, Some(1050));
-    assert_eq!(refreshed.tokens_used, Some(0));
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let tokens = crate::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
-        .await
-        .expect("refresh usage");
-    assert_eq!(tokens, 450);
-    let charged = load_goal_as(&client, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(charged.token_usage_baseline, Some(1050));
-    assert_eq!(charged.tokens_used, Some(450));
-}
-
-#[tokio::test]
-async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
-    let db = test_db("goal-baseline-idempotent").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-idempotent").await;
-    goal_fixture_usage(
-        &db,
-        &agent,
-        "parent-idempotent",
-        &request_doc,
-        "first-call",
-        1000,
-        50,
-    )
-    .await;
-    let created = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        "Baseline prior usage",
-        Some(10_000),
-    )
-    .await
-    .expect("create goal");
-    let goal = match created {
-        CreateGoalForSessionOutcome::Created(goal) => goal,
-        outcome => panic!("expected fresh create, got {outcome:?}"),
-    };
-    assert_eq!(goal.token_usage_baseline, Some(1050));
-
-    // More spend arrives, then the same create replays. The idempotent path
-    // must return the existing row untouched: baseline stays at the creation
-    // snapshot even though session usage has moved on.
-    goal_fixture_usage(
-        &db,
-        &agent,
-        "parent-idempotent",
-        &request_doc,
-        "second-call",
-        400,
-        50,
-    )
-    .await;
-    let duplicate = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        " Baseline prior usage ",
-        Some(10_000),
-    )
-    .await
-    .expect("idempotent replay");
-    let goal = match duplicate {
-        CreateGoalForSessionOutcome::Idempotent(goal) => goal,
-        outcome => panic!("expected idempotent replay, got {outcome:?}"),
-    };
-    assert_eq!(goal.token_usage_baseline, Some(1050));
-    assert_eq!(goal.tokens_used, Some(0));
-
-    // An owner-level set_goal replay is also idempotent and must not reset the
-    // baseline after post-goal spend.
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let replayed = seed_goal_from_access(
-        &agent_access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Baseline prior usage"),
-        Some(GoalStatus::Active),
-        Some(Some(10_000)),
-        None,
-    )
-    .await
-    .expect("set_goal replay");
-    assert_eq!(replayed.token_usage_baseline, Some(1050));
-    assert_eq!(replayed.tokens_used, Some(0));
-    assert_eq!(
-        client.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
-    let db = test_db("goal-baseline-zero").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-zero").await;
-    let created = crate::goal::create_goal_for_session_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        "Zero prior usage",
-        Some(10_000),
-    )
-    .await
-    .expect("create goal");
-    let goal = match created {
-        CreateGoalForSessionOutcome::Created(goal) => goal,
-        outcome => panic!("expected fresh create, got {outcome:?}"),
-    };
-    assert_eq!(goal.token_usage_baseline, Some(0));
-    assert_eq!(goal.tokens_used, Some(0));
-    goal_fixture_usage(
-        &db,
-        &agent,
-        "parent-zero",
-        &request_doc,
-        "only-call",
-        400,
-        50,
-    )
-    .await;
-    let refreshed = load_goal_as(&client, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let tokens = crate::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
-        .await
-        .expect("refresh usage");
-    assert_eq!(tokens, 450);
-    let charged = load_goal_as(&client, db.node_identity.did())
-        .await
-        .expect("goal exists");
-    assert_eq!(charged.token_usage_baseline, Some(0));
-    assert_eq!(charged.tokens_used, Some(450));
-}
-
-#[tokio::test]
 async fn set_goal_over_http_transactions_computes_the_same_baseline() {
-    let db = test_db("http-goal-baseline").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let access = db.client_access(&user);
-    let did = db.node_identity.did();
-    let request_doc = goal_fixture_request(&db, &user, &agent, "http-baseline-request").await;
-    goal_fixture_usage_for_node(
-        &db.node,
-        did,
-        SESSION,
-        &agent,
-        FixtureUsage {
-            request_id: "http-baseline-request",
-            request_doc: &request_doc,
-            call_id: "http-baseline-call",
-            prompt_tokens: 1000,
-            completion_tokens: 50,
-            cached_input_tokens: 0,
-        },
+    let f = GoalFixture::start("http-goal-baseline").await;
+    let session = "http-goal-session";
+    f.reserve_session(session).await;
+    let access = f.client_access();
+    let request_doc = f
+        .seed_request(session, "http-baseline-request", "completed")
+        .await;
+    f.seed_usage(
+        session,
+        "http-baseline-request",
+        &request_doc,
+        "http-baseline-call",
+        (1000, 50, 0),
     )
     .await;
-    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"http-baseline-request\"}}) {session_doc_id}}").await.unwrap();
-    let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"]
-        .as_str()
-        .unwrap();
+    let (_, session_doc) = f.request_doc_and_session("http-baseline-request").await;
     let goal = seed_goal_from_access(
-        &access,
-        did,
-        SESSION,
+        access,
+        f.did(),
+        session,
         Some("HTTP baseline"),
         None,
         None,
@@ -2469,23 +1355,23 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     let rows = access.execute(&format!(r#"{{ Goal(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{session_doc_id agent_did creator_did parent_linked}} _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
     let goal_row = &rows["data"]["Goal"][0];
     assert_eq!(goal_row["session_doc_id"], session_doc);
-    assert_eq!(goal_row["agent_did"], agent.did());
-    assert_eq!(goal_row["creator_did"], user.did());
+    assert_eq!(goal_row["agent_did"], f.agent_did());
+    assert_eq!(goal_row["creator_did"], f.home.user.did());
     for case in gents_lean_vocab::families::goal_links_seeded_goal::cases() {
         assert_eq!(case.input.collection, "Goal");
         case.check(goal_row["parent_linked"].as_bool().unwrap());
     }
     let cid = rows["data"]["_commits"][0]["cid"].as_str().unwrap();
     assert_eq!(
-        verified_block_signer_as(&db.node, user.did(), cid).await,
-        user.did()
+        verified_block_signer_as(&f.home.node, f.home.user.did(), cid).await,
+        f.home.user.did()
     );
 
     let client_session = "http-client-goal";
-    let client_session_doc = reserve_goal_session(&db, &user, &agent, client_session).await;
+    let client_session_doc = f.reserve_session(client_session).await;
     let created = crate::goal::create_goal_for_session_from_access(
-        &access,
-        did,
+        access,
+        f.did(),
         client_session,
         "Client-authored Goal",
         Some(500),
@@ -2494,8 +1380,8 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     .expect("create client Goal over HTTP");
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
     let retried = crate::goal::create_goal_for_session_from_access(
-        &access,
-        did,
+        access,
+        f.did(),
         client_session,
         "Client-authored Goal",
         Some(500),
@@ -2509,316 +1395,623 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     assert_eq!(created.goal().doc_id, retried.goal().doc_id);
     for case in gents_lean_vocab::families::goal_links_client_session_goal::cases() {
         let collection = case.input.collection.as_str();
-        let session = escape_graphql_string(&client_session_doc);
-        let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
+        let session_escaped = escape_graphql_string(&client_session_doc);
+        let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session_escaped}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
         let rows = rows["data"][collection].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row["session_doc_id"], client_session_doc);
-        assert_eq!(row["agent_did"], agent.did());
-        assert_eq!(row["creator_did"], user.did());
+        assert_eq!(row["agent_did"], f.agent_did());
+        assert_eq!(row["creator_did"], f.home.user.did());
         case.check(row["parent_linked"].as_bool().unwrap());
         let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
         let history = access.execute(&format!(r#"{{_commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}}}}"#)).await.unwrap();
         let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
         assert_eq!(
-            verified_block_signer_as(&db.node, user.did(), cid).await,
-            user.did()
+            verified_block_signer_as(&f.home.node, f.home.user.did(), cid).await,
+            f.home.user.did()
         );
     }
 }
 
 #[tokio::test]
 async fn goal_backed_submission_commits_goal_before_request_visibility_and_retries_idempotently() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "goal-backed-submit",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = db
-        .create_agent(
-            "Test agent",
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await;
-    let agent = db.resolve_agent(&binding);
-    let access = db.agent_access(&binding);
-    let create = signed_goal_backed_request(&db, &agent, "goal-backed-first").await;
-    let first = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Ship atomically").to_string(),
+    let f = GoalFixture::start("goal-backed-submit").await;
+    let access = f.agent_access();
+
+    // Atomic create + Lean publication links + idempotent retries even after goal progress.
+    {
+        let session = "goal-backed-atomic";
+        let create = f
+            .signed_goal_backed_request(session, "goal-backed-first")
+            .await;
+        let input = gents_protocol::operations::goal::GoalStartInput {
+            session_id: session.to_string(),
+            objective: "Ship atomically".to_string(),
             token_budget: Some(5_000),
-        },
-        &create,
-    )
-    .await
-    .expect("atomic goal submission");
-    assert_eq!(first, crate::goal::GoalBackedRequestDisposition::Created);
-    let binding = access.execute(
-        "{ AgentSession { _docID agent_did requester_did } Goal { _docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } AgentRequest { _docID } }",
-    ).await.unwrap();
-    let session = &binding["data"]["AgentSession"][0];
-    let request = &binding["data"]["AgentRequest"][0];
-    assert_eq!(session["agent_did"], agent.did());
-    assert_eq!(session["requester_did"], agent.did());
-    for case in gents_lean_vocab::families::goal_links_goal_backed_submission::cases() {
-        let collection = case.input.collection.as_str();
-        let row = &binding["data"][collection][0];
-        assert_eq!(row["session_doc_id"], session["_docID"]);
-        assert_eq!(row["agent_did"], agent.did());
-        assert_eq!(row["creator_did"], agent.did());
-        case.check(row["parent_linked"].as_bool().unwrap());
-        let doc = row["_docID"].as_str().unwrap().to_owned();
-        let owners = access
-            .transact_readonly("test.goal_backed_native_owner", |txn| {
-                let doc = &doc;
-                Box::pin(async move {
-                    txn.document_owners(collection, std::slice::from_ref(doc))
-                        .await
+        };
+        let first = crate::operations::goal::start(access, f.did(), &input, &create)
+            .await
+            .expect("atomic goal submission");
+        assert_eq!(first, crate::goal::GoalBackedRequestDisposition::Created);
+        let escaped = escape_graphql_string(session);
+        let binding = access
+            .execute(&format!(
+                r#"{{
+                    AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID agent_did requester_did }}
+                    Goal(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id }}
+                    GoalCreationClaim(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID session_doc_id agent_did creator_did parent_linked }}
+                    AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID request_id lifecycle_state }}
+                }}"#
+            ))
+            .await
+            .unwrap();
+        let sess_row = &binding["data"]["AgentSession"][0];
+        let req_row = &binding["data"]["AgentRequest"][0];
+        assert_eq!(sess_row["agent_did"], f.agent_did());
+        assert_eq!(sess_row["requester_did"], f.agent_did());
+        for case in gents_lean_vocab::families::goal_links_goal_backed_submission::cases() {
+            let collection = case.input.collection.as_str();
+            let row = &binding["data"][collection][0];
+            assert_eq!(row["session_doc_id"], sess_row["_docID"]);
+            assert_eq!(row["agent_did"], f.agent_did());
+            assert_eq!(row["creator_did"], f.agent_did());
+            case.check(row["parent_linked"].as_bool().unwrap());
+            let doc = row["_docID"].as_str().unwrap().to_owned();
+            let owners = access
+                .transact_readonly("test.goal_backed_native_owner", |txn| {
+                    let doc = &doc;
+                    Box::pin(async move {
+                        txn.document_owners(collection, std::slice::from_ref(doc))
+                            .await
+                    })
                 })
-            })
+                .await
+                .unwrap();
+            assert_eq!(
+                owners[0].owner.as_ref().map(|owner| owner.as_str()),
+                Some(f.agent_did())
+            );
+        }
+        assert_eq!(
+            binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
+            req_row["_docID"]
+        );
+        assert_eq!(binding["data"]["Goal"].as_array().unwrap().len(), 1);
+        assert_eq!(binding["data"]["AgentRequest"].as_array().unwrap().len(), 1);
+        assert_eq!(req_row["lifecycle_state"], "pending");
+
+        let retry = crate::operations::goal::start(access, f.did(), &input, &create)
+            .await
+            .expect("idempotent atomic retry");
+        assert_eq!(retry, crate::goal::GoalBackedRequestDisposition::Idempotent);
+
+        let committed_goal = f.load_goal(access, session).await.expect("goal exists");
+        access
+            .write(
+                "test.goal_backed_progress",
+                &format!(
+                    r#"mutation {{ update_Goal(docID: "{}", input: {{ status: "complete" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&committed_goal.doc_id),
+                ),
+            )
+            .await
+            .expect("simulate progress after an ambiguous commit acknowledgement");
+        let late_retry = crate::operations::goal::start(access, f.did(), &input, &create)
+            .await
+            .expect("exact retry remains idempotent after goal progress");
+        assert_eq!(
+            late_retry,
+            crate::goal::GoalBackedRequestDisposition::Idempotent
+        );
+    }
+
+    // Retry rejects changed logical request fields.
+    {
+        let session = "goal-backed-fingerprint";
+        let create = f
+            .signed_goal_backed_request(session, "goal-backed-fingerprint")
+            .await;
+        let input = gents_protocol::operations::goal::GoalStartInput {
+            session_id: session.to_string(),
+            objective: "Ship one exact request".to_string(),
+            token_budget: None,
+        };
+        crate::operations::goal::start(access, f.did(), &input, &create)
+            .await
+            .expect("initial goal submission");
+        let mut changed = create.clone();
+        changed.content = "Begin different work".to_string();
+        gents_session::request::admission::sign_agent_request_create(
+            f.home.agent_identity.as_ref(),
+            &mut changed,
+        )
+        .await
+        .expect("re-sign changed request");
+        let error = crate::operations::goal::start(access, f.did(), &input, &changed)
+            .await
+            .expect_err("changed retry semantics must conflict");
+        assert!(error
+            .to_string()
+            .contains("different immutable request fields"));
+    }
+
+    // Matching terminal goal is rejected without publishing request or claim.
+    {
+        let session = "goal-backed-terminal";
+        let create = f
+            .signed_goal_backed_request(session, "goal-backed-terminal")
+            .await;
+        seed_goal_from_access(
+            access,
+            f.did(),
+            session,
+            Some("Already terminal"),
+            Some(GoalStatus::Complete),
+            None,
+            None,
+        )
+        .await
+        .expect("set terminal goal");
+        let error = crate::operations::goal::start(
+            access,
+            f.did(),
+            &gents_protocol::operations::goal::GoalStartInput {
+                session_id: session.to_string(),
+                objective: "Already terminal".to_string(),
+                token_budget: None,
+            },
+            &create,
+        )
+        .await
+        .expect_err("terminal goal must reject a new first request");
+        assert!(error.to_string().contains("non-active goal"));
+        let escaped = escape_graphql_string(session);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ request_id }} GoalCreationClaim(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ creation_key }} }}"#
+            ))
+            .await
+            .unwrap();
+        assert!(response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(response["data"]["GoalCreationClaim"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    // Request staging failure rolls back Goal and claim while preserving reserved session.
+    {
+        let session = "goal-backed-rollback";
+        let mut invalid = f
+            .signed_goal_backed_request(session, "goal-backed-invalid")
+            .await;
+        invalid.initial_lifecycle_state =
+            gents_protocol::client_protocol::RequestLifecycleState::Processing;
+        gents_session::request::admission::sign_agent_request_create(
+            f.home.agent_identity.as_ref(),
+            &mut invalid,
+        )
+        .await
+        .expect("re-sign invalid request");
+        let escaped = escape_graphql_string(session);
+        let reserved = access
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+            ))
+            .await
+            .expect("load reserved session")["data"]["AgentSession"]
+            .clone();
+        let error = crate::operations::goal::start(
+            access,
+            f.did(),
+            &gents_protocol::operations::goal::GoalStartInput {
+                session_id: session.to_string(),
+                objective: "Never publish partially".to_string(),
+                token_budget: None,
+            },
+            &invalid,
+        )
+        .await
+        .expect_err("invalid request must abort transaction");
+        assert!(error.to_string().contains("pending state"));
+        let response = access
+            .execute(&format!(
+                r#"{{
+                    AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    Goal(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    GoalCreationClaim(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ creation_key }}
+                    AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ request_id }}
+                }}"#
+            ))
             .await
             .unwrap();
         assert_eq!(
-            owners[0].owner.as_ref().map(|owner| owner.as_str()),
-            Some(agent.did())
+            response["data"]["AgentSession"], reserved,
+            "the aborted transaction left the reserved session unchanged"
         );
+        assert_eq!(reserved.as_array().map(Vec::len), Some(1));
+        for collection in ["Goal", "GoalCreationClaim", "AgentRequest"] {
+            assert!(
+                response["data"][collection].as_array().unwrap().is_empty(),
+                "{collection} escaped the aborted transaction"
+            );
+        }
     }
-    assert_eq!(
-        binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
-        request["_docID"]
-    );
-
-    let response = access.execute(r#"{ Goal { goal_id } AgentRequest(filter: { retry_key: { _eq: "goal-submit:goal-session" } }) { request_id lifecycle_state } }"#)
-        .await.expect("load atomic pair as selected Agent");
-    assert_eq!(response["data"]["Goal"].as_array().unwrap().len(), 1);
-    let requests = response["data"]["AgentRequest"].as_array().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["lifecycle_state"], "pending");
-
-    let retry = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Ship atomically").to_string(),
-            token_budget: Some(5_000),
-        },
-        &create,
-    )
-    .await
-    .expect("idempotent atomic retry");
-    assert_eq!(retry, crate::goal::GoalBackedRequestDisposition::Idempotent);
-
-    let committed_goal = access
-        .transact_readonly("test.load_committed_goal", |txn| {
-            Box::pin(crate::goal::load_canonical_goal_in_txn(
-                txn,
-                db.node_identity.did(),
-                SESSION,
-            ))
-        })
-        .await
-        .expect("load committed goal")
-        .expect("goal exists");
-    access.write("test.goal_backed_progress", &format!(
-        r#"mutation {{ update_Goal(docID: "{}", input: {{ status: "complete" }}) {{ _docID }} }}"#,
-        escape_graphql_string(&committed_goal.doc_id),
-    )).await.expect("simulate progress after an ambiguous commit acknowledgement");
-    let late_retry = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Ship atomically").to_string(),
-            token_budget: Some(5_000),
-        },
-        &create,
-    )
-    .await
-    .expect("exact retry remains idempotent after goal progress");
-    assert_eq!(
-        late_retry,
-        crate::goal::GoalBackedRequestDisposition::Idempotent
-    );
 }
 
-#[tokio::test]
-async fn goal_backed_retry_rejects_changed_logical_request_fields() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "goal-backed-submit-fingerprint-conflict",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = db
-        .create_agent(
-            "Test agent",
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
+async fn scenario_stale_controller_cas(f: &GoalFixture, session: &str, status: GoalStatus) {
+    f.reserve_session(session).await;
+    f.seed_request(session, &format!("newly-claimed-{session}"), "completed")
         .await;
-    let agent = db.resolve_agent(&binding);
-    let access = db.agent_access(&binding);
-    let create = signed_goal_backed_request(&db, &agent, "goal-backed-fingerprint").await;
-    crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Ship one exact request").to_string(),
-            token_budget: None,
-        },
-        &create,
+    let stale = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        session,
+        Some("Preserve the newer continuation from stale controller decisions"),
+        Some(GoalStatus::Active),
+        None,
+        None,
     )
     .await
-    .expect("initial goal submission");
-
-    let mut changed = create.clone();
-    changed.content = "Begin different work".to_string();
-    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut changed)
+    .expect("set active goal");
+    assert_eq!(stale.continuation_sequence(), 0);
+    let parent_id = format!("newly-claimed-{session}");
+    assert!(
+        crate::goal::claim_continuation_from_access(f.agent_access(), &stale, &parent_id)
+            .await
+            .expect("claim newer continuation")
+    );
+    let claimed = f.load_goal(f.agent_access(), session).await.unwrap();
+    assert_eq!(claimed.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(claimed.continuation_sequence(), 1);
+    assert_eq!(
+        claimed.last_continued_from_request_id.as_deref(),
+        Some(parent_id.as_str())
+    );
+    let fields = format!(
+        r#"status: "{}", last_failure: "stale controller observation""#,
+        status.as_str()
+    );
+    assert!(
+        !crate::goal::update_goal_fields_if_status_from_access(
+            f.agent_access(),
+            &stale,
+            GoalStatus::Active,
+            &fields,
+        )
         .await
-        .expect("re-sign changed request");
-    let error = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Ship one exact request").to_string(),
-            token_budget: None,
-        },
-        &changed,
+        .expect("stale controller mutation returns cleanly"),
+        "same status must not authorize an older continuation snapshot"
+    );
+    let current = f.load_goal(f.agent_access(), session).await.unwrap();
+    assert_eq!(current.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(
+        current.continuation_sequence(),
+        claimed.continuation_sequence()
+    );
+    assert_eq!(
+        current.last_continued_from_request_id,
+        claimed.last_continued_from_request_id
+    );
+    assert_eq!(current.last_failure, claimed.last_failure);
+    assert!(crate::goal::update_goal_fields_if_status_from_access(
+        f.agent_access(),
+        &current,
+        GoalStatus::Active,
+        &fields,
     )
     .await
-    .expect_err("changed retry semantics must conflict");
-    assert!(error
-        .to_string()
-        .contains("different immutable request fields"));
+    .expect("current controller mutation"));
+    let updated = f.load_goal(f.agent_access(), session).await.unwrap();
+    assert_eq!(updated.parsed_status(), Some(status));
+    assert_eq!(updated.continuation_sequence(), 1);
 }
 
-#[tokio::test]
-async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publishing() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "goal-backed-submit-terminal-goal",
-        crate::lifecycle_hooks::composition(),
+async fn scenario_cas_and_clear(f: &GoalFixture) {
+    // continuation_claim_rejects_a_stale_active_status_snapshot
+    let s1 = "cas-stale-active";
+    f.reserve_session(s1).await;
+    f.seed_request(s1, "parent-stale", "completed").await;
+    let stale = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s1,
+        Some("Do not race an operator pause"),
+        Some(GoalStatus::Active),
+        None,
+        None,
     )
-    .await;
-    let binding = db
-        .create_agent(
-            "Test agent",
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await;
-    let agent = db.resolve_agent(&binding);
-    let access = db.agent_access(&binding);
-    let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
+    .await
+    .unwrap();
     seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Already terminal"),
+        f.client_access(),
+        f.did(),
+        s1,
+        None,
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !crate::goal::claim_continuation_from_access(f.agent_access(), &stale, "parent-stale")
+            .await
+            .unwrap()
+    );
+
+    // controller_status_cas_never_overwrites_a_newer_completion
+    let s2 = "cas-completion-wins";
+    f.reserve_session(s2).await;
+    let stale = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s2,
+        Some("Completion wins controller races"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    seed_goal_from_access(
+        f.client_access(),
+        f.did(),
+        s2,
+        None,
         Some(GoalStatus::Complete),
         None,
         None,
     )
     .await
-    .expect("set terminal goal");
-    let error = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Already terminal").to_string(),
-            token_budget: None,
-        },
-        &create,
+    .unwrap();
+    assert!(!crate::goal::update_goal_fields_if_status_from_access(
+        f.agent_access(),
+        &stale,
+        GoalStatus::Active,
+        r#"status: "paused", last_failure: "stale controller""#,
     )
     .await
-    .expect_err("terminal goal must reject a new first request");
-    assert!(error.to_string().contains("non-active goal"));
-    let response = access
-        .execute("{ AgentRequest { request_id } GoalCreationClaim { creation_key } }")
+    .unwrap());
+    assert_eq!(
+        f.load_goal(f.agent_access(), s2)
+            .await
+            .unwrap()
+            .parsed_status(),
+        Some(GoalStatus::Complete)
+    );
+
+    scenario_stale_controller_cas(f, "cas-older-pause", GoalStatus::Paused).await;
+    scenario_stale_controller_cas(f, "cas-older-block", GoalStatus::Blocked).await;
+
+    // clearing_a_goal_also_clears_its_creation_claim
+    let s3 = "cas-clear-claim";
+    f.reserve_session(s3).await;
+    crate::goal::create_goal_for_session_from_access(
+        f.agent_access(),
+        f.did(),
+        s3,
+        "First objective",
+        None,
+    )
+    .await
+    .unwrap();
+    let cleared = f
+        .agent_access()
+        .transact_write("test.clear_agent_goal", |txn| {
+            Box::pin(async move {
+                let goal = txn
+                    .execute(r#"mutation { delete_Goal(filter: {session_id: {_eq: "cas-clear-claim"}}) {_docID} }"#)
+                    .await?;
+                let claim = txn
+                    .execute(r#"mutation { delete_GoalCreationClaim(filter: {session_id: {_eq: "cas-clear-claim"}}) {_docID} }"#)
+                    .await?;
+                let goals = goal["data"]["delete_Goal"].as_array().map_or(0, Vec::len);
+                let claims = claim["data"]["delete_GoalCreationClaim"]
+                    .as_array()
+                    .map_or(0, Vec::len);
+                Ok::<_, anyhow::Error>((goals, claims))
+            })
+        })
         .await
-        .expect("query terminal rollback as selected Agent");
-    assert!(response["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(response["data"]["GoalCreationClaim"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .unwrap();
+    assert_eq!(cleared, (1, 1));
+    let replacement = crate::goal::create_goal_for_session_from_access(
+        f.agent_access(),
+        f.did(),
+        s3,
+        "Replacement objective",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        replacement,
+        CreateGoalForSessionOutcome::Created(_)
+    ));
 }
 
-#[tokio::test]
-async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "goal-backed-submit-rollback",
-        crate::lifecycle_hooks::composition(),
+async fn scenario_baselines_and_usage(f: &GoalFixture) {
+    // fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend
+    let s1 = "baseline-prior";
+    f.reserve_session(s1).await;
+    let doc = f.seed_request(s1, "parent-baseline", "completed").await;
+    f.seed_usage(s1, "parent-baseline", &doc, "baseline-call", (1000, 50, 0))
+        .await;
+    let CreateGoalForSessionOutcome::Created(goal) =
+        crate::goal::create_goal_for_session_from_access(
+            f.client_access(),
+            f.did(),
+            s1,
+            "Baseline prior usage",
+            Some(10_000),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected fresh create")
+    };
+    assert_eq!(
+        (goal.token_usage_baseline, goal.tokens_used),
+        (Some(1050), Some(0))
+    );
+    f.seed_usage(s1, "parent-baseline", &doc, "post-goal-call", (400, 50, 0))
+        .await;
+    let refreshed = f.load_goal(f.client_access(), s1).await.unwrap();
+    assert_eq!(
+        (refreshed.token_usage_baseline, refreshed.tokens_used),
+        (Some(1050), Some(0))
+    );
+    let tokens = crate::goal::refresh_goal_usage_from_access(f.agent_access(), &refreshed)
+        .await
+        .unwrap();
+    assert_eq!(tokens, 450);
+    let charged = f.load_goal(f.client_access(), s1).await.unwrap();
+    assert_eq!(
+        (charged.token_usage_baseline, charged.tokens_used),
+        (Some(1050), Some(450))
+    );
+
+    // idempotent_goal_recreate_preserves_the_existing_baseline
+    let s2 = "baseline-idempotent";
+    f.reserve_session(s2).await;
+    let doc = f.seed_request(s2, "parent-idempotent", "completed").await;
+    f.seed_usage(s2, "parent-idempotent", &doc, "first-call", (1000, 50, 0))
+        .await;
+    let CreateGoalForSessionOutcome::Created(goal) =
+        crate::goal::create_goal_for_session_from_access(
+            f.client_access(),
+            f.did(),
+            s2,
+            "Baseline prior usage",
+            Some(10_000),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected fresh create")
+    };
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+    f.seed_usage(s2, "parent-idempotent", &doc, "second-call", (400, 50, 0))
+        .await;
+    let CreateGoalForSessionOutcome::Idempotent(goal) =
+        crate::goal::create_goal_for_session_from_access(
+            f.client_access(),
+            f.did(),
+            s2,
+            " Baseline prior usage ",
+            Some(10_000),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected idempotent replay")
+    };
+    assert_eq!(
+        (goal.token_usage_baseline, goal.tokens_used),
+        (Some(1050), Some(0))
+    );
+    let replayed = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s2,
+        Some("Baseline prior usage"),
+        Some(GoalStatus::Active),
+        Some(Some(10_000)),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (replayed.token_usage_baseline, replayed.tokens_used),
+        (Some(1050), Some(0))
+    );
+    assert_eq!(
+        f.client_access()
+            .execute(
+                r#"{ Goal(filter: { session_id: { _eq: "baseline-idempotent" } }) { _docID } }"#
+            )
+            .await
+            .unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // fresh_goal_with_zero_prior_usage_starts_charging_from_zero
+    let s3 = "baseline-zero";
+    f.reserve_session(s3).await;
+    let doc = f.seed_request(s3, "parent-zero", "completed").await;
+    let CreateGoalForSessionOutcome::Created(goal) =
+        crate::goal::create_goal_for_session_from_access(
+            f.client_access(),
+            f.did(),
+            s3,
+            "Zero prior usage",
+            Some(10_000),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected fresh create")
+    };
+    assert_eq!(
+        (goal.token_usage_baseline, goal.tokens_used),
+        (Some(0), Some(0))
+    );
+    f.seed_usage(s3, "parent-zero", &doc, "only-call", (400, 50, 0))
+        .await;
+    let refreshed = f.load_goal(f.client_access(), s3).await.unwrap();
+    assert_eq!(
+        crate::goal::refresh_goal_usage_from_access(f.agent_access(), &refreshed)
+            .await
+            .unwrap(),
+        450
+    );
+    let charged = f.load_goal(f.client_access(), s3).await.unwrap();
+    assert_eq!(
+        (charged.token_usage_baseline, charged.tokens_used),
+        (Some(0), Some(450))
+    );
+
+    // session_token_usage_charges_cached_input_as_part_of_the_total
+    let s4 = "cached-input";
+    f.reserve_session(s4).await;
+    let doc = f.seed_request(s4, "parent-cached", "completed").await;
+    f.seed_usage(
+        s4,
+        "parent-cached",
+        &doc,
+        "goal-cached-call",
+        (1000, 50, 800),
     )
     .await;
-    let binding = db
-        .create_agent(
-            "Test agent",
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await;
-    let agent = db.resolve_agent(&binding);
-    let access = db.agent_access(&binding);
-    let mut invalid = signed_goal_backed_request(&db, &agent, "goal-backed-invalid").await;
-    invalid.initial_lifecycle_state =
-        gents_protocol::client_protocol::RequestLifecycleState::Processing;
-    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut invalid)
-        .await
-        .expect("re-sign invalid request");
-    let reserved = access
-        .execute("{ AgentSession { _docID } }")
-        .await
-        .expect("load reserved session")["data"]["AgentSession"]
-        .clone();
-    let error = crate::operations::goal::start(
-        &access,
-        db.node_identity.did(),
-        &gents_protocol::operations::goal::GoalStartInput {
-            session_id: (SESSION).to_string(),
-            objective: ("Never publish partially").to_string(),
-            token_budget: None,
-        },
-        &invalid,
-    )
-    .await
-    .expect_err("invalid request must abort transaction");
-    assert!(error.to_string().contains("pending state"));
-    let response = access.execute("{ AgentSession { _docID } Goal { _docID } GoalCreationClaim { creation_key } AgentRequest { request_id } }")
-        .await.expect("load rollback state as selected Agent");
     assert_eq!(
-        response["data"]["AgentSession"], reserved,
-        "the aborted transaction left the reserved session unchanged"
+        session_token_usage(&f.home.node, &f.agent_did().parse().unwrap(), f.did(), s4)
+            .await
+            .unwrap(),
+        1050
     );
-    assert_eq!(reserved.as_array().map(Vec::len), Some(1));
-    for collection in ["Goal", "GoalCreationClaim", "AgentRequest"] {
-        assert!(
-            response["data"][collection].as_array().unwrap().is_empty(),
-            "{collection} escaped the aborted transaction"
-        );
-    }
 }
 
-#[tokio::test]
-async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
-    let db = test_db("goal-model-create-concurrent").await;
-    let (user, _agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let left_client = client.clone();
-    let observer = client.clone();
-    let did = db.node_identity.did().to_owned();
-    let left_did = did.clone();
+async fn scenario_concurrent_create_exhaustion_and_time_accounting(f: &GoalFixture) {
+    // concurrent_model_goal_create_converges_to_one_physical_goal
+    let s1 = "concurrent-create";
+    f.reserve_session(s1).await;
+    let left_client = f.client_access().clone();
+    let right_client = f.client_access().clone();
+    let left_did = f.did().to_owned();
+    let right_did = f.did().to_owned();
     let left = tokio::spawn(async move {
         crate::goal::create_goal_for_session_from_access(
             &left_client,
             &left_did,
-            SESSION,
+            s1,
             "Concurrent objective",
             None,
         )
@@ -2826,57 +2019,678 @@ async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
     });
     let right = tokio::spawn(async move {
         crate::goal::create_goal_for_session_from_access(
-            &client,
-            &did,
-            SESSION,
+            &right_client,
+            &right_did,
+            s1,
             "Concurrent objective",
             None,
         )
         .await
     });
-    left.await.expect("left task").expect("left create");
-    right.await.expect("right task").expect("right create");
+    left.await.unwrap().unwrap();
+    right.await.unwrap().unwrap();
     assert_eq!(
-        observer.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
+        f.client_access()
+            .execute(r#"{ Goal(filter: { session_id: { _eq: "concurrent-create" } }) { _docID } }"#)
+            .await
+            .unwrap()["data"]["Goal"]
             .as_array()
             .unwrap()
             .len(),
         1
     );
+
+    // continuation_sequence_exhaustion_rejects_claims_without_retry_charge
+    for retry in [false, true] {
+        let session = if retry {
+            "seq-exhaust-retry"
+        } else {
+            "seq-exhaust-normal"
+        };
+        f.reserve_session(session).await;
+        let last_parent = format!("last-parent-{retry}");
+        let blocked_parent = format!("must-not-be-claimed-{retry}");
+        f.seed_request(session, &last_parent, "completed").await;
+        f.seed_request(session, &blocked_parent, "completed").await;
+        let initial = seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Never reuse an exhausted continuation sequence"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        seed_goal_fields_from_access(
+            f.agent_access(),
+            &initial,
+            &format!(
+                "continuation_sequence: {}, infrastructure_retry_count: 0, last_failure: null, last_continued_from_request_id: null",
+                i64::MAX - 1
+            ),
+        )
+        .await;
+        let before = f.load_goal(f.agent_access(), session).await.unwrap();
+        let claimed = if retry {
+            crate::goal::claim_retry_continuation_from_access(
+                f.agent_access(),
+                &before,
+                &last_parent,
+                1,
+                "failed",
+            )
+            .await
+        } else {
+            crate::goal::claim_continuation_from_access(f.agent_access(), &before, &last_parent)
+                .await
+        };
+        assert!(claimed.expect("MAX-1 must permit one final sequence advance"));
+        let exhausted = f.load_goal(f.agent_access(), session).await.unwrap();
+        assert_eq!(exhausted.continuation_sequence(), i64::MAX);
+        assert_eq!(
+            exhausted.last_continued_from_request_id.as_deref(),
+            Some(last_parent.as_str())
+        );
+        assert_eq!(exhausted.infrastructure_retry_count, Some(i64::from(retry)));
+        let rejected = if retry {
+            crate::goal::claim_retry_continuation_from_access(
+                f.agent_access(),
+                &exhausted,
+                &blocked_parent,
+                2,
+                "must-not-be-charged",
+            )
+            .await
+        } else {
+            crate::goal::claim_continuation_from_access(
+                f.agent_access(),
+                &exhausted,
+                &blocked_parent,
+            )
+            .await
+        };
+        assert!(
+            rejected.is_err(),
+            "exhaustion must fail explicitly: {rejected:?}"
+        );
+        let after = f.load_goal(f.agent_access(), session).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&exhausted).unwrap(),
+            "rejected claim must not change watermark, retry charge, failure, or timestamp"
+        );
+    }
+
+    // stale_usage_refresh_preserves_completed_goal_time_accounting
+    let s2 = "stale-usage-time";
+    f.reserve_session(s2).await;
+    let initial = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s2,
+        Some("A stale observer cannot restart completed goal accounting"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    seed_goal_fields_from_access(
+        f.agent_access(),
+        &initial,
+        "active_time_seconds: 7, active_started_at: null",
+    )
+    .await;
+    let stale = f.load_goal(f.agent_access(), s2).await.unwrap();
+    seed_goal_from_access(
+        f.client_access(),
+        f.did(),
+        s2,
+        None,
+        Some(GoalStatus::Complete),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    seed_goal_fields_from_access(
+        f.agent_access(),
+        &stale,
+        "active_time_seconds: 73, active_started_at: null",
+    )
+    .await;
+    let completed = f.load_goal(f.agent_access(), s2).await.unwrap();
+    assert_eq!(completed.status, "complete");
+    assert_eq!(completed.active_time_seconds, Some(73));
+    assert!(completed.active_started_at.is_none());
+    crate::goal::refresh_goal_usage_from_access(f.agent_access(), &stale)
+        .await
+        .expect("stale usage observation must safely skip obsolete accounting writes");
+    let after = f.load_goal(f.agent_access(), s2).await.unwrap();
+    assert_eq!(after.status, "complete");
+    assert_eq!(after.active_time_seconds, completed.active_time_seconds);
+    assert_eq!(after.active_started_at, completed.active_started_at);
+    assert_eq!(
+        after.continuation_sequence(),
+        completed.continuation_sequence()
+    );
 }
 
-#[tokio::test]
-async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session() {
-    let db = test_db("goal-session-idle").await;
-    let (user, agent, access) = goal_recovery_actors(&db, "older-complete", "completed").await;
-    goal_fixture_request_with_state_at(
-        &db,
-        &user,
-        &agent,
-        "newer-manual",
-        "pending",
-        "2026-11-04T00:01:00Z",
+async fn scenario_operator_resume_variants(f: &GoalFixture) {
+    // concurrent_operator_resumes_publish_one_child
+    let s1 = "resume-concurrent";
+    f.reserve_session(s1).await;
+    f.seed_request_at(
+        s1,
+        "concurrent-parent",
+        "interrupted",
+        "2026-07-15T00:00:00Z",
     )
     .await;
     seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
+        f.client_access(),
+        f.did(),
+        s1,
+        Some("One operator continuation"),
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (left, right) = tokio::join!(
+        crate::goal::resume_goal_request(
+            f.client_access(),
+            &f.home.user,
+            f.did(),
+            s1,
+            "concurrent-parent"
+        ),
+        crate::goal::resume_goal_request(
+            f.client_access(),
+            &f.home.user,
+            f.did(),
+            s1,
+            "concurrent-parent"
+        ),
+    );
+    let (left, right) = (left.unwrap(), right.unwrap());
+    assert_ne!(left.created, right.created);
+    assert_eq!(
+        (left.request_id, left.doc_id),
+        (right.request_id, right.doc_id)
+    );
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), s1).await.len(),
+        1
+    );
+    let goal = f.load_goal(f.client_access(), s1).await.unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(goal.continuation_sequence(), 1);
+
+    // operator_resume_preserves_pending_wrapup_in_child_policy
+    let s2 = "resume-retained-wrapup";
+    f.reserve_session(s2).await;
+    f.seed_request_at(s2, "wrapup-parent", "interrupted", "2026-07-15T00:00:00Z")
+        .await;
+    let paused = seed_goal_from_access(
+        f.client_access(),
+        f.did(),
+        s2,
+        Some("Finish the already requested wrap-up"),
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    seed_goal_fields_from_access(
+        f.agent_access(),
+        &paused,
+        "wrapup_requested: true, wrapup_completed: false",
+    )
+    .await;
+    let receipt = crate::goal::resume_goal_request(
+        f.client_access(),
+        &f.home.user,
+        f.did(),
+        s2,
+        "wrapup-parent",
+    )
+    .await
+    .unwrap();
+    let goal = f.load_goal(f.client_access(), s2).await.unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
+    assert_eq!(goal.wrapup_requested, Some(true));
+    assert_eq!(goal.wrapup_completed, Some(false));
+    let child = operator_resume_child_row_from_access(f.client_access(), &receipt.doc_id).await;
+    assert_eq!(
+        child["input"]
+            .pointer("/goal_continuation/wrapup")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    let content = child["content"].as_str().unwrap();
+    assert!(content.contains("one wrap-up turn"), "{content}");
+    assert!(content.contains("do not start new work"), "{content}");
+
+    // operator_resume_accepts_same_second_child_that_sorts_before_root
+    for (idx, parent_id) in ["graph-parent", "task-goal-request:parent"]
+        .into_iter()
+        .enumerate()
+    {
+        let session = format!("resume-same-second-{idx}");
+        let (child_id, child_doc) =
+            seed_same_second_canonical_goal_child(f, &session, parent_id, true).await;
+        let receipt = crate::goal::resume_goal_request(
+            f.client_access(),
+            &f.home.user,
+            f.did(),
+            &session,
+            &child_id,
+        )
+        .await
+        .expect("canonical child is latest despite its lexical position");
+        let next = operator_resume_child_row_from_access(f.client_access(), &receipt.doc_id).await;
+        assert_eq!(next["caused_by_parent_request_id"], child_id);
+        assert_eq!(next["caused_by_parent_request_doc_id"], child_doc);
+        let goal = f.load_goal(f.client_access(), &session).await.unwrap();
+        assert_eq!(goal.continuation_sequence(), 2);
+        assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    }
+}
+
+#[tokio::test]
+async fn goal_cas_idempotency_baseline_and_operator_resume_scenarios() {
+    let f = GoalFixture::start("goal-cas-baseline-resume").await;
+    scenario_cas_and_clear(&f).await;
+    scenario_baselines_and_usage(&f).await;
+    scenario_concurrent_create_exhaustion_and_time_accounting(&f).await;
+    scenario_operator_resume_variants(&f).await;
+}
+
+async fn scenario_nested_workspace_lineage(f: &GoalFixture) {
+    let session = "lineage-workspace";
+    let (parent_doc_id, _) = seed_lineage_parent(
+        f,
+        session,
+        "parent-nested-workspace",
+        "completed",
+        "workspace-goal",
+        "seal-hash",
+    )
+    .await;
+    publish_owned_terminal_activity(
+        f.agent_access(),
+        f.home.agent_identity.as_ref(),
+        &parent_doc_id,
+        "durable progress",
+    )
+    .await;
+    seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        session,
+        Some("Preserve nested workspace scope"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (mut source, _tx) = f.ready_source().await;
+    next_intent(&mut source, "lineage continuation").await;
+    let children = goal_children_in_session(f.agent_access(), session).await;
+    assert_eq!(children.len(), 1);
+    let child = &children[0];
+    let visible = goal_children_in_session(f.client_access(), session).await;
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].doc_id, child.doc_id);
+    assert_eq!(child.request_hop, Some(2));
+    assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
+    assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
+    assert_eq!(child.workspace_owner_node_did.as_deref(), Some(f.did()));
+    assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
+    let child_identity = (
+        child.doc_id.clone(),
+        child.request_id.clone(),
+        child.retry_key.clone(),
+    );
+    let continuation_sequence = f
+        .load_goal(f.agent_access(), session)
+        .await
+        .unwrap()
+        .continuation_sequence;
+    drop(source);
+    for _ in 0..2 {
+        let recovered =
+            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+                &f.home.node,
+                f.did(),
+                std::slice::from_ref(&f.home.agent_identity),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recovered.requests_recovered, 0);
+        let (mut restarted, _restart_tx) = f.ready_source().await;
+        assert_settles_without_fire(
+            &mut restarted,
+            "repeated maintenance and source reconciliation must not emit another continuation",
+        )
+        .await;
+        let children = goal_children_in_session(f.agent_access(), session).await;
+        assert_eq!(children.len(), 1);
+        let child = &children[0];
+        assert_eq!(
+            (
+                child.doc_id.clone(),
+                child.request_id.clone(),
+                child.retry_key.clone()
+            ),
+            child_identity
+        );
+        assert_eq!(child.request_hop, Some(2));
+        assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
+        assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
+        assert_eq!(child.workspace_owner_node_did.as_deref(), Some(f.did()));
+        assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
+        assert_eq!(
+            f.load_goal(f.agent_access(), session)
+                .await
+                .unwrap()
+                .continuation_sequence,
+            continuation_sequence
+        );
+    }
+    f.clear_goal(session).await;
+}
+
+async fn scenario_delimiter_and_single_child(f: &GoalFixture) {
+    // delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys
+    for (session, parent) in [("b:c", "d"), ("b", "c:d")] {
+        f.reserve_session(session).await;
+        let doc_id = f
+            .seed_request_at(session, parent, "completed", "2026-11-04T00:00:00Z")
+            .await;
+        publish_owned_terminal_activity(
+            f.agent_access(),
+            f.home.agent_identity.as_ref(),
+            &doc_id,
+            "progress",
+        )
+        .await;
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some(&format!("goal for {session}")),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let (mut source, _tx) = f.ready_source().await;
+    for _ in 0..2 {
+        next_intent(&mut source, "delimiter continuation").await;
+    }
+    let mut keys = RapidHashSet::new();
+    for session in ["b:c", "b"] {
+        let children = goal_children_in_session(f.agent_access(), session).await;
+        assert_eq!(children.len(), 1);
+        keys.insert(children[0].retry_key.clone().expect("retry key"));
+        f.clear_goal(session).await;
+    }
+    assert_eq!(keys.len(), 2);
+
+    // completed_request_materializes_exactly_one_same_session_goal_child
+    let session = "goal-exactly-once";
+    f.seed_recovery_parent(session, "parent-complete", "completed")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        session,
+        Some("Finish the durable objective"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (mut source, _tx) = f.ready_source().await;
+    let intent = next_intent(&mut source, "goal continuation").await;
+    assert!(intent.pre_materialized_request_id.is_some());
+    let children = goal_children_in_session(f.agent_access(), session).await;
+    assert_eq!(children.len(), 1);
+    let child = &children[0];
+    let visible = goal_children_in_session(f.client_access(), session).await;
+    assert_eq!(
+        visible.len(),
+        1,
+        "the session owner must see the continuation"
+    );
+    assert_eq!(visible[0].doc_id, child.doc_id);
+    assert_eq!(child.session_id, session);
+    assert_eq!(child.agent_did.as_deref(), Some(f.agent_did()));
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        Some("parent-complete")
+    );
+    assert_eq!(
+        child.caused_by_trigger_id.as_deref(),
+        Some(goal.goal_id.as_str())
+    );
+    assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("goal"));
+    assert_settles_without_fire(
+        &mut source,
+        "a pending child must suppress duplicate continuation",
+    )
+    .await;
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), session)
+            .await
+            .len(),
+        1
+    );
+    f.clear_goal(session).await;
+}
+
+async fn scenario_foreign_collisions_and_restart_recovery(f: &GoalFixture) {
+    use sha2::{Digest, Sha256};
+
+    // foreign_request_id_collision_cannot_preempt_owned_goal_continuation
+    let s1 = "foreign-req-collision";
+    f.seed_recovery_parent(s1, "parent-owned-collision", "completed")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s1,
+        Some("Ignore foreign request IDs"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let digest = Sha256::digest(format!("{}\0parent-owned-collision", goal.goal_id).as_bytes());
+    let collision_id = format!(
+        "goal-cont-{:020}-{}",
+        1,
+        digest[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    create_visible_foreign_collision(f, &collision_id, None).await;
+    let (mut source, _tx) = f.ready_source().await;
+    next_intent(&mut source, "owned continuation despite foreign request_id").await;
+    let children = goal_children_in_session(f.agent_access(), s1).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].request_id, collision_id);
+    assert_eq!(children[0].session_id, s1);
+    f.clear_goal(s1).await;
+
+    // foreign_retry_key_collision_is_rejected_instead_of_reused
+    let s2 = "foreign-retry-collision";
+    f.seed_recovery_parent(s2, "parent-owned-retry-collision", "completed")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s2,
+        Some("Reject foreign retry keys"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let digest =
+        Sha256::digest(format!("{}\0parent-owned-retry-collision", goal.goal_id).as_bytes());
+    let retry_key = format!(
+        "goal-continuation:{}",
+        digest[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    create_visible_foreign_collision(f, "foreign-retry-collision", Some(&retry_key)).await;
+    let (mut source, _tx) = f.ready_source().await;
+    assert_settles_without_fire(
+        &mut source,
+        "a conflicting retry key must not be reported as an owned continuation",
+    )
+    .await;
+    assert!(goal_children_in_session(f.agent_access(), s2)
+        .await
+        .is_empty());
+    f.clear_goal(s2).await;
+
+    // restart_reconcile_does_not_duplicate_a_goal_continuation
+    let s3 = "restart-no-dup";
+    f.seed_recovery_parent(s3, "parent-restart", "completed")
+        .await;
+    seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s3,
+        Some("Continue exactly once across restart"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (mut first, _tx) = f.ready_source().await;
+    next_intent(&mut first, "first source").await;
+    drop(first);
+    let (mut restarted, _tx) = f.ready_source().await;
+    assert_settles_without_fire(&mut restarted, "restart must not emit a second child").await;
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), s3).await.len(),
+        1
+    );
+    f.clear_goal(s3).await;
+
+    // restart_materializes_a_claimed_continuation_after_crash
+    let s4 = "restart-claimed";
+    f.seed_recovery_parent(s4, "parent-claimed", "completed")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s4,
+        Some("Recover the claimed continuation"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::goal::claim_continuation_from_access(f.agent_access(), &goal, "parent-claimed")
+            .await
+            .unwrap()
+    );
+    assert!(goal_children_in_session(f.agent_access(), s4)
+        .await
+        .is_empty());
+    let (mut restarted, _tx) = f.ready_source().await;
+    next_intent(&mut restarted, "recovery source").await;
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), s4).await.len(),
+        1
+    );
+    f.clear_goal(s4).await;
+
+    // restart_materializes_claimed_wrapup_retry_without_charging_it_twice
+    let s5 = "restart-claimed-wrapup-retry";
+    f.seed_recovery_parent(s5, "parent-claimed-wrapup-retry", "failed")
+        .await;
+    let goal = seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s5,
+        Some("Recover one charged wrap-up retry"),
+        Some(GoalStatus::BudgetLimited),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(crate::goal::claim_retry_continuation_from_access(
+        f.agent_access(),
+        &goal,
+        "parent-claimed-wrapup-retry",
+        1,
+        "failed",
+    )
+    .await
+    .unwrap());
+    let (mut restarted, _tx) = f.ready_source().await;
+    next_intent(&mut restarted, "wrap-up retry recovery").await;
+    let recovered = f.load_goal(f.agent_access(), s5).await.unwrap();
+    assert_eq!(recovered.infrastructure_retry_count, Some(1));
+    let children = goal_children_in_session(f.agent_access(), s5).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].input.as_ref().unwrap()["goal_continuation"]["wrapup"],
+        true
+    );
+    f.clear_goal(s5).await;
+}
+
+async fn scenario_idleness_retired_inputs_interrupted_and_same_second(f: &GoalFixture) {
+    // any_newer_active_request_blocks_goal_continuation_for_the_whole_session
+    let s1 = "session-idle-block";
+    f.seed_recovery_parent(s1, "older-complete", "completed")
+        .await;
+    f.seed_request_at(s1, "newer-manual", "pending", "2026-11-04T00:01:00Z")
+        .await;
+    seed_goal_from_access(
+        f.agent_access(),
+        f.did(),
+        s1,
         Some("Wait for session idleness"),
         Some(GoalStatus::Active),
         None,
         None,
     )
     .await
-    .expect("set goal");
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
+    .unwrap();
+    let (mut source, _tx) = f.ready_source().await;
     assert_settles_without_fire(&mut source, "the goal owner must not continue").await;
-    assert!(goal_children_from_access(&access).await.is_empty());
-}
+    assert!(goal_children_in_session(f.agent_access(), s1)
+        .await
+        .is_empty());
+    f.clear_goal(s1).await;
 
-#[tokio::test]
-async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
+    // retired_queued_inputs_do_not_pause_completed_goal_execution
     for (name, state, reason) in [
         (
             "folded",
@@ -2894,38 +2708,34 @@ async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
             gents_session::request::lifecycle::REMOVED_REASON,
         ),
     ] {
-        let db = test_db(&format!("goal-retired-input-{name}")).await;
-        let (user, agent, access) =
-            goal_recovery_actors(&db, "execution-parent", "completed").await;
-        let parent = {
-            let query =
-                "{AgentRequest(filter: {request_id: {_eq: \"execution-parent\"}}) {_docID}}";
-            access.execute(query).await.unwrap()["data"]["AgentRequest"][0]["_docID"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        let input =
-            goal_fixture_request_with_state(&db, &user, &agent, "zz-retired-input", state).await;
-        access
+        let session = format!("retired-input-{name}");
+        let parent_id = format!("execution-parent-{name}");
+        let parent = f
+            .seed_recovery_parent(&session, &parent_id, "completed")
+            .await;
+        let input = f
+            .seed_request(&session, &format!("zz-retired-input-{name}"), state)
+            .await;
+        f.agent_access()
             .write(
                 "test.goal_retired_input",
                 &format!(
                     r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
-                failure_reason: "{}", superseded_by_request: "execution-parent",
-                superseded_by_request_doc_id: "{}"
-            }}) {{ _docID }} }}"#,
+                        failure_reason: "{}", superseded_by_request: "{}",
+                        superseded_by_request_doc_id: "{}"
+                    }}) {{ _docID }} }}"#,
                     escape_graphql_string(&input),
                     escape_graphql_string(reason),
+                    escape_graphql_string(&parent_id),
                     escape_graphql_string(&parent),
                 ),
             )
             .await
             .unwrap();
         seed_goal_from_access(
-            &access,
-            db.node_identity.did(),
-            SESSION,
+            f.agent_access(),
+            f.did(),
+            &session,
             Some("Continue the existing objective"),
             Some(GoalStatus::Active),
             None,
@@ -2933,80 +2743,117 @@ async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
         )
         .await
         .unwrap();
-        let (mut source, _tx) = source_for_agent(&db, &agent).await;
+        let (mut source, _tx) = f.ready_source().await;
         next_intent(
             &mut source,
-            &format!("{name}: the retired input prevented continuation"),
+            &format!("{name}: retired input prevented continuation"),
         )
         .await;
-        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
+        let goal = f.load_goal(f.agent_access(), &session).await.unwrap();
         assert_eq!(goal.parsed_status(), Some(GoalStatus::Active), "{name}");
-        let children = goal_children_from_access(&access).await;
-        assert_eq!(children.len(), 1, "{name}");
+        assert_eq!(
+            goal_children_in_session(f.agent_access(), &session)
+                .await
+                .len(),
+            1,
+            "{name}"
+        );
+        f.clear_goal(&session).await;
     }
-}
 
-#[tokio::test]
-async fn interrupted_terminal_pauses_instead_of_self_continuing() {
-    let db = test_db("goal-interrupted").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-interrupted", "interrupted").await;
+    // interrupted_terminal_pauses_instead_of_self_continuing
+    let s2 = "interrupted-pauses";
+    f.seed_recovery_parent(s2, "parent-interrupted", "interrupted")
+        .await;
     seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
+        f.agent_access(),
+        f.did(),
+        s2,
         Some("Respect human interruption"),
         Some(GoalStatus::Active),
         None,
         None,
     )
     .await
-    .expect("set goal");
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "interrupted goal to pause",
-        |goal| goal.parsed_status() == Some(GoalStatus::Paused),
-    )
+    .unwrap();
+    let (mut source, _tx) = f.ready_source().await;
+    f.wait_for_goal(s2, &mut source, "interrupted goal to pause", |goal| {
+        goal.parsed_status() == Some(GoalStatus::Paused)
+    })
     .await;
-    assert!(goal_children_from_access(&access).await.is_empty());
+    assert!(goal_children_in_session(f.agent_access(), s2)
+        .await
+        .is_empty());
+    f.clear_goal(s2).await;
+
+    // goal_source_continues_same_second_child_that_sorts_before_root
+    for (idx, parent_id) in ["graph-parent", "task-goal-request:parent"]
+        .into_iter()
+        .enumerate()
+    {
+        let session = format!("source-same-second-{idx}");
+        let (child_id, _) =
+            seed_same_second_canonical_goal_child(f, &session, parent_id, false).await;
+        let (mut controller, _tx) = f.ready_source().await;
+        let intent = next_intent(
+            &mut controller,
+            "causal child must not be hidden by lexical root ordering",
+        )
+        .await;
+        let next_id = intent
+            .pre_materialized_request_id
+            .expect("materialized child");
+        let children = goal_children_in_session(f.agent_access(), &session).await;
+        let next = children
+            .iter()
+            .find(|row| row.request_id == next_id)
+            .unwrap();
+        assert_eq!(
+            next.caused_by_parent_request_id.as_deref(),
+            Some(child_id.as_str())
+        );
+        let goal = f.load_goal(f.agent_access(), &session).await.unwrap();
+        assert_eq!(goal.continuation_sequence(), 2);
+        assert_eq!(
+            goal.last_continued_from_request_id.as_deref(),
+            Some(child_id.as_str())
+        );
+        f.clear_goal(&session).await;
+    }
 }
 
 #[tokio::test]
-async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
-    let db = test_db("goal-budget-wrapup").await;
-    let (user, agent_identity, access) =
-        goal_recovery_actors(&db, "parent-budget", "completed").await;
-    let parent_doc = access.execute("{AgentRequest(filter: {request_id: {_eq: \"parent-budget\"}}) {_docID session_doc_id}}").await.unwrap()["data"]["AgentRequest"][0].clone();
-    let parent_doc_id = parent_doc["_docID"].as_str().unwrap();
-    let session_doc_id = parent_doc["session_doc_id"].as_str().unwrap();
+async fn goal_source_continuation_and_collision_scenarios() {
+    let f = GoalFixture::start("goal-source-continuation").await;
+    scenario_nested_workspace_lineage(&f).await;
+    scenario_delimiter_and_single_child(&f).await;
+    scenario_foreign_collisions_and_restart_recovery(&f).await;
+    scenario_idleness_retired_inputs_interrupted_and_same_second(&f).await;
+}
+
+async fn scenario_token_budget_wrapup_and_failed_wrapup_retries(f: &GoalFixture) {
+    // token_budget_materializes_one_wrapup_and_never_repeats_it
+    let s1 = "budget-wrapup";
+    f.seed_recovery_parent(s1, "parent-budget", "completed")
+        .await;
+    let (parent_doc_id, session_doc_id) = f.request_doc_and_session("parent-budget").await;
     seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
+        f.agent_access(),
+        f.did(),
+        s1,
         Some("Stop at the durable budget"),
         Some(GoalStatus::Active),
         Some(Some(10)),
         None,
     )
     .await
-    .expect("set goal");
-    goal_fixture_usage_for_node(
-        &db.node,
-        db.node_identity.did(),
-        SESSION,
-        &agent_identity,
-        FixtureUsage {
-            request_id: "parent-budget",
-            request_doc: parent_doc_id,
-            call_id: "goal-budget-call",
-            prompt_tokens: 100,
-            completion_tokens: 5,
-            cached_input_tokens: 90,
-        },
+    .unwrap();
+    f.seed_usage(
+        s1,
+        "parent-budget",
+        &parent_doc_id,
+        "goal-budget-call",
+        (100, 5, 90),
     )
     .await;
     let foreign_dir = tempfile::tempdir().unwrap();
@@ -3015,77 +2862,99 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         None,
     )
     .unwrap();
-    seed_foreign_goal_usage(
-        &access,
-        &agent_identity,
-        foreign_node.did(),
-        parent_doc_id,
-        session_doc_id,
-    )
-    .await;
+    let foreign_did = foreign_node.did().to_owned();
+    let agent_did = f.agent_did().to_owned();
+    let doc = f.agent_access().transact_write("test.goal_foreign_usage", |txn| {
+        let foreign_did = &foreign_did;
+        let agent_did = &agent_did;
+        let parent_doc_id = &parent_doc_id;
+        let session_doc_id = &session_doc_id;
+        Box::pin(async move {
+            let input = serde_json::json!({
+                "call_id": "goal-budget-call-foreign", "node_did": foreign_did,
+                "agent_did": agent_did, "session_id": s1, "request_id": "parent-budget",
+                "request_doc_id": parent_doc_id, "call_seq": 1, "call_kind": "inference",
+                "attempt": 1, "call_state": "completed", "prompt_tokens": 10000,
+                "completion_tokens": 10000, "cached_input_tokens": 0
+            });
+            let result = txn.execute_with_variables(
+                "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}",
+                &serde_json::json!({"input": input}),
+            ).await?;
+            let doc = gents_store::graphql::created_doc_id(&result, "InferenceCall")?;
+            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc_id).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.unwrap();
+    let observed = f
+        .agent_access()
+        .execute(&format!(
+            r#"{{InferenceCall(docID: "{}") {{_docID node_did request_doc_id}}}}"#,
+            escape_graphql_string(&doc)
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        observed["data"]["InferenceCall"][0]["node_did"],
+        foreign_node.did()
+    );
+    assert_eq!(
+        observed["data"]["InferenceCall"][0]["request_doc_id"],
+        parent_doc_id
+    );
 
-    // The goal already existed when the usage was seeded: an idempotent
-    // set_goal replay must leave the creation-time baseline and the charged
-    // tokens untouched instead of resetting or re-deriving them.
     let replayed = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
+        f.agent_access(),
+        f.did(),
+        s1,
         Some("Stop at the durable budget"),
         Some(GoalStatus::Active),
         Some(Some(10)),
         None,
     )
     .await
-    .expect("idempotent set goal replay");
-    assert_eq!(replayed.token_usage_baseline, Some(0));
-    assert_eq!(replayed.tokens_used, Some(0));
+    .unwrap();
     assert_eq!(
-        access.execute("{Goal {_docID}}").await.unwrap()["data"]["Goal"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        (replayed.token_usage_baseline, replayed.tokens_used),
+        (Some(0), Some(0))
     );
 
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent_identity).await;
+    let (mut source, _tx) = f.ready_source().await;
     next_intent(&mut source, "goal continuation").await;
-    let children = goal_children_from_access(&access).await;
+    let children = goal_children_in_session(f.agent_access(), s1).await;
     assert_eq!(children.len(), 1);
-    let user_children = goal_children_from_access(&db.client_access(&user)).await;
+    let user_children = goal_children_in_session(f.client_access(), s1).await;
     assert_eq!(user_children.len(), 1);
     assert_eq!(user_children[0].doc_id, children[0].doc_id);
-    let input = children[0].input.as_ref().expect("goal continuation input");
     assert_eq!(
-        input.pointer("/goal_continuation/wrapup"),
+        children[0]
+            .input
+            .as_ref()
+            .unwrap()
+            .pointer("/goal_continuation/wrapup"),
         Some(&serde_json::json!(true))
     );
-
-    set_request_state_as(&access, &children[0].doc_id, "completed").await;
+    set_request_state_as(f.agent_access(), &children[0].doc_id, "completed").await;
     publish_owned_terminal_activity(
-        &access,
-        agent_identity.as_ref(),
+        f.agent_access(),
+        f.home.agent_identity.as_ref(),
         &children[0].doc_id,
         "final durable wrapup",
     )
     .await;
-    let goal = wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "completed wrapup",
-        |goal| {
+    let goal = f
+        .wait_for_goal(s1, &mut source, "completed wrapup", |goal| {
             goal.parsed_status() == Some(GoalStatus::BudgetLimited)
                 && goal.wrapup_completed == Some(true)
-        },
-    )
-    .await;
+        })
+        .await;
     assert_settles_without_fire(&mut source, "a completed wrapup must not continue").await;
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.tokens_used, Some(105));
     assert_eq!(goal.wrapup_requested, Some(true));
-    assert_eq!(goal.wrapup_completed, Some(true));
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), s1).await.len(),
+        1
+    );
     let child_identity = (
         children[0].doc_id.clone(),
         children[0].request_id.clone(),
@@ -3093,56 +2962,37 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     let continuation_sequence = goal.continuation_sequence;
     assert_eq!(
-        session_token_usage(
-            &db.node,
-            &agent_identity.did().parse().unwrap(),
-            db.node_identity.did(),
-            SESSION
-        )
-        .await
-        .expect("session usage before repeated recovery"),
-        105,
+        session_token_usage(&f.home.node, &f.agent_did().parse().unwrap(), f.did(), s1)
+            .await
+            .unwrap(),
+        105
     );
     drop(source);
     for _ in 0..2 {
         let recovered =
             gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
-                &db.node,
-                db.node_identity.did(),
-                std::slice::from_ref(&agent_identity),
+                &f.home.node,
+                f.did(),
+                std::slice::from_ref(&f.home.agent_identity),
             )
             .await
-            .expect("repeat lease recovery");
-        assert_eq!(recovered.requests_recovered, 0);
-        assert_eq!(recovered.responses_recovered, 0);
-        let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
+            .unwrap();
+        assert_eq!(
+            (recovered.requests_recovered, recovered.responses_recovered),
+            (0, 0)
+        );
+        let (mut restarted, _tx) = f.ready_source().await;
         assert_settles_without_fire(
             &mut restarted,
             "recovery and goal reconciliation must not emit a second wrapup",
         )
         .await;
-        let current = load_goal_as(&access, db.node_identity.did()).await.unwrap();
+        let current = f.load_goal(f.agent_access(), s1).await.unwrap();
         assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
-        assert_eq!(
-            current.tokens_used,
-            Some(105),
-            "the same persisted inference usage must not be charged again"
-        );
+        assert_eq!(current.tokens_used, Some(105));
         assert_eq!(current.continuation_sequence, continuation_sequence);
         assert_eq!(current.wrapup_completed, Some(true));
-        assert_eq!(
-            session_token_usage(
-                &db.node,
-                &agent_identity.did().parse().unwrap(),
-                db.node_identity.did(),
-                SESSION
-            )
-            .await
-            .unwrap(),
-            105,
-            "recovery must preserve the session charge, including cached input exactly once",
-        );
-        let after = goal_children_from_access(&access).await;
+        let after = goal_children_in_session(f.agent_access(), s1).await;
         assert_eq!(after.len(), 1);
         assert_eq!(
             (
@@ -3153,337 +3003,49 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             child_identity
         );
     }
-}
+    f.clear_goal(s1).await;
 
-#[tokio::test]
-async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
-    let db = test_db("goal-cached-input").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let doc = goal_fixture_request(&db, &user, &agent, "parent-cached").await;
-    goal_fixture_usage_for_node(
-        &db.node,
-        db.node_identity.did(),
-        SESSION,
-        &agent,
-        FixtureUsage {
-            request_id: "parent-cached",
-            request_doc: &doc,
-            call_id: "goal-cached-call",
-            prompt_tokens: 1000,
-            completion_tokens: 50,
-            cached_input_tokens: 800,
-        },
-    )
-    .await;
-    let tokens = session_token_usage(
-        &db.node,
-        &agent.did().parse().unwrap(),
-        db.node_identity.did(),
-        SESSION,
-    )
-    .await
-    .expect("session token usage");
-    assert_eq!(tokens, 1050);
-}
-
-#[tokio::test]
-async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
-    let db = test_db("goal-provider-usage-limit").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
-    let parent = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
-    let parent = &parent["data"]["AgentRequest"][0];
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        parent["_docID"].as_str().unwrap(),
-        parent["session_doc_id"].as_str().unwrap(),
-        FailedInferenceCall {
-            call_id: "usage-limited-call",
-            call_kind: "inference",
-            attempt: 1,
-            ended_at: "2026-07-15T00:00:01Z",
-            failure_reason: "provider insufficient_quota: credit balance exhausted",
-        },
-    )
-    .await;
+    // failed_wrapup_retries_twice_then_is_durably_abandoned
+    let s2 = "wrapup-retry-bound";
+    let parent_doc = f
+        .seed_recovery_parent(s2, "parent-wrapup-retry", "completed")
+        .await;
     seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Stop on provider quota exhaustion"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    let goal = wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "provider usage limit",
-        |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
-    )
-    .await;
-    assert!(goal
-        .last_failure
-        .as_deref()
-        .is_some_and(|reason| reason.contains("insufficient_quota")));
-}
-
-#[tokio::test]
-async fn compaction_usage_limit_moves_goal_to_usage_limited() {
-    let db = test_db("goal-compaction-usage-limit").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
-    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
-    let parent = &request["data"]["AgentRequest"][0];
-    let request_doc = parent["_docID"].as_str().unwrap();
-    let session_doc = parent["session_doc_id"].as_str().unwrap();
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        request_doc,
-        session_doc,
-        FailedInferenceCall {
-            call_id: "compaction-call",
-            call_kind: "compaction",
-            attempt: 1,
-            ended_at: "2026-07-15T00:00:10Z",
-            failure_reason: RENDERED_LIMIT,
-        },
-    )
-    .await;
-    let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
-    assert!(
-        last_failure
-            .as_deref()
-            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
-        "{last_failure:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_later_limited_call_wins_over_an_earlier_retry() {
-    let db = test_db("goal-later-limited-call").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
-    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
-    let parent = &request["data"]["AgentRequest"][0];
-    let request_doc = parent["_docID"].as_str().unwrap();
-    let session_doc = parent["session_doc_id"].as_str().unwrap();
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        request_doc,
-        session_doc,
-        FailedInferenceCall {
-            call_id: "earlier-retry",
-            call_kind: "inference",
-            attempt: 2,
-            ended_at: "2026-07-15T00:00:05Z",
-            failure_reason: "HttpError: Invalid status code 500",
-        },
-    )
-    .await;
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        request_doc,
-        session_doc,
-        FailedInferenceCall {
-            call_id: "later-compaction",
-            call_kind: "compaction",
-            attempt: 1,
-            ended_at: "2026-07-15T00:00:10Z",
-            failure_reason: RENDERED_LIMIT,
-        },
-    )
-    .await;
-    let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
-    assert!(
-        last_failure
-            .as_deref()
-            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
-        "{last_failure:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
-    let db = test_db("goal-reset-update").await;
-    let (_user, agent, access) = seed_a_passed_reset(&db, true).await;
-    publish_node_readiness_for_agent(
-        &db,
-        gents_protocol::row::NodeReadinessProcessState::Ready,
-        None,
-        agent.did(),
-    )
-    .await;
-    let updates = MockUpdateSubscriptionSource::new();
-    let (_snapshot_tx, rx) = watch::channel(agent_snapshot(&db, &agent));
-    let mut source = GoalSource::with_subscription_source(
-        Arc::new(updates.clone()),
-        rx,
-        db.node.clone(),
-        CancellationToken::new(),
-    )
-    .with_rescan_interval(Duration::from_secs(3600));
-    wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "usage limit before the reset is resumed",
-        |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
-    )
-    .await;
-    assert_eq!(
-        goal_and_children(&db, &access).await,
-        (Some(GoalStatus::UsageLimited), 0)
-    );
-    let goal_collection_id = gents_store::subscription_source::collection_ids(&db.node, ["Goal"])
-        .unwrap()
-        .remove(0);
-    updates.publish_update(goal_collection_id, "goal-doc");
-    assert!(
-        source.rescan_to_settled(false).await.is_none(),
-        "an update-triggered rescan must leave the passed reset to the tick"
-    );
-    assert_eq!(
-        goal_and_children(&db, &access).await,
-        (Some(GoalStatus::UsageLimited), 0)
-    );
-}
-
-#[tokio::test]
-async fn opted_in_goal_resumes_at_its_reported_reset() {
-    assert_eq!(
-        goal_after_a_passed_reset("goal-reset-opted-in", true).await,
-        (Some(GoalStatus::Active), 1)
-    );
-    assert_eq!(
-        goal_after_a_passed_reset("goal-reset-not-opted-in", false).await,
-        (Some(GoalStatus::UsageLimited), 0)
-    );
-}
-
-#[tokio::test]
-async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
-    let db = test_db("goal-openrouter-credits-402").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
-    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
-    let parent = &request["data"]["AgentRequest"][0];
-    let (reason, _, _) = crate::goal::blocked_turn::permit_recorded(
-        r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
-        chrono::Utc::now(),
-    );
-    seed_failed_call_from_access(
-        &access,
-        &agent,
-        db.node_identity.did(),
-        parent["_docID"].as_str().unwrap(),
-        parent["session_doc_id"].as_str().unwrap(),
-        FailedInferenceCall {
-            call_id: "openrouter-credits-call",
-            call_kind: "inference",
-            attempt: 1,
-            ended_at: "2026-07-15T00:00:01Z",
-            failure_reason: &reason,
-        },
-    )
-    .await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Stop on OpenRouter credits exhaustion"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    let goal = wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "OpenRouter credits exhaustion",
-        |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
-    )
-    .await;
-    assert!(goal
-        .last_failure
-        .as_deref()
-        .is_some_and(|reason| reason.contains("Insufficient credits")));
-}
-
-#[tokio::test]
-async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
-    let db = test_db("goal-wrapup-retry-bound").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-wrapup-retry", "completed").await;
-    let parent_doc = access
-        .execute("{AgentRequest(filter: {request_id: {_eq: \"parent-wrapup-retry\"}}) {_docID}}")
-        .await
-        .unwrap()["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
+        f.agent_access(),
+        f.did(),
+        s2,
         Some("Bound failed wrap-up retries"),
         Some(GoalStatus::Active),
         Some(Some(1)),
         None,
     )
     .await
-    .expect("set goal");
-    goal_fixture_usage(
-        &db,
-        &agent,
+    .unwrap();
+    f.seed_usage(
+        s2,
         "parent-wrapup-retry",
         &parent_doc,
         "wrapup-budget-call",
-        2,
-        0,
+        (2, 0, 0),
     )
     .await;
-
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
+    let (mut source, _tx) = f.ready_source().await;
     for expected_children in 1..=3 {
-        next_intent(
-            &mut source,
-            &format!("wrapup or retry intent before child {expected_children}"),
-        )
-        .await;
-        let children = goal_children_from_access(&access).await;
+        next_intent(&mut source, &format!("wrapup child {expected_children}")).await;
+        let children = goal_children_in_session(f.agent_access(), s2).await;
         assert_eq!(children.len(), expected_children);
         let child = children
             .iter()
             .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
             .expect("new pending wrap-up child");
-        set_request_state_as(&access, &child.doc_id, "failed").await;
+        set_request_state_as(f.agent_access(), &child.doc_id, "failed").await;
     }
-
-    let goal = wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "failed wrap-up abandonment",
-        |goal| {
+    let goal = f
+        .wait_for_goal(s2, &mut source, "failed wrap-up abandonment", |goal| {
             goal.parsed_status() == Some(GoalStatus::BudgetLimited)
                 && goal.wrapup_completed == Some(true)
-        },
-    )
-    .await;
+        })
+        .await;
     assert_eq!(goal.infrastructure_retry_count, Some(2));
     assert!(goal
         .last_failure
@@ -3494,669 +3056,603 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         "bounded failed wrap-up must not spawn a fourth child",
     )
     .await;
-    assert_eq!(goal_children_from_access(&access).await.len(), 3);
+    assert_eq!(
+        goal_children_in_session(f.agent_access(), s2).await.len(),
+        3
+    );
+    f.clear_goal(s2).await;
 }
 
-#[tokio::test]
-async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() {
-    for retry in [false, true] {
-        let name = if retry {
-            "goal-retry-sequence-exhaustion"
-        } else {
-            "goal-sequence-exhaustion"
-        };
-        let db = test_db(name).await;
-        let (user, agent) = goal_creation_actors(&db).await;
-        goal_fixture_request(&db, &user, &agent, "last-parent").await;
-        goal_fixture_request(&db, &user, &agent, "must-not-be-claimed").await;
-        let access = ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent.did().parse().unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        let initial = seed_goal_from_access(
-            &access,
-            db.node_identity.did(),
-            SESSION,
-            Some("Never reuse an exhausted continuation sequence"),
+async fn scenario_usage_limits_and_passed_resets(f: &GoalFixture) {
+    let (openrouter_reason, _, _) = crate::goal::blocked_turn::permit_recorded(
+        r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
+        chrono::Utc::now(),
+    );
+    let limit_cases: &[(&str, &str, Vec<FailedInferenceCall<'_>>, &str)] = &[
+        (
+            "usage-limit-quota",
+            "req-limit-quota",
+            vec![FailedInferenceCall {
+                call_id: "usage-limited-call",
+                call_kind: "inference",
+                attempt: 1,
+                ended_at: "2026-07-15T00:00:01Z",
+                failure_reason: "provider insufficient_quota: credit balance exhausted",
+            }],
+            "insufficient_quota",
+        ),
+        (
+            "usage-limit-compaction",
+            "req-limit-compaction",
+            vec![FailedInferenceCall {
+                call_id: "compaction-call",
+                call_kind: "compaction",
+                attempt: 1,
+                ended_at: "2026-07-15T00:00:10Z",
+                failure_reason: RENDERED_LIMIT,
+            }],
+            "resets at 2026-07-15T05:00:00Z",
+        ),
+        (
+            "usage-limit-later-wins",
+            "req-limit-later",
+            vec![
+                FailedInferenceCall {
+                    call_id: "earlier-retry",
+                    call_kind: "inference",
+                    attempt: 2,
+                    ended_at: "2026-07-15T00:00:05Z",
+                    failure_reason: "HttpError: Invalid status code 500",
+                },
+                FailedInferenceCall {
+                    call_id: "later-compaction",
+                    call_kind: "compaction",
+                    attempt: 1,
+                    ended_at: "2026-07-15T00:00:10Z",
+                    failure_reason: RENDERED_LIMIT,
+                },
+            ],
+            "resets at 2026-07-15T05:00:00Z",
+        ),
+        (
+            "usage-limit-openrouter",
+            "req-limit-openrouter",
+            vec![FailedInferenceCall {
+                call_id: "openrouter-credits-call",
+                call_kind: "inference",
+                attempt: 1,
+                ended_at: "2026-07-15T00:00:01Z",
+                failure_reason: &openrouter_reason,
+            }],
+            "Insufficient credits",
+        ),
+    ];
+    for (session, req_id, calls, expected_fragment) in limit_cases {
+        f.seed_recovery_parent(session, req_id, "failed").await;
+        let (request_doc, session_doc) = f.request_doc_and_session(req_id).await;
+        for call in calls {
+            f.seed_failed_call(
+                session,
+                req_id,
+                &request_doc,
+                &session_doc,
+                FailedInferenceCall {
+                    call_id: call.call_id,
+                    call_kind: call.call_kind,
+                    attempt: call.attempt,
+                    ended_at: call.ended_at,
+                    failure_reason: call.failure_reason,
+                },
+            )
+            .await;
+        }
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Stop on provider limit"),
             Some(GoalStatus::Active),
             None,
             None,
         )
         .await
         .unwrap();
-        seed_goal_fields_from_access(
-            &access,
-            &initial,
-            &format!(
-                "continuation_sequence: {}, infrastructure_retry_count: 0, last_failure: null, last_continued_from_request_id: null",
-                i64::MAX - 1
-            ),
-        )
-        .await;
-        let before = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-        let claimed = if retry {
-            crate::goal::claim_retry_continuation_from_access(
-                &agent_access(&db, &agent),
-                &before,
-                "last-parent",
-                1,
-                "failed",
-            )
-            .await
-        } else {
-            crate::goal::claim_continuation_from_access(
-                &agent_access(&db, &agent),
-                &before,
-                "last-parent",
-            )
-            .await
-        };
-        assert!(claimed.expect("MAX-1 must permit one final sequence advance"));
-        let exhausted = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-        assert_eq!(exhausted.continuation_sequence(), i64::MAX);
-        assert_eq!(
-            exhausted.last_continued_from_request_id.as_deref(),
-            Some("last-parent")
-        );
-        assert_eq!(exhausted.infrastructure_retry_count, Some(i64::from(retry)));
-        let rejected = if retry {
-            crate::goal::claim_retry_continuation_from_access(
-                &agent_access(&db, &agent),
-                &exhausted,
-                "must-not-be-claimed",
-                2,
-                "must-not-be-charged",
-            )
-            .await
-        } else {
-            crate::goal::claim_continuation_from_access(
-                &agent_access(&db, &agent),
-                &exhausted,
-                "must-not-be-claimed",
-            )
-            .await
-        };
+        let (mut source, _tx) = f.ready_source().await;
+        let goal = f
+            .wait_for_goal(session, &mut source, session, |goal| {
+                goal.parsed_status() == Some(GoalStatus::UsageLimited)
+            })
+            .await;
+        assert_settles_without_fire(&mut source, "a usage-limited goal must not continue").await;
         assert!(
-            rejected.is_err(),
-            "exhaustion must fail explicitly: {rejected:?}"
+            goal.last_failure
+                .as_deref()
+                .is_some_and(|reason| reason.contains(expected_fragment)),
+            "{session}: {:?}",
+            goal.last_failure
         );
-        let after = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(&after).unwrap(),
-            serde_json::to_value(&exhausted).unwrap(),
-            "rejected claim must not change watermark, retry charge, failure, or timestamp"
-        );
+        f.clear_goal(session).await;
     }
-}
 
-#[tokio::test]
-async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
-    let db = test_db("goal-stale-usage-after-completion").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let initial = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("A stale observer cannot restart completed goal accounting"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    seed_goal_fields_from_access(
-        &access,
-        &initial,
-        "active_time_seconds: 7, active_started_at: null",
-    )
-    .await;
-    let stale = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    seed_goal_from_access(
-        &client,
-        db.node_identity.did(),
-        SESSION,
-        None,
-        Some(GoalStatus::Complete),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    seed_goal_fields_from_access(
-        &access,
-        &stale,
-        "active_time_seconds: 73, active_started_at: null",
-    )
-    .await;
-    let completed = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(completed.status, "complete");
-    assert_eq!(completed.active_time_seconds, Some(73));
-    assert!(completed.active_started_at.is_none());
-
-    crate::goal::refresh_goal_usage_from_access(&access, &stale)
-        .await
-        .expect("stale usage observation must safely skip obsolete accounting writes");
-    let after = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(after.status, "complete");
-    assert_eq!(after.active_time_seconds, completed.active_time_seconds);
-    assert_eq!(after.active_started_at, completed.active_started_at);
-    assert_eq!(
-        after.continuation_sequence(),
-        completed.continuation_sequence()
-    );
-}
-
-#[tokio::test]
-async fn concurrent_operator_resumes_publish_one_child() {
-    let db = test_db("operator-resume-concurrent").await;
-    let did = db.node_identity.did();
-    let (user, agent) = goal_creation_actors(&db).await;
-    let access = db.client_access(&user);
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    seed_operator_resume_parent_with_actors(&db, &user, &agent, "concurrent-parent").await;
-    seed_goal_from_access(
-        &access,
-        did,
-        SESSION,
-        Some("One operator continuation"),
-        Some(GoalStatus::Paused),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let (left, right) = tokio::join!(
-        crate::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
-        crate::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
-    );
-    let left = left.unwrap();
-    let right = right.unwrap();
-    assert_ne!(left.created, right.created);
-    assert_eq!(
-        (left.request_id, left.doc_id),
-        (right.request_id, right.doc_id)
-    );
-    assert_eq!(goal_children_from_access(&agent_access).await.len(), 1);
-    let goal = load_goal_as(&access, did).await.unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(goal.continuation_sequence(), 1);
-}
-
-#[tokio::test]
-async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
-    let db = test_db("operator-resume-retained-wrapup").await;
-    let did = db.node_identity.did();
-    let (user, agent) = goal_creation_actors(&db).await;
-    let client = db.client_access(&user);
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    seed_operator_resume_parent_with_actors(&db, &user, &agent, "wrapup-parent").await;
-    let paused = seed_goal_from_access(
-        &client,
-        did,
-        SESSION,
-        Some("Finish the already requested wrap-up"),
-        Some(GoalStatus::Paused),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    seed_goal_fields_from_access(
-        &agent_access,
-        &paused,
-        "wrapup_requested: true, wrapup_completed: false",
-    )
-    .await;
-    let receipt = crate::goal::resume_goal_request(&client, &user, did, SESSION, "wrapup-parent")
-        .await
-        .unwrap();
-    let goal = load_goal_as(&client, did).await.unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
-    assert_eq!(goal.wrapup_requested, Some(true));
-    assert_eq!(goal.wrapup_completed, Some(false));
-    let child = operator_resume_child_row_from_access(&client, &receipt.doc_id).await;
-    let input = &child["input"];
-    assert_eq!(
-        input
-            .pointer("/goal_continuation/wrapup")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
-    let content = child["content"].as_str().unwrap();
-    assert!(content.contains("one wrap-up turn"), "{content}");
-    assert!(content.contains("do not start new work"), "{content}");
-}
-
-#[tokio::test]
-async fn goal_source_continues_same_second_child_that_sorts_before_root() {
-    for parent_id in ["graph-parent", "task-goal-request:parent"] {
-        let db = test_db(&format!("goal-head-order-{}", parent_id.replace(':', "-"))).await;
-        let (user, agent) = goal_creation_actors(&db).await;
-        let access = ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent.did().parse().unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        let (child_id, _) =
-            seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, false)
-                .await;
-        let (mut controller, _snapshot_tx) = source_for_agent(&db, &agent).await;
-        let intent = next_intent(
-            &mut controller,
-            "causal child must not be hidden by lexical root ordering",
+    // a_database_update_leaves_a_passed_reset_to_the_rescan_tick
+    {
+        let session = "reset-update-tick";
+        f.seed_recovery_parent(session, "req-reset-tick", "failed")
+            .await;
+        let (req_doc, sess_doc) = f.request_doc_and_session("req-reset-tick").await;
+        f.seed_failed_call(
+            session,
+            "req-reset-tick",
+            &req_doc,
+            &sess_doc,
+            FailedInferenceCall {
+                call_id: "limited-call-tick",
+                call_kind: "inference",
+                attempt: 1,
+                ended_at: "2026-07-15T00:00:10Z",
+                failure_reason: RENDERED_LIMIT,
+            },
         )
         .await;
-        let next_id = intent
-            .pre_materialized_request_id
-            .expect("materialized child");
-        let children = goal_children_from_access(&access).await;
-        let next = children
-            .iter()
-            .find(|row| row.request_id == next_id)
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Resume at the reported reset"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        seed_goal_from_access(
+            f.client_access(),
+            f.did(),
+            session,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .await
+        .unwrap();
+        f.publish_readiness(gents_protocol::row::NodeReadinessProcessState::Ready, None)
+            .await;
+        let updates = MockUpdateSubscriptionSource::new();
+        let (_tx, rx) = watch::channel(f.agent_snapshot());
+        let mut source = GoalSource::with_subscription_source(
+            Arc::new(updates.clone()),
+            rx,
+            f.home.node.clone(),
+            CancellationToken::new(),
+        )
+        .with_rescan_interval(Duration::from_secs(3600));
+        f.wait_for_goal(session, &mut source, "usage limit before tick", |goal| {
+            goal.parsed_status() == Some(GoalStatus::UsageLimited)
+        })
+        .await;
+        let goal_collection_id =
+            gents_store::subscription_source::collection_ids(&f.home.node, ["Goal"])
+                .unwrap()
+                .remove(0);
+        updates.publish_update(goal_collection_id, "goal-doc");
+        assert!(
+            source.rescan_to_settled(false).await.is_none(),
+            "an update-triggered rescan must leave the passed reset to the tick"
+        );
+        assert_eq!(
+            f.load_goal(f.agent_access(), session)
+                .await
+                .unwrap()
+                .parsed_status(),
+            Some(GoalStatus::UsageLimited)
+        );
+        assert!(goal_children_in_session(f.agent_access(), session)
+            .await
+            .is_empty());
+        f.clear_goal(session).await;
+    }
+
+    // opted_in_goal_resumes_at_its_reported_reset (both opted_in = true and false)
+    for opted_in in [true, false] {
+        let session = if opted_in {
+            "reset-opted-in"
+        } else {
+            "reset-not-opted-in"
+        };
+        let req_id = format!("req-{session}");
+        f.seed_recovery_parent(session, &req_id, "failed").await;
+        let (req_doc, sess_doc) = f.request_doc_and_session(&req_id).await;
+        f.seed_failed_call(
+            session,
+            &req_id,
+            &req_doc,
+            &sess_doc,
+            FailedInferenceCall {
+                call_id: &format!("call-{session}"),
+                call_kind: "inference",
+                attempt: 1,
+                ended_at: "2026-07-15T00:00:10Z",
+                failure_reason: RENDERED_LIMIT,
+            },
+        )
+        .await;
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Resume at the reported reset"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        if opted_in {
+            seed_goal_from_access(
+                f.client_access(),
+                f.did(),
+                session,
+                None,
+                None,
+                None,
+                Some(true),
+            )
+            .await
             .unwrap();
-        assert_eq!(
-            next.caused_by_parent_request_id.as_deref(),
-            Some(child_id.as_str())
-        );
-        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-        assert_eq!(goal.continuation_sequence(), 2);
-        assert_eq!(
-            goal.last_continued_from_request_id.as_deref(),
-            Some(child_id.as_str())
-        );
-    }
-}
-
-#[tokio::test]
-async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
-    for parent_id in ["graph-parent", "task-goal-request:parent"] {
-        let db = test_db(&format!(
-            "resume-head-order-{}",
-            parent_id.replace(':', "-")
-        ))
+        }
+        let (mut source, _tx) = f.ready_source().await;
+        f.wait_for_goal(session, &mut source, "provider reset decision", |goal| {
+            if opted_in {
+                goal.parsed_status() == Some(GoalStatus::Active)
+                    && goal.continuation_sequence == Some(1)
+            } else {
+                goal.parsed_status() == Some(GoalStatus::UsageLimited)
+            }
+        })
         .await;
-        let (user, agent) = goal_creation_actors(&db).await;
-        let access = ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent.did().parse().unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        let client = db.client_access(&user);
-        let (child_id, child_doc) =
-            seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, true)
-                .await;
-        let receipt = crate::goal::resume_goal_request(
-            &client,
-            &user,
-            db.node_identity.did(),
-            SESSION,
-            &child_id,
-        )
-        .await
-        .expect("canonical child is latest despite its lexical position");
-        let next = operator_resume_child_row_from_access(&client, &receipt.doc_id).await;
-        assert_eq!(next["caused_by_parent_request_id"], child_id);
-        assert_eq!(next["caused_by_parent_request_doc_id"], child_doc);
-        let goal = load_goal_as(&client, db.node_identity.did()).await.unwrap();
-        assert_eq!(goal.continuation_sequence(), 2);
-        assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
-    }
-}
-
-#[tokio::test]
-async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charge() {
-    use gents_protocol::row::{
-        AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
-    };
-    let db = test_db("goal-readiness-wait").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-waits-for-readiness", "completed").await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Wait for the behavior instead of spending retries"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    publish_node_readiness_for_agent(&db, Process::Recovering, None, agent.did()).await;
-    let before =
-        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap();
-    let (mut source, _tx) = unready_source_for_agent(&db, &agent);
-    let mut previous = before["last_failure"].as_str().map(str::to_owned);
-
-    for (process, reason) in [
-        (Process::Recovering, None),
-        (Process::Ready, Some(Reason::RuntimeConfigurationInvalid)),
-        (Process::Ready, Some(Reason::BackendTemporarilyUnavailable)),
-    ] {
-        publish_node_readiness_for_agent(&db, process, reason, agent.did()).await;
-        let waiting = serde_json::to_value(
-            wait_for_goal_transition_as(
-                &access,
-                db.node_identity.did(),
+        if opted_in {
+            assert_settles_without_fire(
                 &mut source,
-                &format!(
-                    "{process:?}/{reason:?}: recorded readiness wait \
-                     (an unready behavior must not receive a continuation)"
-                ),
-                |goal| {
-                    goal.last_failure.as_deref().is_some_and(|reason| {
-                        reason.starts_with(crate::goal::GOAL_READINESS_WAIT_PREFIX)
-                            && Some(reason) != previous.as_deref()
-                    })
-                },
+                "reset must not publish a second continuation",
             )
-            .await,
-        )
-        .unwrap();
-        previous = waiting["last_failure"].as_str().map(str::to_owned);
-        assert!(
-            waiting["last_failure"]
-                .as_str()
-                .is_some_and(|reason| reason.starts_with(crate::goal::GOAL_READINESS_WAIT_PREFIX)),
-            "{process:?}/{reason:?}: the wait must be recorded: {waiting}"
-        );
-        for field in [
-            "status",
-            "continuation_sequence",
-            "infrastructure_retry_count",
-            "tokens_used",
-        ] {
+            .await;
+        }
+        let goal = f.load_goal(f.agent_access(), session).await.unwrap();
+        let child_count = goal_children_in_session(f.agent_access(), session)
+            .await
+            .len();
+        if opted_in {
             assert_eq!(
-                waiting[field], before[field],
-                "{process:?}/{reason:?}: {field}"
+                (goal.parsed_status(), child_count),
+                (Some(GoalStatus::Active), 1)
+            );
+        } else {
+            assert_eq!(
+                (goal.parsed_status(), child_count),
+                (Some(GoalStatus::UsageLimited), 0)
             );
         }
-        assert_settles_without_fire(&mut source, "the goal owner must not continue").await;
-        assert_eq!(
-            serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
-                .unwrap(),
-            waiting,
-            "{process:?}/{reason:?}: an unchanged wait must not rewrite the Goal"
-        );
-        assert!(goal_children_from_access(&access).await.is_empty());
+        f.clear_goal(session).await;
     }
-
-    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    next_intent(&mut source, "goal continuation after readiness recovered").await;
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].session_id, SESSION);
-    assert_eq!(children[0].agent_did.as_deref(), Some(agent.did()));
-    assert_eq!(
-        children[0].caused_by_parent_request_id.as_deref(),
-        Some("parent-waits-for-readiness")
-    );
-    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(goal.continuation_sequence(), 1);
-    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
-    assert_eq!(goal.last_failure, None);
-
-    drop(source);
-    let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    assert_settles_without_fire(
-        &mut restarted,
-        "restart must not duplicate the recovered continuation",
-    )
-    .await;
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
 #[tokio::test]
-async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
+async fn goal_source_budget_and_usage_limit_scenarios() {
+    let f = GoalFixture::start("goal-source-budget-limits").await;
+    scenario_token_budget_wrapup_and_failed_wrapup_retries(&f).await;
+    scenario_usage_limits_and_passed_resets(&f).await;
+}
+
+async fn scenario_readiness_defer_and_race(f: &GoalFixture) {
     use gents_protocol::row::{
         AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
-    let db = test_db("goal-readiness-race").await;
-    let (_user, agent, access) = goal_recovery_actors(&db, "parent-before-race", "completed").await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Survive readiness races"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    let (mut source, _tx) = source_for_agent(&db, &agent).await;
 
-    for round in 1..=(crate::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
-        next_intent(
-            &mut source,
-            &format!("round {round}: goal continuation intent"),
+    // unready_behavior_defers_goal_continuation_without_writes_or_retry_charge
+    {
+        let session = "readiness-wait";
+        f.seed_recovery_parent(session, "parent-waits-for-readiness", "completed")
+            .await;
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Wait for the behavior instead of spending retries"),
+            Some(GoalStatus::Active),
+            None,
+            None,
         )
-        .await;
-        let children = goal_children_from_access(&access).await;
-        assert_eq!(children.len(), round);
+        .await
+        .unwrap();
+        f.publish_readiness(Process::Recovering, None).await;
+        let before =
+            serde_json::to_value(f.load_goal(f.agent_access(), session).await.unwrap()).unwrap();
+        let (mut source, _tx) = f.unready_source();
+        let mut previous = before["last_failure"].as_str().map(str::to_owned);
+        for (process, reason) in [
+            (Process::Recovering, None),
+            (Process::Ready, Some(Reason::RuntimeConfigurationInvalid)),
+            (Process::Ready, Some(Reason::BackendTemporarilyUnavailable)),
+        ] {
+            f.publish_readiness(process, reason).await;
+            let waiting = serde_json::to_value(
+                f.wait_for_goal(session, &mut source, "recorded readiness wait", |goal| {
+                    goal.last_failure.as_deref().is_some_and(|r| {
+                        r.starts_with(crate::goal::GOAL_READINESS_WAIT_PREFIX)
+                            && Some(r) != previous.as_deref()
+                    })
+                })
+                .await,
+            )
+            .unwrap();
+            previous = waiting["last_failure"].as_str().map(str::to_owned);
+            for field in [
+                "status",
+                "continuation_sequence",
+                "infrastructure_retry_count",
+                "tokens_used",
+            ] {
+                assert_eq!(
+                    waiting[field], before[field],
+                    "{process:?}/{reason:?}: {field}"
+                );
+            }
+            assert_settles_without_fire(&mut source, "the goal owner must not continue").await;
+            assert_eq!(
+                serde_json::to_value(f.load_goal(f.agent_access(), session).await.unwrap())
+                    .unwrap(),
+                waiting,
+                "{process:?}/{reason:?}: an unchanged wait must not rewrite the Goal"
+            );
+            assert!(goal_children_in_session(f.agent_access(), session)
+                .await
+                .is_empty());
+        }
+        f.publish_readiness(Process::Ready, None).await;
+        next_intent(&mut source, "goal continuation after readiness recovered").await;
+        let children = goal_children_in_session(f.agent_access(), session).await;
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].caused_by_parent_request_id.as_deref(),
+            Some("parent-waits-for-readiness")
+        );
+        let goal = f.load_goal(f.agent_access(), session).await.unwrap();
+        assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+        assert_eq!(goal.continuation_sequence(), 1);
+        assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+        assert_eq!(goal.last_failure, None);
+        drop(source);
+        let (mut restarted, _tx) = f.ready_source().await;
+        assert_settles_without_fire(&mut restarted, "restart must not duplicate recovered child")
+            .await;
+        assert_eq!(
+            goal_children_in_session(f.agent_access(), session)
+                .await
+                .len(),
+            1
+        );
+        f.clear_goal(session).await;
+    }
+
+    // readiness_rejected_goal_children_never_spend_the_retry_budget
+    {
+        let session = "readiness-race";
+        f.seed_recovery_parent(session, "parent-before-race", "completed")
+            .await;
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Survive readiness races"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let (mut source, _tx) = f.ready_source().await;
+        for round in 1..=(crate::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
+            next_intent(&mut source, &format!("round {round}")).await;
+            let children = goal_children_in_session(f.agent_access(), session).await;
+            assert_eq!(children.len(), round);
+            let pending = children
+                .iter()
+                .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
+                .expect("pending goal child");
+            assert_eq!(
+                pending.input.as_ref().unwrap()["goal_continuation"]["wrapup"],
+                false
+            );
+            f.publish_readiness(Process::Ready, Some(Reason::RuntimeConfigurationInvalid))
+                .await;
+            reject_before_claim(
+                f.agent_access(),
+                &pending.doc_id,
+                Reason::RuntimeConfigurationInvalid.public_message(),
+            )
+            .await;
+            assert_settles_without_fire(&mut source, "rejected child must wait for readiness")
+                .await;
+            let goal = f.load_goal(f.agent_access(), session).await.unwrap();
+            assert_eq!(
+                goal.parsed_status(),
+                Some(GoalStatus::Active),
+                "round {round}"
+            );
+            assert_eq!(
+                goal.infrastructure_retry_count.unwrap_or_default(),
+                0,
+                "round {round}"
+            );
+            f.publish_readiness(Process::Ready, None).await;
+        }
+        next_intent(&mut source, "goal continuation after the final race").await;
+        let children = goal_children_in_session(f.agent_access(), session).await;
         let pending = children
             .iter()
             .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
             .expect("pending goal child");
-        assert_eq!(
-            pending.input.as_ref().unwrap()["goal_continuation"]["wrapup"],
-            false
-        );
-
-        publish_node_readiness_for_agent(
-            &db,
-            Process::Ready,
-            Some(Reason::RuntimeConfigurationInvalid),
-            agent.did(),
-        )
-        .await;
         reject_before_claim(
-            &access,
+            f.agent_access(),
             &pending.doc_id,
             Reason::RuntimeConfigurationInvalid.public_message(),
         )
         .await;
-        assert_settles_without_fire(
+        let waiting = f
+            .wait_for_goal(
+                session,
+                &mut source,
+                "readiness wait after rejection",
+                |goal| {
+                    goal.last_failure
+                        .as_deref()
+                        .is_some_and(|r| r.contains("not been republished since its rejection"))
+                },
+            )
+            .await;
+        assert_eq!(
+            goal_children_in_session(f.agent_access(), session)
+                .await
+                .len(),
+            children.len()
+        );
+        assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
+        assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
+        f.publish_readiness(Process::Ready, None).await;
+        next_intent(
             &mut source,
-            &format!("round {round}: a rejected child must wait for readiness"),
+            "goal continuation after readiness was republished",
         )
         .await;
-        let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(
-            goal.parsed_status(),
-            Some(GoalStatus::Active),
-            "round {round}"
+            goal_children_in_session(f.agent_access(), session)
+                .await
+                .len(),
+            children.len() + 1
         );
-        assert_eq!(
-            goal.infrastructure_retry_count.unwrap_or_default(),
-            0,
-            "round {round}"
-        );
-        publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
+        let goal = f.load_goal(f.agent_access(), session).await.unwrap();
+        assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+        assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+        assert_eq!(goal.last_failure, None);
+        f.clear_goal(session).await;
     }
 
-    next_intent(&mut source, "goal continuation after the final race").await;
-    let children = goal_children_from_access(&access).await;
-    let pending = children
-        .iter()
-        .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
-        .expect("pending goal child");
-    reject_before_claim(
-        &access,
-        &pending.doc_id,
-        Reason::RuntimeConfigurationInvalid.public_message(),
-    )
-    .await;
-    let waiting = wait_for_goal_transition_as(
-        &access,
-        db.node_identity.did(),
-        &mut source,
-        "readiness wait after the rejected child (stale readiness must not re-issue it)",
-        |goal| {
-            goal.last_failure
-                .as_deref()
-                .is_some_and(|reason| reason.contains("not been republished since its rejection"))
-        },
-    )
-    .await;
-    assert_eq!(
-        goal_children_from_access(&access).await.len(),
-        children.len()
-    );
-    assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
-    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    next_intent(
-        &mut source,
-        "goal continuation after readiness was republished",
-    )
-    .await;
-    assert_eq!(
-        goal_children_from_access(&access).await.len(),
-        children.len() + 1
-    );
-    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
-    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
-    assert_eq!(goal.last_failure, None);
-}
-
-#[tokio::test]
-async fn claimed_continuation_waits_for_readiness_before_materializing() {
-    use gents_protocol::row::NodeReadinessProcessState as Process;
-    let db = test_db("goal-claimed-readiness").await;
-    let (_user, agent, access) =
-        goal_recovery_actors(&db, "parent-claimed-waits", "completed").await;
-    let goal = seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Hold a durable claim until the behavior is ready"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .expect("set goal");
-    assert!(crate::goal::claim_continuation_from_access(
-        &agent_access(&db, &agent),
-        &goal,
-        "parent-claimed-waits"
-    )
-    .await
-    .expect("claim continuation"));
-    publish_node_readiness_for_agent(&db, Process::Recovering, None, agent.did()).await;
-    let claimed =
-        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap();
-    let (mut source, _tx) = unready_source_for_agent(&db, &agent);
-    assert_settles_without_fire(
-        &mut source,
-        "a claimed child must not be published to an unready behavior",
-    )
-    .await;
-    assert!(goal_children_from_access(&access).await.is_empty());
-    assert_eq!(
-        serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap(),
-        claimed,
-        "waiting must leave the durable claim untouched"
-    );
-
-    publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    next_intent(&mut source, "goal continuation after readiness recovered").await;
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    assert_eq!(
-        children[0].caused_by_parent_request_id.as_deref(),
-        Some("parent-claimed-waits")
-    );
-}
-
-#[tokio::test]
-async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_live() {
-    let db = test_db("goal-closed-notifications").await;
-    let (user, agent) = goal_creation_actors(&db).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    publish_node_readiness_for_agent(
-        &db,
-        gents_protocol::row::NodeReadinessProcessState::Ready,
-        None,
-        agent.did(),
-    )
-    .await;
-    let updates = MockUpdateSubscriptionSource::new();
-    updates.close();
-    let (_snapshot_tx, rx) = watch::channel(agent_snapshot(&db, &agent));
-    let cancel = CancellationToken::new();
-    let mut source = GoalSource::with_subscription_source(
-        Arc::new(updates),
-        rx,
-        db.node.clone(),
-        cancel.clone(),
-    )
-    .with_rescan_interval(RESCAN);
-    // This test exercises `next_fire`'s own trigger loop, which a settled
-    // rescan bypasses. The loop exposes no settled point, so the check that a
-    // closed feed does not end the source keeps its window: load can only
-    // make it pass without observing the closure, never fail it. The positive
-    // waits below are the owner's own `next_fire` results.
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), source.next_fire())
-            .await
-            .is_err(),
-        "closing notifications must not retire the durable Goal source"
-    );
-    let doc = goal_fixture_request(&db, &user, &agent, "completed-before-continuation").await;
-    publish_owned_terminal_activity(&access, agent.as_ref(), &doc, "durable progress").await;
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some("Continue the existing objective"),
-        Some(GoalStatus::Active),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let _fire = tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
+    // claimed_continuation_waits_for_readiness_before_materializing
+    {
+        let session = "claimed-readiness";
+        f.seed_recovery_parent(session, "parent-claimed-waits", "completed")
+            .await;
+        let goal = seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Hold a durable claim until the behavior is ready"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
         .await
-        .expect("durable rescan must find the active Goal")
-        .expect("closed notifications must not terminate the source");
-    assert_eq!(goal_children_from_access(&access).await.len(), 1);
-    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
-    cancel.cancel();
-    assert!(
-        tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
+        .unwrap();
+        assert!(crate::goal::claim_continuation_from_access(
+            f.agent_access(),
+            &goal,
+            "parent-claimed-waits"
+        )
+        .await
+        .unwrap());
+        f.publish_readiness(Process::Recovering, None).await;
+        let claimed =
+            serde_json::to_value(f.load_goal(f.agent_access(), session).await.unwrap()).unwrap();
+        let (mut source, _tx) = f.unready_source();
+        assert_settles_without_fire(
+            &mut source,
+            "a claimed child must not be published to an unready behavior",
+        )
+        .await;
+        assert!(goal_children_in_session(f.agent_access(), session)
             .await
-            .expect("cancellation must stop the source")
-            .is_none()
-    );
+            .is_empty());
+        assert_eq!(
+            serde_json::to_value(f.load_goal(f.agent_access(), session).await.unwrap()).unwrap(),
+            claimed,
+            "waiting must leave the durable claim untouched"
+        );
+        f.publish_readiness(Process::Ready, None).await;
+        next_intent(&mut source, "goal continuation after readiness recovered").await;
+        let children = goal_children_in_session(f.agent_access(), session).await;
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].caused_by_parent_request_id.as_deref(),
+            Some("parent-claimed-waits")
+        );
+        f.clear_goal(session).await;
+    }
+
+    // closed_goal_notifications_keep_durable_continuation_and_cancellation_live
+    {
+        let session = "closed-notifications";
+        f.publish_readiness(Process::Ready, None).await;
+        let updates = MockUpdateSubscriptionSource::new();
+        updates.close();
+        let (_tx, rx) = watch::channel(f.agent_snapshot());
+        let cancel = CancellationToken::new();
+        let mut source = GoalSource::with_subscription_source(
+            Arc::new(updates),
+            rx,
+            f.home.node.clone(),
+            cancel.clone(),
+        )
+        .with_rescan_interval(RESCAN);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), source.next_fire())
+                .await
+                .is_err(),
+            "closing notifications must not retire the durable Goal source"
+        );
+        f.seed_recovery_parent(session, "completed-before-continuation", "completed")
+            .await;
+        seed_goal_from_access(
+            f.agent_access(),
+            f.did(),
+            session,
+            Some("Continue the existing objective"),
+            Some(GoalStatus::Active),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let _fire =
+            tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
+                .await
+                .expect("durable rescan must find the active Goal")
+                .expect("closed notifications must not terminate the source");
+        assert_eq!(
+            goal_children_in_session(f.agent_access(), session)
+                .await
+                .len(),
+            1
+        );
+        assert_eq!(
+            f.load_goal(f.agent_access(), session)
+                .await
+                .unwrap()
+                .parsed_status(),
+            Some(GoalStatus::Active)
+        );
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
+                .await
+                .expect("cancellation must stop the source")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn goal_source_readiness_and_closed_notification_scenarios() {
+    let f = GoalFixture::start("goal-source-readiness").await;
+    scenario_readiness_defer_and_race(&f).await;
 }

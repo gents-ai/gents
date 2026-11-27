@@ -1,422 +1,492 @@
 use super::*;
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
+};
 use gents_protocol::session_token_usage::SessionTokenUsage;
+use gents_session::test_support::AgentHome;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, NodePermission};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+use serde_json::json;
 
-#[tokio::test]
-async fn session_token_usage_breakdown_sums_to_the_total() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_store::identity::NodeIdentity;
-    use serde_json::json;
-
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "goal-session-usage",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, user_access) = signed_home.into_parts();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let owner = db.node_identity.did();
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "usage-request",
-        RequestScope::new(owner, user.did(), agent.did(), "usage-session"),
-        "test",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &db.node,
-            &user_access,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
-        .await
-        .unwrap();
-    let request_doc_id = lifecycle.request().doc_id.clone();
-    let session_doc_id = user_access
-        .transact_readonly("test.goal_usage.session", |txn| {
-            Box::pin(async move {
-                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                    txn,
-                    owner,
-                    "usage-session",
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap()
-        .unwrap()
-        .doc_id;
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
-        let input = json!({
-            "call_id": format!("usage-call-{seq}"), "runtime_instance_id": "goal-test",
-            "request_id": "usage-request", "request_doc_id": request_doc_id,
-            "session_id": "usage-session", "call_seq": seq, "backend_id": "backend-test",
-            "agent_did": agent.did(), "node_did": owner, "call_kind": "inference", "attempt": 1,
-            "call_state": "completed", "queued_at": "2026-07-15T00:00:00Z",
-            "started_at": "2026-07-15T00:00:00Z", "ended_at": "2026-07-15T00:00:01Z",
-            "priority": 0, "queue_depth_at_enqueue": 0, "controller_generation": 1,
-            "backend_config_fingerprint": "goal-test", "prompt_tokens": prompt,
-            "completion_tokens": completion,
-        });
-        agent_access.transact_write("test.goal_usage.call", |txn| {
-            let input = &input;
-            let session_doc_id = &session_doc_id;
-            Box::pin(async move {
-                let response = txn.execute_with_variables(
-                    "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }",
-                    &json!({"input": input}),
-                ).await?;
-                let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
-                txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc_id).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        }).await.unwrap();
-    }
-    let usage = agent_access
-        .transact_readonly("goal.session_usage_breakdown_test", |txn| {
-            Box::pin(async move {
-                session_token_usage_breakdown_in_txn(txn, owner, "usage-session").await
-            })
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        usage,
-        SessionTokenUsage {
-            input: 1200,
-            output: 57,
-            total: 1257
-        }
-    );
-    assert_eq!(usage.input + usage.output, usage.total);
-    assert_eq!(
-        session_token_usage(
-            &db.node,
-            &identity::Did::new(agent.did()).unwrap(),
-            owner,
-            "usage-session"
-        )
-        .await
-        .unwrap(),
-        1257
-    );
-    let calls = user_access
-        .execute("{ InferenceCall { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(calls["data"]["InferenceCall"].as_array().unwrap().len(), 2);
+struct GoalHome {
+    home: AgentHome,
+    admin: ConfigAccess,
+    agent_doc: String,
+    reader: KeyIdentity,
+    reader_access: ConfigAccess,
+    _reader_dir: tempfile::TempDir,
 }
 
-async fn auto_resume_access() -> (
-    gents_store::test_support::TestStore,
-    gents_store::config_client::ConfigAccess,
-    String,
-) {
-    use gents_store::identity::NodeIdentity;
-    let db = gents_store::test_support::TestStore::start(
-        "goal-auto-resume",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = db.node.clone();
-    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    // Production projects the AgentBaseline from each live Agent document; this
-    // fixture has no projection pass, so the node admin grants it.
-    gents_store::identity::GrantSet::AgentBaseline
-        .grant(
-            &gents_store::config_client::ConfigAccess::local_as(
-                node.clone(),
-                identity::Did::new(root.did()).unwrap(),
-            ),
-            &identity::Did::new(agent.did()).unwrap(),
+impl GoalHome {
+    async fn start(name: &str) -> Self {
+        let home = AgentHome::start_with(name, crate::lifecycle_hooks::composition()).await;
+        let admin = ConfigAccess::local_as(
+            home.node.clone(),
+            identity::Did::new(home.node_identity.did()).unwrap(),
+        );
+        let reader_dir = tempfile::tempdir().unwrap();
+        let reader = KeyIdentity::load_or_create(reader_dir.path().join("reader"), None).unwrap();
+        for permission in [
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DocumentDelete,
+            NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(home.agent_did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        for permission in [
+            NodePermission::DacRelationDelete,
+            NodePermission::DocumentDelete,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(home.user.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
+            admin
+                .grant_node_permission(&identity::Did::new(reader.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        let reader_access =
+            ConfigAccess::local_as(home.node.clone(), identity::Did::new(reader.did()).unwrap());
+        let agent_doc = crate::goal::client_control::agent_document_for_test(
+            &home.user_access,
+            home.node_identity.did(),
+            home.agent_did(),
         )
-        .await
-        .unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node,
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    for session in ["session"] {
-        access
-            .transact_write("test.auto_resume_session", |txn| {
-                Box::pin(gents_session::session::ensure_session_in_txn(
-                    txn,
-                    gents_session::session::NewAgentSession {
-                        session_id: session,
-                        node_did: root.did(),
-                        agent_did: agent.did(),
-                        requester_did: Some(agent.did()),
-                        title: None,
-                        provenance: None,
-                        created_at: "2026-11-04T00:00:00Z",
-                    },
-                ))
+        .await;
+        Self {
+            home,
+            admin,
+            agent_doc,
+            reader,
+            reader_access,
+            _reader_dir: reader_dir,
+        }
+    }
+
+    async fn create_shared_session(&self, session_id: &str) -> String {
+        let runtime_did = self.home.node_identity.did();
+        let agent_did = self.home.agent_did();
+        let user_did = self.home.user.did();
+        self.home
+            .user_access
+            .transact_write("test.goal_home.session", |txn| {
+                Box::pin(async move {
+                    gents_session::session::ensure_session_in_txn(
+                        txn,
+                        gents_session::session::NewAgentSession {
+                            session_id,
+                            node_did: runtime_did,
+                            agent_did,
+                            requester_did: Some(user_did),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-11-04T00:00:00Z",
+                        },
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
             })
             .await
             .unwrap();
-    }
-    (db, access, root.did().to_owned())
-}
-
-#[tokio::test]
-async fn auto_resume_field_round_trips_through_the_live_schema() {
-    let (_db, access, owner) = auto_resume_access().await;
-    let goal = seed_goal_from_access(&access, &owner, "session", Some("ship"), None, None, None)
-        .await
-        .unwrap();
-    assert_eq!(goal.auto_resume_at_reset, None);
-    let doc = escape_graphql_string(&goal.doc_id);
-    access.write("test.auto_resume.set", &format!(r#"mutation {{ update_Goal(docID: "{doc}", input: {{auto_resume_at_reset: true}}) {{_docID}} }}"#)).await.unwrap();
-    let stored = access
-        .transact_readonly("test.auto_resume.read", |txn| {
-            Box::pin(load_canonical_goal_in_txn(txn, &owner, "session"))
-        })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored.auto_resume_at_reset, Some(true));
-}
-
-#[tokio::test]
-async fn session_goal_delete_uses_selected_agent_native_owner() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_store::identity::NodeIdentity;
-
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "goal-selected-agent-delete",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, user_access) = signed_home.into_parts();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    admin
-        .grant_node_permission(
-            &identity::Did::new(agent.did()).unwrap(),
-            gents_store::config_client::NodePermission::DocumentDelete,
-        )
-        .await
-        .unwrap();
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "delete-request",
-        RequestScope::new(
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            "delete-session",
-        ),
-        "test",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let _lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &db.node,
-            &user_access,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
-        .await
-        .unwrap();
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let goal = seed_goal_from_access(
-        &agent_access,
-        db.node_identity.did(),
-        "delete-session",
-        Some("test deletion"),
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    gents_store::test_support::relationships::actor_in_txn(
-        &agent_access,
-        "Goal",
-        &goal.doc_id,
-        "reader",
-        &identity::Did::new(db.node_identity.did()).unwrap(),
-        false,
-    )
-    .await
-    .unwrap();
-    let runtime_access = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    let denied = delete_goal_from_access(&runtime_access, &goal).await;
-    assert!(
-        denied.is_err(),
-        "runtime identity must not delete the selected agent's goal"
-    );
-    assert!(delete_goal_from_access(&agent_access, &goal).await.unwrap());
-    assert!(
-        agent_access.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
-            .as_array()
+        let session_doc = self
+            .home
+            .user_access
+            .transact_readonly("test.goal_home.session_document", |txn| {
+                Box::pin(async move {
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        runtime_did,
+                        session_id,
+                    )
+                    .await
+                })
+            })
+            .await
             .unwrap()
-            .is_empty()
-    );
+            .unwrap()
+            .doc_id;
+        gents_session::session::grant_created_session_relationships(
+            &self.home.user_access,
+            &session_doc,
+            &self.agent_doc,
+            agent_did,
+        )
+        .await
+        .unwrap();
+        self.home
+            .user_access
+            .add_actor_relationship(
+                "AgentSession",
+                &session_doc,
+                "reader",
+                &identity::Did::new(self.reader.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        session_doc
+    }
+}
+
+async fn reader_sees(access: &ConfigAccess, query: &str, collection: &str) -> bool {
+    let response = access.execute(query).await.unwrap();
+    if let Some(errors) = response.get("errors") {
+        assert!(
+            errors.is_null() || errors.as_array().is_some_and(Vec::is_empty),
+            "reader {collection} query failed: {response}"
+        );
+    }
+    !response["data"][collection]
+        .as_array()
+        .unwrap_or_else(|| panic!("reader {collection} query returned no rows array: {response}"))
+        .is_empty()
 }
 
 #[tokio::test]
-async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
-    };
-    use gents_store::identity::NodeIdentity;
+async fn goal_usage_auto_resume_deletion_and_concurrent_repair_scenarios() {
+    let gh = GoalHome::start("goal-core-scenarios").await;
+    let owner = gh.home.node_identity.did();
+    let user = &gh.home.user;
+    let user_access = &gh.home.user_access;
+    let agent = &gh.home.agent_identity;
+    let agent_access = &gh.home.agent_access;
 
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "goal-user-delete",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, user_access) = signed_home.into_parts();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    admin
-        .grant_node_permission(
-            &identity::Did::new(user.did()).unwrap(),
-            gents_store::config_client::NodePermission::DocumentDelete,
+    // Session token usage breakdown sums to the total.
+    {
+        let create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "usage-request",
+            RequestScope::new(owner, user.did(), agent.did(), "usage-session"),
+            "test",
+            "interactive",
+            "2026-07-15T00:00:00Z",
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        let lifecycle =
+            gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+                &gh.home.node,
+                user_access,
+                gh.home.node_identity.clone(),
+                user,
+                agent.as_ref(),
+                create,
+            )
+            .await
+            .unwrap();
+        let request_doc_id = lifecycle.request().doc_id.clone();
+        let session_doc_id = user_access
+            .transact_readonly("test.goal_usage.session", |txn| {
+                Box::pin(async move {
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        owner,
+                        "usage-session",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .doc_id;
+        for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
+            let input = json!({
+                "call_id": format!("usage-call-{seq}"), "runtime_instance_id": "goal-test",
+                "request_id": "usage-request", "request_doc_id": request_doc_id,
+                "session_id": "usage-session", "call_seq": seq, "backend_id": "backend-test",
+                "agent_did": agent.did(), "node_did": owner, "call_kind": "inference", "attempt": 1,
+                "call_state": "completed", "queued_at": "2026-07-15T00:00:00Z",
+                "started_at": "2026-07-15T00:00:00Z", "ended_at": "2026-07-15T00:00:01Z",
+                "priority": 0, "queue_depth_at_enqueue": 0, "controller_generation": 1,
+                "backend_config_fingerprint": "goal-test", "prompt_tokens": prompt,
+                "completion_tokens": completion,
+            });
+            agent_access.transact_write("test.goal_usage.call", |txn| {
+                let input = &input;
+                let session_doc_id = &session_doc_id;
+                Box::pin(async move {
+                    let response = txn.execute_with_variables(
+                        "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }",
+                        &json!({"input": input}),
+                    ).await?;
+                    let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc_id).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            }).await.unwrap();
+        }
+        let usage = agent_access
+            .transact_readonly("goal.session_usage_breakdown_test", |txn| {
+                Box::pin(async move {
+                    session_token_usage_breakdown_in_txn(txn, owner, "usage-session").await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            usage,
+            SessionTokenUsage {
+                input: 1200,
+                output: 57,
+                total: 1257
+            }
+        );
+        assert_eq!(usage.input + usage.output, usage.total);
+        assert_eq!(
+            session_token_usage(
+                &gh.home.node,
+                &identity::Did::new(agent.did()).unwrap(),
+                owner,
+                "usage-session"
+            )
+            .await
+            .unwrap(),
+            1257
+        );
+        let calls = user_access
+            .execute("{ InferenceCall { _docID } }")
+            .await
+            .unwrap();
+        assert_eq!(calls["data"]["InferenceCall"].as_array().unwrap().len(), 2);
+    }
+
+    // auto_resume_at_reset round-trips through the live schema.
+    {
+        gh.create_shared_session("auto-resume-session").await;
+        let goal = seed_goal_from_access(
+            agent_access,
+            owner,
+            "auto-resume-session",
+            Some("ship"),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "user-delete-request",
-        RequestScope::new(
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            "user-delete-session",
-        ),
-        "test",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    gents_session::request::lifecycle::reserve_goal_session(&user_access, &create)
+        assert_eq!(goal.auto_resume_at_reset, None);
+        let doc = escape_graphql_string(&goal.doc_id);
+        agent_access
+            .write(
+                "test.auto_resume.set",
+                &format!(
+                    r#"mutation {{ update_Goal(docID: "{doc}", input: {{auto_resume_at_reset: true}}) {{_docID}} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+        let stored = agent_access
+            .transact_readonly("test.auto_resume.read", |txn| {
+                Box::pin(load_canonical_goal_in_txn(
+                    txn,
+                    owner,
+                    "auto-resume-session",
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.auto_resume_at_reset, Some(true));
+    }
+
+    // Session goal delete uses selected agent native owner.
+    {
+        let create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "delete-request",
+            RequestScope::new(owner, user.did(), agent.did(), "delete-session"),
+            "test",
+            "interactive",
+            "2026-07-15T00:00:00Z",
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        let _lifecycle =
+            gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+                &gh.home.node,
+                user_access,
+                gh.home.node_identity.clone(),
+                user,
+                agent.as_ref(),
+                create,
+            )
+            .await
+            .unwrap();
+        let goal = seed_goal_from_access(
+            agent_access,
+            owner,
+            "delete-session",
+            Some("test deletion"),
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
-    crate::goal::create_goal_for_session_from_access(
-        &user_access,
-        db.node_identity.did(),
-        "user-delete-session",
-        "user-owned goal",
-        None,
-    )
-    .await
-    .unwrap();
-    let other_create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "other-delete-request",
-        RequestScope::new(
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
+        gents_store::test_support::relationships::actor_in_txn(
+            agent_access,
+            "Goal",
+            &goal.doc_id,
+            "reader",
+            &identity::Did::new(owner).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+        let denied = delete_goal_from_access(&gh.admin, &goal).await;
+        assert!(
+            denied.is_err(),
+            "runtime identity must not delete the selected agent's goal"
+        );
+        assert!(delete_goal_from_access(agent_access, &goal).await.unwrap());
+        let remaining = agent_access
+            .execute(r#"{ Goal(filter: { session_id: { _eq: "delete-session" } }) { _docID } }"#)
+            .await
+            .unwrap();
+        assert!(remaining["data"]["Goal"].as_array().unwrap().is_empty());
+    }
+
+    // Held user deletes own goal and claim by physical ID without touching sibling sessions.
+    {
+        for (req, sess) in [
+            ("user-delete-request", "user-delete-session"),
+            ("other-delete-request", "other-delete-session"),
+        ] {
+            let create = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                req,
+                RequestScope::new(owner, user.did(), agent.did(), sess),
+                "test",
+                "interactive",
+                "2026-07-15T00:00:00Z",
+                AgentRequestAdmissionRecord::client(user.did()),
+            );
+            gents_session::request::lifecycle::reserve_goal_session(user_access, &create)
+                .await
+                .unwrap();
+        }
+        crate::goal::create_goal_for_session_from_access(
+            user_access,
+            owner,
+            "user-delete-session",
+            "user-owned goal",
+            None,
+        )
+        .await
+        .unwrap();
+        let other = crate::goal::create_goal_for_session_from_access(
+            user_access,
+            owner,
             "other-delete-session",
-        ),
-        "test",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    gents_session::request::lifecycle::reserve_goal_session(&user_access, &other_create)
-        .await
-        .unwrap();
-    let other = crate::goal::create_goal_for_session_from_access(
-        &user_access,
-        db.node_identity.did(),
-        "other-delete-session",
-        "keep this goal",
-        None,
-    )
-    .await
-    .unwrap();
-    let other_goal_doc_id = other.goal().doc_id.clone();
-    assert_eq!(
-        delete_goals_for_session_from_access(
-            &user_access,
-            db.node_identity.did(),
-            "user-delete-session",
+            "keep this goal",
+            None,
         )
         .await
-        .unwrap(),
-        1
-    );
-    let rows = user_access
-        .execute("{ Goal {_docID session_id} GoalCreationClaim {_docID session_id} }")
-        .await
         .unwrap();
-    let goals = rows["data"]["Goal"].as_array().unwrap();
-    let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
-    assert_eq!(goals.len(), 1);
-    assert_eq!(goals[0]["_docID"], other_goal_doc_id);
-    assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["session_id"], "other-delete-session");
+        let other_goal_doc_id = other.goal().doc_id.clone();
+        assert_eq!(
+            delete_goals_for_session_from_access(user_access, owner, "user-delete-session")
+                .await
+                .unwrap(),
+            1
+        );
+        let rows = user_access
+            .execute(
+                r#"{
+                    Goal(filter: { session_id: { _in: ["user-delete-session", "other-delete-session"] } }) {_docID session_id}
+                    GoalCreationClaim(filter: { session_id: { _in: ["user-delete-session", "other-delete-session"] } }) {_docID session_id}
+                }"#,
+            )
+            .await
+            .unwrap();
+        let goals = rows["data"]["Goal"].as_array().unwrap();
+        let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0]["_docID"], other_goal_doc_id);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0]["session_id"], "other-delete-session");
+    }
+
+    // Signed relationship repair rebuilds after a concurrent Goal write.
+    {
+        let session_doc = gh.create_shared_session("repair-session").await;
+        let input = json!({
+            "goal_id": "race-goal", "creation_key": "race-claim", "node_did": owner,
+            "session_id": "repair-session", "session_doc_id": session_doc, "requester_did": user.did(),
+            "agent_did": agent.did(), "creator_did": user.did(), "parent_linked": false,
+            "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"
+        });
+        let goal_doc = user_access
+            .transact_write("test.goal_repair_race.unlinked", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    let written = txn
+                        .execute_client_signed_create(
+                            "mutation($input: GoalMutationInputArg!) { create_Goal(input: $input) { _docID } }",
+                            &json!({"input": input}),
+                            gents_protocol::schemas::GOAL,
+                        )
+                        .await?;
+                    let doc = gents_store::graphql::created_doc_id(&written, "Goal")?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            })
+            .await
+            .unwrap();
+        let query = format!(
+            r#"{{ Goal(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked objective}} }}"#,
+            escape_graphql_string(&goal_doc)
+        );
+        let rewrite = async {
+            user_access
+                .transact_write("test.goal_repair_race.rewrite", |txn| {
+                    let goal_doc = &goal_doc;
+                    Box::pin(async move {
+                        txn.execute_client_signed_update(
+                            "mutation($id: ID!, $input: GoalMutationInputArg!) { update_Goal(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
+                            &json!({"id": goal_doc, "input": {"objective": "Finish rewritten work"}}),
+                            gents_protocol::schemas::GOAL,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("the creator rewrites the Goal between the repair's mark and commit");
+        };
+        let (repaired, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+            crate::goal::creation::finish_goal_relationships(user_access, owner, "repair-session"),
+            rewrite,
+        )
+        .await;
+        assert!(paused, "the repair paused after its signed marker");
+        repaired.unwrap();
+        let rows = user_access.execute(&query).await.unwrap();
+        let rows = rows["data"]["Goal"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["parent_linked"], true);
+        assert_eq!(rows[0]["objective"], "Finish rewritten work");
+        assert!(
+            reader_sees(&gh.reader_access, &query, "Goal").await,
+            "the session reader sees the Goal through its parent grant"
+        );
+        assert!(
+            reader_sees(agent_access, &query, "Goal").await,
+            "the working Agent sees the Goal through its grant"
+        );
+    }
+    gh.home.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn goal_and_claim_publication_links_match_lean() {
-    use gents_store::config_client::{ConfigAccess, NodePermission};
-    use gents_store::identity::{KeyIdentity, NodeIdentity};
-    use serde_json::json;
-
-    async fn reader_sees(access: &ConfigAccess, query: &str, collection: &str) -> bool {
-        let response = access.execute(query).await.unwrap();
-        if let Some(errors) = response.get("errors") {
-            assert!(
-                errors.is_null() || errors.as_array().is_some_and(Vec::is_empty),
-                "reader {collection} query failed: {response}"
-            );
-        }
-        !response["data"][collection]
-            .as_array()
-            .unwrap_or_else(|| {
-                panic!("reader {collection} query returned no rows array: {response}")
-            })
-            .is_empty()
-    }
-
     #[derive(Debug, Clone, Copy)]
     struct LinkObservation {
         linked: bool,
@@ -432,150 +502,53 @@ async fn goal_and_claim_publication_links_match_lean() {
         repair_allowed: Option<bool>,
     }
 
-    async fn run_link_case(
-        collection: &str,
-        actor_name: &str,
-        mode: &str,
-        commit: bool,
-        steps: &[[bool; 3]],
-    ) -> LinkRun {
-        let signed_home = gents_documents::test_support::SignedHome::start(
-            "goal-links",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (db, user, user_access) = signed_home.into_parts();
-        let node = db.node.clone();
-        let runtime = db.node_identity.clone();
-        let agent =
-            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let reader = KeyIdentity::load_or_create(home.path().join("reader"), None).unwrap();
-        let admin =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-        for permission in [
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::CollectionGet,
-        ] {
-            admin
-                .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
-                .await
-                .unwrap();
-        }
-        admin
-            .grant_node_permission(
-                &identity::Did::new(user.did()).unwrap(),
-                NodePermission::DacRelationDelete,
-            )
-            .await
-            .unwrap();
-        for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
-            admin
-                .grant_node_permission(&identity::Did::new(reader.did()).unwrap(), permission)
-                .await
-                .unwrap();
-        }
-        let agent_access = ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        let reader_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
-        let agent_doc = crate::goal::client_control::agent_document_for_test(
-            &user_access,
-            runtime.did(),
-            agent.did(),
-        )
-        .await;
-        user_access
-            .transact_write("test.goal_links.session", |txn| {
-                let runtime = &runtime;
-                let agent = &agent;
-                let user = &user;
-                Box::pin(async move {
-                    gents_session::session::ensure_session_in_txn(
-                        txn,
-                        gents_session::session::NewAgentSession {
-                            session_id: "links-session",
-                            node_did: runtime.did(),
-                            agent_did: agent.did(),
-                            requester_did: Some(user.did()),
-                            title: None,
-                            provenance: None,
-                            created_at: "2026-11-04T00:00:00Z",
-                        },
-                    )
-                    .await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await
-            .unwrap();
-        let session_doc = user_access
-            .transact_readonly("test.goal_links.session_document", |txn| {
-                let runtime = &runtime;
-                Box::pin(async move {
-                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn,
-                        runtime.did(),
-                        "links-session",
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap()
-            .unwrap()
-            .doc_id;
-        gents_session::session::grant_created_session_relationships(
-            &user_access,
-            &session_doc,
-            &agent_doc,
-            agent.did(),
-        )
-        .await
-        .unwrap();
-        user_access
-            .add_actor_relationship(
-                "AgentSession",
-                &session_doc,
-                "reader",
-                &identity::Did::new(reader.did()).unwrap(),
-            )
-            .await
-            .unwrap();
+    let gh = GoalHome::start("goal-links").await;
+    let mut ordinal = 0usize;
+
+    let mut run_link_case = async |collection: &str,
+                                   actor_name: &str,
+                                   mode: &str,
+                                   commit: bool,
+                                   steps: &[[bool; 3]]|
+           -> LinkRun {
+        ordinal += 1;
+        let session_id = format!("links-session-{ordinal}");
+        let goal_id = format!("model-goal-{ordinal}");
+        let creation_key = format!("model-claim-{ordinal}");
+        let runtime_did = gh.home.node_identity.did();
+        let user_did = gh.home.user.did();
+        let agent_did = gh.home.agent_did();
+        let user_access = &gh.home.user_access;
+        let agent_access = &gh.home.agent_access;
+        let session_doc = gh.create_shared_session(&session_id).await;
         let session_query = format!(
             r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             escape_graphql_string(&session_doc)
         );
         assert!(
-            reader_sees(&reader_access, &session_query, "AgentSession").await,
+            reader_sees(&gh.reader_access, &session_query, "AgentSession").await,
             "modeled reader must be able to query its granted session"
         );
         let (actor, access) = match actor_name {
-            "user" => (user.did(), &user_access),
-            "agent" => (agent.did(), &agent_access),
+            "user" => (user_did, user_access),
+            "agent" => (agent_did, agent_access),
             other => panic!("unknown model actor {other}"),
         };
-        let input = json!({"goal_id": "model-goal", "creation_key": "model-claim", "node_did": runtime.did(),
-            "session_id": "links-session", "session_doc_id": session_doc, "requester_did": user.did(),
-            "agent_did": agent.did(), "creator_did": actor, "parent_linked": mode == "fresh",
-            "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"});
+        let input = json!({
+            "goal_id": goal_id, "creation_key": creation_key, "node_did": runtime_did,
+            "session_id": session_id, "session_doc_id": session_doc, "requester_did": user_did,
+            "agent_did": agent_did, "creator_did": actor, "parent_linked": mode == "fresh",
+            "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"
+        });
         let author_access = if mode == "foreign" {
-            &agent_access
+            agent_access
         } else {
             access
         };
         let staged_doc = std::sync::Mutex::new(None::<String>);
         let outcome = author_access.transact_write("test.goal_links.publication", |txn| {
             let input = &input;
-            let runtime = &runtime;
+            let session_id = &session_id;
             let staged_doc = &staged_doc;
             Box::pin(async move {
                 let doc = if mode == "fresh" {
@@ -583,8 +556,8 @@ async fn goal_and_claim_publication_links_match_lean() {
                         txn,
                         GoalStaging {
                             start: crate::operations::goal::GoalStart {
-                                node_did: runtime.did(),
-                                session_id: "links-session",
+                                node_did: runtime_did,
+                                session_id,
                                 objective: "Finish work",
                                 token_budget: None,
                                 limits: gents_protocol::goal::GoalLimits::default(),
@@ -598,13 +571,21 @@ async fn goal_and_claim_publication_links_match_lean() {
                             identity: None,
                             first_request_doc_id: None,
                         },
-                    ).await?;
+                    )
+                    .await?;
                     if collection == "Goal" {
                         staged.goal.doc_id
                     } else {
-                        let response = txn.execute("{ GoalCreationClaim { _docID } }").await?;
+                        let response = txn
+                            .execute(&format!(
+                                r#"{{ GoalCreationClaim(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                                escape_graphql_string(session_id)
+                            ))
+                            .await?;
                         response["data"]["GoalCreationClaim"][0]["_docID"]
-                            .as_str().unwrap().to_owned()
+                            .as_str()
+                            .unwrap()
+                            .to_owned()
                     }
                 } else {
                     let schema = match collection {
@@ -613,12 +594,11 @@ async fn goal_and_claim_publication_links_match_lean() {
                         other => panic!("unknown modeled collection {other}"),
                     };
                     let mutation = format!(
-                        "mutation($input: {}MutationInputArg!) {{ create_{}(input: $input) {{ _docID }} }}",
-                        collection, collection,
+                        "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
                     );
-                    let written = txn.execute_client_signed_create(
-                        &mutation, &json!({"input": input}), schema,
-                    ).await?;
+                    let written = txn
+                        .execute_client_signed_create(&mutation, &json!({"input": input}), schema)
+                        .await?;
                     gents_store::graphql::created_doc_id(&written, collection)?
                 };
                 *staged_doc.lock().unwrap() = Some(doc.clone());
@@ -655,14 +635,12 @@ async fn goal_and_claim_publication_links_match_lean() {
                 .unwrap();
         }
         let query = format!(
-            r#"{{ {}(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked}} }}"#,
-            collection,
+            r#"{{ {collection}(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked}} }}"#,
             escape_graphql_string(&doc)
         );
         let observe = || {
             let query = &query;
-            let reader_access = &reader_access;
-            let agent_access = &agent_access;
+            let reader_access = &gh.reader_access;
             async move {
                 let rows = access.execute(query).await.unwrap();
                 LinkObservation {
@@ -681,11 +659,9 @@ async fn goal_and_claim_publication_links_match_lean() {
         };
         let rows = access.execute(&query).await.unwrap();
         if rows["data"][collection].as_array().unwrap().is_empty() {
-            let initial = observe().await;
-            node.shutdown().await.expect("node shutdown");
             return LinkRun {
                 owner: None,
-                initial,
+                initial: observe().await,
                 after: Vec::new(),
                 after_revocation: None,
                 repair_allowed: None,
@@ -702,23 +678,18 @@ async fn goal_and_claim_publication_links_match_lean() {
             .await
             .unwrap();
         let owner = match owners[0].owner.as_ref().map(|did| did.as_str()) {
-            Some(did) if did == user.did() => Some("user"),
-            Some(did) if did == agent.did() => Some("agent"),
+            Some(did) if did == user_did => Some("user"),
+            Some(did) if did == agent_did => Some("agent"),
             other => panic!("unexpected goal link owner {other:?}"),
         };
         if mode == "foreign" {
-            let repair_allowed = crate::goal::creation::finish_goal_relationships(
-                access,
-                runtime.did(),
-                "links-session",
-            )
-            .await
-            .is_ok();
-            let initial = observe().await;
-            node.shutdown().await.expect("node shutdown");
+            let repair_allowed =
+                crate::goal::creation::finish_goal_relationships(access, runtime_did, &session_id)
+                    .await
+                    .is_ok();
             return LinkRun {
                 owner,
-                initial,
+                initial: observe().await,
                 after: Vec::new(),
                 after_revocation: None,
                 repair_allowed: Some(repair_allowed),
@@ -728,19 +699,14 @@ async fn goal_and_claim_publication_links_match_lean() {
         let mut after = Vec::new();
         for &[parent_ok, worker_ok, mark_ok] in steps {
             if parent_ok && worker_ok && mark_ok {
-                crate::goal::creation::finish_goal_relationships(
-                    access,
-                    runtime.did(),
-                    "links-session",
-                )
-                .await
-                .unwrap();
+                crate::goal::creation::finish_goal_relationships(access, runtime_did, &session_id)
+                    .await
+                    .unwrap();
             } else {
                 let result: anyhow::Result<()> = access
                     .transact_write("test.goal_links.rollback", |attempt| {
                         let doc = &doc;
                         let session_doc = &session_doc;
-                        let agent = &agent;
                         Box::pin(async move {
                             if parent_ok {
                                 attempt
@@ -759,7 +725,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                                         collection,
                                         doc,
                                         "working_agent",
-                                        &identity::Did::new(agent.did())?,
+                                        &identity::Did::new(agent_did)?,
                                     )
                                     .await?;
                             }
@@ -778,19 +744,17 @@ async fn goal_and_claim_publication_links_match_lean() {
             .delete_resource_relationship(collection, &doc, "parent", "sessions", &session_doc)
             .await
             .unwrap();
-        crate::goal::creation::finish_goal_relationships(access, runtime.did(), "links-session")
+        crate::goal::creation::finish_goal_relationships(access, runtime_did, &session_id)
             .await
             .unwrap();
-        let after_revocation = observe().await;
-        node.shutdown().await.expect("node shutdown");
         LinkRun {
             owner,
             initial,
             after,
-            after_revocation: Some(after_revocation),
+            after_revocation: Some(observe().await),
             repair_allowed: None,
         }
-    }
+    };
 
     for case in gents_lean_vocab::families::goal_links_user_owned::cases() {
         let i = &case.input;
@@ -856,191 +820,5 @@ async fn goal_and_claim_publication_links_match_lean() {
             },
         );
     }
-}
-
-/// The creator's write of the Goal being marked, landing between the repair's
-/// signed marker and its commit, aborts that commit with DefraDB's own
-/// conflict; the repair re-selects the unlinked row and re-signs
-/// (signed-conflict rebuild), committing the marker and both grants together.
-#[tokio::test]
-async fn signed_relationship_repair_rebuilds_after_a_concurrent_goal_write() {
-    use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, NodePermission};
-    use gents_store::identity::{KeyIdentity, NodeIdentity};
-    use serde_json::json;
-
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "goal-repair-race",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, user, user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let runtime = db.node_identity.clone();
-    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let reader = KeyIdentity::load_or_create(home.path().join("reader"), None).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    for permission in [
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::CollectionGet,
-    ] {
-        admin
-            .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
-            .await
-            .unwrap();
-    }
-    for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
-        admin
-            .grant_node_permission(&identity::Did::new(reader.did()).unwrap(), permission)
-            .await
-            .unwrap();
-    }
-    let agent_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let reader_access =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
-    let agent_doc = crate::goal::client_control::agent_document_for_test(
-        &user_access,
-        runtime.did(),
-        agent.did(),
-    )
-    .await;
-    user_access
-        .transact_write("test.goal_repair_race.session", |txn| {
-            let runtime = &runtime;
-            let agent = &agent;
-            let user = &user;
-            Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    gents_session::session::NewAgentSession {
-                        session_id: "repair-session",
-                        node_did: runtime.did(),
-                        agent_did: agent.did(),
-                        requester_did: Some(user.did()),
-                        title: None,
-                        provenance: None,
-                        created_at: "2026-11-04T00:00:00Z",
-                    },
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
-    let session_doc = user_access
-        .transact_readonly("test.goal_repair_race.session_document", |txn| {
-            let runtime = &runtime;
-            Box::pin(async move {
-                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                    txn,
-                    runtime.did(),
-                    "repair-session",
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap()
-        .unwrap()
-        .doc_id;
-    gents_session::session::grant_created_session_relationships(
-        &user_access,
-        &session_doc,
-        &agent_doc,
-        agent.did(),
-    )
-    .await
-    .unwrap();
-    user_access
-        .add_actor_relationship(
-            "AgentSession",
-            &session_doc,
-            "reader",
-            &identity::Did::new(reader.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    let input = json!({"goal_id": "race-goal", "creation_key": "race-claim", "node_did": runtime.did(),
-        "session_id": "repair-session", "session_doc_id": session_doc, "requester_did": user.did(),
-        "agent_did": agent.did(), "creator_did": user.did(), "parent_linked": false,
-        "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"});
-    let goal_doc = user_access
-        .transact_write("test.goal_repair_race.unlinked", |txn| {
-            let input = &input;
-            Box::pin(async move {
-                let written = txn
-                    .execute_client_signed_create(
-                        "mutation($input: GoalMutationInputArg!) { create_Goal(input: $input) { _docID } }",
-                        &json!({"input": input}),
-                        gents_protocol::schemas::GOAL,
-                    )
-                    .await?;
-                let doc = gents_store::graphql::created_doc_id(&written, "Goal")?;
-                Ok::<_, anyhow::Error>(doc)
-            })
-        })
-        .await
-        .unwrap();
-    let query = format!(
-        r#"{{ Goal(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked objective}} }}"#,
-        escape_graphql_string(&goal_doc)
-    );
-
-    let rewrite = async {
-        user_access
-            .transact_write("test.goal_repair_race.rewrite", |txn| {
-                let goal_doc = &goal_doc;
-                Box::pin(async move {
-                    txn.execute_client_signed_update(
-                        "mutation($id: ID!, $input: GoalMutationInputArg!) { update_Goal(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
-                        &json!({"id": goal_doc, "input": {"objective": "Finish rewritten work"}}),
-                        gents_protocol::schemas::GOAL,
-                    )
-                    .await
-                })
-            })
-            .await
-            .expect("the creator rewrites the Goal between the repair's mark and commit");
-    };
-    let (repaired, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
-        crate::goal::creation::finish_goal_relationships(
-            &user_access,
-            runtime.did(),
-            "repair-session",
-        ),
-        rewrite,
-    )
-    .await;
-    assert!(paused, "the repair paused after its signed marker");
-    repaired.unwrap();
-    let rows = user_access.execute(&query).await.unwrap();
-    let rows = rows["data"]["Goal"].as_array().unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["parent_linked"], true);
-    assert_eq!(rows[0]["objective"], "Finish rewritten work");
-    assert!(
-        !reader_access.execute(&query).await.unwrap()["data"]["Goal"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        "the session reader sees the Goal through its parent grant"
-    );
-    assert!(
-        !agent_access.execute(&query).await.unwrap()["data"]["Goal"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        "the working Agent sees the Goal through its grant"
-    );
-    node.shutdown().await.expect("node shutdown");
+    gh.home.node.shutdown().await.expect("node shutdown");
 }
