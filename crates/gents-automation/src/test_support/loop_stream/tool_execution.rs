@@ -892,7 +892,7 @@ pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
         config(4),
     );
     futures::pin_mut!(stream);
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(gents_store::test_support::STALL_CEILING, async {
         while let Some(item) = stream.next().await {
             item.expect("loop succeeds");
         }

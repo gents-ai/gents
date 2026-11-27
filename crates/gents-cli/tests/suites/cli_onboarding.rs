@@ -651,6 +651,7 @@ async fn provision_as_the_desktop(
             tool_root: Some(fs::canonicalize(root)?),
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             default_packs: true,
+            registry: None,
         },
         archives,
     )

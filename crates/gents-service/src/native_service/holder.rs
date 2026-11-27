@@ -146,16 +146,50 @@ pub(super) fn systemd_record(show: &str) -> Option<ServiceRecord> {
         let exec = field("ExecStart");
         let argv = exec.split_once("argv[]=")?.1;
         let argv = argv.split_once(" ;").map_or(argv, |(argv, _)| argv);
-        argv.split_once(" --home ").map(|(_, home)| {
-            let home = home.trim();
-            PathBuf::from(
-                home.strip_suffix(&format!(" {SYSTEM_LOG_FLAG}"))
-                    .unwrap_or(home),
-            )
+        argv.split_once(" --home ").map(|(_, rest)| {
+            let rest = rest.trim();
+            let rest = rest
+                .strip_suffix(&format!(" {SYSTEM_LOG_FLAG}"))
+                .unwrap_or(rest);
+            let home = rest
+                .split_once(&format!(" {REGISTRY_FLAG} "))
+                .map_or(rest, |(home, _)| home);
+            PathBuf::from(home)
         })
     };
     Some(ServiceRecord {
         definition,
         home: from_fragment.map(PathBuf::from).or_else(from_command),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_records_parse_home_when_registry_flag_is_present() {
+        let launchd = "\
+\tpath = /Users/me/Library/LaunchAgents/ai.gents.runtime.plist
+\targuments = {
+\t\t/opt/gents/gents
+\t\tserver
+\t\t--home
+\t\t/Users/me/.gents
+\t\t--registry
+\t\thttp://127.0.0.1:18443
+\t\t--system-log
+\t}
+";
+        let record = launchd_record(launchd);
+        assert_eq!(record.home, Some(PathBuf::from("/Users/me/.gents")));
+
+        let systemd = "\
+LoadState=loaded
+FragmentPath=/nonexistent/gents-runtime.service
+ExecStart={ path=/usr/bin/env ; argv[]=/usr/bin/env -- /opt/gents/gents server --home /home/me/.gents --registry http://127.0.0.1:18443 --system-log ; ignore_errors=no }
+";
+        let record = systemd_record(systemd).expect("systemd record");
+        assert_eq!(record.home, Some(PathBuf::from("/home/me/.gents")));
+    }
 }

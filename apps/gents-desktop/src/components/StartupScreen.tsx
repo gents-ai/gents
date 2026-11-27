@@ -45,7 +45,9 @@ export function StartupScreen({ gate }: { gate?: Exclude<StartupGate, "shell"> }
       await actions.enrollLocalServer();
       await reread();
     } catch (cause) {
-      setConnectError(errorText(cause));
+      if (!(await startup.incompatibleHome.adopt(cause))) {
+        setConnectError(errorText(cause));
+      }
     } finally {
       setConnecting(false);
     }

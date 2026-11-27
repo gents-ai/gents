@@ -32,6 +32,7 @@ use super::executor::integrate::{
 use super::executor::seal::{execute_seal_workspace_plan, SealWorkspaceOutcome};
 use super::executor::{HostExecutorContext, RepositoryPlacementRef};
 use super::overlay::{optional_id, IsolatedWorkspaceRecord};
+use super::transition::{transition_workspace_lifecycle, WorkspaceLifecycleState};
 
 pub(super) fn completion_access(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -338,15 +339,21 @@ pub async fn claim_workspace_cleanup(
                 let state = row["lifecycle_state"]
                     .as_str()
                     .context("cleanup workspace state missing")?;
-                let normalized =
-                    gents_loop::tool_policy::normalize_workspace_lifecycle_state(state);
-                anyhow::ensure!(
-                    matches!(
-                        normalized,
-                        Some("sealed" | "cleaning" | "cleaned" | "provisionFailed")
-                    ),
-                    "workspace in state {state} cannot be cleaned"
-                );
+                let current = WorkspaceLifecycleState::parse(state)
+                    .with_context(|| format!("workspace in state {state} cannot be cleaned"))?;
+                let next = if matches!(
+                    current,
+                    WorkspaceLifecycleState::Cleaning | WorkspaceLifecycleState::Cleaned
+                ) {
+                    current
+                } else {
+                    transition_workspace_lifecycle(
+                        state,
+                        WorkspaceLifecycleState::Cleaning.as_str(),
+                        row["seal_hash"].as_str(),
+                    )
+                    .with_context(|| format!("workspace in state {state} cannot be cleaned"))?
+                };
                 let response = txn
                     .execute(&super::overlay::workspace_bindings_for_parent_query(doc))
                     .await?;
@@ -368,11 +375,6 @@ pub async fn claim_workspace_cleanup(
                     !bindings.iter().any(WorkspaceBindingDoc::is_active),
                     "workspace has Active binding(s); cleanup requires them Released first"
                 );
-                let next = if normalized == Some("cleaned") {
-                    "cleaned"
-                } else {
-                    "cleaning"
-                };
                 let claim = {
                     use gents_protocol::document_query::{
                         fields::isolated_workspace as fields, Input, Update,
@@ -380,7 +382,7 @@ pub async fn claim_workspace_cleanup(
                     Update::doc(
                         doc,
                         Input::new()
-                            .set(fields::LIFECYCLE_STATE, next)
+                            .set(fields::LIFECYCLE_STATE, next.as_str())
                             .set(fields::BINDING_REVISION, uuid::Uuid::new_v4().to_string()),
                     )
                     .render()
@@ -970,6 +972,18 @@ async fn write_workspace_receipt(
                 let [parent] = rows.as_slice() else {
                     anyhow::bail!("workspace receipt parent unavailable or ambiguous")
                 };
+                let parent_state = parent["lifecycle_state"]
+                    .as_str()
+                    .context("workspace parent lifecycle_state missing")?;
+                if WorkspaceLifecycleState::parse(parent_state)
+                    != WorkspaceLifecycleState::parse(&workspace.lifecycle_state)
+                {
+                    transition_workspace_lifecycle(
+                        parent_state,
+                        &workspace.lifecycle_state,
+                        workspace.seal_hash.as_deref(),
+                    )?;
+                }
                 let parent = parent["_docID"]
                     .as_str()
                     .filter(|id| !id.is_empty())

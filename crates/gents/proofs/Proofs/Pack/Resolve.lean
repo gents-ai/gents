@@ -104,4 +104,45 @@ theorem registry_is_last (state : State) (installed : List Pack) (name : String)
       have := List.find?_eq_none.mp hnone record hmem
       simpa [hwanted] using this
 
+/-- An optional registry URL argument or home setting: omitted, whitespace-only
+(or slashes-only), or a non-empty URL. -/
+inductive RegistryInput
+  | absent
+  | blank
+  | named
+  deriving DecidableEq, Repr
+
+/-- Which source supplies the pack registry URL for a home-scoped operation.
+The environment is never consulted. -/
+inductive RegistrySource
+  | explicit
+  | home
+  | default
+  deriving DecidableEq, Repr
+
+/-- Precedence for choosing the pack registry URL: an explicit `--registry` flag
+wins over the registry recorded on the home, which wins over the public default.
+A blank value is treated as omitted. -/
+def registrySource (explicit home : RegistryInput) : RegistrySource :=
+  match explicit with
+  | .named => .explicit
+  | .absent | .blank =>
+    match home with
+    | .named => .home
+    | .absent | .blank => .default
+
+theorem explicit_wins_over_home (home : RegistryInput) :
+    registrySource .named home = .explicit := rfl
+
+theorem home_wins_over_default :
+    registrySource .absent .named = .home := rfl
+
+theorem blank_explicit_falls_back_to_home :
+    registrySource .blank .named = .home := rfl
+
+theorem default_when_neither_named (explicit home : RegistryInput)
+    (he : explicit ≠ .named) (hh : home ≠ .named) :
+    registrySource explicit home = .default := by
+  cases explicit <;> cases home <;> simp_all [registrySource]
+
 end Pack.Resolve

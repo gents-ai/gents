@@ -2,11 +2,10 @@ use std::path::PathBuf;
 
 use super::super::action_plan::{ActionPlan, FreezeWorkspaceBaseAction, HostAction};
 use super::super::adapter::{capture_seal_snapshot, observe_dirty_base, resolve_base_sha};
-use super::super::documents::{LIFECYCLE_READY, LIFECYCLE_SEALED};
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
+use super::super::transition::WorkspaceLifecycleState;
 use super::seal::{apply_seal_snapshot, persist_sealed_workspace_documents};
 use super::{workspace_host_path, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext};
-use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 pub fn execute_freeze_workspace_base_plan(
     plan: &ActionPlan,
@@ -94,8 +93,8 @@ fn freeze_workspace_base_action(
             "base freeze placement differs from host-chosen workspace path",
         ));
     }
-    let state = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
-    if state == Some(LIFECYCLE_SEALED) {
+    let state = WorkspaceLifecycleState::parse(&workspace.lifecycle_state);
+    if state == Some(WorkspaceLifecycleState::Sealed) {
         if workspace.seal_hash.as_deref() != Some(base_tree.as_str()) {
             return Err(HostExecuteError::denied(
                 "base freeze replay differs from persisted seal",
@@ -113,7 +112,7 @@ fn freeze_workspace_base_action(
             placement,
         });
     }
-    if state != Some(LIFECYCLE_READY) {
+    if state != Some(WorkspaceLifecycleState::Ready) {
         return Err(HostExecuteError::denied(
             "only a Ready base workspace can be frozen",
         ));

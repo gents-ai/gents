@@ -275,7 +275,7 @@ pub(super) fn status_from(
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| {
-                "The background Node cannot open its home: it was created by an older Gents version.".to_string()
+                "The background node cannot open its home: it was created by an older Gents version. Nothing in it was changed.".to_string()
             })
     });
     let crashed = refused_store.or_else(|| {

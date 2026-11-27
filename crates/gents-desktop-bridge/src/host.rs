@@ -119,6 +119,7 @@ impl ClientHost {
                 client_host: false,
                 store_key_custody: core.options().store_key_custody,
                 service_executable: None,
+                registry: None,
             },
             pending_oauth_credentials: Arc::default(),
             retirement: std::sync::Mutex::new(None),

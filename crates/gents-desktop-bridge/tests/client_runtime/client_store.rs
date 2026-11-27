@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::client_test_support::ServedRuntimeHome;
@@ -7,6 +6,7 @@ use gents_desktop_bridge::client_runtime::ClientRuntime;
 use gents_observe::client_projection::query::load_session_transcript_page_on;
 use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
 use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::test_support::STALL_CEILING;
 use tokio::time::timeout;
 
 #[test]
@@ -294,7 +294,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         refreshed.is_none(),
         "the in-flight request-event fence must reject direct publication"
     );
-    timeout(Duration::from_secs(5), async {
+    timeout(STALL_CEILING, async {
         loop {
             if core
                 .stores()
@@ -343,7 +343,7 @@ where
     F: FnMut(&ClientRuntime) -> bool,
 {
     let mut updates = core.store_updates();
-    timeout(Duration::from_secs(5), async {
+    timeout(STALL_CEILING, async {
         while !done(core) {
             updates
                 .changed()
@@ -381,7 +381,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
         .publish_node(serde_json::json!({"display_name": "Test Agent", "enabled": true}))
         .await;
 
-    timeout(Duration::from_secs(5), async {
+    timeout(STALL_CEILING, async {
         loop {
             updates.changed().await.context("watch channel closed")?;
             if *updates.borrow() > baseline {
@@ -502,7 +502,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
             &format!("mutation {{ {messages} }}"),
         )
         .await?;
-    timeout(Duration::from_secs(5), async {
+    timeout(STALL_CEILING, async {
         loop {
             if core
                 .observer_metrics()

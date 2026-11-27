@@ -40,8 +40,24 @@ pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
 }
 
 pub fn resolve_registry_url(explicit: Option<&str>) -> String {
-    match explicit.filter(|value| !value.trim().is_empty()) {
-        Some(url) => url.trim_end_matches('/').to_owned(),
+    resolve_registry_url_with_home(explicit, None)
+}
+
+/// Resolves the pack registry URL from an explicit override, else the registry
+/// recorded on `home`, else the public registry (Lean `Pack.Resolve.registrySource`).
+pub fn resolve_registry_url_for_home(explicit: Option<&str>, home: Option<&Path>) -> String {
+    let recorded = home.and_then(gents_store::local::home::recorded_registry);
+    resolve_registry_url_with_home(explicit, recorded.as_deref())
+}
+
+/// Pure precedence for choosing the pack registry URL: an explicit override
+/// wins over the home's recorded registry, which wins over the public default
+/// (Lean `Pack.Resolve.registrySource`).
+pub fn resolve_registry_url_with_home(explicit: Option<&str>, home: Option<&str>) -> String {
+    match gents_store::local::home::normalize_registry(explicit)
+        .or_else(|| gents_store::local::home::normalize_registry(home))
+    {
+        Some(url) => url,
         None => DEFAULT_REGISTRY_URL.to_owned(),
     }
 }
@@ -914,6 +930,49 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("https"), "{message}");
         assert!(message.contains("http://registry.example"), "{message}");
+    }
+
+    #[test]
+    fn registry_source_matches_lean() {
+        use gents_lean_vocab::families::pack_resolve_registry_source as family;
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum RegistryInput {
+            Absent,
+            Blank,
+            Named,
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum RegistrySource {
+            Explicit,
+            Home,
+            Default,
+        }
+
+        const EXPLICIT: &str = "https://explicit.example";
+        const HOME: &str = "https://home.example";
+        let value = |input, url| match input {
+            RegistryInput::Absent => None,
+            RegistryInput::Blank => Some("  / "),
+            RegistryInput::Named => Some(url),
+        };
+        family::replay::<RegistryInput, RegistrySource>(|input| {
+            let resolved = resolve_registry_url_with_home(
+                value(input.explicit, EXPLICIT),
+                value(input.home, HOME),
+            );
+            if resolved == EXPLICIT {
+                RegistrySource::Explicit
+            } else if resolved == HOME {
+                RegistrySource::Home
+            } else {
+                assert_eq!(resolved, DEFAULT_REGISTRY_URL);
+                RegistrySource::Default
+            }
+        });
     }
 }
 

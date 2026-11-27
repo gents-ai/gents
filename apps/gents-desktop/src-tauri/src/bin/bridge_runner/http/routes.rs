@@ -152,16 +152,23 @@ pub(super) async fn handle_request(
         }
         ("POST", "/desktop/packs/search") => {
             let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;
+            let home = fixture.node_home().to_path_buf();
             json(
                 run_pack(runtime, move || {
-                    packs::search(None, query.query, query.page.max(1))
+                    packs::search(Some(home), None, query.query, query.page.max(1))
                 })
                 .await?,
             )
         }
         ("POST", "/desktop/packs/info") => {
             let request = decode::<PackInfoRequest>(&request.body, "decoding pack info")?;
-            json(run_pack(runtime, move || packs::info(None, request.package)).await?)
+            let home = fixture.node_home().to_path_buf();
+            json(
+                run_pack(runtime, move || {
+                    packs::info(Some(home), None, request.package)
+                })
+                .await?,
+            )
         }
         ("POST", "/desktop/packs/install") => {
             let request = decode::<PackInstallRequest>(&request.body, "decoding pack install")?;

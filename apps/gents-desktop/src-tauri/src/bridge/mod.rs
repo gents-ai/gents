@@ -365,6 +365,7 @@ fn platform_bridge_config() -> BridgeConfig {
         client_host: cfg!(all(desktop, any(unix, windows))),
         store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
         service_executable: launch_argument("--gents-bin").map(Into::into),
+        registry: launch_argument("--registry").and_then(|value| value.into_string().ok()),
     }
 }
 
