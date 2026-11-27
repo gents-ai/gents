@@ -781,8 +781,11 @@ class NativeNextest(unittest.TestCase):
 
     def test_the_filterset_names_each_binary_and_filter(self):
         filterset = gate.macos_filterset(["gents", "gents-cli"])
-        self.assertIn("(binary_id(=gents-cli::plugin_build_sandbox))", filterset)
+        self.assertIn("binary_id(=gents-cli)", filterset)
+        self.assertIn("test(~committed_job_fixture_artifact_matches_its_source)", filterset)
         self.assertIn("test(~a_skipped_gate_releases_the_bound_workspace)", filterset)
+        with mock.patch.object(gate, "macos_only_tests", return_value={("--test", "whole_target"): []}):
+            self.assertEqual(gate.macos_filterset(["gents-cli"]), "(binary_id(=gents-cli::whole_target))")
         self.assertEqual(gate.binary_id("gents-client-host", ("--bin", "gents-client-host")),
                          "gents-client-host::bin/gents-client-host")
         self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
@@ -1102,8 +1105,10 @@ class MacosOnlyTests(unittest.TestCase):
             self.assertEqual(whole, {""})
 
     def test_the_repository_gated_tests_are_found(self):
-        # A whole-file gate runs the whole target.
-        self.assertEqual(gate.macos_only_tests("gents-cli")[("--test", "plugin_build_sandbox")], [])
+        # `plugin_build_sandbox` runs under macOS Seatbelt and Linux Landlock: not macOS-only.
+        self.assertNotIn(("--test", "plugin_build_sandbox"), gate.macos_only_tests("gents-cli"))
+        self.assertIn("committed_job_fixture_artifact_matches_its_source",
+                      gate.macos_only_tests("gents-cli")[("--lib",)])
         self.assertIn("a_skipped_gate_releases_the_bound_workspace", gate.macos_only_tests("gents")[("--lib",)])
         # Compiled on both platforms, or on neither with the gate's features: not macOS-only.
         self.assertEqual(gate.macos_only_tests("gents-host"), {})
