@@ -2,6 +2,7 @@ import Proofs.Store.Identity.ClientDelegation
 import Proofs.Store.Identity.DetachedGrantFence
 import Proofs.Store.Identity.GrantSets
 import Proofs.Store.Identity.EnrollmentGrant
+import Proofs.Store.Identity.RuntimeActorAuthority
 import Proofs.Store.SchemaInstall
 import Proofs.Store.AccessClassification
 import Proofs.Conformance.Family
@@ -56,3 +57,11 @@ deriving instance Lean.ToJson for GrantOrigin, CompletionDecision
 attribute [conformance_function] decideGrant
 
 end Identity.DetachedGrantFence
+
+namespace Identity.RuntimeActorAuthority
+
+deriving instance Lean.ToJson for RuntimePath, RequiredAuthority, ActingPrincipal
+
+attribute [conformance_function] requiredAuthority actorAdmitted
+
+end Identity.RuntimeActorAuthority

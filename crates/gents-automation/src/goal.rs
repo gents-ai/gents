@@ -108,8 +108,10 @@ pub use creation::{
 use creation::{stage_goal_and_claim, GoalStaging};
 pub use document::{snapshot, GoalDocument};
 use gents_protocol::goal::{deterministic_goal_creation_key, deterministic_goal_id, GOAL_FIELDS};
+pub use load::load_canonical_goal_in_txn;
 pub(crate) use load::sort_goals_canonical;
-pub use load::{load_canonical_goal, load_canonical_goal_in_txn, load_goals_for_session};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use load::{load_canonical_goal, load_goals_for_session};
 pub use question_wait::awaiting_goal_question_ids;
 pub use state::{
     apply_operator_status_transition, decide_goal_continuation, goal_budget_reached, GoalAction,

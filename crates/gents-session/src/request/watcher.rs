@@ -161,10 +161,12 @@ impl Watcher for DefraWatcher {
         mut agents: Vec<Arc<dyn gents_store::identity::NodeIdentity>>,
     ) -> Result<()> {
         for agent in &agents {
-            anyhow::ensure!(
-                agent.did() != self.node_did,
-                "request watcher requires distinct agent identities"
-            );
+            gents_store::config_client::ensure_runtime_path_actor(
+                &self.node,
+                &self.node_did,
+                gents_store::config_client::RuntimePath::RequestWatch,
+                Some(agent.did()),
+            )?;
             identity::Did::new(agent.did())?;
         }
         agents.sort_by(|a, b| a.did().cmp(b.did()));

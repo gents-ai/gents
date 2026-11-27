@@ -467,31 +467,18 @@ impl DefraSessionHook {
         actor: ::identity::Did,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
+        gents_store::config_client::ensure_runtime_path_actor(
+            &node,
+            node_did,
+            gents_store::config_client::RuntimePath::SessionResume,
+            Some(actor.as_str()),
+        )?;
         Self::resume_with_optional_actor(
             node,
             session_id,
             node_did,
             requester_did,
             Some(actor),
-            failure_policy,
-        )
-        .await
-    }
-
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub async fn resume_with_identity_policy(
-        node: Arc<EmbeddedNode>,
-        session_id: &str,
-        node_did: &str,
-        requester_did: Option<&str>,
-        failure_policy: FailurePolicy,
-    ) -> anyhow::Result<Self> {
-        Self::resume_with_optional_actor(
-            node,
-            session_id,
-            node_did,
-            requester_did,
-            None,
             failure_policy,
         )
         .await

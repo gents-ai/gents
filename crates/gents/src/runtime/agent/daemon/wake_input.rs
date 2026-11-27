@@ -59,6 +59,11 @@ pub(super) async fn load(
     request: &crate::AgentRequest,
     cutoff: Option<u32>,
 ) -> Result<Vec<TaggedMessage>> {
+    gents_store::config_client::ensure_access_for_runtime_path(
+        access,
+        &request.node_did,
+        gents_store::config_client::RuntimePath::WakeInputLoad,
+    )?;
     let Some(cutoff) = cutoff else {
         return Ok(Vec::new());
     };
