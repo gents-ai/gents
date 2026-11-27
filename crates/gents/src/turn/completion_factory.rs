@@ -734,7 +734,7 @@ pub(crate) async fn build_compaction_engine(
     summary.context_window = inference.context_window()?;
     summary.max_output_tokens = inference.max_output_tokens()?;
     summary.sampling = inference.sampling_config()?;
-    summary.max_turns = 0;
+    summary.max_turns = 1;
     summary.compaction_inference = None;
     let api_key = if summary.backend_auth.uses_node_oauth()
         || matches!(

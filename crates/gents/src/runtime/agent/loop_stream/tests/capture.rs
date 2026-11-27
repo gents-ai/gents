@@ -137,7 +137,7 @@ async fn rendered_capture_follows_the_lean_model() {
         let captured = Arc::new(Mutex::new(Vec::<Result<CaptureOutcome, String>>::new()));
         let captured_for_sink = captured.clone();
         let sink_for_loop = sink.clone();
-        let mut loop_config = config(0);
+        let mut loop_config = config(2);
         loop_config.on_rendered_request =
             Some(Arc::new(move |_call, _turn_index, _attempt, _request, _trace| {
                 let sink = sink_for_loop.clone();
@@ -308,7 +308,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
                         "compaction must not inherit main affinity"
                     )
                 }));
-                let mut auxiliary_config = config(0);
+                let mut auxiliary_config = config(1);
                 auxiliary_config.provider_input_counter = counter;
                 let auxiliary = run_loop_stream(
                     model,
