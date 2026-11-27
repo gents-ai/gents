@@ -512,3 +512,83 @@ async fn stale_limit_intersects_normal_call_timeout() {
         );
     }
 }
+
+#[tokio::test]
+async fn call_tool_retries_only_when_preflight_annotations_certify_replay_safety() {
+    let (node, _runtime) = remote_node().await;
+
+    let idempotent_calls = Arc::new(AtomicUsize::new(0));
+    let idempotent_calls_for_fn = Arc::clone(&idempotent_calls);
+    let mut idempotent_tool = rmcp::model::Tool::new(
+        "selected",
+        "idempotent read",
+        Arc::new(
+            serde_json::json!({"type":"object", "properties":{"value":{"type":"integer"}}, "required":["value"]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    );
+    let mut annotations = rmcp::model::ToolAnnotations::default();
+    annotations.idempotent_hint = Some(true);
+    idempotent_tool.annotations = Some(annotations);
+    let idempotent_catalog = rmcp::model::ListToolsResult::with_all_items(vec![idempotent_tool]);
+    let idempotent_pool = crate::mcp::pool::McpPool::new_with_tool_handlers(
+        move |_, _| {
+            let catalog = idempotent_catalog.clone();
+            async move { Ok(catalog) }
+        },
+        move |_| {
+            let calls = Arc::clone(&idempotent_calls_for_fn);
+            async move {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    anyhow::bail!("connection reset by peer");
+                }
+                Ok(make_call_result(&["retried-ok"]))
+            }
+        },
+    );
+
+    let output = CallToolTool::new(remote_context(node.clone(), idempotent_pool))
+        .call(
+            CallToolArgs {
+                service_id: "shared".into(),
+                tool_name: "selected".into(),
+                arguments: serde_json::json!({"value": 1}),
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .expect("tool with idempotentHint=true must retry once on transport drop");
+    assert_eq!(output, "retried-ok");
+    assert_eq!(idempotent_calls.load(Ordering::SeqCst), 2);
+
+    let unannotated_calls = Arc::new(AtomicUsize::new(0));
+    let unannotated_calls_for_fn = Arc::clone(&unannotated_calls);
+    let unannotated_pool = crate::mcp::pool::McpPool::new_with_tool_handlers(
+        |_, _| async { Ok(catalog()) },
+        move |_| {
+            let calls = Arc::clone(&unannotated_calls_for_fn);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection reset by peer");
+            }
+        },
+    );
+
+    let error = CallToolTool::new(remote_context(node.clone(), unannotated_pool))
+        .call(
+            CallToolArgs {
+                service_id: "shared".into(),
+                tool_name: "selected".into(),
+                arguments: serde_json::json!({"value": 1}),
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .expect_err("tool without retry annotations must fail permanently");
+    assert!(format!("{error:#}").contains("connection reset"));
+    assert_eq!(unannotated_calls.load(Ordering::SeqCst), 1);
+
+    node.shutdown().await.unwrap();
+}
