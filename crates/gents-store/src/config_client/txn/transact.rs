@@ -465,8 +465,12 @@ where
                         let _ = txn.rollback_inner().await;
                         return Err(E::from(error));
                     }
+                    let revocation_commit = txn.begin_revocation_commit().await;
                     match txn.commit_inner().await {
                         Ok(()) => {
+                            if let Some(guard) = revocation_commit {
+                                guard.committed().await;
+                            }
                             txn.disarm_rollback();
                             if let Err(error) = txn.observe_committed().await {
                                 return Err(E::from(

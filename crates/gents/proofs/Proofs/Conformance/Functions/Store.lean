@@ -1,4 +1,5 @@
 import Proofs.Store.Identity.ClientDelegation
+import Proofs.Store.Identity.DetachedGrantFence
 import Proofs.Store.Identity.GrantSets
 import Proofs.Store.Identity.EnrollmentGrant
 import Proofs.Store.SchemaInstall
@@ -47,3 +48,11 @@ attribute [conformance_function] storeWrapped inferenceWrapped sessionWrapped p2
 end AccessClassification
 
 attribute [conformance_function] Identity.ClientDelegation.credentialForActor
+
+namespace Identity.DetachedGrantFence
+
+deriving instance Lean.ToJson for GrantOrigin, CompletionDecision
+
+attribute [conformance_function] decideGrant
+
+end Identity.DetachedGrantFence

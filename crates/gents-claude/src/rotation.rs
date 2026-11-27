@@ -133,6 +133,8 @@ pub struct Account {
 
 /// Eligibility tier of an account, best first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Tier {
     /// No live limit.
     Clear,
@@ -153,6 +155,19 @@ impl Tier {
     }
 }
 
+/// Summarised live-limit severity for one account and model family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub enum LiveLimitStatus {
+    /// No live binding limit.
+    Clear,
+    /// At least one live warning limit and no live rejection limit.
+    Warned,
+    /// At least one live rejection limit.
+    Rejected,
+}
+
 /// Rotation policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
@@ -162,12 +177,28 @@ pub struct Policy {
     pub allow_overage: bool,
 }
 
-/// Tier of `account` for `family` at `now`, or `None` when it cannot serve.
-pub fn tier(policy: &Policy, now: u64, family: Family, account: &Account) -> Option<Tier> {
-    if !account.enabled || now < account.blocked_until {
+/// Eligibility tier from an account's enabled flag, block flag, summarised
+/// live-limit severity, overage state and policy flag.
+pub fn tier_of_status(
+    enabled: bool,
+    blocked: bool,
+    limit_status: LiveLimitStatus,
+    overage: Overage,
+    allow_overage: bool,
+) -> Option<Tier> {
+    if !enabled || blocked {
         return None;
     }
-    let mut warned = false;
+    match limit_status {
+        LiveLimitStatus::Rejected => (allow_overage && overage.serves()).then_some(Tier::Overage),
+        LiveLimitStatus::Warned => Some(Tier::Warned),
+        LiveLimitStatus::Clear => Some(Tier::Clear),
+    }
+}
+
+/// Tier of `account` for `family` at `now`, or `None` when it cannot serve.
+pub fn tier(policy: &Policy, now: u64, family: Family, account: &Account) -> Option<Tier> {
+    let mut status = LiveLimitStatus::Clear;
     for limit in account
         .limits
         .iter()
@@ -175,12 +206,35 @@ pub fn tier(policy: &Policy, now: u64, family: Family, account: &Account) -> Opt
     {
         match limit.severity {
             Severity::Rejected => {
-                return (policy.allow_overage && account.overage.serves()).then_some(Tier::Overage);
+                status = LiveLimitStatus::Rejected;
+                break;
             }
-            Severity::Warning => warned = true,
+            Severity::Warning => status = LiveLimitStatus::Warned,
         }
     }
-    Some(if warned { Tier::Warned } else { Tier::Clear })
+    tier_of_status(
+        account.enabled,
+        now < account.blocked_until,
+        status,
+        account.overage,
+        policy.allow_overage,
+    )
+}
+
+/// Soonest time at or after `now` when an enabled `account` can serve `family`
+/// under `policy`. Paid overage serves through rejected subscription limits, so
+/// only `blocked_until` holds back an overage-capable account.
+pub fn account_reset_at(policy: &Policy, now: u64, family: Family, account: &Account) -> u64 {
+    let base = now.max(account.blocked_until);
+    if policy.allow_overage && account.overage.serves() {
+        return base;
+    }
+    account
+        .limits
+        .iter()
+        .filter(|l| l.severity == Severity::Rejected && now < l.reset_at && l.claim.binds(family))
+        .map(|l| l.reset_at)
+        .fold(base, u64::max)
 }
 
 /// The account for the next model call: the best tier, sticky on `current`,
@@ -269,6 +323,26 @@ mod conformance {
     fn overage_serves_matches_lean() {
         gents_lean_vocab::families::account_rotation_overage_serves::replay(|i| {
             Overage::serves(i.overage)
+        });
+    }
+
+    #[test]
+    fn tier_of_status_matches_lean() {
+        gents_lean_vocab::families::account_rotation_tier_of_status::replay(|i| {
+            tier_of_status(
+                i.enabled,
+                i.blocked,
+                i.limit_status,
+                i.overage,
+                i.allow_overage,
+            )
+        });
+    }
+
+    #[test]
+    fn tier_rank_matches_lean() {
+        gents_lean_vocab::families::account_rotation_tier_rank::replay(|i| {
+            u64::from(Tier::rank(i.tier))
         });
     }
 }

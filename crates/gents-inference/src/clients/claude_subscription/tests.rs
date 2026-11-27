@@ -554,4 +554,11 @@ mod pool_client {
         assert_eq!(choose(&cache, &ids, "s1").as_deref(), Some("id-a"));
         assert_eq!(choose(&cache, &ids, "s2").as_deref(), Some("id-b"));
     }
+
+    #[test]
+    fn mark_rotated_on_failure_matches_lean() {
+        gents_lean_vocab::families::account_rotation_mark_rotated_on_failure::replay(|i| {
+            mark_rotated_on_failure(i.rejected, i.reselection)
+        });
+    }
 }

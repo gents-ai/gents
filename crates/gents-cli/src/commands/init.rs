@@ -494,9 +494,13 @@ pub(crate) async fn init_home_with_core_packs(
     // Init publishes through this loopback endpoint as the client, so its
     // owner-staged changes are decided by the node's own route.
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let fence_route = owner_staged.clone();
     node_builder = node_builder.with_http(
         gents::defra_node::HttpConfig::with_listener(listener)?
-            .with_extra_routes(owner_staged.router()),
+            .with_extra_routes(owner_staged.router())
+            .with_router_transform(Arc::new(move |router| {
+                fence_route.wrap_relationship_fence(router)
+            })),
     );
     let node_arc = gents_store::local::backend_protection::build_configured(
         node_builder,

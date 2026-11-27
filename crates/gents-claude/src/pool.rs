@@ -14,10 +14,90 @@ use kovan_map::HopscotchMap;
 use rapidhash::fast::RandomState;
 
 use crate::ratelimit;
-use crate::rotation::{self, Account, Family, Limit, Overage, Policy, Severity};
+use crate::rotation::{self, Account, Family, Limit, Overage, Policy};
 
 /// Default bound on remembered sessions.
 pub const DEFAULT_SESSION_CAP: usize = 4096;
+
+/// How `AccountPool::choose` updates the round-robin cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub enum CursorAction {
+    /// Keep the cursor unchanged (session already had a current account in the list).
+    Keep,
+    /// Advance the cursor past the chosen index.
+    AdvancePastChosen,
+}
+
+/// Cursor update decision for `AccountPool::choose` (Lean: `AccountRotation.cursorAction`).
+pub fn cursor_action(has_current: bool) -> CursorAction {
+    if has_current {
+        CursorAction::Keep
+    } else {
+        CursorAction::AdvancePastChosen
+    }
+}
+
+/// Session map occupancy relative to its cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub enum CapStatus {
+    /// Cap is zero: stickiness is disabled and no session is retained.
+    Zero,
+    /// Strictly below the configured cap.
+    BelowCap,
+    /// At or above the configured cap.
+    AtOrAboveCap,
+}
+
+impl CapStatus {
+    /// Classify a session map's length against `cap`.
+    pub fn from_counts(len: usize, cap: usize) -> Self {
+        if cap == 0 {
+            Self::Zero
+        } else if len < cap {
+            Self::BelowCap
+        } else {
+            Self::AtOrAboveCap
+        }
+    }
+}
+
+/// How `AccountPool::choose` updates the session stickiness map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub enum SessionMapAction {
+    /// Leave the session map untouched.
+    Keep,
+    /// Insert or overwrite the session's entry.
+    Insert,
+    /// Clear the session map before inserting the new entry.
+    ClearAndInsert,
+    /// Clear the session map without inserting (cap is zero).
+    ClearOnly,
+}
+
+/// Session map update decision for `AccountPool::choose` (Lean: `AccountRotation.sessionMapAction`).
+pub fn session_map_action(switched: bool, recorded: bool, cap: CapStatus) -> SessionMapAction {
+    if !switched {
+        SessionMapAction::Keep
+    } else {
+        match cap {
+            CapStatus::Zero => SessionMapAction::ClearOnly,
+            CapStatus::AtOrAboveCap => {
+                if recorded {
+                    SessionMapAction::Insert
+                } else {
+                    SessionMapAction::ClearAndInsert
+                }
+            }
+            CapStatus::BelowCap => SessionMapAction::Insert,
+        }
+    }
+}
 
 /// The account a request goes to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,16 +195,29 @@ where
             self.cursor.load(Ordering::Relaxed),
         )?;
         let key = accounts.get(index)?.clone();
-        if current.is_none() {
-            self.cursor
-                .store(index.saturating_add(1), Ordering::Relaxed);
+        match cursor_action(current.is_some()) {
+            CursorAction::Keep => {}
+            CursorAction::AdvancePastChosen => {
+                self.cursor
+                    .store(index.saturating_add(1), Ordering::Relaxed);
+            }
         }
         let switched = current != Some(index);
-        if switched {
-            if recorded.is_none() && self.sessions.len() >= self.session_cap {
-                self.sessions.clear();
+        let cap = CapStatus::from_counts(self.sessions.len(), self.session_cap);
+        match session_map_action(switched, recorded.is_some(), cap) {
+            SessionMapAction::Keep => {}
+            SessionMapAction::Insert => {
+                self.sessions.insert(session.to_owned(), key.clone());
             }
-            self.sessions.insert(session.to_owned(), key.clone());
+            SessionMapAction::ClearAndInsert => {
+                self.sessions.clear();
+                self.sessions.insert(session.to_owned(), key.clone());
+            }
+            SessionMapAction::ClearOnly => {
+                if !self.sessions.is_empty() {
+                    self.sessions.clear();
+                }
+            }
         }
         Some(Choice {
             key,
@@ -167,18 +260,7 @@ where
             .map(|k| {
                 let mut a = self.snapshot(k);
                 a.enabled = true;
-                if rotation::tier(policy, now, family, &a).is_some() {
-                    return now;
-                }
-                a.limits
-                    .iter()
-                    .filter(|l| {
-                        l.severity == Severity::Rejected
-                            && now < l.reset_at
-                            && l.claim.binds(family)
-                    })
-                    .map(|l| l.reset_at)
-                    .fold(a.blocked_until, u64::max)
+                rotation::account_reset_at(policy, now, family, &a)
             })
             .min()
     }

@@ -1,5 +1,7 @@
 use super::*;
-use crate::rotation::Claim;
+use crate::rotation::{Claim, Severity};
+use gents_lean_vocab::families;
+use gents_lean_vocab::family::recode;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -294,4 +296,123 @@ fn random_sequences_match_policy() {
             ),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PoolOp {
+    Choose,
+    Observe,
+    Reject,
+    EarliestReset,
+    ForgetAccount,
+    ForgetSession,
+}
+
+#[test]
+fn cursor_action_matches_lean() {
+    families::account_rotation_cursor_action::replay(|i| cursor_action(i.has_current));
+}
+
+#[test]
+fn session_map_action_matches_lean() {
+    families::account_rotation_session_map_action::replay(|i| {
+        session_map_action(i.switched, i.recorded, i.cap)
+    });
+}
+
+#[test]
+fn generated_pool_trace_cases_match_runtime_pool() {
+    use families::account_rotation_contracts_pool_trace::{PoolChoice, PoolStepResult};
+
+    families::account_rotation_contracts_pool_trace::replay::<
+        Claim,
+        Family,
+        Overage,
+        PoolOp,
+        Severity,
+    >(|i| {
+        let pool = AccountPool::<String>::new(i.session_cap as usize);
+        i.steps
+            .iter()
+            .map(|step| match step.op {
+                PoolOp::Choose => {
+                    let policy: Policy = recode(&step.policy);
+                    let choice = pool
+                        .choose(
+                            &step.accounts,
+                            &step.session,
+                            step.family,
+                            step.now,
+                            &policy,
+                        )
+                        .map(|c| PoolChoice {
+                            key: c.key,
+                            index: c.index as u64,
+                            switched: c.switched,
+                        });
+                    PoolStepResult {
+                        choice,
+                        earliest_reset: None,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: pool.sessions.get(&step.session),
+                    }
+                }
+                PoolOp::Observe => {
+                    let reported: Vec<Limit> = recode(&step.reported);
+                    pool.observe(&step.account, step.family, &reported, step.overage);
+                    PoolStepResult {
+                        choice: None,
+                        earliest_reset: None,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: None,
+                    }
+                }
+                PoolOp::Reject => {
+                    pool.reject(&step.account, step.now, step.reset_at);
+                    PoolStepResult {
+                        choice: None,
+                        earliest_reset: None,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: None,
+                    }
+                }
+                PoolOp::EarliestReset => {
+                    let policy: Policy = recode(&step.policy);
+                    let earliest_reset =
+                        pool.earliest_reset(&step.accounts, step.family, step.now, &policy);
+                    PoolStepResult {
+                        choice: None,
+                        earliest_reset,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: None,
+                    }
+                }
+                PoolOp::ForgetAccount => {
+                    pool.forget_account(&step.account);
+                    PoolStepResult {
+                        choice: None,
+                        earliest_reset: None,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: None,
+                    }
+                }
+                PoolOp::ForgetSession => {
+                    pool.forget_session(&step.session);
+                    PoolStepResult {
+                        choice: None,
+                        earliest_reset: None,
+                        cursor: pool.cursor.load(Ordering::Relaxed) as u64,
+                        session_count: pool.sessions.len() as u64,
+                        recorded_session_account: pool.sessions.get(&step.session),
+                    }
+                }
+            })
+            .collect()
+    });
 }
