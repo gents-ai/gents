@@ -1,6 +1,6 @@
 ---- MODULE SessionPatchFence ----
 \* lean: ClientDataPublication.reach
-\* crates: gents-observe
+\* crates: gents-observe, gents-desktop-bridge
 \* The fence of a selected session's patch (`ClientRuntime::refresh_local_request`,
 \* `observe/projection_store.rs`) beside the observer's session scope reloads.
 \* One node's store.
