@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::Instant;
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
+use rapidhash::{HashMapExt, RapidHashMap};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -14,8 +15,24 @@ use super::{Catalog, SchemaError, FILE_COLLECTION_POLICIES};
 
 type Result<T, E = SchemaError> = std::result::Result<T, E>;
 
-/// Process-wide lock: desktop and runtime paths can race within one process.
-static ENSURE_LOCK: Mutex<()> = Mutex::const_new(());
+/// Per-node lock: desktop and runtime paths can race on the same node within
+/// one process, while distinct nodes ensure their schemas independently.
+static ENSURE_LOCKS: LazyLock<std::sync::Mutex<RapidHashMap<usize, Weak<Mutex<()>>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(RapidHashMap::new()));
+
+fn node_ensure_lock(node: &EmbeddedNode) -> Arc<Mutex<()>> {
+    let key = (node as *const EmbeddedNode) as usize;
+    let mut table = ENSURE_LOCKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(existing) = table.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let created = Arc::new(Mutex::new(()));
+    table.insert(key, Arc::downgrade(&created));
+    created
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeSchemaError {
@@ -49,7 +66,8 @@ pub async fn ensure_runtime(node: &EmbeddedNode) -> Result<()> {
 /// home `node` serves. Every refusal is read-only and precedes the first
 /// write.
 pub async fn ensure(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
-    let _guard = ENSURE_LOCK.lock().await;
+    let lock = node_ensure_lock(node);
+    let _guard = lock.lock().await;
     let started = Instant::now();
     let ids = crate::local::document_acp::node_policy_ids(node);
     validate_bindings(node, catalog, ids).await?;
