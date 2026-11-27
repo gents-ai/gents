@@ -706,14 +706,14 @@ async fn start(
         let server = answering_server(home, &graphql)?;
         let observed = observe_port(&server, read_initialized_did(home).await.as_deref()).await;
         let outcome = match hand_started(server.http_port, observed) {
-            Some(blocker) => RepairOutcome::Blocked(service_serving_another(home).await.map_or(
-                blocker,
-                |serving| Blocker::ServiceServesAnotherHome {
+            Some(blocker) => RepairOutcome::Blocked(match service_serving_another(home).await {
+                Some(serving) => Blocker::ServiceServesAnotherHome {
                     home: home.to_path_buf(),
                     serving,
-                    free_port: crate::node_port::free_port_after(server.http_port),
+                    free_port: free_port_beside(&server).await,
                 },
-            )),
+                None => blocker,
+            }),
             None => RepairOutcome::Answering(graphql),
         };
         return Ok(repairs.report(outcome));
@@ -752,12 +752,12 @@ async fn start(
     let (running, runs) = match sample {
         Ok(Ok(sample)) => sample,
         Ok(Err(serving)) => {
-            let port = ServerConfig::for_home(home.to_path_buf())?.http_port;
+            let server = ServerConfig::for_home(home.to_path_buf())?;
             return Ok(
                 repairs.report(RepairOutcome::Blocked(Blocker::ServiceServesAnotherHome {
                     home: home.to_path_buf(),
                     serving,
-                    free_port: crate::node_port::free_port_after(port),
+                    free_port: free_port_beside(&server).await,
                 })),
             );
         }
@@ -823,6 +823,15 @@ async fn service_serving_another(home: &Path) -> Option<PathBuf> {
     .await
     .ok()
     .flatten()
+}
+
+/// A free port after the server's, for a node started by hand beside it.
+async fn free_port_beside(server: &ServerConfig) -> Option<u16> {
+    let (addr, taken) = (server.http_addr, server.http_port);
+    tokio::task::spawn_blocking(move || crate::node_port::free_port_after(addr, taken))
+        .await
+        .ok()
+        .flatten()
 }
 
 fn answering_server(home: &Path, graphql: &str) -> Result<ServerConfig> {

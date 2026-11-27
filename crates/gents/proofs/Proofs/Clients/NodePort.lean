@@ -18,10 +18,20 @@ inductive Holder where
   | anotherApp
   deriving DecidableEq, Repr
 
+/-- Where the port in the home's `network.json` came from. -/
+inductive PortSource where
+  /-- No port is recorded; the home uses the default. -/
+  | unset
+  /-- Gents picked it because the port before it was taken. -/
+  | picked
+  /-- A person set it. -/
+  | chosen
+  deriving DecidableEq, Repr
+
 inductive Settlement where
   /-- Listen where the home already would. -/
   | keep
-  /-- Record a free port in `network.json` and listen there. -/
+  /-- Record a free port in `network.json` as picked and listen there. -/
   | move
   /-- Refuse, naming the other node and how to stop or move it. -/
   | blockedByNode
@@ -29,40 +39,53 @@ inductive Settlement where
   | blockedByApp
   deriving DecidableEq, Repr
 
-/-- Where a home's listener settles before its service is installed. `fresh`
-is a home that has never served: it has no `runtime.json`, which only a
-serving runtime writes.
+/-- Where a home's listener settles before its service is installed. `served`
+is a home a runtime has served at least once: it has the served marker the
+server writes with `runtime.json`, which `gents reset` leaves in place, or
+`runtime.json` itself.
 
-Only a fresh home with no port recorded moves. Nothing has saved its address
-yet, and clients learn the port it serves on from the `runtime.json` the
-server writes once it listens. A home that has served, or whose port someone
-chose, keeps it: saved connections and the person's own configuration name
-that port, so the holder is reported instead. This home's own runtime is never
-moved away from or launched over.
+Only a home that has never served moves, and only off a port nobody chose.
+Nothing has saved its address yet, and clients learn the port it serves on
+from the `runtime.json` the server writes once it listens. A port Gents
+picked is picked again while the home has never served, so a pick that was
+taken before the first start does not strand the home. A home that has
+served, or whose port a person chose, keeps it: saved connections and the
+person's own configuration name that port, so the holder is reported
+instead. This home's own runtime is never moved away from or launched over.
 
-External premise: a port observed free can be taken before the server binds
-it; the server then fails closed and startup reports the new holder. -/
-def settle (recorded fresh : Bool) : Holder → Settlement
+External premise: a candidate is free only when binding it on the home's
+address without address reuse succeeds and nothing accepts a connection on
+it there or on either loopback address. On macOS a bind with address reuse,
+as the standard library makes, succeeds beside another program's wildcard
+listener and takes its loopback traffic. A port observed free can still be
+taken before the server listens; the server refuses to start beside a
+listener that answers on its address, and startup reports the new holder. -/
+def settle (port : PortSource) (served : Bool) : Holder → Settlement
   | .nobody | .thisHome => .keep
-  | .anotherNode => if fresh && !recorded then .move else .blockedByNode
-  | .anotherApp => if fresh && !recorded then .move else .blockedByApp
+  | .anotherNode => if served || port == .chosen then .blockedByNode else .move
+  | .anotherApp => if served || port == .chosen then .blockedByApp else .move
 
-theorem a_recorded_port_never_moves (fresh : Bool) (holder : Holder) :
-    settle true fresh holder ≠ .move := by
-  cases holder <;> cases fresh <;> decide
+theorem a_chosen_port_never_moves (served : Bool) (holder : Holder) :
+    settle .chosen served holder ≠ .move := by
+  cases holder <;> cases served <;> decide
 
-theorem a_home_that_has_served_never_moves (recorded : Bool) (holder : Holder) :
-    settle recorded false holder ≠ .move := by
-  cases holder <;> cases recorded <;> decide
+theorem a_home_that_has_served_never_moves (port : PortSource) (holder : Holder) :
+    settle port true holder ≠ .move := by
+  cases holder <;> cases port <;> decide
 
-theorem this_homes_runtime_is_kept (recorded fresh : Bool) :
-    settle recorded fresh .thisHome = .keep := by
-  cases recorded <;> cases fresh <;> rfl
+theorem this_homes_runtime_is_kept (port : PortSource) (served : Bool) :
+    settle port served .thisHome = .keep := by
+  cases port <;> cases served <;> rfl
 
-theorem moves_exactly_when_a_new_homes_port_is_held (recorded fresh : Bool) (holder : Holder) :
-    settle recorded fresh holder = .move ↔
-      fresh = true ∧ recorded = false ∧ (holder = .anotherNode ∨ holder = .anotherApp) := by
-  cases holder <;> cases recorded <;> cases fresh <;> decide
+theorem a_picked_port_is_picked_again_before_the_first_serve :
+    settle .picked false .anotherApp = .move ∧ settle .picked false .anotherNode = .move := by
+  decide
+
+theorem moves_exactly_when_a_new_homes_unchosen_port_is_held
+    (port : PortSource) (served : Bool) (holder : Holder) :
+    settle port served holder = .move ↔
+      served = false ∧ port ≠ .chosen ∧ (holder = .anotherNode ∨ holder = .anotherApp) := by
+  cases holder <;> cases port <;> cases served <;> decide
 
 def maxPort : Nat := 65535
 

@@ -607,7 +607,7 @@ where
         if managed_selection {
             return Ok(());
         }
-        settle_home_port(&node_home, false, user_status_signer(state).await.as_ref())
+        settle_home_port(&node_home, user_status_signer(state).await.as_ref())
             .await
             .map_err(|mut error| {
                 error.message = format!("Your node was stopped; {}", error.message);

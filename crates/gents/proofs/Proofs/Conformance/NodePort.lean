@@ -3,7 +3,7 @@ import Proofs.Conformance.Family
 
 namespace NodePort
 
-deriving instance Lean.ToJson for Holder, Settlement
+deriving instance Lean.ToJson for Holder, PortSource, Settlement
 
 attribute [conformance_function] settle
 

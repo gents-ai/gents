@@ -1,5 +1,6 @@
 use super::*;
 use gents_service::network_settings::NetworkSettings;
+use gents_service::node_port::PortSource;
 use gents_service::server_host::ServerConfig;
 use tokio::io::AsyncWriteExt as _;
 
@@ -33,9 +34,14 @@ async fn a_new_home_moves_off_a_port_another_app_holds() {
     let home = tempfile::tempdir().unwrap();
     let (app, taken) = other_app().await;
 
-    settle_port_at(&listening_on(home.path(), taken), false, true, None)
-        .await
-        .unwrap();
+    settle_port_at(
+        &listening_on(home.path(), taken),
+        PortSource::Unset,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
 
     let recorded = NetworkSettings::read(home.path()).unwrap().http_port;
     assert!(recorded.is_some_and(|port| port != taken), "{recorded:?}");
@@ -47,9 +53,14 @@ async fn a_home_that_has_served_keeps_its_port_and_names_the_holder() {
     let home = tempfile::tempdir().unwrap();
     let (app, taken) = other_app().await;
 
-    let error = settle_port_at(&listening_on(home.path(), taken), false, false, None)
-        .await
-        .expect_err("a home that has served is not moved");
+    let error = settle_port_at(
+        &listening_on(home.path(), taken),
+        PortSource::Unset,
+        true,
+        None,
+    )
+    .await
+    .expect_err("a home that has served is not moved");
 
     assert!(
         error.message.contains("is in use by another app"),
@@ -73,9 +84,14 @@ async fn a_chosen_port_is_kept_and_names_the_holder() {
     };
     chosen.persist(home.path()).unwrap();
 
-    let error = settle_port_at(&listening_on(home.path(), taken), true, true, None)
-        .await
-        .expect_err("a port someone chose is not moved");
+    let error = settle_port_at(
+        &listening_on(home.path(), taken),
+        PortSource::Chosen,
+        false,
+        None,
+    )
+    .await
+    .expect_err("a port someone chose is not moved");
 
     assert!(
         error.message.contains(&taken.to_string()),
@@ -83,5 +99,34 @@ async fn a_chosen_port_is_kept_and_names_the_holder() {
         error.message
     );
     assert_eq!(NetworkSettings::read(home.path()).unwrap(), chosen);
+    app.abort();
+}
+
+#[tokio::test]
+async fn a_picked_port_taken_before_the_first_serve_is_picked_again() {
+    let home = tempfile::tempdir().unwrap();
+    let (app, taken) = other_app().await;
+    NetworkSettings {
+        http_port: Some(taken),
+        http_port_picked: true,
+        ..NetworkSettings::default()
+    }
+    .persist(home.path())
+    .unwrap();
+
+    settle_port_at(
+        &listening_on(home.path(), taken),
+        PortSource::Picked,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let settings = NetworkSettings::read(home.path()).unwrap();
+    assert!(
+        settings.http_port.is_some_and(|port| port != taken) && settings.http_port_picked,
+        "{settings:?}"
+    );
     app.abort();
 }

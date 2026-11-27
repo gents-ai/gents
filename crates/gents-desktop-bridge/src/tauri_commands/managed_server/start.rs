@@ -171,11 +171,8 @@ where
             })
             .await?;
         }
-        let fresh = !node_home
-            .join(gents_store::local::home::RUNTIME_STATE_FILE_NAME)
-            .exists();
         if gents_service::server_host::initialized_home(&node_home) {
-            settle_home_port(&node_home, fresh, user_status_signer(state).await.as_ref()).await?;
+            settle_home_port(&node_home, user_status_signer(state).await.as_ref()).await?;
         }
         gents_server::server_host::ensure_standard_home(
             tauri::async_runtime::handle().inner(),
@@ -203,7 +200,7 @@ where
             },
         )
         .await?;
-        settle_home_port(&node_home, fresh, user_status_signer(state).await.as_ref()).await?;
+        settle_home_port(&node_home, user_status_signer(state).await.as_ref()).await?;
         run_native(launchable_native_service(app, state)?, |service| {
             service_action(&service, install_action())
         })

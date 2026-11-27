@@ -242,24 +242,24 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
 }
 
 /// Where the home listens before its service is installed (Lean
-/// `NodePort.settle`). `fresh` is a home that has never served.
+/// `NodePort.settle`).
 pub(super) async fn settle_home_port(
     node_home: &Path,
-    fresh: bool,
     user: Option<&ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
     let unreadable = |error: String| BridgeError::new(BridgeErrorCode::InvalidArgument, error);
     let config = gents_service::server_host::ServerConfig::for_home(node_home.to_path_buf())
         .map_err(|error| unreadable(format!("{error:#}")))?;
-    let recorded = gents_service::node_port::port_recorded(node_home)
+    let port = gents_service::node_port::port_source(node_home)
         .map_err(|error| unreadable(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
-    settle_port_at(&config, recorded, fresh, user).await
+    let served = gents_service::home_state::has_served(node_home);
+    settle_port_at(&config, port, served, user).await
 }
 
 pub(super) async fn settle_port_at(
     config: &gents_service::server_host::ServerConfig,
-    recorded: bool,
-    fresh: bool,
+    port: gents_service::node_port::PortSource,
+    served: bool,
     user: Option<&ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
     use gents_service::node_port::{move_http_port, settle, PortOccupant, PortSettlement};
@@ -281,20 +281,24 @@ pub(super) async fn settle_port_at(
             (PortOccupant::AnotherApp, Some(occupied_port_message(port)))
         }
     };
-    match settle(recorded, fresh, occupant) {
+    match settle(port, served, occupant) {
         PortSettlement::Keep => Ok(()),
         PortSettlement::Move => {
-            let port = move_http_port(&config.home, config.http_port).map_err(|error| {
-                BridgeError::new(
-                    BridgeErrorCode::InvalidArgument,
-                    gents_protocol::error_chain::ErrorChain(&error).to_string(),
-                )
-            })?;
+            let server = config.clone();
+            let port = tokio::task::spawn_blocking(move || move_http_port(&server))
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?
+                .map_err(|error| {
+                    BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+                    )
+                })?;
             tracing::info!(
                 target: "gents_desktop::managed_server",
                 taken = config.http_port,
                 port,
-                "the default port is in use; the new node listens on another port"
+                "the port is in use; the new node listens on another port"
             );
             Ok(())
         }

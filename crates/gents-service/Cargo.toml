@@ -33,6 +33,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 semver = "1"
+socket2 = "0.6"
 sha2.workspace = true
 tempfile = "3"
 tokio.workspace = true

@@ -428,6 +428,16 @@ async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
         )
     })?;
     drop(listener);
+    let (ip, port) = (addr.ip(), addr.port());
+    let holder =
+        tokio::task::spawn_blocking(move || gents_service::node_port::listener_answering(ip, port))
+            .await
+            .context("checking for another listener on the HTTP port")?;
+    if let Some(holder) = holder {
+        anyhow::bail!(
+            "embedded HTTP listener cannot use {addr}: another program accepts connections on {holder}; stop it or pass --http-port"
+        );
+    }
     Ok(())
 }
 
@@ -1962,6 +1972,25 @@ mod shim_host_tests {
                 },
             );
         }
+    }
+
+    /// On macOS the loopback bind alone succeeds beside a wildcard listener.
+    #[tokio::test]
+    async fn preflight_refuses_a_port_another_program_holds_on_a_wildcard_address() {
+        let listener = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, 0))
+            .expect("bind wildcard listener");
+        let port = listener.local_addr().expect("listener address").port();
+
+        let error = preflight_embedded_http_bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port))
+            .await
+            .expect_err("a port another program holds must not be shared");
+
+        assert!(
+            error
+                .to_string()
+                .contains("another program accepts connections"),
+            "unexpected diagnostic: {error:#}"
+        );
     }
 
     #[tokio::test]
