@@ -188,6 +188,7 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         p2p_read: view.p2p_read,
         p2p_mutate: view.p2p_mutate,
         session_history: view.session_history,
+        memory: false,
         context_budget: view.context_budget,
         session_messages: view.session_messages,
         skills: view.skills,

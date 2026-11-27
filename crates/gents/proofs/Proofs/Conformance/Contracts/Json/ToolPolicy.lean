@@ -254,6 +254,7 @@ def PolicyView.surface (v : PolicyView) : ToolPolicy.Surface :=
   , p2pRead := v.p2pRead
   , p2pMutate := v.p2pMutate
   , sessionHistory := v.sessionHistory
+  , memory := false
   , contextBudget := v.contextBudget
   , sessionMessages := v.sessionMessages
   , skills := v.skills

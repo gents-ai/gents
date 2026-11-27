@@ -22,6 +22,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , p2pRead := a.p2pRead && b.p2pRead
   , p2pMutate := a.p2pMutate && b.p2pMutate
   , sessionHistory := a.sessionHistory && b.sessionHistory
+  , memory := a.memory && b.memory
   , contextBudget := a.contextBudget && b.contextBudget
   , sessionMessages := a.sessionMessages && b.sessionMessages
   , skills := a.skills && b.skills

@@ -159,9 +159,13 @@ node-wide, so document ACP decides which documents that reaches: the native
 owner, which is the creating Agent, holds delete on its own Goal rows
 (`goal_creator_deletes_its_goal`), while another session Agent does not. The
 goal-create source is the only grant, so disabling goal creation withdraws it.
-P2P pairing mutations likewise carry `delete-document` (decision): revoking a pairing deletes the Agent-owned overlay, and document
-ACP limits that to the overlay's native owner, so another Agent's overlay is
-unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
+The memory tool carries `delete-document` (decision): `forget` deletes a fact
+the Agent owns, and document ACP narrows that to rows whose native owner is the
+calling Agent, so it cannot reach another Agent's memory. Disabling the memory
+tool withdraws the grant. P2P pairing mutations likewise carry
+`delete-document` (decision): revoking a pairing deletes the Agent-owned
+overlay, and document ACP limits that to the overlay's native owner, so another
+Agent's overlay is unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
 permission that source adds (`p2p_pairing_grants_only_delete_document`). There
 is no per-collection pairing grant, so an Agent holding P2P mutation may pair
 any collection `ScopeTemplates.decideAppCollection` admits. Withdrawing the
@@ -178,6 +182,7 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
   emit "datastore-query" (datastoreScopeEnabled surface.queryTools) ["get-collection"] ++
   emit "datastore-write" (datastoreScopeEnabled surface.writeTools) ["get-collection"] ++
   emit "session-history" surface.sessionHistory ["read-document"] ++
+  emit "memory" surface.memory ["delete-document"] ++
   emit "goal" surface.goalTools ["read-document", "update-document"] ++
   emit "goal-create" (surface.goalTools && surface.goalCreate)
     ["read-document", "update-document", "add-dac-relation", "delete-document"] ++
