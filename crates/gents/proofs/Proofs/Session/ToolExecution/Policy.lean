@@ -168,10 +168,12 @@ structure RetryCase where
   disposition : RetryDisposition
   deriving Repr
 
-/-- The MCP pool retries a failed `list_tools` once on a fresh connection,
-whatever the failure, because listing is a safe read. It carries no idempotency
-evidence for a tool call, so it never retries `call_tool`, and no other tool
-operation is retried by the tool layer. -/
+/-- Default operation-level retry policy when no per-tool retry metadata is
+supplied. The MCP pool retries a failed `list_tools` once on a fresh connection
+because listing is a safe read. Without per-tool retry-safe metadata,
+`call_tool` never retries (`ToolExecution.McpRetry.absent_metadata_never_retries`),
+and no other tool operation is retried by the tool layer. Metadata-gated MCP
+`call_tool` retries are decided by `ToolExecution.McpRetry.decideMcpCallRetry`. -/
 def retryDisposition : ToolOperation → RetryDisposition
   | .mcpListTools => .retrySafeRead
   | _ => .doNotRetry

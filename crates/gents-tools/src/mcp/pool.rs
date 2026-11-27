@@ -18,11 +18,23 @@ mod auth_refusal;
 use gents_inference::trace_context::current_trace_context_headers;
 
 mod resume;
+mod retry;
 
 pub use auth_refusal::{auth_refusal_of, McpAuthRefusal, McpHandshakeRefused};
 
 pub use resume::McpResumeStats;
 use resume::SessionResumePolicy;
+use retry::{decide_mcp_call_retry, McpCallFailure};
+pub use retry::{
+    McpCallFailureClass, McpCallRetryDecision, McpCallRetryPolicy, McpToolRetryMetadata,
+    DEFAULT_MCP_CALL_MAX_RETRIES, MAX_ALLOWED_MCP_CALL_RETRIES,
+};
+
+pub struct McpCallOptions<'a> {
+    pub node_did: Option<&'a str>,
+    pub connect_timeout: std::time::Duration,
+    pub retry_policy: McpCallRetryPolicy,
+}
 
 pub const NODE_DID_HEADER: &str = "x-node-did";
 
@@ -39,7 +51,9 @@ const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(MCP_LIST_TOOLS_TIMEOUT_SECS);
 
 type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
-type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
+type CallToolFuture = Pin<
+    Box<dyn Future<Output = std::result::Result<CallToolResult, McpCallFailure>> + Send + 'static>,
+>;
 type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
 type ListToolsFn = dyn Fn() -> ListToolsFuture + Send + Sync;
 type CallToolFn = dyn Fn(CallToolRequestParams) -> CallToolFuture + Send + Sync;
@@ -109,7 +123,7 @@ where
                 c.peer()
                     .call_tool(params)
                     .await
-                    .map_err(|e| anyhow::anyhow!("call_tool: {e}"))
+                    .map_err(McpCallFailure::from_service_error)
             })
         }),
     }
@@ -405,7 +419,14 @@ impl McpPool {
                         }),
                         call_tool_fn: Box::new(move |params| {
                             let call = Arc::clone(&call);
-                            Box::pin(async move { call(params).await })
+                            Box::pin(async move {
+                                call(params).await.map_err(|error| {
+                                    McpCallFailure::new(
+                                        McpCallFailureClass::TransportDropped,
+                                        format!("{error:#}"),
+                                    )
+                                })
+                            })
                         }),
                     })
                 }
@@ -496,7 +517,8 @@ impl McpPool {
         .await
     }
 
-    /// Dispatch failures are not retried because calls can repeat side effects without idempotency evidence.
+    /// Dispatch failures are not retried unless the caller supplies retry-safe
+    /// tool metadata through `call_tool_with_options`.
     pub async fn call_tool(
         &self,
         service_id: &str,
@@ -536,33 +558,103 @@ impl McpPool {
         node_did: Option<&str>,
         connect_timeout: std::time::Duration,
     ) -> Result<CallToolResult> {
+        self.call_tool_with_options(
+            service_id,
+            endpoint,
+            tool_name,
+            arguments,
+            McpCallOptions {
+                node_did,
+                connect_timeout,
+                retry_policy: McpCallRetryPolicy::default(),
+            },
+        )
+        .await
+    }
+
+    pub async fn call_tool_with_options(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        options: McpCallOptions<'_>,
+    ) -> Result<CallToolResult> {
         let argument_count = argument_count(&arguments);
+        let params = build_call_tool_params(tool_name, arguments);
         async {
-            let connection = self
-                .get_or_connect(
-                    service_id,
-                    endpoint,
-                    node_did,
-                    ParkAdmission::Normal,
-                    connect_timeout,
-                )
-                .await?;
-            let result = self
-                .call_tool_once(&connection, build_call_tool_params(tool_name, arguments))
-                .await;
-            if let Ok(result) = &result {
-                tracing::Span::current()
-                    .record("mcp_result_is_error", result.is_error.unwrap_or(false));
+            let mut retries_used = 0usize;
+            let mut admission = ParkAdmission::Normal;
+            loop {
+                let connection = match self
+                    .get_or_connect(
+                        service_id,
+                        endpoint,
+                        options.node_did,
+                        admission,
+                        options.connect_timeout,
+                    )
+                    .await
+                {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        let failure_class = if auth_refusal_of(&error).is_some() {
+                            McpCallFailureClass::AuthRefused
+                        } else {
+                            McpCallFailureClass::ConnectFailed
+                        };
+                        debug_assert_eq!(
+                            decide_mcp_call_retry(
+                                options.retry_policy,
+                                failure_class,
+                                retries_used
+                            ),
+                            McpCallRetryDecision::FailFinal
+                        );
+                        return Err(error);
+                    }
+                };
+                match self.call_tool_once(&connection, params.clone()).await {
+                    Ok(result) => {
+                        tracing::Span::current()
+                            .record("mcp_result_is_error", result.is_error.unwrap_or(false));
+                        return Ok(result);
+                    }
+                    Err(failure) => {
+                        match decide_mcp_call_retry(
+                            options.retry_policy,
+                            failure.class,
+                            retries_used,
+                        ) {
+                            McpCallRetryDecision::EvictAndRetry => {
+                                retries_used += 1;
+                                tracing::Span::current().record("retries", retries_used as i64);
+                                tracing::warn!(
+                                    service_id = %service_id,
+                                    tool_name = %tool_name,
+                                    retries_used,
+                                    error = %failure,
+                                    "MCP call_tool hit a transient transport failure on a retry-safe tool, evicting connection and retrying"
+                                );
+                                self.remove(service_id).await;
+                                admission = ParkAdmission::SafeReadRetry;
+                            }
+                            McpCallRetryDecision::FailFinal => {
+                                return Err(anyhow::Error::new(failure));
+                            }
+                        }
+                    }
+                }
             }
-            result
         }
         .instrument(tracing::info_span!(
             "mcp.call_tool",
             service_id = %service_id,
             endpoint = %endpoint,
             tool_name = %tool_name,
-            node_did_bound = node_did.is_some(),
+            node_did_bound = options.node_did.is_some(),
             argument_count = argument_count as i64,
+            retries = 0i64,
             mcp_result_is_error = tracing::field::Empty,
         ))
         .await
@@ -595,7 +687,7 @@ impl McpPool {
         &self,
         connection: &McpConnection,
         params: CallToolRequestParams,
-    ) -> Result<CallToolResult> {
+    ) -> std::result::Result<CallToolResult, McpCallFailure> {
         (connection.call_tool_fn)(params).await
     }
 
