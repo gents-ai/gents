@@ -624,7 +624,7 @@ mod tests {
         (start, (row, column + "beside them.".len() as u16 - 1))
     }
 
-    const REPLY: &str = "Moving them under `gents auth`, one subcommand per provider,\n and folding the probes in beside them.";
+    const REPLY: &str = "Moving them under gents auth, one subcommand per provider,\n and folding the probes in beside them.";
 
     #[test]
     fn a_drag_across_rows_copies_their_text() {

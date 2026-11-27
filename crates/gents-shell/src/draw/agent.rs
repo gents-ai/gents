@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::input::TAB;
+use crate::app::markdown::Marks;
 use crate::app::selection::Selection;
 use crate::app::transcript::Tab;
 use crate::app::{App, Mode, Pane};
@@ -41,7 +42,7 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
         let shown = app.conversation_rows(rows.width);
-        chat(&shown, tab.scroll, rows, buf);
+        chat(&shown, &tab.row_marks(rows.width), tab.scroll, rows, buf);
         if let Some(selection) = app.selection {
             selected(selection, shown.len(), tab.scroll, rows, buf);
         }
@@ -159,13 +160,25 @@ pub fn first_line(total: usize, height: u16, scroll: usize) -> usize {
     total.saturating_sub(usize::from(height) + scroll)
 }
 
-/// A conversation's rows, `scroll` rows up from its end, as the tab and the sidebar draw them.
-pub fn chat(rows: &[(String, Tone)], scroll: usize, area: Rect, buf: &mut Buffer) {
+/// A conversation's rows, `scroll` rows up from its end, as the tab and the sidebar draw them,
+/// each row styled by its `marks`; rows past them draw plain.
+pub(crate) fn chat(
+    rows: &[(String, Tone)],
+    marks: &[Marks],
+    scroll: usize,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let edges = bubble_edges(rows);
     let first = first_line(rows.len(), area.height, scroll);
     let shown = rows[first..].iter().zip(&edges[first..]);
-    for (((text, tone), edge), y) in shown.zip(area.top()..area.bottom()) {
+    for (at, (((text, tone), edge), y)) in (first..).zip(shown.zip(area.top()..area.bottom())) {
         draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
+        for (cells, look) in marks.get(at).into_iter().flatten() {
+            let width = cells.end.saturating_sub(cells.start);
+            let cells = Rect::new(area.x + cells.start as u16, y, width as u16, 1);
+            buf.set_style(cells.intersection(area), theme::look(*look));
+        }
         if *tone == Tone::You {
             let left = edge.saturating_sub(1) as u16;
             let block = Rect::new(area.x + left, y, area.width - left, 1);
@@ -370,11 +383,13 @@ fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::markdown::Look;
     use crate::app::transcript::{sample_chat, ChatLine, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::Tone;
     use crate::source::{Agent, Update};
     use crate::testing::{buffer, find, press, screen, with_right_pane};
+    use ratatui::style::Modifier;
 
     fn no_logo(app: &App) -> bool {
         buffer(app).content().iter().all(|c| c.bg != theme::LOGO)
@@ -508,7 +523,6 @@ mod tests {
         use ratatui::crossterm::event::{
             Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
         };
-        use ratatui::style::Modifier;
         let mut app = chat_app();
         let s = screen(&app);
         let (row, start) = find(&s, "Moving them").expect("the reply");
@@ -703,6 +717,111 @@ mod tests {
         }
         let drawn = buf.content().iter().filter(|c| c.symbol().starts_with('✔'));
         assert_eq!(drawn.count(), 60);
+    }
+
+    fn tab_with(lines: &[(&str, Tone)]) -> Tab {
+        let mut tab = Tab::new_session();
+        tab.lines = lines
+            .iter()
+            .map(|(text, tone)| ChatLine {
+                text: text.to_string(),
+                tone: *tone,
+                item: None,
+                change: None,
+                under: None,
+            })
+            .collect();
+        tab
+    }
+
+    fn bold() -> Look {
+        Look {
+            modifier: Modifier::BOLD,
+            code: false,
+        }
+    }
+
+    fn code() -> Look {
+        Look {
+            modifier: Modifier::empty(),
+            code: true,
+        }
+    }
+
+    #[test]
+    fn a_reply_row_marks_its_styled_columns() {
+        let tab = tab_with(&[("**bold** and `code`", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["bold and code"]);
+        assert_eq!(tab.row_marks(80), [vec![(0..4, bold()), (9..13, code())]]);
+    }
+
+    #[test]
+    fn a_styled_span_keeps_its_style_across_a_wrap() {
+        let tab = tab_with(&[("aaaa **bb cc**", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 7), ["aaaa bb", "cc"]);
+        assert_eq!(
+            tab.row_marks(7),
+            [vec![(5..7, bold())], vec![(0..2, bold())]]
+        );
+    }
+
+    #[test]
+    fn styles_land_on_columns_not_bytes() {
+        let tab = tab_with(&[("é😀 **x**", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["é😀 x"]);
+        assert_eq!(tab.row_marks(80), [vec![(4..5, bold())]]);
+    }
+
+    #[test]
+    fn only_replies_read_markdown() {
+        let tab = tab_with(&[("**hi**", Tone::You), ("**x**", Tone::Plain)]);
+        let rows = rows_at(&tab, 80);
+        assert_eq!(
+            (rows[0].trim_start(), rows[1].as_str()),
+            ("**hi**", "**x**")
+        );
+        assert!(tab.row_marks(80).iter().all(Vec::is_empty));
+    }
+
+    fn reply_app(text: &str) -> App {
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        app.tabs[0].lines = tab_with(&[(text, Tone::Reply)]).lines;
+        app
+    }
+
+    #[test]
+    fn a_reply_draws_its_markdown_styled() {
+        let app = reply_app("**Fixed** the `wrap()`");
+        let s = screen(&app);
+        let (row, column) = find(&s, "Fixed the wrap()").expect("the reply");
+        assert_eq!(find(&s, "**"), None);
+        let buf = buffer(&app);
+        let bold = |x: u16| buf[(x, row)].modifier.contains(Modifier::BOLD);
+        assert!(bold(column) && bold(column + 4) && !bold(column + 6));
+        assert_eq!(buf[(column + 10, row)].fg, theme::ACCENT);
+        assert_ne!(buf[(column + 6, row)].fg, theme::ACCENT);
+    }
+
+    #[test]
+    fn a_selection_shows_over_styled_text() {
+        use ratatui::crossterm::event::{
+            Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = reply_app("**Fixed** the `wrap()`");
+        let (row, column) = find(&screen(&app), "Fixed").expect("the reply");
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), column),
+            (MouseEventKind::Drag(MouseButton::Left), column + 4),
+        ] {
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        }
+        let cell = buffer(&app)[(column, row)].modifier;
+        assert!(cell.contains(Modifier::REVERSED | Modifier::BOLD));
     }
 
     #[test]

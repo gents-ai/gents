@@ -103,7 +103,11 @@ fn draw_subagent(app: &App, shown: &Tab, area: Rect, buf: &mut Buffer) {
     for ((text, tone), y) in prompt.iter().zip(area.top()..below.top()) {
         draw_row(buf, area, y, text, *tone, false);
     }
-    agent::chat(&shown.wrapped_rows(below.width), shown.scroll, below, buf);
+    let (rows, marks) = (
+        shown.wrapped_rows(below.width),
+        shown.row_marks(below.width),
+    );
+    agent::chat(&rows, &marks, shown.scroll, below, buf);
 }
 
 pub fn draw_rail(app: &App, area: Rect, buf: &mut Buffer) {

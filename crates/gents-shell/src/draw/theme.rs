@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Style};
 
+use crate::app::markdown::Look;
 use crate::sample::Tone;
 
 pub const BG: Color = Color::from_u32(0x0f1411);
@@ -37,6 +38,16 @@ pub fn tone(tone: Tone) -> Style {
         Tone::File(_) => ACCENT,
     };
     Style::new().fg(color)
+}
+
+/// A reply's styled span, over the row's own style.
+pub(crate) fn look(look: Look) -> Style {
+    let style = Style::new().add_modifier(look.modifier);
+    if look.code {
+        style.fg(ACCENT)
+    } else {
+        style
+    }
 }
 
 pub fn edge(focused: bool) -> Style {
