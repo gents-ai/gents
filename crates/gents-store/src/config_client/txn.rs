@@ -1,5 +1,6 @@
 mod apply_txn;
 mod auto_commit;
+mod body_verification;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod change_fault;
 mod configuration_reader;

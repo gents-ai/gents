@@ -23,6 +23,7 @@ mod application_pairing;
 pub mod assignment_receiver;
 pub mod assignments;
 pub mod authored_document;
+pub mod body_verification;
 mod client_agent_publication;
 pub mod client_authentication;
 mod client_pack_evidence;
