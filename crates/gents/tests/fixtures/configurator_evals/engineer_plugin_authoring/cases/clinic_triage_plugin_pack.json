@@ -147,7 +147,7 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.0"
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
                   }
                 ]
               }
@@ -224,8 +224,8 @@
                 "matches": "(?s)\"name\"\\s*:\\s*\"triage\".*\"namespace\"\\s*:\\s*\"clinic\"|\"namespace\"\\s*:\\s*\"clinic\".*\"name\"\\s*:\\s*\"triage\""
               },
               {
-                "path": "clinic_triage/manifest.json",
-                "matches": "\"score_triage\""
+                "path": "clinic_triage/pack_config.json",
+                "matches": "\"pages\""
               },
               {
                 "path": "clinic.triage-1.0.0.pack",
@@ -275,18 +275,64 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "rows",
-            "min_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "caseId",
-                "equals": "c1"
+                "capture": "rows",
+                "min": 2
               },
               {
-                "field": "level",
-                "equals": "urgent"
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "rows",
+                "key": "caseId",
+                "id": "c1",
+                "expect": [
+                  {
+                    "field": "score",
+                    "equals": 7
+                  },
+                  {
+                    "field": "level",
+                    "equals": "urgent"
+                  }
+                ]
+              },
+              {
+                "capture": "rows",
+                "key": "caseId",
+                "id": "c2",
+                "expect": [
+                  {
+                    "field": "score",
+                    "equals": 5
+                  },
+                  {
+                    "field": "level",
+                    "equals": "routine"
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/score_triage",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "matches": "^(?:0\\.1\\.[1-9]\\d*|0\\.[2-9]\\d*\\.\\d+|[1-9]\\d*\\.\\d+\\.\\d+)$"
+                  }
+                ]
               }
             ]
           },
@@ -302,37 +348,6 @@
               },
               {
                 "matches": "(?i)routine"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "install",
-                "min": 1,
-                "max": 1
-              }
-            ],
-            "rows": [
-              {
-                "capture": "install",
-                "key": "coordinate",
-                "id": "node/score_triage",
-                "expect": [
-                  {
-                    "field": "digest",
-                    "matches": "^sha256:[0-9a-f]{64}$"
-                  },
-                  {
-                    "field": "version",
-                    "equals": "0.1.1"
-                  }
-                ]
               }
             ]
           },

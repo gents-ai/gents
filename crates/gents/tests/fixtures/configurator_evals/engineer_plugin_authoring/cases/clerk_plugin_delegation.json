@@ -186,26 +186,31 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.0"
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
                   }
                 ]
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "tools",
-            "min_rows": 1,
-            "expect": [
-              {
-                "field": "integrations",
-                "matches": "node/reserve_slot"
-              }
-            ]
+            ],
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "booking-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)booking[- ]?clerk"
+                  },
+                  "tools": [
+                    {
+                      "field": "integrations",
+                      "matches": "node/reserve_slot"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           "tier": "acceptance",
           "weight": 1

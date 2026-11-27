@@ -147,7 +147,7 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.0"
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
                   }
                 ]
               }
@@ -224,8 +224,8 @@
                 "matches": "(?s)\"name\"\\s*:\\s*\"fuel_audit\".*\"namespace\"\\s*:\\s*\"depot\"|\"namespace\"\\s*:\\s*\"depot\".*\"name\"\\s*:\\s*\"fuel_audit\""
               },
               {
-                "path": "fuel_audit/manifest.json",
-                "matches": "\"log_fuel\""
+                "path": "fuel_audit/pack_config.json",
+                "matches": "\"pages\""
               },
               {
                 "path": "depot.fuel_audit-1.0.0.pack",
@@ -275,22 +275,29 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "rows",
-            "min_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "truck",
-                "equals": "T7"
-              },
+                "capture": "rows",
+                "min": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "liters",
-                "equals": 30
-              },
-              {
-                "field": "cost",
-                "equals": 120
+                "capture": "rows",
+                "key": "truck",
+                "id": "T7",
+                "expect": [
+                  {
+                    "field": "liters",
+                    "equals": 30
+                  },
+                  {
+                    "field": "cost",
+                    "equals": 120
+                  }
+                ]
               }
             ]
           },

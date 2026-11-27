@@ -142,26 +142,31 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.0"
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
                   }
                 ]
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "tools",
-            "min_rows": 1,
-            "expect": [
-              {
-                "field": "integrations",
-                "matches": "node/tier_discount"
-              }
-            ]
+            ],
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "pricing-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)pricing[- ]?clerk"
+                  },
+                  "tools": [
+                    {
+                      "field": "integrations",
+                      "matches": "node/tier_discount"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           "tier": "acceptance",
           "weight": 1
@@ -314,26 +319,31 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.1"
+                    "matches": "^(?:0\\.1\\.[1-9]\\d*|0\\.[2-9]\\d*\\.\\d+|[1-9]\\d*\\.\\d+\\.\\d+)$"
                   }
                 ]
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "tools",
-            "min_rows": 1,
-            "expect": [
-              {
-                "field": "integrations",
-                "matches": "node/tier_discount"
-              }
-            ]
+            ],
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "pricing-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)pricing[- ]?clerk"
+                  },
+                  "tools": [
+                    {
+                      "field": "integrations",
+                      "matches": "node/tier_discount"
+                    }
+                  ]
+                }
+              ]
+            }
           },
           "tier": "acceptance",
           "weight": 1

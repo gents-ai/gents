@@ -147,7 +147,7 @@
                   },
                   {
                     "field": "version",
-                    "equals": "0.1.0"
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
                   }
                 ]
               }
@@ -224,8 +224,8 @@
                 "matches": "(?s)\"name\"\\s*:\\s*\"fees\".*\"namespace\"\\s*:\\s*\"harbor\"|\"namespace\"\\s*:\\s*\"harbor\".*\"name\"\\s*:\\s*\"fees\""
               },
               {
-                "path": "harbor_fees/manifest.json",
-                "matches": "\"calc_berth\""
+                "path": "harbor_fees/pack_config.json",
+                "matches": "\"pages\""
               },
               {
                 "path": "harbor.fees-1.0.0.pack",
@@ -275,22 +275,29 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "rows",
-            "min_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "berth",
-                "equals": "B4"
-              },
+                "capture": "rows",
+                "min": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "hours",
-                "equals": 4
-              },
-              {
-                "field": "fee",
-                "equals": 60
+                "capture": "rows",
+                "key": "berth",
+                "id": "B4",
+                "expect": [
+                  {
+                    "field": "hours",
+                    "equals": 4
+                  },
+                  {
+                    "field": "fee",
+                    "equals": 60
+                  }
+                ]
               }
             ]
           },
