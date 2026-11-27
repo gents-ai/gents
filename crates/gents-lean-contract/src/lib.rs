@@ -16,8 +16,10 @@ use sha2::{Digest, Sha256};
 
 pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN GENTS LEAN CONTRACT JSON---";
 pub const CONTRACT_JSON_END: &str = "---END GENTS LEAN CONTRACT JSON---";
+pub const CONTRACT_FILE_ENV: &str = "GENTS_LEAN_CONTRACT_FILE";
 
 const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
+const CONTRACT_EXE_TARGET: &str = "contracts";
 const CONTRACT_RUN_FILE: &str = "Proofs/Conformance/Contracts.lean";
 const LAKE_BUILD_ATTEMPTS: usize = 3;
 
@@ -52,6 +54,9 @@ pub fn load_contract_json() -> Result<String> {
 }
 
 pub fn load_contract_stdout() -> Result<String> {
+    if let Some(stdout) = try_read_contract_file_override()? {
+        return Ok(stdout);
+    }
     load_contract_stdout_with_reader(
         &proofs_dir()?,
         &PROCESS_STDOUT_CACHE,
@@ -60,6 +65,40 @@ pub fn load_contract_stdout() -> Result<String> {
         &ensure_contract_built_unlocked,
         &run_built_contract_generator_unlocked,
     )
+}
+
+fn try_read_contract_file_override() -> Result<Option<String>> {
+    let Some(raw_path) = std::env::var_os(CONTRACT_FILE_ENV) else {
+        return Ok(None);
+    };
+    let trimmed = raw_path.to_string_lossy();
+    let path_str = trimmed.trim();
+    if path_str.is_empty() {
+        return Ok(None);
+    }
+    read_contract_snapshot_file(Path::new(path_str)).map(Some)
+}
+
+fn read_contract_snapshot_file(path: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "reading {CONTRACT_FILE_ENV} snapshot from {}",
+            path.display()
+        )
+    })?;
+    if raw.contains(CONTRACT_JSON_BEGIN) {
+        let _ = extract_contract_json(&raw)?;
+        return Ok(raw);
+    }
+    let trimmed = raw.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "{CONTRACT_FILE_ENV} snapshot {} was empty",
+        path.display()
+    );
+    Ok(format!(
+        "{CONTRACT_JSON_BEGIN}\n{trimmed}\n{CONTRACT_JSON_END}\n"
+    ))
 }
 
 #[cfg(test)]
@@ -130,23 +169,79 @@ pub fn run_lake_build(proofs_dir: &Path) -> Result<()> {
     run_lake_build_with(proofs_dir, &run_lake_build_unlocked)
 }
 
+fn contract_exe_path(proofs_dir: &Path) -> PathBuf {
+    let name = if cfg!(windows) {
+        "contracts.exe"
+    } else {
+        CONTRACT_EXE_TARGET
+    };
+    proofs_dir.join(".lake/build/bin").join(name)
+}
+
+#[cfg(target_os = "macos")]
+fn configure_lake_exe_env(command: &mut Command, proofs_dir: &Path) {
+    // Lean 4.18's bundled LLVM 15 ld64.lld omits SG_READ_ONLY on __DATA_CONST,
+    // which macOS 26+ dyld rejects. Linking with Apple's /usr/bin/clang fixes it.
+    if std::env::var_os("LEAN_CC").is_some() || !Path::new("/usr/bin/clang").is_file() {
+        return;
+    }
+    let Ok(output) = Command::new("lake")
+        .args(["env", "lean", "--print-prefix"])
+        .current_dir(proofs_dir)
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if prefix.is_empty() {
+        return;
+    }
+    let lib_dir = PathBuf::from(prefix).join("lib");
+    let library_path = match std::env::var_os("LIBRARY_PATH") {
+        Some(existing) if !existing.is_empty() => {
+            let mut combined = lib_dir.into_os_string();
+            combined.push(":");
+            combined.push(existing);
+            combined
+        }
+        _ => lib_dir.into_os_string(),
+    };
+    command
+        .env("LEAN_CC", "/usr/bin/clang")
+        .env("LIBRARY_PATH", library_path);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_lake_exe_env(_command: &mut Command, _proofs_dir: &Path) {}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "synchronous build driver outside any runtime; backs off between blocking lake runs"
 )]
-fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
+fn run_lake_build_target_unlocked(
+    proofs_dir: &Path,
+    target: &str,
+    for_native_exe: bool,
+) -> Result<()> {
     let mut failures = Vec::new();
 
     for attempt in 1..=LAKE_BUILD_ATTEMPTS {
         let mut command = Command::new("lake");
         command
-            .args(["build", CONTRACT_TARGET])
+            .args(["build", target])
             .current_dir(proofs_dir)
             .stdin(Stdio::null());
+        if for_native_exe {
+            configure_lake_exe_env(&mut command, proofs_dir);
+        }
         let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
             .with_context(|| {
                 format!(
-                    "failed to build Lean conformance contract target in {}",
+                    "failed to build Lean conformance target {target} in {}",
                     proofs_dir.display()
                 )
             })?;
@@ -165,7 +260,7 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
 
         if !retryable || attempt == LAKE_BUILD_ATTEMPTS {
             anyhow::bail!(
-                "Lean conformance contract build failed\n  cwd: {}\n{}",
+                "Lean conformance target {target} build failed\n  cwd: {}\n{}",
                 proofs_dir.display(),
                 failures.join("\n\n")
             );
@@ -175,6 +270,17 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
     }
 
     unreachable!("lake build retry loop should return or bail")
+}
+
+fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
+    if run_lake_build_target_unlocked(proofs_dir, CONTRACT_EXE_TARGET, true).is_ok() {
+        return Ok(());
+    }
+    let _ = writeln!(
+        io::stderr(),
+        "gents-lean-contract: compiled `{CONTRACT_EXE_TARGET}` build failed; falling back to `{CONTRACT_TARGET}`"
+    );
+    run_lake_build_target_unlocked(proofs_dir, CONTRACT_TARGET, false)
 }
 
 type OutputTask = thread::JoinHandle<io::Result<Vec<u8>>>;
@@ -305,6 +411,19 @@ pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
 /// warm cache hits run concurrently under a shared lock; misses upgrade to an
 /// exclusive lock and double-check before invoking Lake.
 pub fn run_prepared_generator(proofs_dir: &Path, target: &str, file: &str) -> Result<String> {
+    if target == CONTRACT_TARGET && file == CONTRACT_RUN_FILE {
+        if let Some(stdout) = try_read_contract_file_override()? {
+            return Ok(stdout);
+        }
+        return run_prepared_generator_with(
+            proofs_dir,
+            target,
+            file,
+            None,
+            &prepare_contract_or_target_unlocked,
+            &run_contract_or_generator_with_input_unlocked,
+        );
+    }
     run_prepared_generator_with(
         proofs_dir,
         target,
@@ -478,8 +597,62 @@ fn prepare_generator_unlocked(proofs_dir: &Path, target: &str) -> Result<()> {
     Ok(())
 }
 
+fn prepare_contract_or_target_unlocked(proofs_dir: &Path, target: &str) -> Result<()> {
+    if target == CONTRACT_TARGET {
+        return run_lake_build_unlocked(proofs_dir);
+    }
+    prepare_generator_unlocked(proofs_dir, target)
+}
+
 fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
+    let exe = contract_exe_path(proofs_dir);
+    if exe.is_file() {
+        match Command::new(&exe)
+            .current_dir(proofs_dir)
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                if let Ok(stdout) = String::from_utf8(output.stdout) {
+                    if extract_contract_json(&stdout).is_ok() {
+                        return Ok(stdout);
+                    }
+                }
+                let _ = writeln!(
+                    io::stderr(),
+                    "gents-lean-contract: compiled `{}` emitted invalid contract output; falling back to `lake env lean --run`",
+                    exe.display()
+                );
+            }
+            Ok(output) => {
+                let _ = writeln!(
+                    io::stderr(),
+                    "gents-lean-contract: compiled `{}` exited with {}; falling back to `lake env lean --run`",
+                    exe.display(),
+                    output.status
+                );
+            }
+            Err(error) => {
+                let _ = writeln!(
+                    io::stderr(),
+                    "gents-lean-contract: failed to spawn `{}` ({error}); falling back to `lake env lean --run`",
+                    exe.display()
+                );
+            }
+        }
+    }
     run_generator_unlocked(proofs_dir, CONTRACT_RUN_FILE)
+}
+
+fn run_contract_or_generator_with_input_unlocked(
+    proofs_dir: &Path,
+    file: &str,
+    input: Option<&str>,
+) -> Result<String> {
+    if file == CONTRACT_RUN_FILE && input.is_none() {
+        return run_contract_generator_unlocked(proofs_dir);
+    }
+    run_generator_with_input_unlocked(proofs_dir, file, input)
 }
 
 fn try_read_fresh_contract_cache(proofs_dir: &Path) -> Result<Option<String>> {
@@ -498,7 +671,7 @@ fn run_built_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
         None,
         None,
         false,
-        &run_generator_with_input_unlocked,
+        &run_contract_or_generator_with_input_unlocked,
     )
 }
 
@@ -1976,6 +2149,80 @@ mod tests {
                 assert_eq!(second.join().expect("second input thread")?.trim(), "21 c");
                 Ok(())
             })?;
+            Ok(())
+        })();
+        std::fs::remove_dir_all(root)?;
+        result
+    }
+
+    #[test]
+    fn contract_snapshot_file_accepts_wrapped_and_raw_json() -> Result<()> {
+        let root = unique_temp_dir("snapshot-file");
+        let result = (|| {
+            let wrapped = root.join("wrapped.txt");
+            let payload = format!("{CONTRACT_JSON_BEGIN}\n{{\"ok\":true}}\n{CONTRACT_JSON_END}\n");
+            std::fs::write(&wrapped, &payload)?;
+            assert_eq!(read_contract_snapshot_file(&wrapped)?, payload);
+
+            let raw = root.join("raw.json");
+            std::fs::write(&raw, "{\"ok\":true}\n")?;
+            let normalized = read_contract_snapshot_file(&raw)?;
+            assert_eq!(extract_contract_json(&normalized)?, "{\"ok\":true}");
+
+            let empty = root.join("empty.json");
+            std::fs::write(&empty, "   \n")?;
+            assert!(read_contract_snapshot_file(&empty).is_err());
+            Ok(())
+        })();
+        std::fs::remove_dir_all(root)?;
+        result
+    }
+
+    #[test]
+    fn contract_generator_uses_compiled_exe_and_falls_back_when_broken() -> Result<()> {
+        let root = unique_temp_dir("compiled-exe");
+        let result = (|| {
+            std::fs::copy(
+                proofs_dir()?.join("lean-toolchain"),
+                root.join("lean-toolchain"),
+            )?;
+            std::fs::write(
+                root.join("lakefile.lean"),
+                "import Lake\nopen Lake DSL\npackage fixture\nlean_lib Proofs\nlean_exe contracts where\n  root := `Proofs.Conformance.Contracts\n",
+            )?;
+            std::fs::create_dir_all(root.join("Proofs/Conformance"))?;
+            std::fs::write(
+                root.join("Proofs/Conformance/Contracts.lean"),
+                format!(
+                    "def main : IO Unit := do\n  IO.println \"{CONTRACT_JSON_BEGIN}\"\n  IO.println \"{{\\\"source\\\":\\\"lean\\\"}}\"\n  IO.println \"{CONTRACT_JSON_END}\"\n"
+                ),
+            )?;
+
+            run_lake_build_unlocked(&root)?;
+            assert!(
+                contract_exe_path(&root).is_file(),
+                "expected compiled contracts executable"
+            );
+            let from_exe = run_contract_generator_unlocked(&root)?;
+            assert_eq!(extract_contract_json(&from_exe)?, "{\"source\":\"lean\"}");
+
+            // Replace compiled binary with a failing system executable; loader must fall back to `lake env lean --run`.
+            #[cfg(unix)]
+            {
+                let false_bin = ["/usr/bin/false", "/bin/false"]
+                    .into_iter()
+                    .map(Path::new)
+                    .find(|path| path.is_file())
+                    .expect("system false binary");
+                let exe = contract_exe_path(&root);
+                std::fs::remove_file(&exe)?;
+                std::os::unix::fs::symlink(false_bin, &exe)?;
+                let from_fallback = run_contract_generator_unlocked(&root)?;
+                assert_eq!(
+                    extract_contract_json(&from_fallback)?,
+                    "{\"source\":\"lean\"}"
+                );
+            }
             Ok(())
         })();
         std::fs::remove_dir_all(root)?;

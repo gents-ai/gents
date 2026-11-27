@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import copy
 import importlib.util
+import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "decoders", Path(__file__).with_name("check-lean-rust-decoders.py"))
@@ -270,6 +273,14 @@ pub struct RecordPayload { value: u64 }
     def test_contract_markers_are_honored(self):
         raw = "log {noise}\n" + decoders.BEGIN + '\n{"cases": []}\n' + decoders.END + "\ntrailer }"
         self.assertEqual(decoders.extract_contract(raw), {"cases": []})
+
+    def test_load_contract_text_honors_env_without_invoking_lean(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            snap = Path(scratch) / "snap.txt"
+            snap.write_text(decoders.BEGIN + '\n{"cases": []}\n' + decoders.END + "\n")
+            with mock.patch.object(decoders.subprocess, "run", side_effect=AssertionError("lean should not run")):
+                with mock.patch.dict(os.environ, {"GENTS_LEAN_CONTRACT_FILE": str(snap)}):
+                    self.assertEqual(decoders.extract_contract(decoders.load_contract_text(Path(scratch))), {"cases": []})
 
 
 if __name__ == "__main__":

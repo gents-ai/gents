@@ -130,6 +130,12 @@ export async function runLeanGenerator(
   file: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<string> {
+  if (target === CONTRACT_TARGET && file === CONTRACT_FILE) {
+    const contractFile = process.env.GENTS_LEAN_CONTRACT_FILE?.trim();
+    if (contractFile) {
+      return readFile(contractFile, "utf8");
+    }
+  }
   const repoRoot = findRepoRoot();
   const proofsDir = join(repoRoot, "crates/gents/proofs");
   const binary = findPrebuiltGenerator(repoRoot);

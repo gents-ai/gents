@@ -1,0 +1,25 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.BackgroundExecutionRegistry
+import Proofs.Conformance.CloneReceipt
+import Proofs.Conformance.ContractCases.SessionDocuments
+import Proofs.Conformance.Functions.Documents
+import Proofs.Conformance.Identity.AgentBaseline
+import Proofs.Conformance.Identity.DirectoryPublication
+import Proofs.Conformance.Identity.HouseholdAutomation
+import Proofs.Conformance.Identity.WorkspaceCapability
+import Proofs.Conformance.InferenceSlotAccounting
+import Proofs.Conformance.OperatorBaseFreeze
+import Proofs.Conformance.Placement
+import Proofs.Conformance.RepeatedToolSuccess
+import Proofs.Conformance.RequestContext
+import Proofs.Conformance.RootCandidates.PinnedRetryBudget
+import Proofs.Conformance.SelfConfigToolsRoot
+import Proofs.Conformance.ToolResultText
+import Proofs.Session.Request.CrossActorAuthorization
+
+namespace Conformance.Contracts.Shards.S01
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S01

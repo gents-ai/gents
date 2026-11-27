@@ -69,3 +69,6 @@ target canonicalOutputMap pkg : Unit := Job.async do
 lean_lib Proofs where
   srcDir := "."
   roots := proofRoots
+
+lean_exe contracts where
+  root := `Proofs.Conformance.Contracts

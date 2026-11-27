@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AuthoringFileMode
+import Proofs.Conformance.ClaudePromptAssembly
+import Proofs.Conformance.ClientShell.Contracts.Json
+import Proofs.Conformance.ContractCases.RollingCompaction
+import Proofs.Conformance.Contracts.Json.RequestInput
+import Proofs.Conformance.FileReviewRoutes
+import Proofs.Conformance.HookPersistence
+import Proofs.Conformance.Identity.DelegatedPublicationRecovery
+import Proofs.Conformance.Identity.HouseholdCDocuments
+import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.InferenceRegistry
+import Proofs.Conformance.OperationRecovery
+import Proofs.Conformance.PairingDataPlane
+import Proofs.Conformance.RepairBackups
+import Proofs.Conformance.RepeatedToolFailure
+import Proofs.Conformance.RequestAssembly
+import Proofs.Conformance.SelfConfigStructured
+import Proofs.Conformance.ToolRebinding
+import Proofs.Session.Identity.SessionInputEdit
+
+namespace Conformance.Contracts.Shards.S24
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S24

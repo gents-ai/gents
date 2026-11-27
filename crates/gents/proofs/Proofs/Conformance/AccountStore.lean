@@ -189,7 +189,8 @@ def labels : List Input :=
       seeds := []
       steps :=
         [ person .claude "a" "1", person .claude "b" "1", setLabel 1 "Claude", setLabel 1 ""
-        , setLabel 1 "a\x07b", setLabel 1 "Claude 2", setLabel 0 "Claude 2", setLabel 0 "Home"
+        -- Avoid `"a\x07b"`: Lean 4.18's C backend emits `\x07b`, which C parses as 0x7b (`{`).
+        , setLabel 1 ("a" ++ String.singleton (Char.ofNat 7) ++ "b"), setLabel 1 "Claude 2", setLabel 0 "Claude 2", setLabel 0 "Home"
         , setLabel 1 "Claude", setLabel 7 "Nobody" ] } ]
 
 def identities : List Input :=

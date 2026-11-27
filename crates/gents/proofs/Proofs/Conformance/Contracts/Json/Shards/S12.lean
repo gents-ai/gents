@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.CanonicalOutputProjection
+import Proofs.Conformance.ClientRequestClosureCases
+import Proofs.Conformance.DatastoreProtection
+import Proofs.Conformance.DatastoreWrite
+import Proofs.Conformance.EventDeliveryConvergence
+import Proofs.Conformance.GoalWakeReceipt
+import Proofs.Conformance.Identity.RuntimeUse
+import Proofs.Conformance.Identity.WorkspaceAndFileRequests
+import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
+import Proofs.Conformance.LspServerStart
+import Proofs.Conformance.NativeRefinement
+import Proofs.Conformance.ProcessStop
+import Proofs.Conformance.PromptAssemblyBudget
+import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.RootCandidates.ReadinessPersistence
+import Proofs.Conformance.SourceBoundary
+import Proofs.Conformance.TaskLineage
+import Proofs.Conformance.WorkspaceDirtyTrunk
+import Proofs.Store.Identity.WorkspaceAndFileRequests
+
+namespace Conformance.Contracts.Shards.S12
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S12

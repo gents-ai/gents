@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Clients.ClientShell.OptimisticSend
+import Proofs.Conformance.AccessWake
+import Proofs.Conformance.BackendProbeSchedule
+import Proofs.Conformance.ClientTelemetry
+import Proofs.Conformance.Contracts.Json.DispatchObservation
+import Proofs.Conformance.Contracts.Json.PayloadPresentation
+import Proofs.Conformance.EditorUndoCheckpoint
+import Proofs.Conformance.GoalDeliveryInput
+import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.Identity.AgentIdentity
+import Proofs.Conformance.Identity.AgentTargetAccess
+import Proofs.Conformance.Identity.HouseholdBGents
+import Proofs.Conformance.Identity.StartupReadiness
+import Proofs.Conformance.InstallRepair
+import Proofs.Conformance.ManagedExecSpawn
+import Proofs.Conformance.OperatorProtection
+import Proofs.Conformance.QuestionReply
+import Proofs.Conformance.RunTimelineRetry
+import Proofs.Conformance.StorageWriteGateStreamWaiter
+
+namespace Conformance.Contracts.Shards.S17
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S17

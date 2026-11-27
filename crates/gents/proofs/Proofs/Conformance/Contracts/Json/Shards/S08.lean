@@ -1,0 +1,26 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.ClientDataPublicationCases
+import Proofs.Conformance.ClientIdentityMetadata
+import Proofs.Conformance.Contracts.Json.Lsp
+import Proofs.Conformance.Contracts.Json.SessionDocuments
+import Proofs.Conformance.CrossActorAuthorization
+import Proofs.Conformance.GoalClientStart
+import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.GoalResetResume
+import Proofs.Conformance.Identity.HouseholdAAutomation
+import Proofs.Conformance.Identity.OwnerRegistration
+import Proofs.Conformance.LateDelivery
+import Proofs.Conformance.PluginBind
+import Proofs.Conformance.RootCandidates.CompletionConfig
+import Proofs.Conformance.SessionOrigin
+import Proofs.Conformance.SessionStaleCompletion
+import Proofs.Conformance.TranscriptCases
+import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Store.Identity.GrantSetsConformance
+
+namespace Conformance.Contracts.Shards.S08
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S08

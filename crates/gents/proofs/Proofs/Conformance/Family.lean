@@ -251,6 +251,72 @@ private def chunkedEntries (entries : Array (TSyntax `term)) : TermElabM (TSynta
     list ← `([$chunk,*] ++ $list)
   return list
 
+initialize emittedEntryExtension : SimplePersistentEnvExtension Name (Array Name) ←
+  registerSimplePersistentEnvExtension
+    { addEntryFn := Array.push
+    , addImportedFn := fun imported => imported.foldl (· ++ ·) #[] }
+
+private def emittedSet (env : Environment) : NameSet :=
+  (emittedEntryExtension.getState env).foldl (·.insert ·) {}
+
+private def directImportSet (env : Environment) : NameSet :=
+  env.header.imports.foldl (fun s imp => s.insert imp.module) {}
+
+private def isFromDirectImport (env : Environment) (direct : NameSet) (decl : Name) : Bool :=
+  match env.getModuleIdxFor? decl with
+  | some idx =>
+    match env.header.moduleNames[idx.toNat]? with
+    | some modName => direct.contains modName
+    | none => false
+  | none => false
+
+/-- Emits `def <id> : List (String × Json)` for every conformance function and
+family declared in this module's direct imports that has not already been
+emitted by an imported shard, splitting into small chunk defs so C compilation
+stays bounded. -/
+elab "conformance_shard_entries" id:ident : command => do
+  let env ← getEnv
+  let emitted := emittedSet env
+  let direct := directImportSet env
+  let fnDecls := ((functionExtension.getState env).filter fun d =>
+    !emitted.contains d && isFromDirectImport env direct d).qsort Name.lt
+  let famDecls := ((familyExtension.getState env).filter fun d =>
+    !emitted.contains d && isFromDirectImport env direct d).qsort Name.lt
+  let itemTerms ← Command.liftTermElabM do
+    let fns ← fnDecls.mapM fun declaration => do
+      `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
+    let fams ← famDecls.mapM fun declaration => do
+      let key := wireKey (declaration.replacePrefix `Conformance .anonymous)
+      `(($(quote key), $(← explicitFamilyTerm declaration)))
+    pure (fns ++ fams)
+  let chunkSize := 16
+  let chunkCount := (itemTerms.size + chunkSize - 1) / chunkSize
+  let mut chunkIdents : Array (TSyntax `term) := #[]
+  for index in List.range chunkCount do
+    let chunk := itemTerms.extract (index * chunkSize) ((index + 1) * chunkSize)
+    let chunkIdent := mkIdent (id.getId.appendAfter s!"_chunk_{index}")
+    Command.elabCommand (← `(private def $chunkIdent : List (String × Json) := [$chunk,*]))
+    chunkIdents := chunkIdents.push chunkIdent
+  let body ← chunkIdents.foldrM (fun c acc => `($c ++ $acc)) (← `(([] : List (String × Json))))
+  Command.elabCommand (← `(def $id : List (String × Json) := $body))
+  modifyEnv fun env =>
+    let env := fnDecls.foldl (emittedEntryExtension.addEntry · ·) env
+    famDecls.foldl (emittedEntryExtension.addEntry · ·) env
+
+/-- Every conformance function and family in the import closure not already
+emitted by an imported shard. -/
+elab "conformance_remaining_entries%" : term => do
+  let env ← getEnv
+  let emitted := emittedSet env
+  let fnDecls := ((functionExtension.getState env).filter (!emitted.contains ·)).qsort Name.lt
+  let famDecls := ((familyExtension.getState env).filter (!emitted.contains ·)).qsort Name.lt
+  let fns ← fnDecls.mapM fun declaration => do
+    `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
+  let fams ← famDecls.mapM fun declaration => do
+    let key := wireKey (declaration.replacePrefix `Conformance .anonymous)
+    `(($(quote key), $(← explicitFamilyTerm declaration)))
+  elabTerm (← chunkedEntries (fns ++ fams)) none
+
 /-- The snapshot entries of every `conformance_function` and
 `conformance_family` in the import closure. A family's key drops a leading
 `Conformance` namespace. -/

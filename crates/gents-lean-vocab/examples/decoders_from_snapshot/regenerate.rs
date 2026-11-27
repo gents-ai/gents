@@ -167,12 +167,19 @@ pub fn run(src: &Path, snapshot_file: Option<&str>, force: bool) {
     let snapshot: serde_json::Value = serde_json::from_str(&text).expect("snapshot JSON");
     let parse_ms = ms(phase);
 
-    let (schema, decoders) = std::thread::scope(|scope| {
+    let tla = repo.join("crates/gents/proofs/tla");
+    let (schema, tla_out, decoders) = std::thread::scope(|scope| {
         let schema = scope.spawn(|| {
             let phase = Instant::now();
             let text = gents_lean_vocab::family::render_family_schema(&snapshot)
                 .unwrap_or_else(|error| panic!("family schema: {error}"));
             (text, ms(phase))
+        });
+        let tla_task = scope.spawn(|| {
+            let phase = Instant::now();
+            let modules = gents_lean_vocab::tla::render_modules_from_snapshot(&snapshot, &tla)
+                .unwrap_or_else(|error| panic!("TLA+ Lean decisions: {error}"));
+            (modules, ms(phase))
         });
         let phase = Instant::now();
         let generated_path = src.join(GENERATED);
@@ -196,18 +203,17 @@ pub fn run(src: &Path, snapshot_file: Option<&str>, force: bool) {
         }
         (
             schema.join().expect("schema thread"),
+            tla_task.join().expect("TLA+ thread"),
             (gone, passes, ms(phase)),
         )
     });
-    let ((schema, schema_ms), (gone, passes, decoders_ms)) = (schema, decoders);
+    let ((schema, schema_ms), (modules, tla_render_ms), (gone, passes, decoders_ms)) =
+        (schema, tla_out, decoders);
     let schema_changed = write_if_changed(&crate_dir.join(SCHEMA), &schema);
-    let phase = Instant::now();
-    let tla = repo.join("crates/gents/proofs/tla");
-    let modules = gents_lean_vocab::tla::render_modules_from_snapshot(&snapshot, &tla)
-        .unwrap_or_else(|error| panic!("TLA+ Lean decisions: {error}"));
+    let tla_write_phase = Instant::now();
     let tla_changed = gents_lean_vocab::tla::write_modules(&tla.join("generated"), &modules)
         .expect("write the TLA+ Lean decisions");
-    let tla_ms = ms(phase);
+    let tla_ms = tla_render_ms + ms(tla_write_phase);
 
     if stamped {
         let digest = inputs_digest(repo);
