@@ -325,12 +325,97 @@ async fn boot_runtime(
     boot_prepared_accepted_turn(db, prepared, agent).await
 }
 
+async fn bind_stream_liveness_timeout_secs(
+    db: &TestStore,
+    fixture: &ManagedAgentFixture,
+    agent_dids: &[&str],
+    liveness_secs: i64,
+) {
+    use gents_documents::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    use gents_store::collection::Collection;
+
+    let owner = db.node_identity.did();
+    for agent_did in agent_dids {
+        let execution_id = format!("{agent_did}:liveness-execution");
+        fixture
+            .access
+            .transact_signed_conflict_rebuild("test.job_liveness_execution", |txn| {
+                let execution_id = &execution_id;
+                Box::pin(async move {
+                    let (_, agent) =
+                        read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
+                            .await?
+                            .expect("managed job Agent must exist");
+                    let profile_id = agent["inference_profile_id"]
+                        .as_str()
+                        .expect("managed Agent inference profile");
+                    let (_, mut profile) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::InferenceProfile,
+                        owner,
+                        profile_id,
+                    )
+                    .await?
+                    .expect("managed Agent inference profile document must exist");
+                    profile["execution_id"] = json!(execution_id);
+                    let execution = json!({
+                        "node_did": owner,
+                        "execution_id": execution_id,
+                        "stream_liveness_timeout_secs": liveness_secs,
+                    });
+                    let plan = DesiredStateApplyPlan::new(vec![
+                        DesiredStateApplyDocument {
+                            collection: Collection::InferenceExecution,
+                            add: execution.clone(),
+                            update: execution,
+                        },
+                        DesiredStateApplyDocument {
+                            collection: Collection::InferenceProfile,
+                            add: profile.clone(),
+                            update: profile,
+                        },
+                    ])?;
+                    apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("bind job agent stream liveness timeout");
+    }
+}
+
 pub(crate) async fn boot_job_harness(
     db: TestStore,
     plugin_home: PathBuf,
     session_id: &str,
     accepted_chunks: Vec<StreamChunk>,
     child_plans: Vec<StreamPlan>,
+) -> JobHarness {
+    boot_job_harness_with_liveness(
+        db,
+        plugin_home,
+        session_id,
+        accepted_chunks,
+        child_plans,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn boot_job_harness_with_liveness(
+    db: TestStore,
+    plugin_home: PathBuf,
+    session_id: &str,
+    accepted_chunks: Vec<StreamChunk>,
+    child_plans: Vec<StreamPlan>,
+    stream_liveness_timeout_secs: Option<i64>,
 ) -> JobHarness {
     let actors = install_job_fixture(&db, &plugin_home, job_settings()).await;
     // A child inherits the pin's cwd, and an empty one cannot be resolved.
@@ -360,6 +445,15 @@ pub(crate) async fn boot_job_harness(
         },
     )
     .await;
+    if let Some(liveness_secs) = stream_liveness_timeout_secs {
+        bind_stream_liveness_timeout_secs(
+            &db,
+            &actors.fixture,
+            &[&actors.fixture.binding.agent_did, &actors.child_did],
+            liveness_secs,
+        )
+        .await;
+    }
     let runtime = boot_runtime(&db, &plugin_home, prepared).await;
     JobHarness {
         db,
