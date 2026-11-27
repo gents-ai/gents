@@ -739,10 +739,75 @@ mod tests {
         );
     }
 
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TraceBoundary {
+        config: String,
+        reason: String,
+        source: String,
+        test: String,
+    }
+
+    fn trace_boundaries(
+        workspace: &Path,
+        compiled: &BTreeSet<std::path::PathBuf>,
+    ) -> BTreeSet<String> {
+        let bytes = fs::read(crate::tla::tla_dir().join("trace-coverage.json")).unwrap();
+        let ledger: Vec<TraceBoundary> = serde_json::from_slice(&bytes).unwrap();
+        let mut names = BTreeSet::new();
+        for entry in ledger {
+            assert!(
+                names.insert(entry.config.clone()),
+                "duplicate boundary {}",
+                entry.config
+            );
+            assert!(
+                !entry.reason.trim().is_empty(),
+                "{} lacks a boundary reason",
+                entry.config
+            );
+            let source = workspace.join(&entry.source);
+            assert!(
+                compiled.contains(&source),
+                "uncompiled boundary evidence {}",
+                entry.source
+            );
+            let mut syntax = syn::parse_file(&fs::read_to_string(source).unwrap()).unwrap();
+            retain_enabled_syntax(&mut syntax);
+            struct Evidence<'a> {
+                name: &'a str,
+                found: bool,
+            }
+            impl<'ast> Visit<'ast> for Evidence<'_> {
+                fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+                    self.found |= function.sig.ident == self.name
+                        && function.attrs.iter().any(|a| {
+                            a.path()
+                                .segments
+                                .last()
+                                .is_some_and(|segment| segment.ident == "test")
+                        });
+                }
+            }
+            let mut evidence = Evidence {
+                name: &entry.test,
+                found: false,
+            };
+            evidence.visit_file(&syntax);
+            assert!(
+                evidence.found,
+                "{} lacks active evidence {}",
+                entry.config, entry.test
+            );
+        }
+        names
+    }
+
     #[test]
-    fn every_generated_trace_has_one_replay_consumer() {
+    fn every_generated_trace_has_one_replay_consumer_or_a_boundary() {
         let workspace = workspace();
         let compiled = crate::module_tree::enabled_module_tree(&workspace).compiled;
+        let mut boundaries = trace_boundaries(&workspace, &compiled);
         let mut files = Vec::new();
         for root in SOURCE_ROOTS {
             source_files(&workspace.join(root), &mut files);
@@ -780,12 +845,17 @@ mod tests {
             }
             let consumers = sites.remove(&file).unwrap_or_default();
             assert_eq!(
-                consumers.len(),
+                consumers.len()
+                    + usize::from(boundaries.remove(file.file_stem().unwrap().to_str().unwrap())),
                 1,
                 "{} replay consumers: {consumers:?}",
                 file.display()
             );
         }
+        assert!(
+            boundaries.is_empty(),
+            "boundaries without generated traces: {boundaries:?}"
+        );
         assert!(
             sites.is_empty(),
             "consumers outside the generated traces: {sites:?}"

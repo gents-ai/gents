@@ -1,0 +1,180 @@
+{
+  "config": "MCInterruptPartialOutputSuspendedHandoff",
+  "constants": {
+    "AtomicHandoff": false,
+    "Chunks": 2,
+    "DrainFlushes": true
+  },
+  "expect": "violates NoReceivedOutputDropped",
+  "spec": "InterruptPartialOutput",
+  "steps": [
+    {
+      "action": "Receive",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 1,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 0,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Latch",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 1,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 1,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Observe",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 1,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 1,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "InterruptBranch",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "interrupt",
+        "drive": "draining",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 1,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Drain",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "interrupt",
+        "drive": "drained",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "interrupt",
+        "drive": "draining",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Terminalize",
+      "actor": null,
+      "after": {
+        "acc": 0,
+        "cause": "interrupt",
+        "drive": "drained",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "interrupted",
+        "observed": true,
+        "slot": 0,
+        "terminalWrites": 1
+      },
+      "before": {
+        "acc": 0,
+        "cause": "interrupt",
+        "drive": "drained",
+        "durable": 0,
+        "emitted": 1,
+        "latched": true,
+        "lifecycle": "processing",
+        "observed": true,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    }
+  ]
+}
