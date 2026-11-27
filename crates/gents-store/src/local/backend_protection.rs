@@ -478,6 +478,9 @@ impl<'a> FreshBackendStore<'a> {
             .open(self.data.join(MARKER))
             .await?;
         file.write_all(&bytes).await?;
+        // tokio::fs::File completes writes on a blocking thread; flush waits
+        // for the OS write to finish before drop when sync_all is skipped.
+        file.flush().await?;
         if self.durability == storage::backends::DurabilityMode::Immediate {
             file.sync_all().await?;
             // A directory handle is unix-only: Windows refuses `File::open` on a

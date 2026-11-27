@@ -386,6 +386,9 @@ async fn custodied_store_key(
             .open(&record_path)
             .await?;
         file.write_all(&serde_json::to_vec(&record)?).await?;
+        // tokio::fs::File completes writes on a blocking thread; flush waits
+        // for the OS write to finish before drop when sync_all is skipped.
+        file.flush().await?;
         if durability == storage::backends::DurabilityMode::Immediate {
             file.sync_all().await?;
         }
