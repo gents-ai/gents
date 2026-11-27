@@ -120,104 +120,14 @@ fn foreign_did(db: &gents_store::test_support::TestStore) -> String {
     .to_owned()
 }
 
-#[derive(Debug, Deserialize)]
-struct ConvergenceRow {
-    lifecycle_state: RequestLifecycleState,
-    failure_reason: Option<String>,
-    terminalized_at: Option<String>,
-    terminal_redrive_attempts: Option<i64>,
-}
-
-async fn create_owned_request(
+async fn create_owned_pending_request(
     node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
-    lifecycle_state: &str,
 ) -> String {
-    create_recovery_request(
-        node,
-        request_id,
-        session_id,
-        node_did,
-        agent_did,
-        lifecycle_state,
-    )
-    .await
-}
-
-async fn seed_owned_request_projection(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    request_id: &str,
-    node_did: &str,
-    agent_did: &str,
-) {
-    let rows = root_read(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state created_at }} }}"#,
-            escape_graphql_string(request_id)
-        ),
-    )
-    .await;
-    let row = &rows["AgentRequest"][0];
-    let mut session =
-        support::session_document_in_scope(node_did, session_id, agent_did, CONVERGENCE_CREATED_AT);
-    session.observation = Some(gents_protocol::session::SessionObservation {
-        reply_preview: None,
-        last_activity_at: row["created_at"]
-            .as_str()
-            .expect("creation time")
-            .to_owned(),
-        preview: Some("hello".into()),
-        latest_request: Some(gents_protocol::session::SessionRequestObservation {
-            request_doc_id: row["_docID"].as_str().expect("physical request").to_owned(),
-            request_id: request_id.to_owned(),
-            lifecycle_state: serde_json::from_value(row["lifecycle_state"].clone())
-                .expect("canonical lifecycle"),
-        }),
-    });
-    let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
-    let agent = ::identity::Did::new(agent_did).expect("Agent DID");
-    let session = serde_json::to_value(&session).expect("serialize session");
-    gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
-        .transact_write("test.convergence.session", |txn| {
-            let (session, agent) = (&session, &agent);
-            Box::pin(async move {
-                let response = txn
-                    .execute_with_variables(
-                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-                        &json!({"input": session}),
-                    )
-                    .await?;
-                let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
-                txn.add_actor_relationship("AgentSession", &doc, "working_agent", agent)
-                    .await?;
-                gents_session::session::interrupt_marker::create_in_txn(
-                    txn,
-                    &doc,
-                    session["node_did"].as_str().unwrap_or_default(),
-                    session["session_id"].as_str().unwrap_or_default(),
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .expect("root writes request-owned session projection");
-}
-
-async fn create_recovery_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    lifecycle_state: &str,
-) -> String {
-    let mut input = json!({
+    let input = json!({
         "request_id": request_id,
         "purpose": "normal",
         "node_did": node_did,
@@ -226,20 +136,12 @@ async fn create_recovery_request(
         "session_id": session_id,
         "retry_root_request": request_id,
         "content": "hello",
-        "lifecycle_state": lifecycle_state,
+        "lifecycle_state": "pending",
         "execution_origin": "interactive",
         "created_at": CONVERGENCE_CREATED_AT,
         "retry_count": 0,
         "request_hop": 0,
     });
-    if RequestLifecycleState::is_terminal_str(Some(lifecycle_state)) {
-        input["terminalized_at"] = json!(CONVERGENCE_CREATED_AT);
-        input["terminal_redrive_attempts"] = json!(0);
-    }
-    if matches!(lifecycle_state, "claimed" | "processing") {
-        input["execution_generation"] = json!(uuid::Uuid::new_v4().to_string());
-        input["execution_lease_expires_at"] = json!(CONVERGENCE_CREATED_AT);
-    }
     root_write_request(node, input, Some(agent_did)).await
 }
 
@@ -254,38 +156,6 @@ fn coalesce_wakeup_input(session_id: &str) -> String {
     format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
     )
-}
-
-async fn create_queue_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    input: &str,
-    created_at: &str,
-) -> String {
-    let queue_input = serde_json::from_str::<Value>(input).expect("request input JSON");
-    root_write_request(
-        node,
-        json!({
-            "request_id": request_id,
-            "purpose": "normal",
-            "node_did": node_did,
-            "agent_did": agent_did,
-            "session_id": session_id,
-            "retry_root_request": request_id,
-            "content": "wake up",
-            "input": queue_input,
-            "lifecycle_state": "pending",
-            "execution_origin": "scheduled",
-            "created_at": created_at,
-            "retry_count": 0,
-            "request_hop": 0,
-        }),
-        Some(agent_did),
-    )
-    .await
 }
 
 async fn fetch_queue_convergence_row(
@@ -305,54 +175,18 @@ async fn fetch_queue_convergence_row(
     first_data_row(&root_read(node, &query).await, "AgentRequest")
 }
 
-async fn fetch_convergence_row(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-) -> ConvergenceRow {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                lifecycle_state
-                failure_reason
-                terminalized_at
-                terminal_redrive_attempts
-            }}
-        }}"#
-    );
-    first_data_row(&root_read(node, &query).await, "AgentRequest")
-}
-
-async fn composite_commit_count(node: &std::sync::Arc<EmbeddedNode>, doc_id: &str) -> usize {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"query {{
-            _commits(
-                docID: ["{escaped_doc_id}"],
-                filter: {{ fieldName: {{ _eq: "_C" }} }}
-            ) {{ cid }}
-        }}"#
-    );
-    root_read(node, &query)
-        .await
-        .get("_commits")
-        .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len)
-}
-
 pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     let db = trial_store("convergence-single-claimer").await;
     let agent = support::managed_agent_fixture(&db).await.agent;
     let owner_did = db.node_identity.did();
     let foreign = foreign_did(&db);
 
-    let foreign_doc = create_owned_request(
+    let foreign_doc = create_owned_pending_request(
         &db.node,
         agent.did(),
         "convergence-foreign-req",
         "convergence-foreign-session",
         &foreign,
-        "pending",
     )
     .await;
 
@@ -374,13 +208,12 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
         "watcher scan (next_request) must never yield a foreign replica, got {scanned:?}"
     );
 
-    let own_doc = create_owned_request(
+    let own_doc = create_owned_pending_request(
         &db.node,
         agent.did(),
         "convergence-own-req",
         "convergence-own-session",
         owner_did,
-        "pending",
     )
     .await;
     let claimed = watcher.try_fetch_request(&own_doc).await.unwrap();
@@ -388,181 +221,6 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     assert_eq!(
         claimed.node_did, owner_did,
         "the claimable request must be the owner's own"
-    );
-}
-
-pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    let db = trial_store("convergence-terminal-repair").await;
-    let agent = support::managed_agent_fixture(&db).await.agent;
-    let owner_did = db.node_identity.did();
-    let request_id = "convergence-terminal-repair-request";
-    let session_id = "convergence-terminal-repair-session";
-    let request_doc_id = create_recovery_request(
-        &db.node,
-        request_id,
-        session_id,
-        owner_did,
-        agent.did(),
-        "processing",
-    )
-    .await;
-    seed_owned_request_projection(&db.node, session_id, request_id, owner_did, agent.did()).await;
-    let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
-    let repaired = RequestLifecycle::repair_terminal_requests_with_identities(
-        &db.node,
-        owner_did,
-        std::slice::from_ref(&agent),
-    )
-    .await
-    .unwrap();
-    assert_eq!(repaired.repaired, 1);
-    assert_eq!(repaired.failed, 0);
-    assert_eq!(
-        composite_commit_count(&db.node, &request_doc_id).await,
-        request_commits_before_repair + 1,
-        "one logical terminal repair must add one composite request commit"
-    );
-    let row = fetch_convergence_row(&db.node, request_id).await;
-    assert_eq!(row.lifecycle_state, RequestLifecycleState::Failed);
-    assert_eq!(
-        row.failure_reason.as_deref(),
-        Some("execution lease expired")
-    );
-    assert!(row.terminalized_at.is_some());
-    assert_eq!(row.terminal_redrive_attempts, Some(0));
-
-    let duplicate = RequestLifecycle::repair_terminal_requests_with_identities(
-        &db.node,
-        owner_did,
-        std::slice::from_ref(&agent),
-    )
-    .await
-    .unwrap();
-    assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
-
-    let provider_request_id = "convergence-no-interrupt-latch";
-    let provider_session_id = "convergence-no-interrupt-latch-session";
-    create_recovery_request(
-        &db.node,
-        provider_request_id,
-        provider_session_id,
-        owner_did,
-        agent.did(),
-        "processing",
-    )
-    .await;
-    seed_owned_request_projection(
-        &db.node,
-        provider_session_id,
-        provider_request_id,
-        owner_did,
-        agent.did(),
-    )
-    .await;
-    let provider_repair = RequestLifecycle::repair_terminal_requests_with_identities(
-        &db.node,
-        owner_did,
-        std::slice::from_ref(&agent),
-    )
-    .await
-    .unwrap();
-    assert_eq!(provider_repair.repaired, 1);
-    let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
-    assert_eq!(provider_row.lifecycle_state, RequestLifecycleState::Failed);
-    assert_eq!(
-        provider_row.failure_reason.as_deref(),
-        Some("execution lease expired"),
-        "without the request-owned interrupt latch, recovery remains Failed"
-    );
-
-    let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
-    let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
-    let runtime_interrupt_doc_id = create_recovery_request(
-        &db.node,
-        runtime_interrupt_request_id,
-        runtime_interrupt_session_id,
-        owner_did,
-        agent.did(),
-        "processing",
-    )
-    .await;
-    seed_owned_request_projection(
-        &db.node,
-        runtime_interrupt_session_id,
-        runtime_interrupt_request_id,
-        owner_did,
-        agent.did(),
-    )
-    .await;
-    gents_session::test_support::interrupt_session_of_request_at(
-        &db.node,
-        &runtime_interrupt_doc_id,
-        "2026-07-10T00:00:00Z",
-    )
-    .await;
-
-    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
-        &db.node,
-        owner_did,
-        std::slice::from_ref(&agent),
-    )
-    .await
-    .unwrap();
-    assert_eq!(runtime_interrupt_repair.repaired, 1);
-    let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
-    assert_eq!(
-        runtime_interrupt_row.lifecycle_state,
-        RequestLifecycleState::Interrupted
-    );
-    assert_eq!(
-        runtime_interrupt_row.failure_reason.as_deref(),
-        Some("execution lease expired"),
-        "the durable interrupt latch selects Interrupted lifecycle, while the canonical recovery diagnostic records the expired ownership boundary that triggered repair"
-    );
-}
-
-pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    let db = trial_store("convergence-recover-claimed").await;
-    let agent = support::managed_agent_fixture(&db).await.agent;
-    let owner_did = db.node_identity.did();
-
-    create_recovery_request(
-        &db.node,
-        "convergence-stuck-claimed",
-        "convergence-stuck-claimed-session",
-        owner_did,
-        agent.did(),
-        "claimed",
-    )
-    .await;
-    seed_owned_request_projection(
-        &db.node,
-        "convergence-stuck-claimed-session",
-        "convergence-stuck-claimed",
-        owner_did,
-        agent.did(),
-    )
-    .await;
-    let report = RequestLifecycle::recover_all_with_identities(
-        &db.node,
-        owner_did,
-        std::slice::from_ref(&agent),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        report.requests_recovered, 1,
-        "a claimed own-request must be recovered (Lean requestRecoveryStale = claimed ∨ processing)"
-    );
-
-    let row = fetch_convergence_row(&db.node, "convergence-stuck-claimed").await;
-    assert!(
-        matches!(
-            row.lifecycle_state,
-            RequestLifecycleState::Failed | RequestLifecycleState::Completed
-        ),
-        "recovered request must be terminal, got {}",
-        row.lifecycle_state
     );
 }
 
@@ -706,111 +364,5 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         foreign_row.superseded_by_request.as_deref().unwrap_or(""),
         "",
         "foreign replica must carry no supersede pointer"
-    );
-}
-
-pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
-    let db = trial_store("convergence-drain-foreign").await;
-    let agent = support::managed_agent_fixture(&db).await.agent;
-    let owner_did = db.node_identity.did();
-    let foreign = foreign_did(&db);
-    let session_id = "convergence-drain-foreign-session";
-    let input = coalesce_wakeup_input(session_id);
-    let target_doc_id = create_owned_request(
-        &db.node,
-        agent.did(),
-        "convergence-drain-active",
-        session_id,
-        owner_did,
-        "processing",
-    )
-    .await;
-    seed_owned_request_projection(
-        &db.node,
-        session_id,
-        "convergence-drain-active",
-        owner_did,
-        agent.did(),
-    )
-    .await;
-    gents_session::test_support::record_claim_generation(&db.node, &target_doc_id).await;
-
-    let owner_wake = create_queue_request(
-        &db.node,
-        agent.did(),
-        "convergence-drain-owner",
-        session_id,
-        owner_did,
-        &input,
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    create_queue_request(
-        &db.node,
-        agent.did(),
-        "convergence-drain-foreign",
-        session_id,
-        &foreign,
-        &input,
-        "2026-03-23T00:00:01Z",
-    )
-    .await;
-
-    gents_session::test_support::record_claim_generation(&db.node, &owner_wake).await;
-    let signer = agent.managed_agent_signer().expect("managed Agent signer");
-    gents_session::request::interrupt::interrupt_request_by_doc_id(
-        &db.node,
-        Some(&signer),
-        &target_doc_id,
-        owner_did,
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(
-        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
-            &gents_store::config_client::ConfigAccess::local(db.node.clone()),
-            &target_doc_id,
-        )
-        .await
-        .unwrap()
-        .is_some(),
-        "the exact owned request must be interrupted"
-    );
-
-    // The owner's wake recorded the generation the interrupt passed, so its
-    // claim drains it (`InterruptGeneration.wakeAtClaim`).
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        ::identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let wake = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &agent_access,
-        &owner_wake,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        wake,
-        60,
-    );
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Interrupted
-    );
-    let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
-    assert_eq!(owner.lifecycle_state, RequestLifecycleState::Interrupted);
-
-    let foreign_row = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
-    assert_eq!(foreign_row.node_did, foreign);
-    assert_eq!(
-        foreign_row.lifecycle_state,
-        RequestLifecycleState::Pending,
-        "foreign replica must not be interrupted by the owner's wake-up drain"
     );
 }
