@@ -9,6 +9,8 @@ import {
 import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
+import { inNativeShell } from "../lib/nativeShell";
+import { isMacTauriShell } from "../lib/shellPlatform";
 import type { ClientState, ClientStore } from "./clientStore";
 import { errorText } from "../lib/errorText";
 
@@ -26,6 +28,7 @@ export type IncompatibleHome = {
   busy: boolean;
   fullReset: boolean;
   canReset: boolean;
+  canFullReset: boolean;
   previewReset: () => Promise<void>;
   startOver: () => Promise<void>;
   cancel: () => void;
@@ -180,6 +183,8 @@ export function createIncompatibleHomeOps({
   return {
     adopt,
     canReset: Boolean(api.resetManagedServer),
+    canFullReset:
+      Boolean(api.resetManagedServer) && (!inNativeShell() || isMacTauriShell()),
     previewReset,
     startOver,
     cancel,
