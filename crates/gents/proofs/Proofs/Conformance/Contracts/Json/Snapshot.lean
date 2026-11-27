@@ -27,6 +27,7 @@ import Proofs.Conformance.Contracts.Json.Shards.S24
 import Proofs.Conformance.DatastoreUpsert
 import Proofs.Conformance.DocumentSigner
 import Proofs.Conformance.Identity.RuntimeActorAuthority
+import Proofs.Conformance.StoreMigration
 
 namespace Conformance.Contracts
 

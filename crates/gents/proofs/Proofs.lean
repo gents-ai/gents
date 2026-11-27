@@ -16,6 +16,7 @@ import Proofs.Store.TransactionFence
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
 import Proofs.Store.StoreHandoff
+import Proofs.Store.StoreMigration
 import Proofs.Inference.Operations
 import Proofs.Inference.Scheduling
 import Proofs.Inference.AccountListing
