@@ -1010,6 +1010,10 @@ mod tests {
                         index,
                         kind: ClaudeBlockKind::Thinking,
                     },
+                    "block_start_redacted" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::RedactedThinking,
+                    },
                     "block_start_tool_use" => Event::BlockStart {
                         index,
                         kind: ClaudeBlockKind::ToolUse {
@@ -1024,6 +1028,10 @@ mod tests {
                     "signature" => Event::Signature {
                         index,
                         fragment: "sig".into(),
+                    },
+                    "redacted_data" => Event::RedactedData {
+                        index,
+                        data: "opaque".into(),
                     },
                     "block_stop" => Event::BlockStop { index },
                     other => panic!("unsupported modeled provider step {other}"),

@@ -55,4 +55,47 @@ def «prefix» : Family PrefixInput Json where
     CanonicalOutputWire.auditResult
       (StreamingResponse.reconstructAuditPrefix witness.input none)).getD Json.null
 
+structure RecoveryEntryWire where
+  stream : Nat
+  blockIndex : Nat
+  kind : String
+  signature : Option String
+  deriving ToJson
+
+structure RecoveryOutput where
+  valid : Bool
+  closeStreamBytes : List Nat
+  retained : List RecoveryEntryWire
+  audit : Json
+  deriving ToJson
+
+def recoveryNamed (name : String) : Option StreamingResponse.ReasoningAudit.RecoveryCase :=
+  StreamingResponse.ReasoningAudit.recoveryCases.find? (·.name == name)
+
+theorem recovery_case_names_are_unique :
+    (StreamingResponse.ReasoningAudit.recoveryCases.map (·.name)).eraseDups.length =
+      StreamingResponse.ReasoningAudit.recoveryCases.length := by
+  native_decide
+
+def recoveryResult (witness : StreamingResponse.ReasoningAudit.RecoveryCase) : RecoveryOutput :=
+  let obs := witness.input
+  let audit := CanonicalOutputWire.auditResult (StreamingResponse.reconstructAuditPrefix obs none)
+  match StreamingResponse.ReasoningAudit.planRecovery obs.records obs.target.coordinate
+      obs.target.writer with
+  | .error _ => { valid := false, closeStreamBytes := [], retained := [], audit }
+  | .ok plan =>
+      { valid := true
+        closeStreamBytes := plan.closeStreamBytes
+        retained := plan.retained.map fun entry =>
+          { stream := entry.stream, blockIndex := entry.blockIndex,
+            kind := entry.kind, signature := entry.signature }
+        audit }
+
+@[conformance_family]
+def recovery : Family PrefixInput RecoveryOutput where
+  inputs := StreamingResponse.ReasoningAudit.recoveryCases.map fun witness =>
+    { name := witness.name, input := CanonicalOutputWire.observation witness.input }
+  model := fun i => ((recoveryNamed i.name).map recoveryResult).getD
+    { valid := false, closeStreamBytes := [], retained := [], audit := Json.null }
+
 end Conformance.ReasoningAudit

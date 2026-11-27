@@ -1452,6 +1452,98 @@ async fn partial_recovery_keeps_stopped_reasoning_but_not_the_following_open_blo
 }
 
 #[tokio::test]
+async fn partial_close_replay_with_stopped_reasoning_rejects_missing_header() {
+    use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
+    use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SourceClose,
+    };
+    use gents_store::config_client::session_children::output_segment_bound_variables;
+
+    let (node, path, lifecycle, writer) = fixture("partial-stopped-missing-header").await;
+    let request = lifecycle.request();
+    let scope: gents_protocol::rendered_request::CaptureScope = "inference.1".parse().unwrap();
+    writer
+        .start_provider_attempt(&request.doc_id, 0, 0, scope)
+        .await;
+    let first = AssistantContent::Reasoning(Reasoning {
+        id: None,
+        content: vec![ReasoningContent::Text {
+            text: "complete".into(),
+            signature: Some("sig".into()),
+        }],
+    });
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    writer
+        .flush_owned_partial_with_stop(
+            request,
+            &generation,
+            &Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![first],
+            },
+            Some(0),
+        )
+        .await
+        .unwrap();
+    let closing = OutputSegment {
+        node_did: request.node_did.clone(),
+        requester_did: request.requester_did.clone(),
+        session_id: request.session_id.clone(),
+        request_doc_id: request.doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope,
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: None,
+        runs: Vec::new(),
+        payload: String::new(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Partial,
+            segments: 1,
+            stream_bytes: vec![8, 3, 0],
+        }),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let access = fixture_access(&node, &lifecycle);
+    access
+        .transact_write("test.insert_headerless_stopped_close", |txn| {
+            let closing = closing.clone();
+            Box::pin(async move {
+                let vars = output_segment_bound_variables(txn, &closing).await?;
+                txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &vars)
+                    .await?;
+                Ok::<(), anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    let error = canonical::close_provider_attempt_at_with_access(
+        &access,
+        &generation,
+        &closing,
+        canonical::ProviderAttemptClose::Partial,
+        None,
+        chrono::Utc::now(),
+    )
+    .await
+    .expect_err("replaying a partial close with stopped reasoning and no header must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its committed publication header"),
+        "unexpected error: {error:#}"
+    );
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
+}
+
+#[tokio::test]
 async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     let (node, path, lifecycle, writer) = fixture("tool-replay").await;

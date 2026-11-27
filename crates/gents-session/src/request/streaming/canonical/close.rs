@@ -4,7 +4,7 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, ReconstructionError, SourceClose, StreamPayload,
+    OutputWriter, PayloadPresentation, ReasoningPart, ReconstructionError, SourceClose,
     TranscriptMessage,
 };
 
@@ -391,6 +391,21 @@ pub(crate) async fn request_headers_in_txn(
     .await
 }
 
+fn partial_recovery_block_matches_close(block: &MessageBlock, close_doc_id: &str) -> bool {
+    match block {
+        MessageBlock::Text { text } => {
+            text.presentation == PayloadPresentation::Full
+                && text.output.close_doc_id == close_doc_id
+        }
+        MessageBlock::Reasoning { id: None, parts } => match parts.as_slice() {
+            [ReasoningPart::Text { text, .. }] => text.close_doc_id == close_doc_id,
+            [ReasoningPart::Redacted { data }] => data.close_doc_id == close_doc_id,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 async fn partial_header_in_txn(
     txn: &ConfigApplyTxn<'_>,
     inputs: PartialHeaderInputs<'_>,
@@ -431,10 +446,12 @@ async fn partial_header_in_txn(
                 && existing.message.outcome == OutputOutcome::Partial
                 && existing.message.role == MessageRole::Assistant
                 && existing.message.native_id.is_none()
-                && existing.message.blocks.iter().all(|block| matches!(block,
-                    MessageBlock::Text { text }
-                        if text.presentation == PayloadPresentation::Full
-                            && text.output.close_doc_id == closing.doc_id)),
+                && existing.message.native_request_id.is_none()
+                && existing
+                    .message
+                    .blocks
+                    .iter()
+                    .all(|block| partial_recovery_block_matches_close(block, &closing.doc_id)),
             "partial publication replay changed its exact header"
         );
         if let Some(factory) = header_factory {
@@ -461,19 +478,29 @@ async fn partial_header_in_txn(
         let Some(SourceClose::Closed { segments, .. }) = closing.segment.close.as_ref() else {
             anyhow::bail!("partial replay has no Partial closure")
         };
-        let retains_text = records.iter().any(|row| {
-            row.segment
-                .ordinal
-                .is_some_and(|ordinal| ordinal < *segments)
-                && row.segment.runs.iter().any(|run| {
-                    run.declaration.as_ref().is_some_and(|declaration| {
-                        declaration.part_index == 0
-                            && matches!(declaration.payload, StreamPayload::Text)
-                    })
-                })
-        });
+        let bounded = records
+            .iter()
+            .filter(|row| {
+                row.doc_id == closing.doc_id
+                    || row
+                        .segment
+                        .ordinal
+                        .is_some_and(|ordinal| ordinal < *segments)
+            })
+            .map(|row| ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            })
+            .collect::<Vec<_>>();
+        let retained = retained_partial_blocks(
+            &bounded,
+            &prepared.request_doc_id,
+            &prepared.source,
+            &prepared.writer,
+            closing,
+        )?;
         anyhow::ensure!(
-            !retains_text,
+            retained.is_empty(),
             "partial close replay is missing its committed publication header"
         );
         return Ok(None);
