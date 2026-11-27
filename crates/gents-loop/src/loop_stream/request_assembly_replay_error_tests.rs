@@ -1,4 +1,4 @@
-use super::tagged_history::tagged_from_sourced;
+use super::tagged_history::{tagged_from_sourced, SourceTagError};
 use super::*;
 use crate::claude_messages_body::{ReasoningWitness, ReplayIssuer, ReplayOrigin};
 use crate::provider_input::ProviderInputProfile;
@@ -1358,4 +1358,194 @@ async fn responses_reasoning_returns_only_to_its_issuer_whatever_the_prefix_beca
             "{text}"
         );
     }
+}
+
+#[test]
+fn source_tagging_matches_the_lean_model() {
+    use crate::compaction::history::{SourcedMessage, StubReceipt, StubSizes};
+    use gents_lean_vocab::families::request_assembly_source_tagging::{
+        self as family, SourceTagWire, SourceTaggingOutput, TaggedRowWire,
+    };
+    use gents_protocol::message::{ToolResult, ToolResultContent};
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let to_native_tag = |tag: &SourceTagWire| ReplayTag {
+        request_doc_id: format!("req-{}", tag.request),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: tag.scope,
+            },
+            turn_index: u32::try_from(tag.turn).expect("turn fits"),
+            attempt: u32::try_from(tag.attempt).expect("attempt fits"),
+        },
+    };
+    let to_wire_tag = |tag: &ReplayTag| match &tag.source {
+        OutputSource::ProviderTurn {
+            scope,
+            turn_index,
+            attempt,
+        } => SourceTagWire {
+            request: tag
+                .request_doc_id
+                .strip_prefix("req-")
+                .expect("synthetic request prefix")
+                .parse()
+                .expect("request id"),
+            scope: scope.seq,
+            turn: u64::from(*turn_index),
+            attempt: u64::from(*attempt),
+        },
+        other => panic!("unexpected replay source {other:?}"),
+    };
+    let to_wire_role = |message: &Message| match message {
+        Message::User { .. } => "user".to_string(),
+        Message::Assistant { .. } => "assistant".to_string(),
+        Message::System { .. } => "system".to_string(),
+    };
+    let to_wire_error = |error: SourceTagError| match error {
+        SourceTagError::NonAssistantSource => "non_assistant_source",
+        SourceTagError::ReorderedOrDuplicatedSourceRow => "reordered_or_duplicated_source_row",
+        SourceTagError::OutOfRangeSourceIndex => "out_of_range_source_index",
+        SourceTagError::RoleMismatch => "role_mismatch",
+        SourceTagError::MisalignedAssistantBlockIndices => "misaligned_assistant_block_indices",
+        SourceTagError::ReorderedAssistantBlocks => "reordered_assistant_blocks",
+        SourceTagError::OutOfRangeAssistantBlockIndex => "out_of_range_assistant_block_index",
+        SourceTagError::InvalidOriginalAssociation => "invalid_original_association",
+    };
+
+    family::replay::<String, String>(|case| {
+        let originals = case
+            .originals
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let message = match row.role.as_str() {
+                    "user" => Message::user(format!("u-{index}")),
+                    "system" => Message::System {
+                        content: format!("s-{index}"),
+                    },
+                    "assistant" => Message::Assistant {
+                        request_id: None,
+                        id: None,
+                        content: (0..row.block_count)
+                            .map(|block| {
+                                AssistantContent::Text(Text {
+                                    text: format!("a-{index}-{block}"),
+                                })
+                            })
+                            .collect(),
+                    },
+                    other => panic!("unknown role {other}"),
+                };
+                TaggedMessage {
+                    message,
+                    source: row.source.as_ref().map(to_native_tag),
+                    physical_header: row.physical_header.clone(),
+                    block_indices: row
+                        .block_indices
+                        .iter()
+                        .map(|position| usize::try_from(*position).expect("block index fits"))
+                        .collect(),
+                    stub_receipts: row
+                        .stub_receipt_keys
+                        .iter()
+                        .map(|key| StubReceipt {
+                            source_index: index,
+                            result_key: key.clone(),
+                            sizes: StubSizes {
+                                original_bytes: 128,
+                                stub_bytes: 16,
+                                stub_shaped: false,
+                            },
+                        })
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let sourced = case
+            .sourced
+            .iter()
+            .map(|item| {
+                let message = match item.role.as_str() {
+                    "user" => {
+                        if item.kept_tool_result_keys.is_empty() {
+                            Message::user("projected-user")
+                        } else {
+                            Message::User {
+                                content: item
+                                    .kept_tool_result_keys
+                                    .iter()
+                                    .map(|key| {
+                                        UserContent::ToolResult(ToolResult {
+                                            id: key.clone(),
+                                            call_id: Some(key.clone()),
+                                            content: vec![ToolResultContent::text("ok")],
+                                        })
+                                    })
+                                    .collect(),
+                            }
+                        }
+                    }
+                    "system" => Message::System {
+                        content: "projected-system".to_string(),
+                    },
+                    "assistant" => Message::Assistant {
+                        request_id: None,
+                        id: None,
+                        content: (0..item.block_count)
+                            .map(|block| {
+                                AssistantContent::Text(Text {
+                                    text: format!("projected-{block}"),
+                                })
+                            })
+                            .collect(),
+                    },
+                    other => panic!("unknown role {other}"),
+                };
+                SourcedMessage {
+                    source_index: usize::try_from(item.source_index).expect("source index fits"),
+                    block_indices: item
+                        .block_indices
+                        .iter()
+                        .map(|position| usize::try_from(*position).expect("block index fits"))
+                        .collect(),
+                    message,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        match tagged_from_sourced(&originals, sourced) {
+            Err(error) => {
+                let tag_error = *SourceTagError::in_chain(&error).unwrap_or_else(|| {
+                    panic!("{}: unexpected non-SourceTagError {error:?}", case.name)
+                });
+                SourceTaggingOutput {
+                    error: Some(to_wire_error(tag_error).to_string()),
+                    rows: Vec::new(),
+                }
+            }
+            Ok(rows) => SourceTaggingOutput {
+                error: None,
+                rows: rows
+                    .into_iter()
+                    .map(|row| TaggedRowWire {
+                        role: to_wire_role(&row.message),
+                        source: row.source.as_ref().map(to_wire_tag),
+                        physical_header: row.physical_header,
+                        block_indices: row
+                            .block_indices
+                            .into_iter()
+                            .map(|position| u64::try_from(position).expect("block index fits"))
+                            .collect(),
+                        stub_receipt_keys: row
+                            .stub_receipts
+                            .into_iter()
+                            .map(|receipt| receipt.result_key)
+                            .collect(),
+                    })
+                    .collect(),
+            },
+        }
+    });
 }
