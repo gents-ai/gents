@@ -135,6 +135,8 @@ mod access_classification_tests;
 mod variable_tests;
 
 #[cfg(test)]
+mod hot_counter_replay;
+#[cfg(test)]
 mod pushdown_tests;
 #[cfg(test)]
 mod relationship_tests;
