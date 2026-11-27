@@ -215,6 +215,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , p2pRead := ordinary
   , p2pMutate := ordinary
   , sessionHistory := ordinary
+  , memory := ordinary
   , contextBudget := ordinary
   , sessionMessages := sessionMessages
   , skills := ordinary

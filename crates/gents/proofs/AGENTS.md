@@ -33,7 +33,7 @@ group can span layers.
 | `P2P` | Enrollment, pairing reconcile and routes, peer discovery, the backpressure obligation model |
 | `Pack` | Pack resolution, core packs, plugin wiring, grants and ownership |
 | `Session` | Requests and execution leases, sessions, forks and recovery, the session queue, prompt assembly, compaction and transcripts, command policy, managed execution, workspaces, hooks, client turn-state derivation (`Client/`) |
-| `Tools` | The tool surface, self-config and its grants, tool policy, root admission, edit matching, LSP and MCP health |
+| `Tools` | The tool surface, self-config and its grants, tool policy, root admission, edit matching, LSP and MCP health, agent experience memory (`Memory/`) |
 | `ToolCalls` | Tool dispatch, background tool rows, plugin jobs, trigger identity, tool-call recovery |
 | `Automation` | Triggers and event delivery, callbacks, Goals and Goal automation, the mailbox, processes, hook instantiations |
 | `Observe` | File inventory, retry summaries |

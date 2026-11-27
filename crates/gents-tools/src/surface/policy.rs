@@ -202,6 +202,7 @@ pub struct ToolPolicySurface {
     pub p2p_read: bool,
     pub p2p_mutate: bool,
     pub session_history: bool,
+    pub memory: bool,
     pub context_budget: bool,
     pub session_messages: bool,
     pub skills: bool,
@@ -283,6 +284,9 @@ impl ToolPolicySurface {
         if self.session_history {
             emit("session-history", &[NodePermission::DocumentRead]);
         }
+        if self.memory {
+            emit("memory", &[NodePermission::DocumentDelete]);
+        }
         if self.include_goal_tools() {
             emit(
                 "goal",
@@ -359,6 +363,7 @@ impl ToolPolicySurface {
             p2p_read: false,
             p2p_mutate: false,
             session_history: false,
+            memory: false,
             context_budget: false,
             session_messages: false,
             skills: false,
@@ -400,6 +405,7 @@ impl ToolPolicySurface {
             p2p_read: true,
             p2p_mutate: true,
             session_history: true,
+            memory: true,
             context_budget: true,
             session_messages: true,
             skills: true,
@@ -516,6 +522,7 @@ impl ToolPolicySurface {
             p2p_read: selection.enable_p2p_tool,
             p2p_mutate: selection.enable_p2p_mutations,
             session_history: selection.enable_session_history_tool,
+            memory: selection.enable_memory_tool,
             context_budget: selection.enable_context_budget,
             session_messages: agent_tools.enabled,
             skills: true,
@@ -561,6 +568,7 @@ impl ToolPolicySurface {
             p2p_read: self.p2p_read && other.p2p_read,
             p2p_mutate: self.p2p_mutate && other.p2p_mutate,
             session_history: self.session_history && other.session_history,
+            memory: self.memory && other.memory,
             context_budget: self.context_budget && other.context_budget,
             session_messages: self.session_messages && other.session_messages,
             skills: self.skills && other.skills,

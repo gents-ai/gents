@@ -1,0 +1,4 @@
+---- MODULE MCMemoryAliasMergeAdmitOutside ----
+EXTENDS MemoryAliasMerge
+
+====

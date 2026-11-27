@@ -122,7 +122,23 @@ its delete is the session's delete (`Identity.SessionInterrupt`).
 manages it and no permission names it, so only the Agent's owner places it and
 holding it grants nothing: the receiving node reads it only as a certified
 assignment whose creator is the issuer it trusts
-(`only_the_owner_places_an_agent`, `a_host_grants_no_permission`). -/
+(`only_the_owner_places_an_agent`, `a_host_grants_no_permission`).
+
+`agent_memory` holds an Agent's memory: its facts, problems, attempts,
+outcomes, alias rows and alias guard (`Tools.Memory.Experience`,
+`Identity.AgentMemoryAccess`). Decision (operator, Q1): its parent is the
+Agent, so memory outlives the session that recorded it. The Agent's DID creates
+every row and so owns it, and reads, updates and deletes it natively. Its read
+is the Agent's `memory_read`: an explicit `memory_reader`, a configuration
+`reader`, an `administrator`, and the Node's delete as for `session_read`, so
+whoever may change memory through `session_admin` also reads it; its update and
+delete are the Agent's `session_admin`. Sharing an Agent's memory is one
+`memory_reader` relationship on the Agent document, never one per row, and it
+grants nothing else (`memory_reader_grants_only_memory_read`). Decision
+(operator, Q2): `administrator` manages `memory_reader`, and so does
+`executor`, so an Agent may share its own experience; an executor manages no
+other relation, and only on its own Agent document
+(`an_executor_shares_only_its_own_memory`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -183,14 +199,17 @@ def policy : List ResourceDefinition :=
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"workspace_selected_by", ["configuration->reader", "agents->executor"], []⟩,
         ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor", "nodes->owner", "nodes->administrator"],
-          ["parent", "reader", "session_writer", "administrator", "executor", "config_writer"]⟩,
-        ⟨"executor", ["actor"], []⟩, ⟨"config_writer", ["actor"], []⟩, ⟨"host", ["actor"], []⟩]
+          ["parent", "reader", "session_writer", "administrator", "executor", "config_writer",
+            "memory_reader"]⟩,
+        ⟨"executor", ["actor"], ["memory_reader"]⟩, ⟨"config_writer", ["actor"], []⟩, ⟨"host", ["actor"], []⟩,
+        ⟨"memory_reader", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "workspace_selected_by", "session_writer", "administrator", "executor", "config_writer"] [("parent", "read")],
         permission "update" ["administrator", "config_writer"] [("parent", "update")],
         permission "delete" ["administrator"] [("parent", "delete")],
         permission "invoke" ["session_writer", "executor", "administrator"] [("parent", "delete")],
         permission "session_read" ["reader", "administrator"] [("parent", "delete")],
-        permission "session_admin" ["administrator"] [("parent", "delete")]] }
+        permission "session_admin" ["administrator"] [("parent", "delete")],
+        permission "memory_read" ["memory_reader", "reader", "administrator"] [("parent", "delete")]] }
   , { name := "sessions"
       relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"working_agent", ["actor"], []⟩]
@@ -226,6 +245,11 @@ def policy : List ResourceDefinition :=
   , { name := "agent_children"
       relations := [⟨"parent", ["agents"], []⟩]
       permissions := [permission "read" [] [("parent", "session_read")],
+        permission "update" [] [("parent", "session_admin")],
+        permission "delete" [] [("parent", "session_admin")]] }
+  , { name := "agent_memory"
+      relations := [⟨"parent", ["agents"], []⟩]
+      permissions := [permission "read" [] [("parent", "memory_read")],
         permission "update" [] [("parent", "session_admin")],
         permission "delete" [] [("parent", "session_admin")]] }
   , { name := "workspaces"

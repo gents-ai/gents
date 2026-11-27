@@ -236,6 +236,23 @@ pub const AGENT_SESSION_GOAL_RECEIPT: &str =
 pub const GOAL_OBSERVATION_NAME: &str = "GoalObservation";
 pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observation.graphql");
 
+pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
+pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
+pub const AGENT_MEMORY_PROBLEM_NAME: &str = "AgentMemoryProblem";
+pub const AGENT_MEMORY_PROBLEM: &str =
+    include_str!("../schemas/agent/agent_memory_problem.graphql");
+pub const AGENT_MEMORY_ATTEMPT_NAME: &str = "AgentMemoryAttempt";
+pub const AGENT_MEMORY_ATTEMPT: &str =
+    include_str!("../schemas/agent/agent_memory_attempt.graphql");
+pub const AGENT_MEMORY_OUTCOME_NAME: &str = "AgentMemoryOutcome";
+pub const AGENT_MEMORY_OUTCOME: &str =
+    include_str!("../schemas/agent/agent_memory_outcome.graphql");
+pub const AGENT_MEMORY_ALIAS_NAME: &str = "AgentMemoryAlias";
+pub const AGENT_MEMORY_ALIAS: &str = include_str!("../schemas/agent/agent_memory_alias.graphql");
+pub const AGENT_MEMORY_ALIAS_GUARD_NAME: &str = "AgentMemoryAliasGuard";
+pub const AGENT_MEMORY_ALIAS_GUARD: &str =
+    include_str!("../schemas/agent/agent_memory_alias_guard.graphql");
+
 pub const ALL: &[&str] = &[
     NODE,
     ACCOUNT_DEVICE_GROUP,
@@ -327,6 +344,12 @@ pub const ALL: &[&str] = &[
     EVAL_VERDICT,
     OPTIMIZATION_JOB,
     PACK_INSTALLATION,
+    AGENT_MEMORY,
+    AGENT_MEMORY_PROBLEM,
+    AGENT_MEMORY_ATTEMPT,
+    AGENT_MEMORY_OUTCOME,
+    AGENT_MEMORY_ALIAS,
+    AGENT_MEMORY_ALIAS_GUARD,
 ];
 
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
@@ -420,6 +443,12 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVAL_VERDICT_NAME,
     OPTIMIZATION_JOB_NAME,
     PACK_INSTALLATION_NAME,
+    AGENT_MEMORY_NAME,
+    AGENT_MEMORY_PROBLEM_NAME,
+    AGENT_MEMORY_ATTEMPT_NAME,
+    AGENT_MEMORY_OUTCOME_NAME,
+    AGENT_MEMORY_ALIAS_NAME,
+    AGENT_MEMORY_ALIAS_GUARD_NAME,
 ];
 
 /// The discovery and enrollment documents Gents' own routes carry across a
@@ -536,6 +565,7 @@ pub mod kind {
         Blob => "Blob",
         StrList => "[String!]",
         IntList => "[Int!]",
+        Float32List => "[Float32!]",
         DocId => "String",
     }
 }

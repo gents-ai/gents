@@ -18,6 +18,7 @@ fn covered_tool_operations_follow_executable_identity_model() {
         let mut surface = ToolPolicySurface::secure_minimal();
         surface.schema_management = case.schema;
         surface.session_history = case.history;
+        surface.memory = case.memory;
         surface.goal_tools = case.goal;
         surface.goal_create = case.create;
         surface.self_config = case.self_config;

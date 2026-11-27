@@ -55,6 +55,7 @@ pub struct ResolvedToolSelection {
     /// `host.max_background_tool_calls`, resolved.
     pub background_limit: gents_protocol::job::BackgroundLimit,
     pub enable_session_history_tool: bool,
+    pub enable_memory_tool: bool,
     pub enable_schema_tool: bool,
     pub enable_p2p_tool: bool,
     pub enable_p2p_mutations: bool,
@@ -99,6 +100,7 @@ impl Default for ResolvedToolSelection {
             backgroundable_tool_names: Vec::new(),
             background_limit: Default::default(),
             enable_session_history_tool: true,
+            enable_memory_tool: true,
             enable_schema_tool: false,
             enable_p2p_tool: false,
             enable_p2p_mutations: false,
@@ -253,6 +255,9 @@ impl ResolvedToolSelection {
                 .unwrap_or(false),
             enable_session_history_tool: built_ins
                 .and_then(|built| built.enable_session_history_tool)
+                .unwrap_or(true),
+            enable_memory_tool: built_ins
+                .and_then(|built| built.enable_memory_tool)
                 .unwrap_or(true),
             enable_context_budget: built_ins
                 .and_then(|built| built.enable_context_budget)

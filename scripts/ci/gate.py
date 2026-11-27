@@ -97,6 +97,7 @@ class Group:
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
+        "gents-memory-embed",
         "gents-lean-vocab",
         "gents-callback-fixture-create-workspace", "gents-claude", "gents-claude-login",
         "gents-chatgpt-login", "gents-login-ui", "gents-fs-runner", "gents-shell",

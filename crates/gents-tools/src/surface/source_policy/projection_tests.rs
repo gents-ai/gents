@@ -669,7 +669,7 @@ async fn configured_delete_sources_grant_revoke_and_preserve_independent_permiss
     let nonce = escape_graphql_string(&binding.creation_nonce);
     for mutation in [
         format!(
-            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"delete-tools",self_config:{{enable_self_config:true,self_config_categories:["agent"],enable_pack_install:false}}}}) {{_docID}} }}"#
+            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"delete-tools",built_ins:{{enable_memory_tool:false}},self_config:{{enable_self_config:true,self_config_categories:["agent"],enable_pack_install:false}}}}) {{_docID}} }}"#
         ),
         format!(
             r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"delete-context",tools_id:"delete-tools"}}) {{_docID}} }}"#
@@ -1185,7 +1185,7 @@ async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyho
     let nonce = escape_graphql_string(&binding.creation_nonce);
     for mutation in [
         format!(
-            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"plugin-tools",integrations:{integration}}}) {{_docID}} }}"#
+            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"plugin-tools",built_ins:{{enable_memory_tool:false}},integrations:{integration}}}) {{_docID}} }}"#
         ),
         format!(
             r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"plugin-context",tools_id:"plugin-tools"}}) {{_docID}} }}"#

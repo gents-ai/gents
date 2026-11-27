@@ -77,7 +77,9 @@ fn strip_comment(line: &str) -> &str {
 }
 
 /// The schema bundle uses one field per line and no nested selections, so the
-/// only brace that opens a body is the first one outside a directive argument.
+/// brace that opens a body is the first one outside a directive argument. Field
+/// directives may hold their own brace sets, so the body closes at its matching
+/// brace rather than the first one.
 fn parse_types(path: &Path) -> Vec<TypeDef> {
     let source = fs::read_to_string(path).expect("read schema");
     let text: String = source
@@ -96,10 +98,7 @@ fn parse_types(path: &Path) -> Vec<TypeDef> {
             .collect();
         assert!(!name.is_empty(), "unnamed type in {}", path.display());
         let open = body_open(rest).unwrap_or_else(|| panic!("{name} has no body"));
-        let close = rest[open..]
-            .find('}')
-            .unwrap_or_else(|| panic!("{name} body is not closed"))
-            + open;
+        let close = body_close(rest, open).unwrap_or_else(|| panic!("{name} body is not closed"));
         let fields = rest[open + 1..close]
             .lines()
             .map(str::trim)
@@ -140,6 +139,25 @@ fn body_open(text: &str) -> Option<usize> {
     None
 }
 
+fn body_close(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    for (offset, ch) in text[open..].char_indices() {
+        match ch {
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_field(type_name: &str, line: &str) -> FieldDef {
     let (name, rest) = line
         .split_once(':')
@@ -167,6 +185,7 @@ fn parse_field(type_name: &str, line: &str) -> FieldDef {
         "Blob" => "Blob",
         "[String]" | "[String!]" => "StrList",
         "[Int]" | "[Int!]" => "IntList",
+        "[Float32]" | "[Float32!]" => "Float32List",
         other => panic!("{type_name}.{name}: unsupported schema type {other:?}"),
     };
     FieldDef { name, kind }

@@ -27,7 +27,8 @@
         }
       },
       "built_ins": {
-        "enable_session_history_tool": false
+        "enable_session_history_tool": false,
+        "enable_memory_tool": false
       }
     }
   ]

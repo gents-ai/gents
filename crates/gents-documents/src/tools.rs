@@ -454,6 +454,11 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_session_history_tool: Option<bool>,
+    /// The `memory` tool and its automatic context injection. Unset is
+    /// enabled; a tool-less agent sets this to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_memory_tool: Option<bool>,
     /// Node-wide schema administration, independent of config and document access.
     /// DefraDB remains the schema authorization owner. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]

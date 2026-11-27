@@ -17,6 +17,7 @@ structure ToolOperationInput where
   pack : Bool
   query : Bool
   write : Bool
+  memory : Bool
   deriving ToJson, Inhabited
 
 structure OperationSource where
@@ -35,6 +36,7 @@ def toolOperationSurface (i : ToolOperationInput) : ToolPolicy.Surface :=
     { ToolPolicy.ContractCases.secureMinimal with
       schemaManagement := i.schema
       sessionHistory := i.history
+      memory := i.memory
       goalTools := i.goal
       goalCreate := i.create
       selfConfig := i.selfConfig
@@ -49,16 +51,23 @@ def toolOperationSources (i : ToolOperationInput) : List OperationSource :=
 
 def operation (name : String) (schema history goal create selfConfig pack : Bool)
     (category : String) : ToolOperationInput :=
-  { name, schema, history, goal, create, selfConfig, category, pack, query := false, write := false }
+  { name, schema, history, goal, create, selfConfig, category, pack, query := false, write := false,
+    memory := false }
+
+def memoryOperation (name : String) : ToolOperationInput :=
+  { name, schema := false, history := false, goal := false, create := false,
+    selfConfig := false, category := "none", pack := false, query := false, write := false,
+    memory := true }
 
 def datastoreOperation (name : String) (query write : Bool) : ToolOperationInput :=
   { name, schema := false, history := false, goal := false, create := false,
-    selfConfig := false, category := "none", pack := false, query, write }
+    selfConfig := false, category := "none", pack := false, query, write, memory := false }
 
 def toolOperationInputs : List ToolOperationInput :=
   [operation "none" false false false false false false "none",
    operation "schema" true false false false false false "none",
    operation "session-history" false true false false false false "none",
+   memoryOperation "memory",
    operation "goal" false false true false false false "none",
    operation "goal-create-without-goal" false false false true false false "none",
    operation "goal-and-create" false false true true false false "none",

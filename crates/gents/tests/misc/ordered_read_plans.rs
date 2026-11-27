@@ -223,6 +223,7 @@ fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
     let field = Regex::new(r"([A-Z][A-Za-z0-9_]*|\$GENTS_[^$]*\$)\s*\(").unwrap();
     let ordered = Regex::new(r"\border\s*:").unwrap();
     let bounded = Regex::new(r"\b(?:limit|offset)\s*:").unwrap();
+    let ranked = Regex::new(r"\border\s*:\s*(?:\[\s*)?\{\s*_alias\s*:").unwrap();
     field
         .captures_iter(&template)
         .filter_map(|capture| {
@@ -233,7 +234,10 @@ fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
             let start = capture.get(0).unwrap().end() - 1;
             let end = matching_paren(&template, start)?;
             let arguments = &template[start + 1..end];
-            (ordered.is_match(arguments) && bounded.is_match(arguments)).then(|| Read {
+            (ordered.is_match(arguments)
+                && bounded.is_match(arguments)
+                && !ranked.is_match(arguments))
+            .then(|| Read {
                 path: path.to_owned(),
                 collection: capture[1].to_owned(),
                 arguments: canonical_whitespace(arguments),
@@ -603,6 +607,23 @@ query = f"""{{ AgentRequest(order: {{request_id: ASC}}, limit: {limit}) {{_docID
         .collect();
     assert_eq!(found.len(), 1);
     assert!(found[0].arguments.contains("$GENTS_limit$"));
+}
+
+#[test]
+fn ranked_alias_order_is_outside_the_index_plan_screen() {
+    let path = Path::new("fixture.rs");
+    let source = r#"fn search() {
+        let query = "{AgentMemory(filter: {agent_did: {_eq: \"a\"}}, limit: 8, order: [{_alias: {_score: DESC}}]) { _docID }}";
+    }"#;
+    let syntax = syn::parse_file(source).unwrap();
+    let mut literals = Literals::default();
+    literals.visit_file(&syntax);
+    let found: Vec<_> = literals
+        .0
+        .into_iter()
+        .flat_map(|(literal, formatted)| reads(&path.display().to_string(), &literal, formatted))
+        .collect();
+    assert!(found.is_empty());
 }
 
 #[test]

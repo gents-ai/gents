@@ -10,4 +10,5 @@ import Proofs.Tools.Identity.Configuration
 import Proofs.Store.Identity.McpService
 import Proofs.Store.Identity.Operations
 import Proofs.Store.Identity.OwedDeliveryAccess
+import Proofs.Store.Identity.AgentMemoryAccess
 import Proofs.Store.Identity.ApplicationPairingAccess

@@ -1,5 +1,6 @@
 use gents_protocol::tool_names::{
-    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, META_TOOL_NAMES, SESSION_HISTORY_TOOL_NAME,
+    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, MEMORY_TOOL_NAME, META_TOOL_NAMES,
+    SESSION_HISTORY_TOOL_NAME,
 };
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
@@ -88,6 +89,7 @@ impl ToolSurfaceExplanation {
             && tool_names.iter().any(|name| {
                 name == CONTEXT_BUDGET_TOOL_NAME
                     || name == SESSION_HISTORY_TOOL_NAME
+                    || name == MEMORY_TOOL_NAME
                     || name == DEFRA_QUERY_TOOL_NAME
             })
         {
@@ -412,6 +414,11 @@ fn explain_builtin_reads(
         builder.include_many("built_in_read", [SESSION_HISTORY_TOOL_NAME.to_string()]);
     } else {
         builder.exclude("built_in_read", SESSION_HISTORY_TOOL_NAME);
+    }
+    if surface.enable_memory_tool {
+        builder.include_many("built_in_read", [MEMORY_TOOL_NAME.to_string()]);
+    } else {
+        builder.exclude("built_in_read", MEMORY_TOOL_NAME);
     }
 
     if surface.enable_defra_query {

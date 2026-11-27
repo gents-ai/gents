@@ -31,7 +31,7 @@ bytes = { version = "1", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["block-padding", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
-compact_str = { version = "0.9" }
+compact_str = { version = "0.9", features = ["serde"] }
 const-hex = { version = "1", default-features = false, features = ["core-error", "serde", "std"] }
 cranelift-bitset = { version = "0.137", default-features = false, features = ["enable-serde"] }
 crossbeam-epoch = { version = "0.9" }
@@ -67,6 +67,7 @@ generic-array = { version = "0.14", default-features = false, features = ["more_
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 gimli = { version = "0.33", default-features = false, features = ["read", "std", "write"] }
+half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", features = ["serde"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hmac = { version = "0.12", default-features = false, features = ["reset"] }
@@ -86,6 +87,7 @@ libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
+nom = { version = "7" }
 num-bigint = { version = "0.4" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
@@ -140,9 +142,7 @@ time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "ring", "tls12"] }
 tokio-util = { version = "0.7", features = ["codec", "io-util", "rt"] }
-toml_datetime-3b31131e45eafb45 = { package = "toml_datetime", version = "0.6", default-features = false, features = ["serde"] }
-toml_datetime-dff4ba8e3ae991db = { package = "toml_datetime", version = "1", default-features = false, features = ["serde", "std"] }
-toml_edit = { version = "0.20", features = ["serde"] }
+toml_datetime = { version = "1", default-features = false, features = ["serde", "std"] }
 toml_parser = { version = "1", default-features = false, features = ["std"] }
 tower = { version = "0.5", default-features = false, features = ["limit", "log", "make", "util"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -188,6 +188,7 @@ indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.14" }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
+nom = { version = "7", default-features = false, features = ["std"] }
 num-integer = { version = "0.1", default-features = false, features = ["i128"] }
 num-traits = { version = "0.2", default-features = false, features = ["i128"] }
 object = { version = "0.40", default-features = false, features = ["elf", "read_core"] }
@@ -217,8 +218,7 @@ syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-trai
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
-toml_datetime-dff4ba8e3ae991db = { package = "toml_datetime", version = "1", features = ["serde"] }
-toml_edit = { version = "0.20" }
+toml_datetime = { version = "1", features = ["serde"] }
 toml_parser = { version = "1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
@@ -283,8 +283,6 @@ libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std"] }
 rustix = { version = "1", features = ["fs"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
-toml_datetime-3b31131e45eafb45 = { package = "toml_datetime", version = "0.6", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.20", default-features = false, features = ["serde"] }
 winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
 
 ### END HAKARI SECTION

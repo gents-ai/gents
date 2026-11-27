@@ -338,6 +338,12 @@ def networkProtocolResource : String → Option String
   | "CallbackInvocation" => some "agent_children"
   | "CallbackResult" => some "agent_children"
   | "EventGroupState" => some "agent_children"
+  | "AgentMemory" => some "agent_memory"
+  | "AgentMemoryProblem" => some "agent_memory"
+  | "AgentMemoryAttempt" => some "agent_memory"
+  | "AgentMemoryOutcome" => some "agent_memory"
+  | "AgentMemoryAlias" => some "agent_memory"
+  | "AgentMemoryAliasGuard" => some "agent_memory"
   | "TriggerFire" => some "children"
   | "FireOutcome" => some "children"
   | _ => none

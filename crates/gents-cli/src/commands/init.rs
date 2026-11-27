@@ -1885,6 +1885,7 @@ fn tools_for_package(
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(writes),
             enable_session_history_tool: None,
+            enable_memory_tool: None,
             enable_schema_tool: None,
             enable_p2p_tool: None,
             enable_p2p_mutations: None,

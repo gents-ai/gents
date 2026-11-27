@@ -56,5 +56,5 @@ fn reserved_names_cover_native_and_meta_tools() {
     }
 
     assert!(!is_reserved_builtin_tool_name("request_action"));
-    assert!(!is_reserved_builtin_tool_name("memory"));
+    assert!(is_reserved_builtin_tool_name("memory"));
 }

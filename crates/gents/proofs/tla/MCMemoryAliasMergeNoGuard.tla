@@ -1,0 +1,4 @@
+---- MODULE MCMemoryAliasMergeNoGuard ----
+EXTENDS MemoryAliasMerge
+
+====

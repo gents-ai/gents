@@ -2,8 +2,8 @@ use anyhow::Result;
 use gents_protocol::tool_names::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
     CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME,
-    LIST_PROCESSES_TOOL_NAME, META_TOOL_NAMES, READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
-    SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, MEMORY_TOOL_NAME, META_TOOL_NAMES, READ_PROCESS_TOOL_NAME,
+    SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 
 /// `name` is trimmed at deserialization; the field name is interpolated verbatim
@@ -448,6 +448,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         gents_protocol::plugin::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
+        MEMORY_TOOL_NAME,
         gents_protocol::tool_names::SCHEMA_TOOL_NAME,
         gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         gents_protocol::goal_names::GET_GOAL_TOOL_NAME,

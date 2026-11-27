@@ -59,6 +59,9 @@ structure Surface where
   /-- Mutations also require read authority. -/
   p2pMutate : Bool
   sessionHistory : Bool
+  /-- The `memory` tool: flat facts and experience records. Its delete is the
+  tool's only node permission, because `forget` retires a fact the Agent owns. -/
+  memory : Bool
   contextBudget : Bool
   /-- The agents tool group (`AgentTools.enabled`): `agent_new` over the
   `agentTargets` allowlist, `agent_message`, `agent_interrupt` and

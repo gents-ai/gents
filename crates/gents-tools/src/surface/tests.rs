@@ -231,6 +231,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             enable_context_budget: false,
             ..Default::default()
         },
@@ -259,6 +260,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             enable_context_budget: false,
             ..Default::default()
         },
@@ -288,6 +290,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -313,6 +316,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::readonly(),
@@ -334,6 +338,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::readwrite(operator_root),
@@ -365,6 +370,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ceiling,
@@ -397,6 +403,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
                 "observability-mcp".to_string(),
             ],
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -519,6 +526,7 @@ fn background_tool_allowlist_registers_r6_tools() {
                 "bash_unrestricted".to_string(),
             ],
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::readonly(),
@@ -543,6 +551,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_goal_tools: false,
             backgroundable_tool_names: vec!["read_file".to_string()],
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::readonly(),
@@ -575,6 +584,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::readwrite(operator_root),
@@ -952,6 +962,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         explanation.tool_names,
         vec![
             gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME,
+            gents_protocol::tool_names::MEMORY_TOOL_NAME,
             "read_research_source"
         ]
     );
@@ -1181,6 +1192,7 @@ fn session_history_tool_follows_selection() {
         "ops",
         ResolvedToolSelection {
             enable_session_history_tool: false,
+            enable_memory_tool: false,
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -2072,7 +2084,8 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         explanation.tool_names,
         vec![
             name.clone(),
-            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()
+            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string(),
+            gents_protocol::tool_names::MEMORY_TOOL_NAME.to_string()
         ]
     );
     assert_eq!(explanation.included["meta_mcp"], vec![name]);

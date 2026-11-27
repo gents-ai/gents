@@ -274,6 +274,7 @@ const PROCESS_STATIC_EXCEPTIONS: &[(&str, usize, &str)] = &[
     ("crates/gents-toolcalls/src/call/lifecycle/recovery.rs", 1, "rate limit of the unresolved-parent warning; stays"),
     ("crates/gents-toolcalls/src/plugin/executor.rs", 1, "a built-in plugin declaration: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-tools/src/memory/mod.rs", 1, "the bundled embedder loaded once per process and shared by the tool and injection: an immutable value built once; stays"),
     ("crates/gents-tools/src/native/command_observability.rs", 2, "process-wide command policy counters for metrics; stay"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
 ];
