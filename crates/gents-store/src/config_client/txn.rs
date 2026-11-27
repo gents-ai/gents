@@ -15,6 +15,7 @@ mod native;
 mod owner_staged;
 mod pack_interpreter;
 mod rollback;
+mod runtime_actor_authority;
 mod runtime_hop_cap;
 mod runtime_metadata;
 mod runtime_use;
@@ -49,6 +50,12 @@ pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 pub use owner_staged::CallbackAgentSelection;
 pub(super) use owner_staged::OwnerStagedRevocations;
 pub(super) use owner_staged::StagedRelation;
+pub use runtime_actor_authority::{
+    actor_admitted, check_runtime_actor_authority, classify_acting_principal,
+    ensure_access_for_runtime_path, ensure_runtime_path_actor, is_runtime_actor_authority_error,
+    required_authority, ActingPrincipal, RequiredAuthority, RuntimeActorAuthorityError,
+    RuntimePath,
+};
 #[cfg(test)]
 pub(super) use transact::client_signed_write_may_retry;
 pub use transact::{IdempotentTransactionRetry, TransactionFinalityError};

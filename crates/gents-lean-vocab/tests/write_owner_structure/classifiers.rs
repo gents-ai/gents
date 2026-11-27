@@ -60,6 +60,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_owner", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
+    ("crates/gents-store/src/config_client/txn/runtime_actor_authority.rs", &["is_runtime_actor_authority_error"]),
     ("crates/gents-store/src/config_client/user_write.rs", &["UserWriteRefusal::in_chain"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
     ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),

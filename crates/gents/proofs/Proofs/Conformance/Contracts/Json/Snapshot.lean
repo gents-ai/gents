@@ -26,6 +26,7 @@ import Proofs.Conformance.Contracts.Json.Shards.S23
 import Proofs.Conformance.Contracts.Json.Shards.S24
 import Proofs.Conformance.DatastoreUpsert
 import Proofs.Conformance.DocumentSigner
+import Proofs.Conformance.Identity.RuntimeActorAuthority
 
 namespace Conformance.Contracts
 

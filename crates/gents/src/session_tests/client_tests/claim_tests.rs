@@ -131,6 +131,21 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     .await
     .unwrap();
     assert_eq!(hook.session_id().await.as_deref(), Some("first-session"));
+    let runtime_resume = gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        "first-session",
+        runtime.did(),
+        Some(user.did()),
+        runtime.did().parse().unwrap(),
+        gents_toolcalls::call::hook::FailurePolicy::default(),
+    )
+    .await
+    .err()
+    .expect("the hosting runtime node key must never resume a private session");
+    assert!(
+        gents_store::config_client::is_runtime_actor_authority_error(runtime_resume.as_ref()),
+        "expected RuntimeActorAuthorityError, got {runtime_resume:#}"
+    );
     let reader = gents_store::test_support::unrelated_document_reader(&node).await;
     let reader_did = reader.actor_did().unwrap();
     for actor in [reader_did.as_str(), second.agent_did.as_str()] {
