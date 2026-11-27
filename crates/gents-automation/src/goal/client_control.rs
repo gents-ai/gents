@@ -180,7 +180,11 @@ fn refused(refusal: gents_store::config_client::user_write::UserWriteRefusal) ->
 pub(crate) async fn prepare_goal_control(
     txn: &ConfigApplyTxn<'_>,
     command: &SessionGoalControl,
+    authorized: bool,
 ) -> Result<Result<PreparedGoalControl, String>> {
+    if !authorized && matches!(command.operation, GoalOperation::Create { .. }) {
+        return Ok(Err("permission denied or session unavailable".into()));
+    }
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &command.node_did,
@@ -202,10 +206,11 @@ pub(crate) async fn prepare_goal_control(
         return Ok(Err("permission denied or session unavailable".into()));
     }
     let goal = load_canonical_goal_in_txn(txn, &command.node_did, &command.session_id).await?;
-    let requests = if matches!(
-        command.operation,
-        GoalOperation::Create { .. } | GoalOperation::Resume {}
-    ) {
+    let requests = if authorized
+        && matches!(
+            command.operation,
+            GoalOperation::Create { .. } | GoalOperation::Resume {}
+        ) {
         super::request_head::load_session_requests(txn, &command.node_did, &command.session_id)
             .await?
     } else {
@@ -298,55 +303,94 @@ pub(crate) async fn prepare_goal_control(
         }));
     }
     let Some(goal) = goal else {
-        return Ok(Err("this session has no goal".into()));
+        return Ok(Err(if authorized {
+            "this session has no goal".into()
+        } else {
+            "permission denied or session unavailable".into()
+        }));
     };
     let Some(expected) = command.expected.as_ref() else {
-        return Ok(Err("goal control lacks its observed revision".into()));
+        return Ok(Err(if authorized {
+            "goal control lacks its observed revision".into()
+        } else {
+            "permission denied or session unavailable".into()
+        }));
     };
-    let input = |status: Option<GoalStatus>, objective: Option<String>, budget: Option<i64>| {
-        gents_protocol::operations::goal::GoalSetInput {
-            objective,
-            token_budget: budget.map(Some),
-            status,
-            expected: Some(gents_protocol::operations::goal::GoalExpected::Revision(
-                expected.clone(),
-            )),
-            ..Default::default()
-        }
+    let current_revision = if authorized && expected.document == goal.doc_id {
+        let current = gents_store::graphql::newest_document_composite_commit_in_txn(
+            txn,
+            &goal.doc_id,
+            "goal.control_preflight",
+        )
+        .await?
+        .context("goal has no unambiguous composite revision")?;
+        Some(gents_protocol::goal_control::GoalRevision {
+            document: goal.doc_id.clone(),
+            composite: current.cid,
+        })
+    } else {
+        None
     };
-    let input = match &command.operation {
+    Ok(plan_existing_goal_control(
+        authorized,
+        actor,
+        goal,
+        current_revision.as_ref(),
+        expected,
+        &command.operation,
+        &requests,
+    ))
+}
+
+/// Lean `GoalAutomation.ClientControl.apply?`: decides an existing-Goal control
+/// command from the observed authorization, composite revision fence, Goal
+/// state, and session requests.
+pub(crate) fn plan_existing_goal_control(
+    authorized: bool,
+    actor: gents_protocol::operations::goal::GoalActor,
+    goal: GoalDocument,
+    current_revision: Option<&gents_protocol::goal_control::GoalRevision>,
+    expected: &gents_protocol::goal_control::GoalRevision,
+    operation: &GoalOperation,
+    requests: &[gents_protocol::row::AgentRequestRow],
+) -> std::result::Result<PreparedGoalControl, String> {
+    if !authorized {
+        return Err("permission denied or session unavailable".into());
+    }
+    let Some(current) = current_revision else {
+        return Err("goal changed; refresh before applying this control".into());
+    };
+    if expected.document != current.document || expected.composite != current.composite {
+        return Err("goal changed; refresh before applying this control".into());
+    }
+    let make_input =
+        |status: Option<GoalStatus>, objective: Option<String>, budget: Option<i64>| {
+            gents_protocol::operations::goal::GoalSetInput {
+                objective,
+                token_budget: budget.map(Some),
+                status,
+                ..Default::default()
+            }
+        };
+    let input = match operation {
         GoalOperation::Edit {
             objective,
             token_budget,
-        } => input(None, objective.clone(), *token_budget),
-        GoalOperation::Pause {} => input(Some(GoalStatus::Paused), None, None),
-        GoalOperation::Stop {} => input(Some(GoalStatus::Stopped), None, None),
+        } => make_input(None, objective.clone(), *token_budget),
+        GoalOperation::Pause {} => make_input(Some(GoalStatus::Paused), None, None),
+        GoalOperation::Stop {} => make_input(Some(GoalStatus::Stopped), None, None),
         GoalOperation::Resume {} => {
-            let current = gents_store::graphql::newest_document_composite_commit_in_txn(
-                txn,
-                &goal.doc_id,
-                "goal.control_preflight",
-            )
-            .await?
-            .context("goal has no unambiguous composite revision")?;
-            if expected.document != goal.doc_id || expected.composite != current.cid {
-                return Ok(Err(
-                    "goal changed; refresh before applying this control".into()
-                ));
-            }
             let Some(state) = goal.state() else {
-                return Ok(Err("goal has an unknown status".into()));
+                return Err("goal has an unknown status".into());
             };
-            return Ok(prepare_goal_resume(goal, state, &requests));
+            return prepare_goal_resume(goal, state, requests);
         }
         GoalOperation::Create { .. } => unreachable!(),
     };
-    Ok(
-        match crate::operations::goal::admit_set_in_txn(txn, actor, &goal, &input, None).await? {
-            Ok(plan) => Ok(PreparedGoalControl::Set(Box::new(plan))),
-            Err(refusal) => Err(refusal.to_string()),
-        },
-    )
+    match crate::operations::goal::plan_set(actor, &goal, &input, None) {
+        Ok(plan) => Ok(PreparedGoalControl::Set(Box::new(plan))),
+        Err(refusal) => Err(refusal.to_string()),
+    }
 }
 
 pub(crate) fn prepare_goal_resume(

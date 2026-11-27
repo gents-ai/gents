@@ -2640,96 +2640,104 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 }
 
 #[cfg(target_os = "macos")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
+    use futures::StreamExt;
     use gents_lean_vocab::families::contracts_artifact_spawn_launch as family;
 
     let cases = tokio::task::spawn_blocking(family::cases).await.unwrap();
-    for case in cases {
-        let fx = gents_session::workspace::artifact_test_fixture(&[]).await;
-        assert_eq!(case.input.requested_mode, "artifact_write");
-        let name = case.input.name.as_str();
-        let background = match case.input.kind.as_str() {
-            "background" => true,
-            "foreground" => false,
-            other => panic!("{name}: launch family holds no {other} spawn"),
-        };
-        let grant = case.input.binding.as_ref().map(|_| fx.grant.clone());
-        if case
-            .input
-            .binding
-            .as_ref()
-            .is_some_and(|binding| !binding.incarnation_matches)
-        {
-            let doc = gents_store::graphql::escape_graphql_string(fx.grant.request_doc_id());
-            let mutation = format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#
-            );
-            let result = fx.node.execute(&mutation).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-        }
-        let root = fx.grant.source_root().to_path_buf();
-        let output = fx.grant.root().join("target").join(name);
-        let script = format!(
-            "printf artifact > \"$CARGO_TARGET_DIR/{name}\"; printf temporary > \"$TMPDIR/{name}\""
-        );
-        let operation = async move {
-            let scope_call = crate::runtime_context::entered_with_workspace_overlay(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                crate::runtime_context::ToolWorkspaceScope {
-                    runtime_home: None,
-                    workspace_cwd: Some(root.clone()),
-                    workspace_root: Some(root.clone()),
-                    workspace_authority: Some(WorkspaceAuthority::ReadOnly),
-                    workspace_artifact: grant,
-                },
-                gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
-                    background,
-                    ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-                        None,
-                        tokio_util::sync::CancellationToken::new(),
-                    )
-                },
-            );
-            async move {
-                let context = ToolContext::new(root, false).unwrap();
-                let policy = CommandExecutionPolicy::write_capable()
-                    .with_mode(CommandExecutionMode::ArtifactWrite)
-                    .with_network_mode(CommandNetworkMode::Disabled);
-                super::shared::run_command(
-                    &scope_call,
-                    &context,
-                    "bash",
-                    super::shared::CommandRequest {
-                        command_name: "/bin/sh",
-                        args: &["-c".into(), script],
-                        cwd: None,
-                        timeout: Duration::from_secs(10),
-                        raw_json: false,
-                        max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
-                    },
-                    &policy,
-                )
-                .await
-            }
-            .await
-        };
-        let result = if background {
-            tokio::spawn(operation).await.unwrap()
-        } else {
-            operation.await
-        };
-        let dispatched = result.is_ok();
-        assert_eq!(
-            output.exists(),
-            dispatched,
-            "{name}: dispatch effect disagrees with the result: {result:?}"
-        );
-        assert_eq!(fx.grant.root().join("tmp").join(name).exists(), dispatched);
-        case.check(family::ArtifactSpawnOutput {
-            mode: dispatched.then(|| CommandExecutionMode::ArtifactWrite.as_str().to_string()),
-        });
-    }
+    futures::stream::iter(cases)
+        .map(|case| {
+            tokio::spawn(async move {
+                let fx = gents_session::workspace::artifact_test_fixture(&[]).await;
+                assert_eq!(case.input.requested_mode, "artifact_write");
+                let name = case.input.name.as_str();
+                let background = match case.input.kind.as_str() {
+                    "background" => true,
+                    "foreground" => false,
+                    other => panic!("{name}: launch family holds no {other} spawn"),
+                };
+                let grant = case.input.binding.as_ref().map(|_| fx.grant.clone());
+                if case
+                    .input
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| !binding.incarnation_matches)
+                {
+                    let doc = gents_store::graphql::escape_graphql_string(fx.grant.request_doc_id());
+                    let mutation = format!(
+                        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+                    );
+                    let result = fx.node.execute(&mutation).await;
+                    assert!(!result.has_errors(), "{:?}", result.errors);
+                }
+                let root = fx.grant.source_root().to_path_buf();
+                let output = fx.grant.root().join("target").join(name);
+                let script = format!(
+                    "printf artifact > \"$CARGO_TARGET_DIR/{name}\"; printf temporary > \"$TMPDIR/{name}\""
+                );
+                let operation = async move {
+                    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+                        &gents_loop::tool::ToolCallEnvelope::default(),
+                        crate::runtime_context::ToolWorkspaceScope {
+                            runtime_home: None,
+                            workspace_cwd: Some(root.clone()),
+                            workspace_root: Some(root.clone()),
+                            workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+                            workspace_artifact: grant,
+                        },
+                        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                            background,
+                            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                                None,
+                                tokio_util::sync::CancellationToken::new(),
+                            )
+                        },
+                    );
+                    async move {
+                        let context = ToolContext::new(root, false).unwrap();
+                        let policy = CommandExecutionPolicy::write_capable()
+                            .with_mode(CommandExecutionMode::ArtifactWrite)
+                            .with_network_mode(CommandNetworkMode::Disabled);
+                        super::shared::run_command(
+                            &scope_call,
+                            &context,
+                            "bash",
+                            super::shared::CommandRequest {
+                                command_name: "/bin/sh",
+                                args: &["-c".into(), script],
+                                cwd: None,
+                                timeout: Duration::from_secs(10),
+                                raw_json: false,
+                                max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
+                            },
+                            &policy,
+                        )
+                        .await
+                    }
+                    .await
+                };
+                let result = if background {
+                    tokio::spawn(operation).await.unwrap()
+                } else {
+                    operation.await
+                };
+                let dispatched = result.is_ok();
+                assert_eq!(
+                    output.exists(),
+                    dispatched,
+                    "{name}: dispatch effect disagrees with the result: {result:?}"
+                );
+                assert_eq!(fx.grant.root().join("tmp").join(name).exists(), dispatched);
+                case.check(family::ArtifactSpawnOutput {
+                    mode: dispatched
+                        .then(|| CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+                });
+            })
+        })
+        .buffer_unordered(4)
+        .for_each(|result| async { result.unwrap() })
+        .await;
 }
 
 #[cfg(target_os = "macos")]

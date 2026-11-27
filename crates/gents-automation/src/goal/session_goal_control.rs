@@ -256,15 +256,16 @@ async fn process_command_with_clock(
             };
             let denied = !targets_match || agent["enabled"].as_bool() == Some(false)
                 || *session_permission == Denied || *agent_permission == Denied;
-            let outcome = if denied {
+            let authorized = !denied;
+            let outcome = if !authorized && matches!(command.operation, gents_protocol::goal_control::GoalOperation::Create { .. }) {
                 GoalControlOutcome::Rejected { reason: "permission denied or session unavailable".into() }
-            } else if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
+            } else if authorized && now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
                 GoalControlOutcome::Rejected { reason: "goal control has expired".into() }
-            } else if matches!(command.operation, gents_protocol::goal_control::GoalOperation::Create { .. }) && command.native_evidence.is_none() {
+            } else if authorized && matches!(command.operation, gents_protocol::goal_control::GoalOperation::Create { .. }) && command.native_evidence.is_none() {
                 tracing::debug!(command_doc_id = doc_id, "goal creation remains pending without its native client graphs");
                 return Ok((None, None));
             } else {
-                match crate::goal::prepare_goal_control(txn, &command).await? {
+                match crate::goal::prepare_goal_control(txn, &command, authorized).await? {
                     Err(reason) => GoalControlOutcome::Rejected { reason },
                     Ok(mut prepared) => {
                         if matches!(command.operation, gents_protocol::goal_control::GoalOperation::Create { .. }) {

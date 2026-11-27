@@ -66,7 +66,7 @@ pub struct ClaimedRequestBuilder<'a> {
     max_request_retries: Option<u64>,
     fold_admitted: Vec<String>,
     steering_admission: bool,
-    spec: Option<SpecEdit<'a>>,
+    spec: std::sync::Mutex<Option<SpecEdit<'a>>>,
 }
 
 impl ClaimedRequest {
@@ -132,7 +132,7 @@ impl ClaimedRequest {
             max_request_retries: None,
             fold_admitted: Vec::new(),
             steering_admission: false,
-            spec: None,
+            spec: std::sync::Mutex::new(None),
         }
     }
 
@@ -177,7 +177,7 @@ impl<'a> ClaimedRequestBuilder<'a> {
     /// Sets any further signed field of a client request (trigger lineage,
     /// parent, goal input) before it is signed.
     pub fn spec(mut self, edit: impl FnOnce(&mut RequestSpec) + Send + 'a) -> Self {
-        self.spec = Some(Box::new(edit));
+        *self.spec.get_mut().unwrap() = Some(Box::new(edit));
         self
     }
 
@@ -284,7 +284,7 @@ impl<'a> ClaimedRequestBuilder<'a> {
         );
         let (doc_id, mut lifecycle) = match admission {
             Admission::ClientSigned { reserved } => {
-                let spec = self.spec.take();
+                let spec = self.spec.get_mut().unwrap().take();
                 self.publish_client(agent.as_ref(), reserved, retry, spec)
                     .await;
                 let request_id = gents_store::graphql::escape_graphql_string(&self.request_id);
