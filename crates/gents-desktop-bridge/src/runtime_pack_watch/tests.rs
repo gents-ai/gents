@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use gents_store::test_support::{STALL_CEILING, UNREACHED_DEADLINE};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -10,9 +11,9 @@ use super::*;
 use crate::tauri_commands::ux_plugins::UxDataCallResult;
 
 const TIMING: WatchTiming = WatchTiming {
-    connect: Duration::from_secs(5),
-    read: Duration::from_millis(300),
-    send: Duration::from_secs(5),
+    connect: UNREACHED_DEADLINE,
+    read: UNREACHED_DEADLINE,
+    send: UNREACHED_DEADLINE,
     backoff_unit: Duration::from_micros(20),
 };
 
@@ -322,6 +323,16 @@ async fn watch(
     open: bool,
     cancel_on_backoff: bool,
 ) -> Outcome {
+    watch_with_timing(TIMING, endpoints, until, open, cancel_on_backoff).await
+}
+
+async fn watch_with_timing(
+    timing: WatchTiming,
+    endpoints: Vec<Result<GraphqlEndpoint, AcquireFailure>>,
+    until: Option<u64>,
+    open: bool,
+    cancel_on_backoff: bool,
+) -> Outcome {
     let cancel = CancellationToken::new();
     let mut endpoints = VecDeque::from(endpoints);
     let acquire = || {
@@ -360,8 +371,8 @@ async fn watch(
     };
     let started = Instant::now();
     let final_phase = tokio::time::timeout(
-        Duration::from_secs(30),
-        run(TIMING, acquire, &request(), deliver, &cancel, observe),
+        STALL_CEILING,
+        run(timing, acquire, &request(), deliver, &cancel, observe),
     )
     .await
     .expect("the watch settles");
@@ -400,7 +411,17 @@ async fn read_timeout_reconnects_and_delivers_a_fresh_snapshot() {
         Reply::Frames(vec![snapshot(2)], After::Hang),
     ])
     .await;
-    let outcome = watch(vec![Ok(runtime.endpoint())], Some(2), true, false).await;
+    let outcome = watch_with_timing(
+        WatchTiming {
+            read: Duration::from_millis(300),
+            ..TIMING
+        },
+        vec![Ok(runtime.endpoint())],
+        Some(2),
+        true,
+        false,
+    )
+    .await;
     assert_eq!(
         outcome.seen,
         vec![Seen::Snapshot(1), reconnecting(1), Seen::Snapshot(2)]
