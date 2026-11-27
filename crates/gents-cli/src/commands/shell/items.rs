@@ -371,7 +371,8 @@ pub(super) fn transcript(
             _ => {}
         }
     }
-    // A spawned or background run has no result message: its own output is its result.
+    // A spawned or background run has no result message: its own output is its result, under
+    // its call's line.
     for tool in view.tool_calls.iter().copied() {
         let Some(id) = tool.doc_id.as_deref() else {
             continue;
@@ -383,7 +384,14 @@ pub(super) fn transcript(
             continue;
         }
         if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials) {
-            lines.extend(output(id, &result));
+            let call = |line: &ChatLine| {
+                line.item.as_deref() == Some(id) || line.under.as_deref() == Some(id)
+            };
+            let at = lines
+                .iter()
+                .rposition(call)
+                .map_or(lines.len(), |at| at + 1);
+            lines.splice(at..at, output(id, &result));
         }
     }
     lines.extend(worked_line(turn));
@@ -975,6 +983,23 @@ mod tests {
             tool.expect("a call on the page").await_mode = Some("background".to_string());
         }
 
+        /// The output call `id` wrote itself, which no message delivers.
+        fn ran(&mut self, id: &str, output: &str) {
+            let source = OutputSource::ToolCall {
+                tool_call_doc_id: id.to_string(),
+            };
+            let writer = OutputWriter::ToolExecution {
+                tool_call_doc_id: id.to_string(),
+            };
+            self.segment(closed(
+                &at(),
+                source,
+                writer,
+                StreamPayload::ToolOutput,
+                output,
+            ));
+        }
+
         /// The process `parent`'s spawn_process call started, as call `id` in `state`.
         fn spawned(&mut self, id: &str, parent: &str, state: &str) {
             let row = json!({
@@ -1114,14 +1139,7 @@ mod tests {
         let cargo = json!({ "command": "cargo", "args": ["test"] });
         page.tool(2, "t1", "bash", cargo, "completed");
         page.background("t1");
-        let source = OutputSource::ToolCall {
-            tool_call_doc_id: "t1".to_string(),
-        };
-        let writer = OutputWriter::ToolExecution {
-            tool_call_doc_id: "t1".to_string(),
-        };
-        let ran = closed(&at(), source, writer, StreamPayload::ToolOutput, "ok");
-        page.segment(ran);
+        page.ran("t1", "ok");
         page.claimed("2026-11-26T12:00:00Z", Some("2026-11-26T12:01:23Z"));
         let read = page.read(&[], &Edits::new());
         let worked = line("  worked for 1m 23s", Tone::Label, "bae-r1/worked");
@@ -1136,6 +1154,26 @@ mod tests {
             .lines
             .iter()
             .all(|shown| !shown.text.contains("worked for")));
+    }
+
+    #[test]
+    fn a_background_call_s_own_output_follows_its_command() {
+        use Tone::{Label, Reply, You};
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "hello");
+        let cargo = json!({ "command": "cargo", "args": ["test"] });
+        page.tool(1, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        page.text(2, MessageRole::Assistant, "started it");
+        page.ran("t1", "ok");
+        let read = page.read(&[], &Edits::new());
+        let expected = vec![
+            line("hello", You, "m0"),
+            line("  ✓ run   cargo test", Label, "t1"),
+            under("t1", line("ok", Label, "t1/output")),
+            line("started it", Reply, "m2"),
+        ];
+        assert_eq!(read.lines, expected);
     }
 
     #[test]

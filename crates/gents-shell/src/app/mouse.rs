@@ -734,7 +734,8 @@ mod tests {
         assert_eq!((app.diff, app.selection), (Some(1), None));
     }
 
-    /// A command's line `c1`, its output under it and a reply, each followed by a blank.
+    /// A command's line `c1`, a reply, and the command's output under it arriving after the
+    /// reply, each followed by a blank.
     fn command_tab(app: &mut App) {
         use crate::app::transcript::ChatLine;
         use crate::sample::Tone;
@@ -748,8 +749,8 @@ mod tests {
         let tab = &mut app.tabs[0];
         tab.lines.clear();
         tab.put(line("  ✓ run   cargo check", "c1", None));
-        tab.put(line("Finished in 41s", "c1/output", Some("c1")));
         tab.put(line("All good.", "m2", None));
+        tab.put(line("Finished in 41s", "c1/output", Some("c1")));
     }
 
     #[test]

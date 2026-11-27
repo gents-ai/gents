@@ -239,13 +239,23 @@ impl Tab {
         })
     }
 
-    /// An unseen item appends its line and a blank, and a seen one replaces its line.
+    /// An unseen item adds its line and a blank: under the item it opens under, after the lines
+    /// already there, or else at the end. A seen one replaces its line.
     pub(super) fn put(&mut self, line: ChatLine) {
-        let seen = line.item.as_deref().and_then(|item| self.item_line(item));
-        match seen {
-            Some(index) => self.lines[index] = line,
-            None => self.lines.extend([line, blank()]),
+        if let Some(index) = line.item.as_deref().and_then(|item| self.item_line(item)) {
+            self.lines[index] = line;
+            return;
         }
+        let parent = line.under.as_deref();
+        let opener = parent.and_then(|parent| self.item_line(parent));
+        let at = opener.map_or(self.lines.len(), |opener| {
+            let under = |shown: &ChatLine| *shown == blank() || shown.under.as_deref() == parent;
+            let past = self.lines[opener + 1..]
+                .iter()
+                .take_while(|shown| under(shown));
+            opener + 1 + past.count()
+        });
+        self.lines.splice(at..at, [line, blank()]);
     }
 
     /// The selected row stays selected while it is listed, else its position is kept in range.
