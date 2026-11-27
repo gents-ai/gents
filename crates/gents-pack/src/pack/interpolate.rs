@@ -102,6 +102,39 @@ pub fn resolve_upgrade_variable(
     supplied.or(previous)
 }
 
+/// Substitutes `input` and names the variables it read, in first-use order:
+/// the variables a loader types a substituted value by.
+pub fn interpolate_with_uses(
+    input: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<(String, Vec<String>), Vec<String>> {
+    let used = std::cell::RefCell::new(Vec::new());
+    let output = interpolate_with(input, &|name| {
+        let mut used = used.borrow_mut();
+        if !used.iter().any(|seen| seen == name) {
+            used.push(name.to_owned());
+        }
+        lookup(name)
+    })?;
+    Ok((output, used.into_inner()))
+}
+
+/// The variables `input` names, without resolving them: what a preview shows
+/// as read even where a value is missing.
+pub fn referenced_variables(input: &str) -> Vec<String> {
+    match interpolate_with_uses(input, &|_| None) {
+        Ok((_, used)) => used,
+        Err(missing) => missing,
+    }
+}
+
+/// Whether [`interpolate_with`] substitutes in `input`, asked of the parser so
+/// the schema's [`SUBSTITUTION_PATTERN`] and the loader cannot disagree: a
+/// substitution is exactly a `${...}` whose name the parser looks up.
+pub fn substitutes(input: &str) -> bool {
+    !referenced_variables(input).is_empty()
+}
+
 pub fn interpolate_with(
     input: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -254,6 +287,21 @@ mod install_variable_conformance {
             Some(&Some("example.test".to_owned()))
         );
         assert!(!escaped.variables.contains_key("LITERAL"));
+    }
+
+    #[test]
+    fn preview_reports_a_typed_field_resolved_with_its_scalar_text() {
+        let config = serde_json::json!({"compactions": [
+            {"compaction_id": "compaction", "threshold": "${T:-0.3}"}]});
+        let uses = inspect_install_variables(&config, &|_| None).unwrap();
+        let threshold = uses
+            .iter()
+            .find(|item| item.path == "/compactions/0/threshold")
+            .unwrap();
+        assert_eq!(threshold.resolved, "0.3");
+        assert_eq!(threshold.variables.get("T"), Some(&None));
+        let supplied = inspect_install_variables(&config, &|_| Some("0.5".to_owned())).unwrap();
+        assert_eq!(supplied[0].resolved, "0.5");
     }
 
     #[test]

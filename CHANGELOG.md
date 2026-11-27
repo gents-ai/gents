@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A pack's `${NAME}` / `${NAME:-default}` install-variable substitution now
+  fills a number or a boolean field, not only text: the field's authored type
+  decides, so `"threshold": "${FACTORY_COMPACTION_THRESHOLD:-0.3}"` decodes to
+  the number `0.3` (or the value each dev supplies) while a text field whose
+  substitution reads `"123"` stays the string `"123"`. Substituted text that is
+  not the field's scalar is refused, naming the field's path and the variable.
+  Breaking only for a pack that relied on such a substitution being rejected.
 - Breaking: the harness pauses a Goal after 3 consecutive goal turns without
   progress, judged from what its Agent did, never its text: a turn makes
   progress when it changes the Goal or makes a tool call (name, canonical

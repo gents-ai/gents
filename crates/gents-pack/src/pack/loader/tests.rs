@@ -67,6 +67,55 @@ fn interpolation_cannot_change_json_structure_and_preserves_task_braces() {
     assert!(load(json!({"node":{"display_name":"${UNSET}"}})).is_err());
 }
 
+fn load_with(
+    environment: &'static dyn Fn(&str) -> Option<String>,
+    value: Value,
+) -> Result<PackConfig> {
+    load_pack_config(
+        &manifest(),
+        &PackInstallOptions {
+            node_did: "did:key:owner".into(),
+        },
+        &|path| match path {
+            "config/bundle.json" => Ok(serde_json::to_vec(&value)?),
+            _ => anyhow::bail!("unexpected asset {path}"),
+        },
+        environment,
+    )
+}
+
+#[test]
+fn a_typed_field_reads_a_substitution_as_its_scalar_and_refuses_other_text() {
+    let threshold = |value: Value| json!({"node":{},"compactions":[{"compaction_id":"compaction","threshold":value}]});
+    let load_nothing = |value: Value| load_with(&|_| None, value);
+    let defaulted = load_nothing(threshold(json!("${T:-0.3}"))).unwrap();
+    assert_eq!(defaulted.compactions[0].threshold, Some(0.3));
+    let supplied = load_with(
+        &|name| (name == "T").then(|| "0.5".to_owned()),
+        threshold(json!("${T:-0.3}")),
+    )
+    .unwrap();
+    assert_eq!(supplied.compactions[0].threshold, Some(0.5));
+    let refusal = load_nothing(threshold(json!("${T:-wide}"))).unwrap_err();
+    let text = format!("{refusal:#}");
+    assert!(
+        text.contains("compactions/0/threshold") && text.contains("${T}"),
+        "the refusal names the field and the variable: {text}"
+    );
+}
+
+#[test]
+fn a_text_field_keeps_a_substituted_digit_string() {
+    let config = load_with(&|_| None, json!({"node":{"display_name":"${NAME:-123}"}})).unwrap();
+    assert_eq!(config.node.display_name.as_deref(), Some("123"));
+    let supplied = load_with(
+        &|_| Some("456".to_owned()),
+        json!({"node":{"display_name":"${NAME:-123}"}}),
+    )
+    .unwrap();
+    assert_eq!(supplied.node.display_name.as_deref(), Some("456"));
+}
+
 #[test]
 fn explicit_owner_mismatch_and_unknown_authoring_keys_fail() {
     for owner in [json!("did:key:foreign"), json!(null), json!("")] {

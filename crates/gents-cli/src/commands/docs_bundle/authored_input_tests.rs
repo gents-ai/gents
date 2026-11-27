@@ -555,6 +555,154 @@ fn backend(fields: Value) -> Value {
     json!({"node": {"node_did": OWNER}, "inference_backends": [backend]})
 }
 
+fn compaction(threshold: Value) -> Value {
+    json!({"node": {"node_did": OWNER}, "compactions": [{
+        "compaction_id": "compaction",
+        "threshold": threshold
+    }]})
+}
+
+fn resolved(
+    config: &Value,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> gents_documents::PackConfig {
+    let owner = config
+        .pointer("/node/node_did")
+        .and_then(Value::as_str)
+        .filter(|did| !did.contains('$'))
+        .unwrap_or(OWNER)
+        .to_owned();
+    decode_pack_config(
+        config.clone(),
+        Some(&PackInstallOptions { node_did: owner }),
+        environment,
+        &|_, _, _| unreachable!("no sidecar in these configs"),
+    )
+    .unwrap_or_else(|error| panic!("the loader decodes {config}: {error:#}"))
+}
+
+/// The loader's refusal for a substitution a field cannot hold, with the
+/// field's path and the variables it resolved.
+fn refusal(config: &Value, environment: &dyn Fn(&str) -> Option<String>) -> String {
+    let owner = config
+        .pointer("/node/node_did")
+        .and_then(Value::as_str)
+        .filter(|did| !did.contains('$'))
+        .unwrap_or(OWNER)
+        .to_owned();
+    let error = decode_pack_config(
+        config.clone(),
+        Some(&PackInstallOptions { node_did: owner }),
+        environment,
+        &|_, _, _| unreachable!("no sidecar in these configs"),
+    )
+    .expect_err("the loader refuses the substitution");
+    let mut text = String::new();
+    for cause in error.chain() {
+        text.push_str(&format!("{cause}\n"));
+    }
+    text
+}
+
+#[test]
+fn a_substitution_in_a_typed_field_resolves_into_its_scalar() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    for config in [
+        backend(json!({"max_concurrent": "${CONCURRENCY:-2}"})),
+        backend(json!({"enabled": "${ENABLED:-true}"})),
+        compaction(json!("${T:-0.3}")),
+    ] {
+        assert!(
+            decodes(&config, Path::new("."), None),
+            "the loader accepts {config}"
+        );
+        let errors: Vec<_> = validator
+            .iter_errors(&config)
+            .map(|error| format!("{error} at {}", error.instance_path()))
+            .collect();
+        assert!(errors.is_empty(), "{config} is rejected: {errors:?}");
+    }
+    let defaulted = resolved(
+        &backend(json!({"max_concurrent": "${CONCURRENCY:-2}"})),
+        &|_| None,
+    );
+    assert_eq!(defaulted.inference_backends[0].max_concurrent, Some(2));
+    let overridden = resolved(
+        &backend(json!({"max_concurrent": "${CONCURRENCY:-2}"})),
+        &|name| (name == "CONCURRENCY").then(|| "7".to_owned()),
+    );
+    assert_eq!(overridden.inference_backends[0].max_concurrent, Some(7));
+    let enabled = resolved(&backend(json!({"enabled": "${ENABLED:-true}"})), &|_| None);
+    assert!(enabled.inference_backends[0].enabled);
+    let disabled = resolved(&backend(json!({"enabled": "${ENABLED:-true}"})), &|_| {
+        Some("false".to_owned())
+    });
+    assert!(!disabled.inference_backends[0].enabled);
+    let threshold = resolved(&compaction(json!("${T:-0.3}")), &|_| None);
+    assert_eq!(threshold.compactions[0].threshold, Some(0.3));
+    let supplied = resolved(&compaction(json!("${T:-0.3}")), &|_| Some("0.5".to_owned()));
+    assert_eq!(supplied.compactions[0].threshold, Some(0.5));
+}
+
+#[test]
+fn a_typed_field_refuses_a_substitution_that_is_not_its_scalar() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    for (config, path, variable) in [
+        (
+            backend(json!({"max_concurrent": "${N:-abc}"})),
+            "inference_backends/0/max_concurrent",
+            "N",
+        ),
+        (
+            compaction(json!("${T:-wide}")),
+            "compactions/0/threshold",
+            "T",
+        ),
+        (
+            backend(json!({"enabled": "${ENABLED:-yes}"})),
+            "inference_backends/0/enabled",
+            "ENABLED",
+        ),
+        (
+            backend(json!({"max_concurrent": "${CONCURRENCY:-2} ${OTHER:-3}"})),
+            "inference_backends/0/max_concurrent",
+            "CONCURRENCY",
+        ),
+    ] {
+        assert!(
+            !decodes(&config, Path::new("."), None),
+            "the loader rejects {config}"
+        );
+        assert!(
+            validator.is_valid(&config),
+            "the schema accepts the field's substitution: {config}"
+        );
+        let text = refusal(&config, &|_| None);
+        assert!(
+            text.contains(path) && text.contains(&format!("${{{variable}}}")),
+            "the refusal names the field {path} and ${{{variable}}}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_string_field_keeps_a_substituted_digit_string_as_text() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    let config = backend(json!({"name": "${NAME:-123}"}));
+    assert!(
+        decodes(&config, Path::new("."), None),
+        "the loader accepts {config}"
+    );
+    assert!(validator.is_valid(&config), "the schema accepts {config}");
+    let decoded = resolved(&config, &|_| None);
+    assert_eq!(decoded.inference_backends[0].name, "123");
+    let supplied = resolved(&config, &|_| Some("456".to_owned()));
+    assert_eq!(supplied.inference_backends[0].name, "456");
+}
+
 #[test]
 fn interpolated_input_validates_exactly_where_the_loader_substitutes() {
     let schema = authored_pack_config_schema();
@@ -575,13 +723,13 @@ fn interpolated_input_validates_exactly_where_the_loader_substitutes() {
             .collect();
         assert!(errors.is_empty(), "{accepted} is rejected: {errors:?}");
     }
-    // Interpolation only rewrites strings, so numbers and booleans stay
-    // literal; escaped or unclosed `${` is not a substitution.
+    // Escaped or unclosed `${` reads no variable, so nothing resolves and the
+    // number field still refuses the string.
     for rejected in [
-        backend(json!({"max_concurrent": "${CONCURRENCY:-2}"})),
-        backend(json!({"enabled": "${ENABLED:-true}"})),
         backend(json!({"provider_kind": "$${PROVIDER}"})),
         backend(json!({"provider_kind": "${PROVIDER"})),
+        backend(json!({"max_concurrent": "$${CONCURRENCY}"})),
+        backend(json!({"max_concurrent": "${CONCURRENCY"})),
     ] {
         assert!(
             !decodes(&rejected, dir, None),
