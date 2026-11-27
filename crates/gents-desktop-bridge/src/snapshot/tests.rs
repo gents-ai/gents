@@ -5,7 +5,7 @@ use gents_protocol::output::{
     OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
     StreamDeclaration, StreamPayload, TranscriptMessage,
 };
-use gents_protocol::row::{AgentRequestRow, GoalRow};
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::{
     AgentSession, SessionObservation, SessionRequestObservation, SessionTitle, SessionTitleSource,
 };

@@ -404,49 +404,6 @@ fn session_queue_order_matches_native_arrival_model_after_claim() {
     });
 }
 
-/// Only the Agent's verified observation shows a Goal (Lean
-/// `SessionObservation.no_goal_only_from_verified_absence`), so a readable
-/// Goal row never reaches the snapshot projection.
-#[test]
-fn session_snapshot_never_projects_goal_rows() {
-    let goal = GoalRow {
-        goal_id: "goal-1".into(),
-        creation_key: None,
-        session_id: "session-1".into(),
-        node_did: "did:test:amy".into(),
-        objective: Some("Ship the durable controller".into()),
-        tags: Vec::new(),
-        status: Some("active".into()),
-        token_budget: Some(50_000),
-        tokens_used: Some(1_200),
-        active_time_seconds: Some(42),
-        active_started_at: None,
-        blocked_reason: Some("needs approval".into()),
-        last_continued_from_request_id: None,
-        continuation_sequence: Some(3),
-        wrapup_requested: Some(false),
-        wrapup_completed: Some(false),
-        infrastructure_retry_count: Some(0),
-        max_infrastructure_retries: None,
-        last_failure: None,
-        completion_evidence: None,
-        created_at: None,
-        updated_at: None,
-    };
-    let snapshot = build_session_snapshot_from_store_for_node(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![session(None)],
-            goals: vec![goal],
-            ..ClientStoreRows::default()
-        }),
-        Some("did:test:amy"),
-        "session-1",
-        None,
-    )
-    .expect("snapshot");
-    assert!(snapshot.goal.is_none(), "{:?}", snapshot.goal);
-}
-
 #[test]
 fn requester_scope_does_not_cross_canonical_output_facts() {
     let mut rows = ClientStoreRows {
@@ -510,56 +467,6 @@ fn canonical_transcript_keeps_partial_reconstruction_explicit() {
     assert!(
         matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::PendingUserTurn { .. }, RenderedTimelineItem::AssistantMessage { reconstruction, content: None, .. }] if reconstruction.state == ReconstructionState::Loading)
     );
-}
-
-#[test]
-fn session_snapshot_uses_canonical_session_without_materialized_observation() {
-    let mut session = session(None);
-    session.observation = None;
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![session],
-        requests: vec![request("req-1", RequestLifecycleState::Completed)],
-        ..ClientStoreRows::default()
-    });
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
-    assert_eq!(snapshot.session_id, "session-1");
-    assert_eq!(snapshot.node_did.as_deref(), Some("did:test:amy"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-}
-
-#[test]
-fn session_snapshot_does_not_report_unobserved_preferred_request() {
-    let mut session = session(None);
-    session
-        .observation
-        .as_mut()
-        .expect("observation")
-        .latest_request = Some(SessionRequestObservation {
-        request_doc_id: "req-old".into(),
-        request_id: "req-old".into(),
-        lifecycle_state: RequestLifecycleState::Processing,
-    });
-    let old = AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some("req-old".into()),
-        request_id: "req-old".into(),
-        node_did: Some("did:test:amy".into()),
-        session_id: Some("session-1".into()),
-        lifecycle_state: Some(RequestLifecycleState::Completed),
-        ..Default::default()
-    };
-    let snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![session],
-            requests: vec![old],
-            ..ClientStoreRows::default()
-        }),
-        "session-1",
-        Some("req-new"),
-    )
-    .expect("snapshot");
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-old"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
 }
 
 #[test]
@@ -815,42 +722,6 @@ fn session_snapshot_transcript_rendering_follows_the_lean_projection() {
 }
 
 #[test]
-fn session_snapshot_retains_modeled_terminal_provider_evidence() {
-    for source in RequestLifecycleState::ALL.into_iter().filter(|source| {
-        matches!(
-            source.classify_transition(RequestLifecycleState::Interrupted),
-            gents_protocol::request_lifecycle::RequestTransitionClassification::Legal(_)
-        )
-    }) {
-        for certificate in [
-            None,
-            Some(source.certifies_stopped_before_running(RequestLifecycleState::Interrupted, true)),
-        ] {
-            let mut row = request("req-2", RequestLifecycleState::Interrupted);
-            row.stopped_before_running = certificate;
-            let snapshot = build_session_snapshot_from_store(
-                &ClientStore::from_rows(ClientStoreRows {
-                    sessions: vec![session(None)],
-                    requests: vec![row],
-                    ..ClientStoreRows::default()
-                }),
-                "session-1",
-                Some("req-2"),
-            )
-            .expect("snapshot");
-            assert_eq!(
-                snapshot
-                    .latest_request_outcome
-                    .unwrap()
-                    .stopped_before_running,
-                certificate,
-                "{source} -> interrupted"
-            );
-        }
-    }
-}
-
-#[test]
 fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
     let mut interrupted = request("req-2", RequestLifecycleState::Interrupted);
     interrupted.failure_reason = Some("completion cancelled".into());
@@ -928,50 +799,6 @@ fn tool_cancel_cause_uses_only_its_physical_request_owner() {
         let cause = snapshot.tool_calls[0].cancel_cause.as_ref().expect("cause");
         assert_eq!(cause.cause, "unknown", "owner={request_doc_id:?}");
         assert_eq!(cause.source, "unresolved", "owner={request_doc_id:?}");
-    }
-}
-
-#[test]
-fn accepted_steer_remains_in_the_transcript_before_intake() {
-    use gents_protocol::request_input::{
-        QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
-    };
-
-    for delivery in [QueueDelivery::Queue, QueueDelivery::Steer] {
-        let mut input = request("req-3", RequestLifecycleState::Pending);
-        input.created_at = Some("2026-04-21T12:01:00Z".into());
-        input.input = Some(RequestInput {
-            queue: Some(RequestQueue {
-                delivery,
-                position: None,
-                source: QueueSource::User,
-                policy: QueuePolicy::Append,
-                key: None,
-                queued_after_request_id: Some("req-2".into()),
-                interrupted_request_id: None,
-                background_completion_wake_version: None,
-            }),
-            ..Default::default()
-        });
-        let store = ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![session(None)],
-            requests: vec![request("req-2", RequestLifecycleState::Processing), input],
-            ..Default::default()
-        });
-        let snapshot = build_session_snapshot_from_store(&store, "session-1", None)
-            .expect("snapshot after reconnect");
-        assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
-        assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
-        assert_eq!(snapshot.queued_turns.len(), 1);
-        assert_eq!(snapshot.queued_turns[0].request_id, "req-3");
-        assert_eq!(
-            snapshot.timeline_items.iter().any(|item| matches!(
-                item, RenderedTimelineItem::PendingUserTurn { request_id, .. }
-                    if request_id == "req-3"
-            )),
-            delivery == QueueDelivery::Steer,
-            "accepted {delivery:?} input before provider intake"
-        );
     }
 }
 

@@ -25,7 +25,7 @@ use admission_slot_accounting::{
 };
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
-    fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
+    fetch_session_snapshot, RequestLineageSnapshot,
 };
 use support::{
     build_request, first_optional_row, first_row, trial_store, BACKEND_ID, DEADLINE_SECS,
