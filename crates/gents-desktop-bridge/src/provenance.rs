@@ -113,17 +113,14 @@ async fn caused_calls(
     scope: &SessionScope,
 ) -> anyhow::Result<Vec<CausedCallView>> {
     let own = access
-        .read_view(
-            &gents_session::views::requests::RequestRows::new(
+        .read_view(&gents_session::views::requests::RequestDocIds(
+            gents_session::views::requests::RequestRows::new(
                 gents_session::views::transcript::Scope::Session(scope.clone()),
             )
             .public(),
-        )
+        ))
         .await?;
-    let own_doc_ids = own
-        .into_iter()
-        .filter_map(|row| row.doc_id)
-        .collect::<Vec<_>>();
+    let own_doc_ids = own.into_iter().map(|row| row.doc_id).collect::<Vec<_>>();
     if own_doc_ids.is_empty() {
         return Ok(Vec::new());
     }

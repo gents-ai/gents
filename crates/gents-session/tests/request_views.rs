@@ -191,3 +191,21 @@ async fn causal_request_views_match_model_on_served_node() -> anyhow::Result<()>
     db.node.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn request_doc_ids_select_only_the_document_id() {
+    use gents_protocol::views::View;
+    use gents_session::views::requests::RequestDocIds;
+
+    let rows = RequestRows::new(Scope::Session(gents_protocol::session::SessionScope {
+        node_did: "did:example:node".to_owned(),
+        session_id: "session".to_owned(),
+        requester_did: Some("did:example:requester".to_owned()),
+    }))
+    .public();
+    let full = rows.query("did:example:reader").render();
+    let ids = RequestDocIds(rows).query("did:example:reader").render();
+    let (arguments, _) = full.document.rsplit_once(") {").expect("selection");
+    assert_eq!(ids.document, format!("{arguments}) {{ _docID }} }}"));
+    assert_eq!(ids.variables, full.variables);
+}

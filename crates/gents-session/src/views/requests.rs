@@ -228,6 +228,26 @@ impl View for RequestRows {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RequestDocIdRow {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestDocIds(pub RequestRows);
+
+impl View for RequestDocIds {
+    type Collection = request::Doc;
+    type Row = RequestDocIdRow;
+
+    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
+        self.0
+            .query(reader_did)
+            .select_fields(Selection::new().field(request::DOC_ID))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CausedRequests {
     parent_document_ids: Vec<String>,
