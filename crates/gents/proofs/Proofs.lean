@@ -4,6 +4,7 @@ import Proofs.Store.AssignmentReceiver
 import Proofs.Store.AccessClassification
 import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
+import Proofs.Store.Identity.DetachedGrantFence
 import Proofs.Shared.Basic
 import Proofs.Automation.Process
 import Proofs.Store.Persistence

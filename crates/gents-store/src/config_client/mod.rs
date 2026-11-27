@@ -89,6 +89,7 @@ mod pack_effect;
 mod pairing_reader;
 #[cfg(test)]
 mod query_tests;
+mod relationship_fence;
 mod relationships;
 mod retry;
 mod schema_contract;
@@ -202,6 +203,7 @@ pub use delegation::{
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use held_audience::ResolveAudience;
+pub use relationship_fence::{decide_grant, CompletionDecision, GrantOrigin};
 pub use relationships::ConfigRelationshipGrant;
 pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;

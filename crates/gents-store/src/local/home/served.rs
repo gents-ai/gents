@@ -339,9 +339,13 @@ async fn start(
     if let Some(routes) = &serving.routes {
         authenticated = authenticated.merge(routes(served.clone()));
     }
+    let fence_route = owner_staged.clone();
     let http = defra_node::HttpConfig::with_listener(listener.into_std()?)?
         .with_extra_routes(status_route(served.clone()))
-        .with_authenticated_routes(authenticated);
+        .with_authenticated_routes(authenticated)
+        .with_router_transform(Arc::new(move |router| {
+            fence_route.wrap_relationship_fence(router)
+        }));
     let configure = serving.configure.clone();
     let path = path.to_owned();
     let (node, admission) = protected

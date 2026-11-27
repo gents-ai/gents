@@ -841,6 +841,7 @@
   "identity_configuration_ordinary_mutation_allowed": {"input":{"fields":[["client_intent","bool"],["mutation","bool"]],"struct":"Input"},"output":"bool"},
   "identity_delegation_native": {"input":{"fields":[["name","string"],["holder","string"],["relation","string"],["delete","bool"]],"struct":"DelegationInput"},"output":"bool"},
   "identity_delegation_tools_authoring": {"input":{"fields":[["name","string"],["holder","string"],["relation","string"],["delete","bool"]],"struct":"DelegationInput"},"output":"bool"},
+  "identity_detached_grant_fence_decide_grant": {"input":{"fields":[["origin",{"enum":"GrantOrigin","values":["detached","explicit"]}],["creator_matches","bool"],["revoked_since_queue","bool"]],"struct":"Input"},"output":{"enum":"CompletionDecision","values":["grant","skip_revoked","refuse_actor_mismatch"]}},
   "identity_enrollment_grant_after_grant": {"input":{"fields":[["grant_committed","bool"]],"struct":"Input"},"output":{"enum":"ApprovalStep","values":["approve","refuse"]}},
   "identity_enrollment_grant_after_removal": {"input":{"fields":[["taken_over","bool"]],"struct":"Input"},"output":{"enum":"AfterRemoval","values":["reissue","close"]}},
   "identity_enrollment_grant_observe_member_administrator": {"input":{"fields":[["standing",{"enum":"Standing","values":["owner","administrator","runtime_reader","unrelated"]}],["direct","bool"],["wildcard","bool"]],"struct":"Input"},"output":{"option":"bool"}},
