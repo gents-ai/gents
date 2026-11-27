@@ -9,6 +9,7 @@ TOKEN = re.compile(r'\s*(<<|>>|\|->|[][{},]|-?\d+|"(?:\\.|[^"\\])*"|[A-Za-z_]\w*
 
 def value(text):
     """The finite TLC values used by replayable configs. Reject any unparsed input."""
+    text = text.strip()
     tokens = []
     cursor = 0
     while cursor < len(text):

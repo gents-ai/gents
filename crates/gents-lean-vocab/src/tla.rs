@@ -26,7 +26,8 @@ pub struct FamilyView<'a> {
 }
 
 pub fn tla_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs/tla")
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"))
+        .join("../gents/proofs/tla")
 }
 
 pub fn generated_dir() -> PathBuf {
@@ -507,20 +508,6 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("Ns.decide"), "{error}");
         assert!(error.contains("models:"), "{error}");
-    }
-
-    #[test]
-    fn generated_tla_traces_are_current() {
-        let output = std::process::Command::new("python3")
-            .arg(tla_dir().join("scripts/tla_check.py"))
-            .args(["traces", "--check"])
-            .output()
-            .expect("run the pinned TLC trace generator");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 
     #[test]

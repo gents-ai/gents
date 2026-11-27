@@ -20,8 +20,6 @@ import { deliveryAffordances, sendStatus } from "../src/hooks/chatDeliveryView";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { acceptedChat } from "./chat-delivery-fixture";
-import noPayload from "../../../crates/gents/proofs/tla/generated/traces/MCClientSubmissionContentionNoPayload.json";
-import freshId from "../../../crates/gents/proofs/tla/generated/traces/MCClientSubmissionContentionRetryFreshId.json";
 import { deferred } from "./deferred";
 import { memorySendAttachments } from "./send-attachments-fixture";
 
@@ -318,54 +316,3 @@ it("keeps an observed answer saved as sent until its question closes", async () 
   expect(kept.failure).toBeUndefined();
   stop();
 });
-
-it.each([noPayload, freshId])(
-  "replays $config through the chat delivery owner",
-  async (trace) => {
-    vi.useFakeTimers();
-    const f = fixture();
-    const reply = deferred<ChatSendResult>();
-    f.send.mockImplementation(() => reply.promise);
-    let committed = 0;
-    const ids = new Set<string>();
-    for (const step of trace.steps) {
-      switch (step.action) {
-        case "Compose":
-          void f.actions().sendMessage("Original message");
-          await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
-          break;
-        case "SubmitCommit": {
-          expect(step.actor).toBe(step.before.wire[0].id);
-          const request = f.send.mock.calls[committed++][0];
-          ids.add(request.requestId!);
-          break;
-        }
-        case "Timeout":
-          await vi.advanceTimersByTimeAsync(CHAT_SEND_DEADLINE_MS);
-          break;
-        case "DropPayload":
-          f.stores.chat = createChatStore();
-          break;
-        case "Retry":
-          void f.actions().retryChatMessage(f.send.mock.calls[0][0].requestId!);
-          await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(2));
-          break;
-        default:
-          throw new Error(`Unexpected client step ${step.action}`);
-      }
-    }
-    const [draft] = loadChatDrafts().chatDrafts;
-    const status = sendStatus(draft, Date.now());
-    expect(JSON.parse(draft.requestJson)).toEqual(f.send.mock.calls[0][0]);
-    if (trace.expect === "violates FailedOffersRetry") {
-      expect(status).toBe("failed");
-      expect(deliveryAffordances(status, false, false).retry).toBe(true);
-    } else {
-      expect(trace.expect).toBe("violates CreatedOnce");
-      expect(committed).toBe(trace.constants.MaxSends);
-      expect(ids.size).toBe(1);
-    }
-    reply.resolve(acceptedChat(f.send.mock.calls[0][0]));
-    await vi.advanceTimersByTimeAsync(0);
-  },
-);

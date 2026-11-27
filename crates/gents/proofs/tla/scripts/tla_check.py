@@ -376,7 +376,9 @@ def select(files, nodes=None, crate_for=crate_of):
             return sorted(nodes)
         chosen |= {name for name, node in nodes.items()
                    if any(within(path, modeled) for modeled in node.get("paths", []))}
-        if path.startswith(tla + "generated/"):
+        if path.startswith(tla + "generated/traces/") and path.endswith(".json"):
+            chosen |= by_file.get(Path(path).with_suffix(".cfg").name, set(nodes))
+        elif path.startswith(tla + "generated/"):
             module = Path(path).stem
             chosen |= {name for name, node in nodes.items() if module in node["generated"]}
         elif path.startswith(tla) and "/" not in path[len(tla):]:
@@ -765,16 +767,19 @@ def trace_bytes(tlc, spec, cfg):
 
 def traces(check):
     nodes = graph()
-    tlc = Tlc(*install(), int(os.getenv("TLA_TIMEOUT", "1800")), os.getenv("TLA_HEAP", "1g"))
+    tlc = Tlc(*install(), int(os.getenv("TLA_TIMEOUT", "1800")), os.getenv("TLA_HEAP", "4g"))
     directory = GENERATED / "traces"
-    outputs = {}
-    for spec in ("ClientSubmissionContention", "InterruptLatchContention"):
-        for cfg in nodes[spec]["configs"]:
-            if expectation(cfg).verdict.startswith("violates "):
-                path = directory / (cfg.stem + ".json")
-                outputs[path] = trace_bytes(tlc, spec, cfg)
-                if not check and trace_bytes(tlc, spec, cfg) != outputs[path]:
-                    raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
+    def generate(entry):
+        spec, cfg = entry
+        data = trace_bytes(tlc, spec, cfg)
+        if not check and trace_bytes(tlc, spec, cfg) != data:
+            raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
+        return directory / (cfg.stem + ".json"), data
+
+    configs = [(spec, cfg) for spec in ("ClientSubmissionContention", "InterruptLatchContention")
+               for cfg in nodes[spec]["configs"] if expectation(cfg).verdict.startswith("violates ")]
+    with ThreadPoolExecutor(max_workers=int(os.getenv("TLA_JOBS", "4"))) as pool:
+        outputs = dict(pool.map(generate, configs))
     obsolete = set(directory.glob("*.json")) - outputs.keys()
     if check:
         stale = obsolete | {p for p, data in outputs.items() if not p.exists() or p.read_bytes() != data}

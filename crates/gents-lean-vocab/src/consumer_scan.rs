@@ -138,7 +138,31 @@ fn has_cfg_false(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+fn has_ignore(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("ignore") {
+            return true;
+        }
+        if attr.path().is_ident("cfg_attr") {
+            let parsed = attr.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            );
+            if let Ok(args) = parsed {
+                return args
+                    .iter()
+                    .skip(1)
+                    .any(|meta| meta.path().is_ident("ignore"));
+            }
+        }
+        false
+    })
+}
+
+pub(crate) fn is_disabled(attrs: &[syn::Attribute]) -> bool {
+    has_cfg_false(attrs) || has_ignore(attrs)
+}
+
+pub(crate) fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     match item {
         syn::Item::Const(item) => &item.attrs,
         syn::Item::Enum(item) => &item.attrs,
@@ -169,7 +193,7 @@ fn impl_item_attrs(item: &syn::ImplItem) -> &[syn::Attribute] {
     }
 }
 
-fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
+pub(crate) fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
     match stmt {
         syn::Stmt::Local(local) => &local.attrs,
         syn::Stmt::Item(item) => item_attrs(item),
@@ -178,7 +202,7 @@ fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
     }
 }
 
-fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
+pub(crate) fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
     match expr {
         syn::Expr::Array(expr) => &expr.attrs,
         syn::Expr::Assign(expr) => &expr.attrs,
@@ -628,36 +652,62 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default)]
-    struct TraceIncludes(Vec<String>);
+    fn ts_trace_imports(source: &str) -> Vec<String> {
+        static IMPORT: OnceLock<regex::Regex> = OnceLock::new();
+        let import = IMPORT.get_or_init(|| regex::Regex::new(
+            r#"(?m)^\s*import\s+(?:[\w$,*\s]+|(?:[\w$]+\s*,\s*)?\{[^}]*\})\s+from\s+(?:"([^"\n]+)"|'([^'\n]+)')"#
+        ).unwrap());
+        import
+            .captures_iter(&strip_ts_comments(source))
+            .map(|capture| {
+                capture
+                    .get(1)
+                    .or_else(|| capture.get(2))
+                    .unwrap()
+                    .as_str()
+                    .to_owned()
+            })
+            .collect()
+    }
 
-    impl<'ast> Visit<'ast> for TraceIncludes {
-        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-            if !has_cfg_false(&item.attrs)
-                && item.attrs.iter().any(|attr| {
-                    attr.path()
-                        .segments
-                        .last()
-                        .is_some_and(|part| part.ident == "test")
-                })
-            {
-                self.visit_block(&item.block);
+    #[test]
+    fn trace_imports_count_executable_tests_and_active_statements() {
+        let rust = r#"
+            #[cfg(false)] mod disabled { #[test] fn nested() { include_str!("mod"); } }
+            #[ignore = "manual"] #[test] fn ignored() { include_str!("ignored"); }
+            #[cfg_attr(any(unix, windows), ignore)] #[tokio::test]
+            async fn conditional() { include_str!("conditional"); }
+            #[test] fn active() {
+                #[cfg(false)] let hidden = include_str!("stmt");
+                let value = { #[cfg(false)] { include_str!("expr") } };
+                include_str!("active");
             }
-        }
-
-        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-            if mac.path.is_ident("include_str") {
-                if let Ok(path) = mac.parse_body::<syn::LitStr>() {
-                    self.0.push(path.value());
-                }
-            }
-        }
+            fn helper() { include_str!("helper"); }
+        "#;
+        let includes =
+            |source| crate::module_tree::test_string_includes(&syn::parse_file(source).unwrap());
+        assert_eq!(includes(rust), ["active"]);
+        assert!(includes(&format!("#![cfg(false)]\n{rust}")).is_empty());
+        assert_eq!(
+            ts_trace_imports(
+                r#"
+            // import trace from "comment";
+            /* import trace from 'block'; */
+            import {
+                default as trace
+            } /* active */ from 'one.json';
+            import second
+                from "two.json";
+        "#
+            ),
+            ["one.json", "two.json"]
+        );
     }
 
     #[test]
     fn every_generated_trace_has_one_replay_consumer() {
         let workspace = workspace();
-        let compiled = crate::module_tree::module_tree(&workspace).compiled;
+        let compiled = crate::module_tree::enabled_module_tree(&workspace).compiled;
         let mut files = Vec::new();
         for root in SOURCE_ROOTS {
             source_files(&workspace.join(root), &mut files);
@@ -668,7 +718,9 @@ mod tests {
             .unwrap();
         let mut sites = BTreeMap::<_, Vec<_>>::new();
         for path in files {
-            let ts = path.to_string_lossy().ends_with(".test.ts");
+            let ts = [".test.ts", ".test.tsx"]
+                .iter()
+                .any(|suffix| path.to_string_lossy().ends_with(suffix));
             if !ts && !compiled.contains(&path) {
                 continue;
             }
@@ -677,16 +729,9 @@ mod tests {
                 continue;
             }
             let imports = if ts {
-                source
-                    .lines()
-                    .filter(|s| s.starts_with("import "))
-                    .filter_map(|s| s.split_once(" from \"")?.1.strip_suffix("\";"))
-                    .map(str::to_owned)
-                    .collect()
+                ts_trace_imports(&source)
             } else {
-                let mut includes = TraceIncludes::default();
-                includes.visit_file(&syn::parse_file(&source).unwrap());
-                includes.0
+                crate::module_tree::test_string_includes(&syn::parse_file(&source).unwrap())
             };
             for import in imports.iter().filter(|s| s.contains("/generated/traces/")) {
                 let file = path.parent().unwrap().join(import).canonicalize().unwrap();
@@ -695,6 +740,9 @@ mod tests {
         }
         for entry in directory.read_dir().unwrap() {
             let file = entry.unwrap().path();
+            if file.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
             let consumers = sites.remove(&file).unwrap_or_default();
             assert_eq!(
                 consumers.len(),

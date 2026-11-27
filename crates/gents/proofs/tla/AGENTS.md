@@ -96,8 +96,9 @@ Run `make tla-traces` to regenerate the participating specs' counterexamples
 in `generated/traces/`. The pinned TLC rejects `-dumpTrace`. Its `-tool`
 state messages carry the numbered full snapshots and named actions. The
 generator drops source locations, recovers the client actor from the changed
-queue entry and compares two fresh runs byte for byte. The vocabulary tests
-regenerate the files and check that each has one replay consumer.
+queue entry and compares two fresh runs byte for byte. The contract gate checks
+the generated files against TLC. The vocabulary tests check that each has one
+replay consumer.
 
 Give each disjunct of `Next` a named operator, including its quantifier.
 Add the spec to `traces` in `tla_check.py`. In its e2e test, load each trace,

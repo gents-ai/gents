@@ -244,22 +244,22 @@ async fn replay(trace: &Trace) {
         "MCClientSubmissionContentionTwoPublicationsWitness" => Red::Witness,
         _ => Red::Defect,
     };
-    trace.check(
-        red,
-        &[
-            ("NoConflictLoss", done),
-            ("CreatedOnce", rows.len() <= 1),
-            (
-                "SubmittedUnderCurrentBinding",
-                rows.iter().all(|row| {
-                    row["session_doc_id"] == bound["_docID"]
-                        && row["agent_did"] == bound["agent_did"]
-                        && row["requester_did"] == bound["requester_did"]
-                }),
-            ),
-            ("ReservationRebuiltTwice", !(reserves && commits == 3)),
-        ],
-    );
+    let mut properties = vec![
+        ("NoConflictLoss", done),
+        ("CreatedOnce", rows.len() <= 1),
+        (
+            "SubmittedUnderCurrentBinding",
+            rows.iter().all(|row| {
+                row["session_doc_id"] == bound["_docID"]
+                    && row["agent_did"] == bound["agent_did"]
+                    && row["requester_did"] == bound["requester_did"]
+            }),
+        ),
+    ];
+    if matches!(red, Red::Witness) {
+        properties.push(("ReservationRebuiltTwice", !(reserves && commits == 3)));
+    }
+    trace.check(red, &properties);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

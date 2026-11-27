@@ -1188,6 +1188,7 @@ def run_contract(selection):
     tla = selection["contract"].get("tla", [])
     if tla:
         sh(["python3", str(TLA_CHECK), "check-headers"])
+        sh(["python3", str(TLA_CHECK), "traces", "--check"])
         selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
         sh(["python3", str(TLA_CHECK), "run", *selected])
     if selection["contract"]["ts_lean"]:

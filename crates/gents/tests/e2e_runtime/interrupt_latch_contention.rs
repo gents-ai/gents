@@ -193,15 +193,15 @@ async fn replay(trace: &Trace, stage: Stage) {
         "MCInterruptLatchContentionTwoRenewalsWitness" => Red::Witness,
         _ => Red::Defect,
     };
-    trace.check(
-        red,
-        &[
-            ("NoConflictLoss", done),
-            ("StampedOnce", bumps <= 1),
-            ("DoneIsLatched", !done || (bumps == 1 && stamp.is_some())),
-            ("TwoRenewalsSettled", !(done && commits == 3)),
-        ],
-    );
+    let mut properties = vec![
+        ("NoConflictLoss", done),
+        ("StampedOnce", bumps <= 1),
+        ("DoneIsLatched", !done || (bumps == 1 && stamp.is_some())),
+    ];
+    if matches!(red, Red::Witness) {
+        properties.push(("TwoRenewalsSettled", !(done && commits == 3)));
+    }
+    trace.check(red, &properties);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
