@@ -8,9 +8,11 @@ open Lean
 inductive ProviderStepKind where
   | blockStartText
   | blockStartThinking
+  | blockStartRedacted
   | blockStartToolUse
   | thinkingText
   | signature
+  | redactedData
   | blockStop
   deriving ToJson
 
@@ -43,9 +45,11 @@ def ProviderStepKind.toEvent (kind : ProviderStepKind) (index : Nat) :
   match kind with
   | .blockStartText => .blockStart index .text
   | .blockStartThinking => .blockStart index .thinking
+  | .blockStartRedacted => .blockStart index .redactedThinking
   | .blockStartToolUse => .blockStart index .toolUse
   | .thinkingText => .thinkingText index
   | .signature => .signature index
+  | .redactedData => .redactedData index
   | .blockStop => .blockStop index
 
 def ProviderStepOutcome.ofObservation :
@@ -77,7 +81,29 @@ def reasoningStop : Conformance.Family ProviderCase ProviderOutcome where
         { kind := .blockStartThinking, index := 1 },
         { kind := .thinkingText, index := 1 },
         { kind := .signature, index := 1 },
-        { kind := .blockStop, index := 1 }] } ]
+        { kind := .blockStop, index := 1 }] },
+    { steps := [
+        { kind := .blockStartThinking, index := 0 },
+        { kind := .thinkingText, index := 0 },
+        { kind := .signature, index := 0 },
+        { kind := .signature, index := 0 },
+        { kind := .blockStop, index := 0 },
+        { kind := .blockStartThinking, index := 1 },
+        { kind := .thinkingText, index := 1 },
+        { kind := .signature, index := 1 }] },
+    { steps := [
+        { kind := .blockStartThinking, index := 0 },
+        { kind := .thinkingText, index := 0 },
+        { kind := .signature, index := 0 },
+        { kind := .thinkingText, index := 0 },
+        { kind := .signature, index := 0 },
+        { kind := .blockStop, index := 0 }] },
+    { steps := [
+        { kind := .blockStartRedacted, index := 0 },
+        { kind := .redactedData, index := 0 },
+        { kind := .redactedData, index := 0 },
+        { kind := .blockStop, index := 0 },
+        { kind := .blockStop, index := 0 }] } ]
   model := fun c => { steps := (PromptAssembly.ClaudeAuditStop.trace
       (c.steps.map fun step => step.kind.toEvent step.index)).map ProviderStepOutcome.ofObservation }
 
