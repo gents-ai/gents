@@ -105,6 +105,8 @@ clap = { version = "4", features = ["derive", "env"] }
 # The Regolith range bound also prevents scans from walking beyond their prefix.
 acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }
 crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }
+blockstore = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }
+edge = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }
 defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }
 db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606", default-features = false, features = ["native"] }
 document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2e6f673bf5229b3fbb98a5ee2afae8ecdd8e6606" }

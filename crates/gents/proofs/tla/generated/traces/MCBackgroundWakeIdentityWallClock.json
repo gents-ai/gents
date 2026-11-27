@@ -1,0 +1,1195 @@
+{
+  "config": "MCBackgroundWakeIdentityWallClock",
+  "constants": {
+    "Deadline": 2,
+    "Gate": true,
+    "MaxAttempts": 2,
+    "Notifiers": [
+      {
+        "$model": "n1"
+      },
+      {
+        "$model": "n2"
+      },
+      {
+        "$model": "n3"
+      }
+    ],
+    "ObserveAtClaim": false,
+    "ReadConflicts": true,
+    "Redrive": false,
+    "SessionWrite": false
+  },
+  "expect": "violates SetupNotRefused",
+  "spec": "BackgroundWakeIdentity",
+  "steps": [
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 1,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      },
+      "before": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 0,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 2,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      },
+      "before": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 1,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 3,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      },
+      "before": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 2,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      }
+    },
+    {
+      "action": "Prepare",
+      "actor": null,
+      "after": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 3,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "refused",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      },
+      "before": {
+        "attempts": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "clock": 3,
+        "got": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "holder": "none",
+        "prepared": 0,
+        "rsaw": false,
+        "rsnap": 0,
+        "rst": "done",
+        "setup": "preparing",
+        "snapAt": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapS": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              0
+            ]
+          ]
+        },
+        "snapWake": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              -1
+            ]
+          ]
+        },
+        "st": {
+          "$function": [
+            [
+              {
+                "$model": "n1"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n2"
+              },
+              "idle"
+            ],
+            [
+              {
+                "$model": "n3"
+              },
+              "idle"
+            ]
+          ]
+        },
+        "sver": 0,
+        "version": 0,
+        "wakes": []
+      }
+    }
+  ]
+}

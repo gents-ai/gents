@@ -91,6 +91,15 @@ pub enum ToolOutputAppendRejection {
     DeadlineExceeded,
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+impl ToolOutputAppendRejection {
+    pub(crate) fn in_failure(error: &anyhow::Error) -> Option<&Self> {
+        gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
+            cause.downcast_ref::<Self>()
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct ToolOutputAppendReceipt {
     pub(crate) range: std::ops::Range<u64>,

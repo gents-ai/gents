@@ -614,6 +614,11 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     pub(super) async fn observe_before_commit(&self) -> Result<()> {
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if let Some(name) = self.operation {
+            use crate::test_support::paused_transaction::{observe, TransactionCheckpoint};
+            observe(TransactionCheckpoint::Commit(name)).await;
+        }
         if let Some(observer) = &self.publication_observer {
             let grants = self
                 .relationship_grants

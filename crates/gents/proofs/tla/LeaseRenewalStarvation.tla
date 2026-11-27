@@ -1,6 +1,7 @@
 ---- MODULE LeaseRenewalStarvation ----
 \* lean: none
 \* crates: gents-session, gents-loop
+\* traces: violates
 \* models: RequestExecutionLease.renewalDue
 \* One request's execution lease, its owner and its renewal task on the
 \* owner's runtime, beside the wall clock (#3704).

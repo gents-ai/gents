@@ -1,6 +1,7 @@
 ---- MODULE BackgroundStopRelease ----
 \* lean: none
 \* crates: gents-toolcalls, gents
+\* traces: violates
 \* models: Background.ProcessControl.signalledReply
 (***************************************************************************)
 (* `cancel_process` stopping a running background invocation its runtime   *)

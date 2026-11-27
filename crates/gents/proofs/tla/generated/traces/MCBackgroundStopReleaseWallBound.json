@@ -1,0 +1,66 @@
+{
+  "config": "MCBackgroundStopReleaseWallBound",
+  "constants": {
+    "Bound": "wallclock",
+    "Completes": false,
+    "Decision": "lean"
+  },
+  "expect": "violates ObserverAgrees",
+  "spec": "BackgroundStopRelease",
+  "steps": [
+    {
+      "action": "Load",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      },
+      "before": {
+        "canceller": "idle",
+        "reply": "none",
+        "row": "running",
+        "signalled": false,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "Expire",
+      "actor": null,
+      "after": {
+        "canceller": "expired",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "RereadRow",
+      "actor": null,
+      "after": {
+        "canceller": "done",
+        "reply": "unverified",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      },
+      "before": {
+        "canceller": "expired",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      }
+    }
+  ]
+}

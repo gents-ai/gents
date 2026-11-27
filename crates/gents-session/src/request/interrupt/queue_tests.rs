@@ -1379,3 +1379,6 @@ async fn an_interrupt_lands_while_its_session_is_written_continuously() {
     );
     node.shutdown().await.expect("shut down test node");
 }
+
+#[path = "coverage_replay.rs"]
+mod coverage_replay;

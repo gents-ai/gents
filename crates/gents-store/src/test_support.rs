@@ -536,3 +536,5 @@ pub(crate) fn config_signer() -> crate::config_client::ClientSigningCapability {
 
 #[cfg(test)]
 mod tests;
+
+pub mod paused_transaction;

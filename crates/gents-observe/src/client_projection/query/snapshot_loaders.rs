@@ -212,6 +212,37 @@ pub async fn load_node_snapshot_on(
     access: &ConfigAccess,
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
+    read_node_snapshot_root(access, node_did)
+        .await?
+        .finish()
+        .await
+}
+
+pub struct NodeSnapshotRoot<'a> {
+    access: &'a ConfigAccess,
+    node_did: &'a str,
+    rows: ClientStoreRows,
+    requests: Vec<AgentRequestRow>,
+}
+
+impl NodeSnapshotRoot<'_> {
+    pub async fn finish(mut self) -> std::result::Result<ClientStore, SnapshotReadError> {
+        self.rows.requests = complete_access_snapshot_requests(
+            self.access,
+            self.node_did,
+            &self.rows.sessions,
+            &self.rows.triggers,
+            self.requests,
+        )
+        .await?;
+        Ok(ClientStore::from_rows(self.rows))
+    }
+}
+
+pub async fn read_node_snapshot_root<'a>(
+    access: &'a ConfigAccess,
+    node_did: &'a str,
+) -> std::result::Result<NodeSnapshotRoot<'a>, SnapshotReadError> {
     let (
         nodes,
         default_agent_selections,
@@ -308,15 +339,12 @@ pub async fn load_node_snapshot_on(
         rows.trigger_observations.push(observation);
         rows.schedule_observations.push(schedule);
     }
-    rows.requests = complete_access_snapshot_requests(
+    Ok(NodeSnapshotRoot {
         access,
         node_did,
-        &rows.sessions,
-        &rows.triggers,
+        rows,
         requests,
-    )
-    .await?;
-    Ok(ClientStore::from_rows(rows))
+    })
 }
 
 pub async fn load_inference_configuration(

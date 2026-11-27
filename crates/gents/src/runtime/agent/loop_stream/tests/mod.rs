@@ -31,6 +31,7 @@ include!("claude.rs");
 include!("responses_replay.rs");
 include!("request_assembly.rs");
 include!("retry.rs");
+mod retry_lease_trace;
 include!("streaming.rs");
 include!("tool_execution.rs");
 

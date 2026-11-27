@@ -117,6 +117,8 @@ An action whose parameter TLC elides names its actor source on a
 `\* trace actors: Action1, Action2 => field` line. A function field
 identifies its one changed key. Use `field{2}` for two symmetric actors,
 or `queue.id` for the identity of one replaced or removed queue entry.
+`field{member}` names a changed set member. `left|right` recovers one key
+from either indexed field.
 TLC model values use `{"$model":"w1"}` and functions use `{"$function":[[key,value],…]}`
 to retain composite keys. A temporal trace ends with its closing transition,
 whose `backToState` names the one-based TLC state it revisits.

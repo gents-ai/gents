@@ -1,6 +1,7 @@
 ---- MODULE BackgroundAdmissionContention ----
 \* lean: TransactionReplay.disposition
 \* crates: gents-toolcalls, gents-session, gents-store
+\* traces: violates
 \* Concurrent writers of one request's `AgentRequest` row and session
 \* documents during a turn (#3592).
 \*
@@ -61,6 +62,8 @@
 \* `RequestExecutionLease.consecutive_renewals_obey_cadence`), longer than any
 \* one call's bounded attempt series, so at most one renewal commits while a
 \* call's transaction is retrying. FALSE lets renewals commit back to back.
+\* trace actors: Begin, Abort, CommitStart, CommitAdmission, CommitReceipt => open
+\* trace actors: ChildCompletes => child
 EXTENDS Naturals, FiniteSets, LeanDecision_TransactionReplay
 
 CONSTANTS
@@ -266,8 +269,10 @@ CommitReceipt(c) ==
 \* A running child finishes and writes its row and the session observation.
 \* Background completion recovery re-drives its transaction, so it is modeled
 \* as one commit.
+\* The hook starts the child only after the parent receipt commits.
 ChildCompletes(c) ==
   /\ child[c] = "running"
+  /\ phase[c] = "settled"
   /\ child' = [child EXCEPT ![c] = "done"]
   /\ ver' = Bump({"sess"})
   /\ UNCHANGED <<phase, open, snap, liveSnap, tries, refused, receipts, rseen,

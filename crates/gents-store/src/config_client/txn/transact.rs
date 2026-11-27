@@ -345,6 +345,11 @@ where
                 cancellation_rollback_scheduled: Some(Arc::clone(&cancellation_rollback_scheduled)),
                 dispatch: tracing::dispatcher::get_default(Clone::clone),
             };
+            #[cfg(any(test, feature = "test-fixtures"))]
+            {
+                use crate::test_support::paused_transaction::{observe, TransactionCheckpoint};
+                observe(TransactionCheckpoint::Begin(operation.as_str())).await;
+            }
             let mut txn = match begin(operation, cancellation_rollback_scheduled).await {
                 Ok(txn) => txn,
                 Err(error) => {
