@@ -1,0 +1,389 @@
+{
+  "case_id": "market-vendor-board",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type MarketStall { stall: String vendor: String zone: String fee: Float }",
+      "type StallCheckin { stall: String zone: String present: Boolean }",
+      "type ZoneReport { zone: String note: String }"
+    ],
+    "documents": [
+      {
+        "collection": "MarketStall",
+        "document": {
+          "stall": "S-14",
+          "vendor": "Alder Honey",
+          "zone": "east",
+          "fee": 45
+        }
+      },
+      {
+        "collection": "MarketStall",
+        "document": {
+          "stall": "S-22",
+          "vendor": "Briar Bread",
+          "zone": "west",
+          "fee": 60
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Set up a Zone Inspector agent woken automatically once 2 StallCheckin rows arrive for the same zone, writing a ZoneReport for that zone. Build and lint a \"Market Board\" page with a grid of KPI stats, a bar chart of fees by zone, a vendor search input, and a live table.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%zone inspector%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)market[- ]?board"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bGrid\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bvendor\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bzone\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "east_first",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-14",
+          "zone": "east",
+          "present": true
+        }
+      },
+      "expect_fire": false,
+      "deadline_secs": 180,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "west_first",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-22",
+          "zone": "west",
+          "present": true
+        }
+      },
+      "expect_fire": false,
+      "deadline_secs": 180,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "east_second",
+      "seed": {
+        "collection": "StallCheckin",
+        "document": {
+          "stall": "S-15",
+          "zone": "east",
+          "present": true
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "east_reports",
+          "collection": "ZoneReport",
+          "filter": {
+            "zone": {
+              "_eq": "east"
+            }
+          },
+          "fields": [
+            "zone",
+            "note"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "west_reports",
+          "collection": "ZoneReport",
+          "filter": {
+            "zone": {
+              "_eq": "west"
+            }
+          },
+          "fields": [
+            "zone",
+            "note"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "east_reports",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "west_reports",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": [
+              {
+                "capture": "east_reports",
+                "key": "zone",
+                "id": "east",
+                "expect": [
+                  {
+                    "field": "note",
+                    "matches": "\\S+"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

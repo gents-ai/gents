@@ -1,0 +1,535 @@
+{
+  "case_id": "patent-review-desk",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PatentFiling { docket: String title: String stage: String }",
+      "type ReviewMemo { docket: String reviewer: String verdict: String }"
+    ],
+    "documents": [
+      {
+        "collection": "PatentFiling",
+        "document": {
+          "docket": "PT-88",
+          "title": "Solid-state relay",
+          "stage": "examined"
+        }
+      },
+      {
+        "collection": "PatentFiling",
+        "document": {
+          "docket": "PT-91",
+          "title": "Optical latch",
+          "stage": "filed"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create a Patent Reviewer agent with its own datastore tools to read PatentFiling only and add ReviewMemo only, with no other database access. Build and lint a \"Patent Desk\" page with themed CSS, Filings and Memos tabs, a stage select filter, and a table.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "patent-reviewer",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^patent[ -]?reviewer$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "datastore": {
+                    "surfaces": "surfaces",
+                    "query": [
+                      "PatentFiling"
+                    ],
+                    "create": [
+                      "ReviewMemo"
+                    ]
+                  },
+                  "tools": [
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)patent[- ]?desk"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bTabs\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bSelect\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bdocket\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bverdict\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "css",
+                "matches": "var\\(--"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Have the Patent Reviewer check the title of PT-91, file a ReviewMemo for PT-91 by Mei saying allow, then try to change PatentFiling PT-91's stage to granted and tell me both the title and what happened.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "reviewer_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^patent[ -]?reviewer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "memos",
+          "collection": "ReviewMemo",
+          "filter": {
+            "docket": {
+              "_eq": "PT-91"
+            }
+          },
+          "fields": [
+            "docket",
+            "reviewer",
+            "verdict"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "filing",
+          "collection": "PatentFiling",
+          "filter": {
+            "docket": {
+              "_eq": "PT-91"
+            }
+          },
+          "fields": [
+            "docket",
+            "stage"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "reviewer_runs",
+                "min": 1
+              },
+              {
+                "capture": "memos",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "filing",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "memos",
+                "key": "docket",
+                "id": "PT-91",
+                "expect": [
+                  {
+                    "field": "reviewer",
+                    "matches": "(?i)mei"
+                  },
+                  {
+                    "field": "verdict",
+                    "matches": "(?i)allow"
+                  }
+                ]
+              },
+              {
+                "capture": "filing",
+                "key": "docket",
+                "id": "PT-91",
+                "expect": [
+                  {
+                    "field": "stage",
+                    "equals": "filed"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)optical latch"
+              },
+              {
+                "matches": "(?i)(?:cannot|can't|unable|denied|not allowed|not permitted|not possible|impossible|no [^.\\n]{0,40}(?:mutation|update|write|edit|modify|tool|access|permission)|read[- ]only|prevent|refus|fail|forbidden|disallowed)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "evolve",
+      "prompt": "Add a priority text field to ReviewMemo and add a dialog form to the \"Patent Desk\" page to submit a new ReviewMemo, keeping its themed CSS and relinting.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "ReviewMemo"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type ReviewMemo { docket: String reviewer: String verdict: String priority: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)patent[- ]?desk"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bDialog\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTabs\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bpriority\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              },
+              {
+                "field": "css",
+                "matches": "var\\(--"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

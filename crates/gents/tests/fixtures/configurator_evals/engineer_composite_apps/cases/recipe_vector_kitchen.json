@@ -1,0 +1,290 @@
+{
+  "case_id": "recipe-vector-kitchen",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "recipes.json",
+        "contents": "[\n  {\n    \"code\": \"RCP-1\",\n    \"cuisine\": \"thai\",\n    \"notes\": \"Charred lemongrass broth finished with bird eye chili and lime leaves.\",\n    \"flavorVec\": [\n      0.1,\n      0.2,\n      0.9\n    ]\n  },\n  {\n    \"code\": \"RCP-2\",\n    \"cuisine\": \"bbq\",\n    \"notes\": \"Hickory oak smoked brisket rubbed with cracked black pepper and brown sugar.\",\n    \"flavorVec\": [\n      0.3,\n      0.9,\n      0.1\n    ]\n  },\n  {\n    \"code\": \"RCP-3\",\n    \"cuisine\": \"pastry\",\n    \"notes\": \"Caramelized pear tart glazed with vanilla bean syrup and toasted almond.\",\n    \"flavorVec\": [\n      0.95,\n      0.05,\n      0.02\n    ]\n  },\n  {\n    \"code\": \"RCP-4\",\n    \"cuisine\": \"mediterranean\",\n    \"notes\": \"Roasted garlic hummus drizzled with cold pressed olive oil and sumac.\",\n    \"flavorVec\": [\n      0.2,\n      0.4,\n      0.3\n    ]\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create RecipeCard(code, cuisine, English fulltext notes, 3-dim flavorVec HNSW cosine vector index) and import recipes.json. Build and lint a \"Recipe Kitchen\" page with a donut chart by cuisine, search input, table of recipes, and a form to add a recipe.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "RecipeCard"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "recipes",
+          "collection": "RecipeCard",
+          "filter": {},
+          "fields": [
+            "code",
+            "cuisine",
+            "notes",
+            "flavorVec"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type RecipeCard { code: String cuisine: String notes: String @fulltext(language:\"english\") flavorVec: [Float32!] @index(vector:{dimensions:3,hnsw:{metric:COSINE}}) }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "recipes",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "recipes",
+                "key": "code",
+                "id": "RCP-2",
+                "expect": [
+                  {
+                    "field": "cuisine",
+                    "equals": "bbq"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)recipe[- ]?kitchen"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bDonutChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcuisine\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bnotes\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "vector_search",
+      "prompt": "Run a vector similarity search on RecipeCard flavorVec for [0.25, 0.88, 0.12] and tell me the closest recipe code and cuisine.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "RecipeCard"
+              },
+              {
+                "field": "ranking",
+                "equals": "similarity"
+              },
+              {
+                "field": "results",
+                "contains": "RCP-2"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)RCP-2"
+              },
+              {
+                "matches": "(?i)bbq"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "bm25_search",
+      "prompt": "Search RecipeCard notes with keyword search for \"lemongrass chili\" and tell me the top recipe code.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "RecipeCard"
+              },
+              {
+                "field": "ranking",
+                "equals": "bm25"
+              },
+              {
+                "field": "results",
+                "contains": "RCP-1"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)RCP-1"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

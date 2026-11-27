@@ -1,0 +1,380 @@
+{
+  "case_id": "orchard-harvest-pack",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "seed_schemas": [
+      "type CratePick { lot: String cultivar: String weight: Float }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package and install farm/orchard 1.0.0 in dir orchard: CratePick(lot, cultivar, weight: Float), PressPlan(lot, note), surface orchard-desk, and Press Planner woken on new CratePick to add a PressPlan. Save and lint a node Page \"Orchard Harvest\" with a grid, picks bar chart, and plans table.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "farm/orchard"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%press planner%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CratePick",
+            "PressPlan"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "orchard/pack_config.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "farm/orchard",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "orchard-desk",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"CratePick\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"PressPlan\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)orchard[- ]?harvest"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bGrid\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcultivar\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bnote\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"orchard-desk\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "orchard/pack_config.json",
+                "contains": "orchard-desk"
+              },
+              {
+                "path": "orchard/pack_config.json",
+                "matches": "(?i)press[- ]?planner"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CratePick { lot: String cultivar: String weight: Float } type PressPlan { lot: String note: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "pick_arrives",
+      "seed": {
+        "collection": "CratePick",
+        "document": {
+          "lot": "H-77",
+          "cultivar": "Honeycrisp",
+          "weight": 420
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
+        {
+          "kind": "documents",
+          "name": "worker_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plans",
+          "collection": "PressPlan",
+          "filter": {
+            "lot": {
+              "_eq": "H-77"
+            }
+          },
+          "fields": [
+            "lot",
+            "note"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "worker_runs",
+                "min": 1
+              },
+              {
+                "capture": "plans",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plans",
+                "key": "lot",
+                "id": "H-77",
+                "expect": [
+                  {
+                    "field": "note",
+                    "matches": "(?i)honeycrisp|420|H-77|press"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
