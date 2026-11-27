@@ -9,6 +9,7 @@ mod prompt;
 pub mod search;
 pub(crate) mod selection;
 pub mod setup;
+mod table;
 pub mod transcript;
 pub mod work;
 

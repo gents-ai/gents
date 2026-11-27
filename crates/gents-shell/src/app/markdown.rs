@@ -16,7 +16,7 @@ impl Look {
         code: true,
     };
 
-    fn styled(modifier: Modifier) -> Look {
+    pub(crate) fn styled(modifier: Modifier) -> Look {
         Look {
             modifier,
             code: false,
@@ -34,20 +34,33 @@ impl Look {
 /// Ranges of a text and how each draws.
 pub(crate) type Marks = Vec<(Range<usize>, Look)>;
 
-/// A reply as the shell shows it: `source` without the markdown delimiters it recognizes, and
-/// the byte ranges of that text they styled. Control characters but newlines are cut as well,
-/// since a row never draws them; every other byte stays as typed.
-pub(crate) fn render(source: &str) -> (String, Marks) {
+/// A table in a reply's shown text: its byte range, and each row's cells as byte ranges, the head
+/// first, each cell with the spaces around it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Table {
+    pub range: Range<usize>,
+    pub rows: Vec<Vec<Range<usize>>>,
+}
+
+/// A reply as the shell shows it: `source` without the markdown delimiters it recognizes, the
+/// byte ranges of that text they styled, and its tables. Control characters but newlines are cut
+/// as well, since a row never draws them; every other byte stays as typed.
+pub(crate) fn render(source: &str) -> (String, Marks, Vec<Table>) {
     let mut cuts = Vec::new();
     let mut marks = Vec::new();
+    let mut tables = Vec::new();
     let mut open: Vec<Look> = Vec::new();
-    let events = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let events = Parser::new_ext(source, options).into_offset_iter();
     for (event, range) in events {
         let look = open
             .iter()
             .fold(Look::default(), |all, look| all.with(*look));
         match event {
-            Event::Start(tag) => open.push(opened(source, &tag, &range, &mut cuts)),
+            Event::Start(tag) => {
+                table(&tag, &range, &mut tables);
+                open.push(opened(source, &tag, &range, &mut cuts));
+            }
             Event::End(_) => {
                 open.pop();
             }
@@ -81,9 +94,21 @@ pub(crate) fn render(source: &str) -> (String, Marks) {
             .map(|cut| cut.end.min(at).saturating_sub(cut.start));
         at - before.sum::<usize>()
     };
+    let moved = |range: &Range<usize>| shift(range.start)..shift(range.end);
     let marks = marks
         .into_iter()
-        .map(|(range, look)| (shift(range.start)..shift(range.end), look))
+        .map(|(range, look)| (moved(&range), look))
+        .collect();
+    let tables = tables
+        .into_iter()
+        .map(|table| Table {
+            range: moved(&table.range),
+            rows: table
+                .rows
+                .iter()
+                .map(|row| row.iter().map(moved).collect())
+                .collect(),
+        })
         .collect();
     let mut text = String::with_capacity(source.len());
     let mut at = 0;
@@ -92,7 +117,28 @@ pub(crate) fn render(source: &str) -> (String, Marks) {
         at = cut.end;
     }
     text.push_str(&source[at..]);
-    (text, marks)
+    (text, marks, tables)
+}
+
+/// Notes where a table, each of its rows and each of their cells start.
+fn table(tag: &Tag, range: &Range<usize>, tables: &mut Vec<Table>) {
+    match tag {
+        Tag::Table(_) => tables.push(Table {
+            range: range.clone(),
+            rows: Vec::new(),
+        }),
+        Tag::TableHead | Tag::TableRow => {
+            if let Some(table) = tables.last_mut() {
+                table.rows.push(Vec::new());
+            }
+        }
+        Tag::TableCell => {
+            if let Some(row) = tables.last_mut().and_then(|table| table.rows.last_mut()) {
+                row.push(range.clone());
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The look `tag` gives what it wraps, after cutting its delimiters.
@@ -183,7 +229,7 @@ mod tests {
     use super::*;
 
     fn shown(source: &str) -> (String, Vec<(String, Look)>) {
-        let (text, marks) = render(source);
+        let (text, marks, _) = render(source);
         let marked = marks
             .into_iter()
             .map(|(range, look)| (text[range].to_string(), look))
@@ -270,6 +316,27 @@ mod tests {
         assert_eq!(
             shown("open:\n```\nstill"),
             ("open:\nstill".to_string(), marked(&[("still", code())]))
+        );
+    }
+
+    #[test]
+    fn a_table_reports_its_cells() {
+        let (text, marks, tables) = render("x\n\n| a | **b** |\n|---|---|\n| 1 |\n\ny");
+        assert_eq!(text, "x\n\n| a | b |\n|---|---|\n| 1 |\n\ny");
+        assert_eq!(
+            &text[tables[0].range.clone()],
+            "| a | b |\n|---|---|\n| 1 |\n"
+        );
+        let cells: Vec<Vec<&str>> = tables[0]
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| text[cell.clone()].trim()).collect())
+            .collect();
+        assert_eq!(cells, [vec!["a", "b"], vec!["1", ""]]);
+        assert_eq!(marks.len(), 1);
+        assert!(
+            render("| a | b |\n|--").2.is_empty(),
+            "a table still streaming shows as typed"
         );
     }
 

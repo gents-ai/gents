@@ -795,6 +795,39 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_table_draws_as_columns() {
+        let tab = tab_with(&[("| a | bb |\n|---|---|\n| c😀 | `d` |", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["a   │ bb", "────┼───", "c😀 │ d"]);
+        let marks = tab.row_marks(80);
+        assert_eq!(
+            (&marks[0], &marks[2]),
+            (&vec![(0..1, bold()), (6..8, bold())], &vec![(6..7, code())])
+        );
+        let around = tab_with(&[("intro\n\n| a |\n|---|\n| 1 |\n\nafter", Tone::Reply)]);
+        assert_eq!(
+            rows_at(&around, 80),
+            ["intro", "", "a", "─", "1", "", "after"]
+        );
+    }
+
+    #[test]
+    fn a_wide_table_wraps_its_cells_inside_their_columns() {
+        let tab = tab_with(&[("| k | words |\n|---|---|\n| 1 | aaa bbb ccc |", Tone::Reply)]);
+        assert_eq!(
+            rows_at(&tab, 11),
+            ["k │ words", "──┼────────", "1 │ aaa bbb", "  │ ccc"]
+        );
+        assert!(
+            tab.row_joins(11).iter().all(|join| *join == "\n"),
+            "a table copies as drawn"
+        );
+        assert!(
+            !rows_at(&tab, 2).is_empty(),
+            "a pane narrower than the rules still lays out"
+        );
+    }
+
+    #[test]
     fn only_replies_read_markdown() {
         let tab = tab_with(&[("**hi**", Tone::You), ("**x**", Tone::Plain)]);
         let rows = rows_at(&tab, 80);

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use rapidhash::{HashSetExt, RapidHashSet};
@@ -9,6 +10,7 @@ use ratatui::text::Span;
 
 use super::input::Lines;
 use super::markdown::{self, Marks};
+use super::table::table_rows;
 use crate::sample::{changes, Running, Tone, CHAT};
 use crate::source::{Agent, Change, Prompt};
 
@@ -300,16 +302,40 @@ pub(super) fn line_rows(line: &ChatLine, width: usize) -> Vec<(String, Marks, &'
         .collect()
 }
 
-/// A reply's rows as its markdown shows it.
+/// A reply's rows as its markdown shows it, each table drawn in place of its lines.
 fn reply_rows(text: &str, width: usize) -> Vec<(String, Marks, &'static str)> {
-    let (shown, marks) = markdown::render(text);
+    let (shown, marks, tables) = markdown::render(text);
     let mut rows = Vec::new();
     let mut line_start = 0;
     for line in shown.split('\n') {
-        rows.extend(marked_rows(line, line_start, &marks, width));
-        line_start += line.len() + 1;
+        let line_end = line_start + line.len();
+        let starts = tables
+            .iter()
+            .find(|table| (line_start..=line_end).contains(&table.range.start));
+        let inside = tables
+            .iter()
+            .any(|table| table.range.start < line_start && line_start < table.range.end);
+        if let Some(table) = starts {
+            let cells: Vec<Vec<(&str, usize)>> = table
+                .rows
+                .iter()
+                .map(|row| row.iter().map(|cell| trimmed(&shown, cell)).collect())
+                .collect();
+            let drawn = table_rows(&cells, &marks, width).into_iter();
+            rows.extend(drawn.map(|(row, marks)| (row, marks, "\n")));
+        } else if !inside {
+            rows.extend(marked_rows(line, line_start, &marks, width));
+        }
+        line_start = line_end + 1;
     }
     rows
+}
+
+/// The text of `range` in `text` without the spaces around it, and where it starts.
+fn trimmed<'a>(text: &'a str, range: &Range<usize>) -> (&'a str, usize) {
+    let cell = &text[range.clone()];
+    let start = range.start + cell.len() - cell.trim_start().len();
+    (cell.trim(), start)
 }
 
 /// `line`, at byte `start` of the text `marks` are ranges of, wrapped in `width` columns: each row
