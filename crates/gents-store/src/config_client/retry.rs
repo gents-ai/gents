@@ -4,7 +4,6 @@ use super::error::{ConfigClientError, TransactionConflict};
 use super::write_telemetry::ConflictSource;
 use crate::graphql::GraphqlResponseError;
 
-pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
 /// `Background.receiptContentionAttempts`: outlasts the running children that
 /// may write while the owned loop admits one call at a time, plus the one

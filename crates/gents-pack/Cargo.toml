@@ -54,9 +54,9 @@ memmap2 = "0.9"
 tar = "0.4"
 flate2 = "1"
 semver = "1"
-afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
+afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "98a39d2f6207477ae5e33268d79cd8d6a463eaa1" }
+afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "98a39d2f6207477ae5e33268d79cd8d6a463eaa1" }
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "98a39d2f6207477ae5e33268d79cd8d6a463eaa1", default-features = false, features = [
     "afb-run",
 ] }
 nuclei = { version = "0.5.6", default-features = false }

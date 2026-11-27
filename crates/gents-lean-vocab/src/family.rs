@@ -230,9 +230,29 @@ where
 pub struct Case<I, O> {
     pub input: I,
     key: String,
+    index: usize,
     raw_input: Value,
     expected: Value,
+    checked: std::sync::atomic::AtomicBool,
     output: std::marker::PhantomData<fn(O)>,
+}
+
+impl<I, O> Case<I, O> {
+    fn defuse(&self) {
+        self.checked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl<I, O> Drop for Case<I, O> {
+    fn drop(&mut self) {
+        if !*self.checked.get_mut() && !std::thread::panicking() {
+            panic!(
+                "Lean conformance case {}#{} (input {}) was dropped without calling `.check(...)` — do not filter, find, first, or early-return past emitted cases",
+                self.key, self.index, self.raw_input
+            );
+        }
+    }
 }
 
 impl<I, O> Case<I, O>
@@ -240,6 +260,7 @@ where
     O: Serialize,
 {
     pub fn check(&self, actual: O) {
+        self.defuse();
         let actual = serde_json::to_value(actual).expect("family output encodes");
         assert_eq!(
             actual, self.expected,
@@ -266,12 +287,14 @@ where
             input: serde_json::from_value(case.input.clone())
                 .unwrap_or_else(|error| panic!("family {key} input {}: {error}", case.input)),
             key: key.to_owned(),
+            index,
             raw_input: case.input.clone(),
             expected: if mutated.contains(&index) {
                 perturbed(&case.expected)
             } else {
                 case.expected.clone()
             },
+            checked: std::sync::atomic::AtomicBool::new(false),
             output: std::marker::PhantomData,
         })
         .collect()
@@ -345,32 +368,48 @@ where
     }
 }
 
+fn shard_indices(cases: usize, shard: usize, of: usize) -> Vec<usize> {
+    assert!(shard < of, "shard {shard} of {of}");
+    (0..cases).filter(|index| index % of == shard).collect()
+}
+
+fn assert_shard_partition(cases: usize, shards: &[usize], of: usize) {
+    let mut named = shards.to_vec();
+    named.sort_unstable();
+    assert_eq!(named, (0..of).collect::<Vec<_>>(), "shard tests");
+    let mut replayed: Vec<usize> = (0..of)
+        .flat_map(|index| shard_indices(cases, index, of))
+        .collect();
+    replayed.sort_unstable();
+    assert_eq!(replayed, (0..cases).collect::<Vec<_>>(), "sharded cases");
+}
+
 /// The cases of shard `shard` of `of`, taken round-robin by case index, so
 /// the shards of one family partition its cases: every case lands in exactly
 /// one shard. A generated family too large to replay within one test's hang
 /// ceiling runs as one test per shard; its consumer stays one file.
 #[must_use = "sharded conformance cases must be iterated and verified with `.check(...)`"]
-pub fn shard<T>(cases: Vec<T>, shard: usize, of: usize) -> Vec<T> {
+pub fn shard<I, O>(cases: Vec<Case<I, O>>, shard: usize, of: usize) -> Vec<Case<I, O>> {
     assert!(shard < of, "shard {shard} of {of}");
-    cases
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % of == shard)
-        .map(|(_, case)| case)
-        .collect()
+    let mut selected = Vec::new();
+    for (index, case) in cases.into_iter().enumerate() {
+        if index % of == shard {
+            selected.push(case);
+        } else {
+            case.defuse();
+        }
+    }
+    selected
 }
 
 /// Asserts that `shards` names each shard `0..of` once, so the tests that run
 /// a sharded family replay every one of its `cases` cases exactly once.
-pub fn assert_shards_cover(cases: usize, shards: &[usize], of: usize) {
-    let mut named = shards.to_vec();
-    named.sort_unstable();
-    assert_eq!(named, (0..of).collect::<Vec<_>>(), "shard tests");
-    let mut replayed: Vec<usize> = (0..of)
-        .flat_map(|index| shard((0..cases).collect(), index, of))
-        .collect();
-    replayed.sort_unstable();
-    assert_eq!(replayed, (0..cases).collect::<Vec<_>>(), "sharded cases");
+pub fn assert_shards_cover<I, O>(cases: Vec<Case<I, O>>, shards: &[usize], of: usize) {
+    let count = cases.len();
+    for case in &cases {
+        case.defuse();
+    }
+    assert_shard_partition(count, shards, of);
 }
 
 #[cfg(test)]
@@ -378,6 +417,18 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    fn synthetic_case(index: usize) -> Case<usize, usize> {
+        Case {
+            input: index,
+            key: "synthetic_family".to_owned(),
+            index,
+            raw_input: serde_json::json!(index),
+            expected: serde_json::json!(index),
+            checked: std::sync::atomic::AtomicBool::new(false),
+            output: std::marker::PhantomData,
+        }
+    }
 
     fn schema_path() -> std::path::PathBuf {
         std::path::PathBuf::from(
@@ -389,9 +440,37 @@ mod tests {
     #[test]
     fn shards_partition_the_cases() {
         for cases in [0, 1, 7, 64, 129] {
-            assert_shards_cover(cases, &[2, 0, 1], 3);
+            assert_shard_partition(cases, &[2, 0, 1], 3);
         }
-        assert_eq!(shard((0..7).collect(), 1, 3), vec![1, 4]);
+        assert_eq!(shard_indices(7, 1, 3), vec![1, 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "was dropped without calling `.check(...)`")]
+    fn dropping_an_unchecked_case_panics() {
+        let case = synthetic_case(0);
+        drop(case);
+    }
+
+    #[test]
+    fn shard_defuses_other_shards_and_checks_selected_shard() {
+        let cases: Vec<_> = (0..5).map(synthetic_case).collect();
+        let selected = shard(cases, 1, 3);
+        assert_eq!(
+            selected.iter().map(|case| case.input).collect::<Vec<_>>(),
+            vec![1, 4]
+        );
+        for case in selected {
+            case.check(case.input);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "synthetic_family#1")]
+    fn shard_keeps_selected_cases_armed() {
+        let cases: Vec<_> = (0..5).map(synthetic_case).collect();
+        let selected = shard(cases, 1, 3);
+        drop(selected);
     }
 
     #[test]

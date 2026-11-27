@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import type {
   ProviderAccountView,
   InferenceExecution,
@@ -635,7 +635,7 @@ export function ProfileEditor({
       {!embedded && !draftMode && (
         <DeleteButton
           label={profile.display_name ?? profile.profile_id}
-          warning={dependentsWarning(deployment, "profile", profile.profile_id)}
+          blocked={deleteBlocker(deployment, "profile", profile.profile_id)}
           base={base}
           onDelete={() =>
             changeConfig("deleteInferenceProfileConfig", {

@@ -39,34 +39,6 @@ def pluginJobOpening : Conformance.Family PluginJobOpeningInput PluginJobOpening
   inputs := [.valid, .wrongPin, .failedTransaction].map PluginJobOpeningInput.mk
   model := fun i => ⟨AgentSession.pluginJobOpeningCommits i.name.opening⟩
 
-def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
-  [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
-def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
-  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("agent", toJson r.agent),
-   ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
-   ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB),
-   ("terminalized_at", toJson r.terminalizedAt)]
-private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
-  [("task_id", toJson p.task),
-   ("parent_request_doc_id", toJson p.parentRequestDoc),
-   ("started_by", p.startedBy.map scopeJson |>.getD Json.null),
-   ("opening_request_doc_id", toJson p.openingRequestDoc),
-   ("fork", p.fork.map (fun f => Json.mkObj
-     [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
-     |>.getD Json.null)]
-def documentJson (d : AgentSession.Document) : Json := Json.mkObj
-  [("scope", scopeJson d.scope), ("agent", toJson d.agent),
-   ("created_at", toJson d.createdAt), ("closed_at", toJson d.closedAt),
-   ("stopped_at", toJson d.stoppedAt), ("archived_at", toJson d.archivedAt), ("archive_revision", toJson d.archiveRevision),
-   ("provenance", d.provenance.map provenanceJson |>.getD Json.null),
-   ("tags", toJson d.tags), ("title", d.title.map (fun t => Json.mkObj
-      [("text", toJson t.text), ("source", toJson t.source.toWireName)]) |>.getD Json.null),
-   ("observation", d.observation.map (fun o => Json.mkObj
-      [("activity", toJson o.activity), ("preview", toJson o.preview),
-       ("latest", o.latest.map (fun r => Json.mkObj
-         [("doc_id", toJson r.docId), ("request_id", toJson r.requestId),
-          ("state", toJson r.state.toDefraDB)]) |>.getD Json.null)]) |>.getD Json.null)]
-
 private def roleName : CanonicalOutput.MessageRole → String
   | .system => "system"
   | .user => "user"
@@ -348,6 +320,28 @@ selections, whose rows differ only in purpose and creation time. -/
 def sessionSelectionClientStore : Family SelectionInput SelectionOutput where
   inputs := selectionInputs.filter fun i =>
     i.name ∈ ["newer_title_preserves_normal_head", "title_only_has_no_public_head"]
+  model := selectionOutcome
+
+/-- `latest_session_request` selects the normal head within one node, session
+and exact requester scope, applying the model's purpose filter and same-second
+live/terminalized tie-breaks. -/
+def latestSessionRequestInputs : List SelectionInput :=
+  [ selectionInput "timestamp_tie_forward" [old, newerRequest] 1 10 (some (some 2)),
+    selectionInput "timestamp_tie_reverse" [newerRequest, old] 1 10 (some (some 2)),
+    selectionInput "newer_title_preserves_normal_head" [titleRequest, old] 1 10 (some (some 2)),
+    selectionInput "newer_access_review_preserves_normal_head" [accessReviewRequest, old] 1 10 (some (some 2)),
+    selectionInput "title_only_has_no_public_head" [titleRequest] 1 10 (some (some 2)),
+    selectionInput "foreign_requester_excluded" [foreignRequester, old] 1 10 (some (some 2)),
+    selectionInput "same_second_claim_after_completion" [finishedPredecessor, sameSecondClaim] 1 10 (some (some 2)),
+    selectionInput "same_second_claim_after_completion_reverse" [sameSecondClaim, finishedPredecessor] 1 10 (some (some 2)),
+    selectionInput "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 (some (some 2)),
+    selectionInput "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 (some (some 2)),
+    selectionInput "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 (some (some 2)),
+    selectionInput "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 (some (some 2)) ]
+
+@[conformance_family]
+def latestSessionRequest : Family SelectionInput SelectionOutput where
+  inputs := latestSessionRequestInputs
   model := selectionOutcome
 
 structure EditMessage where

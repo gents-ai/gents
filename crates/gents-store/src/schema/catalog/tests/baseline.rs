@@ -1,9 +1,9 @@
-use crate::node_scope::ContextCalls as _;
 use std::collections::BTreeSet;
 
 use gents_protocol::schemas;
 
 use super::common::{self, fresh_node};
+use crate::node_scope::ContextCalls as _;
 use crate::schema::catalog::{
     baseline, ensure, ensure_runtime, runtime_catalog, validate_existing_schema,
     BaselineCollection, Catalog, SchemaError,
@@ -282,15 +282,16 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     let node = fresh_node().await;
-    let earlier = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .filter(|entry| entry.name != gents_protocol::schemas::RENDERED_REQUEST_NAME)
-        .map(|entry| entry.sdl)
-        .collect::<Vec<_>>()
-        .join("\n");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&earlier))
+    for entry in baseline(gents_protocol::schemas::HomePolicyIds::node_store()).iter() {
+        if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
+            continue;
+        }
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(entry.sdl),
+        )
         .await
-        .unwrap_or_else(|error| panic!("register the earlier baseline: {error}"));
+        .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
+    }
     let create = r#"mutation {
         create_AgentSession(input: { session_id: "pre-upgrade-session" }) { session_id }
     }"#;
@@ -1017,16 +1018,11 @@ async fn canonical_catalog_pins_for_authoring() {
                 .zip(gents_protocol::schemas::ALL.iter().copied()),
         )
         .collect::<Vec<_>>();
-    // One batch, as a fresh store registers it: DefraDB identifies a relation
-    // to a collection registered earlier by name instead.
-    let sdl = catalog
-        .iter()
-        .map(|(_, sdl)| *sdl)
-        .collect::<Vec<_>>()
-        .join("\n");
-    node.add_collection(&schemas::HomePolicyIds::node_store().render(&sdl))
-        .await
-        .unwrap_or_else(|error| panic!("register the catalog for pin authoring: {error}"));
+    for (name, sdl) in &catalog {
+        node.add_collection(&schemas::HomePolicyIds::node_store().render(sdl))
+            .await
+            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
+    }
 
     let mut mismatches = Vec::new();
     for (name, _) in catalog {

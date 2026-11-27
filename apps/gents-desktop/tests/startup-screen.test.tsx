@@ -12,7 +12,6 @@ import type {
 import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
 import { setTimingForTests } from "../src/hooks/timing";
-import { projectStartupGate } from "../src/lib/startupGate";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { deferred } from "./deferred";
@@ -676,40 +675,5 @@ describe("startup waits on this device's saved settings, never on a node", () =>
 
     await act(async () => retried.resolve(snapshot(false, false)));
     expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
-  });
-});
-
-describe("projectStartupGate", () => {
-  const node = (state: ManagedServerStatus["state"], pairingReady: boolean) =>
-    ({ state, pairingReady }) as ManagedServerStatus;
-
-  it("shows the shell once first run settles", () => {
-    expect(projectStartupGate(true, "configured", null)).toBe("shell");
-    expect(projectStartupGate(true, "unreadable", null)).toBe("shell");
-  });
-
-  it("names settings that cannot be read", () => {
-    expect(projectStartupGate(false, "unreadable", null)).toBe("unreadable");
-  });
-
-  it("offers the connect to a desktop the local node does not know", () => {
-    expect(projectStartupGate(false, "configured", node("stopped", false))).toBe(
-      "not_connected",
-    );
-    expect(projectStartupGate(false, "configured", node("running", false))).toBe(
-      "not_connected",
-    );
-  });
-
-  it("waits on the node's configuration in the shell, never on a loading screen", () => {
-    expect(projectStartupGate(false, "configured", node("running", true))).toBe(
-      "shell",
-    );
-    expect(projectStartupGate(false, "configured", node("stopped", true))).toBe(
-      "shell",
-    );
-    expect(projectStartupGate(false, "configured", null)).toBe("shell");
-    expect(projectStartupGate(false, "absent", null)).toBe("shell");
-    expect(projectStartupGate(false, null, null)).toBe("shell");
   });
 });

@@ -1,30 +1,24 @@
-//! ClientSubmissionContention.tla: a User's signed submission reserves its
-//! session and selected Agent before signing. A configuration write to that
-//! Agent landing between the reservation's read and its commit makes DefraDB
-//! abort the commit ("a partial read lost to a newer merge"); the reservation
-//! re-reads, re-plans and re-signs after the confirmed conflict and creates
-//! the session once.
-
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use gents::test_support::tla_trace::{Action, Red, SpecTraceMap, Trace};
+use gents_protocol::document_query::{
+    fields::{agent_request as request, agent_session as session},
+    Filter, Input, Query, Selection, Update,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
-use gents_store::graphql::escape_graphql_string;
+use gents_session::request::lifecycle::{
+    materialize::sign_request, reserve_goal_session, submit_client_request, RequestSigner,
+};
+use gents_store::config_client::is_classified_transaction_conflict;
 use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::{canonical_now, RequestActors};
-use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
 use crate::support::trial_store;
 
 const SESSION: &str = "contended-client-session";
 
-/// The model's `Publications`: concurrent writes landing in the reservation's
-/// attempt series, fewer than its attempts.
-const PUBLICATIONS: usize = 2;
-
-/// The User renames the selected Agent through the signed desired-state owner.
 async fn rename_agent(actors: &RequestActors, name: String) {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{
@@ -65,64 +59,218 @@ async fn rename_agent(actors: &RequestActors, name: String) {
         .expect("rename the selected Agent as its User");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reservation_rebuilds_after_a_concurrent_agent_write() {
+#[derive(Clone, Copy)]
+enum Writer {
+    CompleteRelationships,
+    Publish,
+    ChangeBinding,
+}
+
+const MAP: SpecTraceMap<Writer> = SpecTraceMap {
+    spec: "ClientSubmissionContention",
+    constants: &[(
+        "Attempts",
+        gents_store::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+    )],
+    action: |step| match step.action.as_str() {
+        "AgentPublish" => Action::Environment(Writer::Publish),
+        "BindingChange" => Action::Environment(Writer::ChangeBinding),
+        "Compose" => Action::Internal,
+        "ReserveCommit" | "SubmitCommit" => {
+            assert_eq!(step.actor, Some(1), "one authored request");
+            Action::Commit
+        }
+        action => panic!("unknown submission action {action}"),
+    },
+};
+
+async fn replay(trace: &Trace) {
     let db = trial_store("client-submission-contention").await;
     let actors = Arc::new(RequestActors::new(&db).await);
-    let node_did = db.node_identity.did().to_owned();
     let user = &actors.fixture.user;
-
-    let commits = Arc::new(AtomicUsize::new(0));
-    let hook: ProxyHook = {
-        let actors = actors.clone();
-        let commits = commits.clone();
-        Arc::new(move |method: String, path: String| {
-            let actors = actors.clone();
-            let commits = commits.clone();
-            Box::pin(async move {
-                if !is_commit(&method, &path) {
-                    return;
-                }
-                let landed = commits.fetch_add(1, Ordering::SeqCst);
-                if landed < PUBLICATIONS {
-                    rename_agent(&actors, format!("Renamed {landed}")).await;
-                }
-            })
-        })
-    };
-    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
-    let contended = proxy.client_access(user);
-    let request = AgentRequestCreate::base(
+    let reserves = trace.constants["Reserves"].as_bool().unwrap();
+    let published = trace.constants["PublishedBinding"].as_bool().unwrap();
+    let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "contended-request",
-        RequestScope::new(&node_did, user.did(), actors.agent_did(), SESSION),
-        "submitted while the Agent is reconfigured",
+        RequestScope::new(actors.node_did(), user.did(), actors.agent_did(), SESSION),
+        "submitted while the Agent is writing",
         "interactive",
         canonical_now(),
         AgentRequestAdmissionRecord::client(user.did()),
     );
-
-    let reserved = gents_session::request::lifecycle::reserve_goal_session(&contended, &request)
-        .await
-        .expect("the reservation settles despite the concurrent Agent writes");
-
-    assert_eq!(
-        commits.load(Ordering::SeqCst),
-        PUBLICATIONS + 1,
-        "each overtaken attempt aborted and was rebuilt once"
-    );
-    let rows = actors
+    if !reserves {
+        let doc = actors
+            .create_session_with(serde_json::json!({
+                "session_id": SESSION, "node_did": actors.node_did(), "requester_did": user.did(),
+                "agent_did": actors.agent_did(), "relationships_pending": !published,
+                "created_at": request.created_at,
+            }))
+            .await;
+        request.session_doc_id = Some(doc);
+        request.agent_doc_id = Some(actors.agent_doc.clone());
+        sign_request(&mut request, RequestSigner::Identity(user))
+            .await
+            .unwrap();
+    }
+    let replay = MAP
+        .drive(
+            trace,
+            db.graphql_endpoint(),
+            (!reserves && !published).then_some(Writer::CompleteRelationships),
+            {
+                let actors = actors.clone();
+                let session_doc = request.session_doc_id.clone();
+                move |action, index| {
+                    let (actors, session_doc) = (actors.clone(), session_doc.clone());
+                    async move {
+                        match action {
+                            Writer::CompleteRelationships => {
+                                gents_session::session::grant_created_session_relationships(
+                                    &actors.agent_access,
+                                    session_doc.as_deref().unwrap(),
+                                    &actors.agent_doc,
+                                    actors.agent_did(),
+                                )
+                                .await
+                                .unwrap();
+                            }
+                            Writer::Publish if reserves => {
+                                rename_agent(&actors, format!("Renamed {index}")).await
+                            }
+                            Writer::Publish => {
+                                actors
+                                    .seed_session_observation(
+                                        SESSION,
+                                        &gents_protocol::session::SessionObservation {
+                                            last_activity_at: format!(
+                                                "2099-01-01T00:00:{index:02}Z"
+                                            ),
+                                            preview: None,
+                                            reply_preview: None,
+                                            latest_request: None,
+                                        },
+                                    )
+                                    .await
+                            }
+                            Writer::ChangeBinding => {
+                                let write = Update::doc(
+                                    session_doc.as_deref().unwrap(),
+                                    Input::new().set(session::REQUESTER_DID, actors.agent_did()),
+                                )
+                                .render();
+                                let changed = actors
+                                    .agent_access
+                                    .write_rendered("test.change_published_binding", &write)
+                                    .await;
+                                assert!(
+                                    changed.is_err(),
+                                    "immutable session binding accepted a write: {changed:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        .await;
+    let access = replay.proxy.client_access(user);
+    let result = if reserves {
+        reserve_goal_session(&access, &request).await.map(Some)
+    } else {
+        submit_client_request(&access, &request)
+            .await
+            .map(|()| None)
+    };
+    let done = result.is_ok();
+    let requests = actors
         .fixture
         .access
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID requester_did agent_did }} }}"#,
-            escape_graphql_string(SESSION),
-        ))
+        .read(
+            &Query::select(
+                Selection::doc_id()
+                    .field(request::AGENT_DID)
+                    .field(request::REQUESTER_DID)
+                    .field(request::SESSION_DOC_ID),
+            )
+            .filter(Filter::eq(request::SESSION_ID, SESSION))
+            .render(),
+        )
         .await
         .unwrap();
-    let rows = rows["data"]["AgentSession"].as_array().unwrap();
-    assert_eq!(rows.len(), 1, "the rebuild created one session: {rows:?}");
-    assert_eq!(rows[0]["_docID"], reserved.as_str());
-    assert_eq!(rows[0]["requester_did"], user.did());
-    assert_eq!(rows[0]["agent_did"], actors.agent_did());
+    let rows = requests["data"]["AgentRequest"].as_array().unwrap();
+    let sessions = actors
+        .fixture
+        .access
+        .read(
+            &Query::select(
+                Selection::doc_id()
+                    .field(session::AGENT_DID)
+                    .field(session::REQUESTER_DID),
+            )
+            .filter(Filter::eq(session::SESSION_ID, SESSION))
+            .render(),
+        )
+        .await
+        .unwrap();
+    let [bound] = sessions["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("expected one session: {sessions}");
+    };
+    assert_eq!(bound["requester_did"], user.did());
+    assert_eq!(bound["agent_did"], actors.agent_did());
+    match result {
+        Ok(Some(doc)) => assert_eq!(bound["_docID"], doc),
+        Ok(None) => assert_eq!(rows.len(), 1),
+        Err(error) => {
+            let error = anyhow::Error::new(error);
+            assert!(is_classified_transaction_conflict(&error), "{error:#}");
+            assert!(rows.is_empty());
+        }
+    }
+    let commits = replay.commits();
+    let writes = trace
+        .steps
+        .iter()
+        .filter(|s| s.action == "AgentPublish")
+        .count();
+    let attempts = trace.constants["Attempts"].as_u64().unwrap() as usize;
+    assert_eq!(commits, (writes + 1).min(attempts), "{}", trace.config);
+    let red = match trace.config.as_str() {
+        "MCClientSubmissionContentionShortBudget" => Red::Premise,
+        "MCClientSubmissionContentionTwoPublicationsWitness" => Red::Witness,
+        _ => Red::Defect,
+    };
+    let mut properties = vec![
+        ("NoConflictLoss", done),
+        ("CreatedOnce", rows.len() <= 1),
+        (
+            "SubmittedUnderCurrentBinding",
+            rows.iter().all(|row| {
+                row["session_doc_id"] == bound["_docID"]
+                    && row["agent_did"] == bound["agent_did"]
+                    && row["requester_did"] == bound["requester_did"]
+            }),
+        ),
+    ];
+    if matches!(red, Red::Witness) {
+        properties.push(("ReservationRebuiltTwice", !(reserves && commits == 3)));
+    }
+    trace.check(red, &properties);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replays_client_submission_contention() {
+    for json in [
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionReserveSingleAttempt.json"),
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionSingleAttempt.json"),
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionShortBudget.json"),
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionPublishedBindingChanges.json"),
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionTwoPublicationsWitness.json"),
+    ] {
+        replay(&MAP.load(json)).await;
+    }
 }

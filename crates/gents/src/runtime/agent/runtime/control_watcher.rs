@@ -19,6 +19,7 @@ use super::surface_publication::{
 };
 use gents_pack::plugin::store::{PublishedPluginReadError, ReadOutcome, StoreReadPin};
 use gents_protocol::error_chain::ErrorChain;
+use gents_store::config_client::placement_fence::PlacementBasis;
 
 pub(in crate::runtime::agent) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 pub(super) const CONTROL_RECONCILE_LOCAL_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -94,6 +95,8 @@ pub(super) struct ControlWatcherInputs {
     pub(super) proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) health_events_rx: mpsc::Receiver<()>,
+    /// Changes when the supervisor's placement fence asks for a fresh view.
+    pub(super) placement_resolves: watch::Receiver<u64>,
     pub(super) shutdown: watch::Receiver<bool>,
 }
 
@@ -138,6 +141,7 @@ pub(super) async fn run_control_watcher_with_timing(
         proposals_tx,
         runtime_status,
         mut health_events_rx,
+        mut placement_resolves,
         mut shutdown,
     } = inputs;
     backend_admission.validate(&node).await?;
@@ -153,6 +157,8 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut pending_visibility = false;
     let mut settle_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
+    let mut last_proposed_basis = None::<PlacementBasis>;
+    let mut placement_open = true;
     let mut phase_transition_pending = false;
     let mut resync_required = false;
     let mut replicated_pending = false;
@@ -292,7 +298,10 @@ pub(super) async fn run_control_watcher_with_timing(
                 {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        if phase_announced || send_proposal(last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()), recovery_pending && disposition == Disposition::Publish) {
+                        let basis = snapshot.placement_basis.clone();
+                        let changed = last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str())
+                            || last_proposed_basis.as_ref() != Some(&basis);
+                        if phase_announced || send_proposal(changed, recovery_pending && disposition == Disposition::Publish) {
                             if !phase_announced {
                                 runtime_status
                                     .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -302,6 +311,7 @@ pub(super) async fn run_control_watcher_with_timing(
                                 return Ok(());
                             }
                             last_proposed_fingerprint = Some(fingerprint);
+                            last_proposed_basis = Some(basis);
                             proposed_update = true;
                             if disposition == Disposition::Publish {
                                 recovery_pending = false;
@@ -373,6 +383,18 @@ pub(super) async fn run_control_watcher_with_timing(
                 publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
                 awaiting_release = false;
                 sleep.as_mut().reset(after_wake(&mut pending_since, timing.debounce, timing.debounce));
+            }
+            changed = placement_resolves.changed(), if placement_open => {
+                if changed.is_err() {
+                    placement_open = false;
+                    continue;
+                }
+                placement_resolves.borrow_and_update();
+                resync_required = true;
+                dirty = true;
+                publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
+                awaiting_release = false;
+                sleep.as_mut().reset(after_wake(&mut pending_since, timing.local_debounce, timing.debounce));
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(

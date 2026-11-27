@@ -27,7 +27,18 @@ impl AgentPublicationObserver for PanicPublicationObserver {
         &self,
         _: &str,
         _: &[ConfigRelationshipGrant],
+        _: &[(
+            ConfigRelationshipGrant,
+            crate::config_client::host_grant::HostCredential,
+        )],
     ) -> Result<(), ConfigClientError> {
+        panic!("observer must not run")
+    }
+
+    async fn host_credential(
+        &self,
+        _: &ConfigRelationshipGrant,
+    ) -> Option<crate::config_client::host_grant::HostCredential> {
         panic!("observer must not run")
     }
 
@@ -325,5 +336,9 @@ impl AssignmentRuntime for AssignmentTestRuntime {
         self.active.lock().await.insert(id.to_owned());
         self.changed.notify_one();
         Ok(true)
+    }
+
+    fn placement_fence(&self) -> Option<&crate::config_client::placement_fence::PlacementFence> {
+        None
     }
 }

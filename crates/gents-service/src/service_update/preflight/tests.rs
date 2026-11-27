@@ -38,6 +38,7 @@ fn write_fixture(home: &Path, encryption: StoreEncryption) {
             store_encryption: Some(encryption),
             document_acp: Default::default(),
             client_identity: None,
+            registry: None,
         },
     )
     .unwrap();

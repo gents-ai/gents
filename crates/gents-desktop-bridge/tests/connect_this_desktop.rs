@@ -61,6 +61,7 @@ fn terminal_home(home: &Path, desktop: &Path) {
             tool_root: None,
             store_key_custody: StoreKeyCustodyChoice::File,
             default_packs: false,
+            registry: None,
         },
     ))
     .unwrap();

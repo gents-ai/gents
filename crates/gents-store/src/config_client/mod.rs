@@ -31,6 +31,7 @@ mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
 mod device_group;
+pub mod placement_fence;
 pub(crate) use device_group::verified_publisher_node;
 pub(crate) mod transport_replica;
 pub use device_group::DeviceGroupReadError;
@@ -73,6 +74,7 @@ mod graphql;
 mod held_audience;
 mod home_provider;
 pub mod home_status;
+pub mod host_grant;
 #[cfg(test)]
 mod isolation_premise_tests;
 pub mod node_deferred_operation;
@@ -89,8 +91,11 @@ mod pack_effect;
 mod pairing_reader;
 #[cfg(test)]
 mod query_tests;
+mod relationship_fence;
 mod relationships;
 mod retry;
+
+pub const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 mod schema_contract;
 mod schema_install;
 pub mod schema_introspection;
@@ -157,8 +162,8 @@ pub use authored_document::{
     create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
 };
 pub use client_agent_publication::{
-    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, PublicationStage,
-    PublicationStatus, RecoveryDisposition,
+    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, HostReading,
+    PublicationStage, PublicationStatus, RecoveryDisposition,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use node_deferred_operation::recover_deferred_node_operations;
@@ -202,6 +207,7 @@ pub use delegation::{
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use held_audience::ResolveAudience;
+pub use relationship_fence::{decide_grant, CompletionDecision, GrantOrigin};
 pub use relationships::ConfigRelationshipGrant;
 pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;

@@ -6,51 +6,91 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 
 use super::*;
+use crate::runtime::agent::retry::RetryPolicy;
+use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::agent::PendingAgent;
-use crate::runtime::status::RuntimeStatusHandle;
+use crate::runtime::status::{RuntimeStatusHandle, RuntimeStatusOwner};
 use gents_inference::admission::BackendAdmissionConfig;
-use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::row::AgentRequest;
-use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
+use gents_store::identity::RuntimeNode;
 use gents_store::schema::ensure_runtime_schemas;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolCeiling, ToolSurface};
 
 async fn test_node() -> gents_store::test_support::TestStore {
-    gents_store::test_support::TestStore::start(
-        "reconcile",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await
+    crate::support::trial_store("reconcile").await
 }
 
 fn stub_runtime_node() -> Arc<RuntimeNode> {
-    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
-        KeyIdentity::load_or_create(
-            std::env::temp_dir().join(format!("stub-runtime-node-{}.key", uuid::Uuid::new_v4())),
-            None,
-        )
-        .unwrap(),
-    );
-    Arc::new(RuntimeNode {
-        node_did: identity.did().to_string(),
-        identity,
-        default_agent_did: String::new(),
-        display_name: None,
-        enabled: true,
-    })
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> =
+        Arc::new(gents_store::test_support::test_identity(&format!(
+            "stub-runtime-node-{}",
+            uuid::Uuid::new_v4()
+        )));
+    crate::support::fixtures::test_node_for(identity, "")
+}
+
+fn fast_retry_policy() -> RetryPolicy {
+    RetryPolicy {
+        max_retries: 1,
+        base_delay_ms: 1,
+        max_delay_ms: 2,
+    }
 }
 
 /// Runtime status rows are keyed by the node's own identity, so fixtures pass it here.
-fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusHandle {
-    let (_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+fn runtime_status_pair(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+) -> (RuntimeStatusOwner, RuntimeStatusHandle) {
+    RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         node_did,
         Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
         Duration::from_millis(1),
         crate::runtime::storage_fault::StorageFaultObservation::new(),
-    );
-    runtime_status
+    )
+}
+
+fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusHandle {
+    runtime_status_pair(node, node_did).1
+}
+
+async fn resolve_surface(
+    node: &Arc<defra_node::Node>,
+    agent_config: &AgentWithTools,
+) -> Arc<ToolSurface> {
+    Arc::new(
+        agent_config
+            .tools
+            .resolve(
+                node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &gents_tools::plugin_host::NoPluginHost,
+            )
+            .await
+            .unwrap(),
+    )
+}
+
+async fn drain_until_shutdown(
+    request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            message = async {
+                let mut receiver = request_rx.lock().await;
+                receiver.recv().await
+            } => {
+                if message.is_none() {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 /// Revisions of one Agent share its provisioned binding and root identity, so they
@@ -75,62 +115,17 @@ impl AgentLineage {
     }
 }
 
-async fn snapshot_for_agents(
-    node: &Arc<defra_node::Node>,
-    default_agent_did: &str,
-    agents: Vec<AgentWithTools>,
-) -> ResolvedRuntimeSnapshot {
-    snapshot_for_agents_with_node(node, default_agent_did, agents, stub_runtime_node()).await
-}
-
-async fn snapshot_for_agents_with_node(
-    node: &Arc<defra_node::Node>,
-    default_agent_did: &str,
-    agents: Vec<AgentWithTools>,
-    runtime_node: Arc<RuntimeNode>,
-) -> ResolvedRuntimeSnapshot {
-    let mut tool_surfaces = RapidHashMap::new();
-    for agent_config in &agents {
-        let tool_surface = agent_config
-            .tools
-            .resolve(
-                node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &gents_tools::plugin_host::NoPluginHost,
-            )
-            .await
-            .unwrap();
-        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
-    }
-    ResolvedRuntimeSnapshot::from_parts(
-        default_agent_did.to_string(),
-        agents,
-        tool_surfaces,
-        RapidHashMap::new(),
-    )
-    .with_node(runtime_node)
-}
-
-async fn snapshot_for_agents_with_admission(
+async fn snapshot_for_agents_with_admission_and_node(
     node: &Arc<defra_node::Node>,
     default_agent_did: &str,
     agents: Vec<AgentWithTools>,
     backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
+    runtime_node: Arc<RuntimeNode>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = RapidHashMap::new();
     for agent_config in &agents {
-        let tool_surface = agent_config
-            .tools
-            .resolve(
-                node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &gents_tools::plugin_host::NoPluginHost,
-            )
-            .await
-            .unwrap();
-        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
+        let tool_surface = resolve_surface(node, agent_config).await;
+        tool_surfaces.insert(agent_config.agent.agent_did.clone(), tool_surface);
     }
     ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_agent_did.to_string(),
@@ -139,7 +134,38 @@ async fn snapshot_for_agents_with_admission(
         backend_admission_configs,
         RapidHashMap::new(),
     )
-    .with_node(stub_runtime_node())
+    .with_node(runtime_node)
+}
+
+async fn snapshot_for_agents(
+    node: &Arc<defra_node::Node>,
+    default_agent_did: &str,
+    agents: Vec<AgentWithTools>,
+) -> ResolvedRuntimeSnapshot {
+    snapshot_for_agents_with_admission_and_node(
+        node,
+        default_agent_did,
+        agents,
+        RapidHashMap::new(),
+        stub_runtime_node(),
+    )
+    .await
+}
+
+async fn snapshot_for_agents_with_node(
+    node: &Arc<defra_node::Node>,
+    default_agent_did: &str,
+    agents: Vec<AgentWithTools>,
+    runtime_node: Arc<RuntimeNode>,
+) -> ResolvedRuntimeSnapshot {
+    snapshot_for_agents_with_admission_and_node(
+        node,
+        default_agent_did,
+        agents,
+        RapidHashMap::new(),
+        runtime_node,
+    )
+    .await
 }
 
 fn backend_admission_config(
@@ -159,44 +185,219 @@ fn backend_admission_config(
 }
 
 fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
-    AgentRequest {
-        retry_parent_request_doc_id: None,
-        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-        doc_id: format!("child-doc-{index}"),
-        request_id: format!("child-request-{index}"),
-        node_did: "did:test:background-fanout-test".to_string(),
-        requester_did: None,
-        agent_did: agent_did.to_string(),
-        session_id: format!("child-session-{index}"),
-        content: format!("background child {index}"),
-        max_total_tokens: None,
-        input: Default::default(),
-        execution_origin: Some("interactive".to_string()),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_lease_secs: None,
-        request_hop: 1,
-        interrupt_generation: None,
-        caused_by_parent_request_id: Some("parent-request".to_string()),
-        caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
-        caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
-        caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_node_did: None,
-        workspace_seal_hash: None,
-        executed_model_name: None,
-        executed_reasoning_effort: None,
-        executed_service_tier: None,
-        executed_inference_profile_id: None,
-        executed_runtime_generation: None,
+    let mut request = crate::support::build_request(
+        format!("child-doc-{index}"),
+        format!("child-request-{index}"),
+        format!("child-session-{index}"),
+        chrono::Utc::now().to_rfc3339(),
+    );
+    request.node_did = "did:test:background-fanout-test".to_string();
+    request.agent_did = agent_did.to_string();
+    request.content = format!("background child {index}");
+    request.execution_origin = Some("interactive".to_string());
+    request.request_hop = 1;
+    request.caused_by_parent_request_id = Some("parent-request".to_string());
+    request.caused_by_parent_request_doc_id = Some("parent-request-doc".to_string());
+    request.caused_by_parent_tool_call_id = Some("parent-tool-call".to_string());
+    request.caused_by_parent_tool_call_doc_id = Some("parent-tool-call-doc".to_string());
+    request
+}
+
+/// Runs a held in-flight request while proposing a switched agent snapshot,
+/// then observes the queued request on the new slot and the drained held
+/// request on the retired slot.
+async fn run_restage_and_drain<T, F>(
+    initial_agent: AgentWithTools,
+    switched_agent: AgentWithTools,
+    observe: F,
+) -> (u64, (String, u64, T), (String, u64, T))
+where
+    T: Send + 'static,
+    F: Fn(&AgentWithTools, u64) -> T + Clone + Send + Sync + 'static,
+{
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
+    let agent_did = initial_agent.agent.agent_did.clone();
+    let runtime_node = stub_runtime_node();
+    let initial_snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![initial_agent], runtime_node.clone())
+            .await;
+    let switched_snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![switched_agent], runtime_node).await;
+
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(String, u64, T)>();
+    let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
+    let release = Arc::new(Notify::new());
+    let runner = {
+        let release = release.clone();
+        move |agent_config: AgentWithTools,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<WorkerCapacity>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let (done_tx, held_tx, release, observe) = (
+                done_tx.clone(),
+                held_tx.clone(),
+                release.clone(),
+                observe.clone(),
+            );
+            async move {
+                loop {
+                    let request = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => match message {
+                            Some(request) => request,
+                            None => return Ok(()),
+                        },
+                    };
+                    if request.request_id == "held" {
+                        let _ = held_tx.send(request.request_id.clone());
+                        release.notified().await;
+                    }
+                    let _ = done_tx.send((
+                        request.request_id,
+                        generation,
+                        observe(&agent_config, generation),
+                    ));
+                }
+            }
+        }
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
+        RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 5,
+            max_delay_ms: 25,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let initial = supervisor.current_snapshot();
+    let mut held = background_child_request(0, &agent_did);
+    held.request_id = "held".to_string();
+    initial.dispatchers[&agent_did]
+        .for_request(&held)
+        .send(held)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
+        .await
+        .expect("the old slot claims the first request")
+        .unwrap();
+
+    let (active_tx, mut active_rx) = watch::channel(initial.clone());
+    let (proposal_tx, proposal_rx) = mpsc::channel(4);
+    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+    proposal_tx.send(switched_snapshot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
+        .await
+        .expect("a config change publishes a generation while a call is in flight")
+        .unwrap();
+    let updated = active_rx.borrow().clone();
+    assert!(
+        !initial.dispatchers[&agent_did].same_channel(&updated.dispatchers[&agent_did]),
+        "a restaging change must rotate the slot dispatcher"
+    );
+    drop(initial);
+
+    let mut queued = background_child_request(1, &agent_did);
+    queued.request_id = "queued".to_string();
+    updated.dispatchers[&agent_did]
+        .for_request(&queued)
+        .send(queued)
+        .await
+        .unwrap();
+    let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+        .await
+        .expect("the queued request runs on the new slot")
+        .unwrap();
+
+    release.notify_one();
+    let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+        .await
+        .expect("the call in flight finishes on the retired slot")
+        .unwrap();
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("supervisor should stop on shutdown")
+        .unwrap()
+        .unwrap();
+    node.shutdown().await.unwrap();
+    (updated.generation, next, drained)
+}
+
+type SharedRequestRx = Arc<Mutex<mpsc::Receiver<AgentRequest>>>;
+type SlotWorkerFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
+
+#[derive(Clone)]
+struct GatedExitGates {
+    gen1_exit: Arc<Semaphore>,
+    gen2_exit: Arc<Semaphore>,
+    gen2_waiting: Arc<Notify>,
+    exited: Arc<AtomicUsize>,
+}
+
+impl GatedExitGates {
+    fn new() -> Self {
+        Self {
+            gen1_exit: Arc::new(Semaphore::new(0)),
+            gen2_exit: Arc::new(Semaphore::new(0)),
+            gen2_waiting: Arc::new(Notify::new()),
+            exited: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn runner(
+        &self,
+    ) -> impl Fn(
+        AgentWithTools,
+        Arc<ToolSurface>,
+        SharedRequestRx,
+        Arc<WorkerCapacity>,
+        u64,
+        watch::Receiver<bool>,
+    ) -> SlotWorkerFuture
+           + Clone
+           + Send
+           + Sync
+           + 'static {
+        let gates = self.clone();
+        move |_agent, _tool_surface, request_rx, _capacity, generation, shutdown| {
+            let gates = gates.clone();
+            Box::pin(async move {
+                let _ = drain_until_shutdown(request_rx, shutdown).await;
+                if generation == 2 {
+                    gates.gen2_waiting.notify_one();
+                }
+                let permit = if generation == 1 {
+                    gates.gen1_exit.acquire().await.unwrap()
+                } else {
+                    gates.gen2_exit.acquire().await.unwrap()
+                };
+                permit.forget();
+                gates.exited.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
     }
 }
 
@@ -263,50 +464,25 @@ async fn slot_panic_restarts_agent() {
     let agent_config = PendingAgent::new("general").build_with_identity_for_test(
         gents_store::test_support::test_identity("pairing-contract-slot-crash"),
     );
-    let tool_surface = Arc::new(
-        agent_config
-            .tools
-            .resolve(
-                &node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &gents_tools::plugin_host::NoPluginHost,
-            )
-            .await
-            .unwrap(),
-    );
+    let tool_surface = resolve_surface(&node, &agent_config).await;
     let starts = Arc::new(AtomicUsize::new(0));
     let (starts_tx, mut starts_rx) = watch::channel(0usize);
     let runner = {
-        let starts = starts.clone();
-        let starts_tx = starts_tx.clone();
+        let (starts, starts_tx) = (starts.clone(), starts_tx.clone());
         move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+              _capacity: Arc<WorkerCapacity>,
               _generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let starts = starts.clone();
-            let starts_tx = starts_tx.clone();
+              shutdown: watch::Receiver<bool>| {
+            let (starts, starts_tx) = (starts.clone(), starts_tx.clone());
             async move {
                 let attempt = starts.fetch_add(1, Ordering::SeqCst) + 1;
                 starts_tx.send_replace(attempt);
                 if attempt == 1 {
                     panic!("contract probe panic");
                 }
-                loop {
-                    tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => {
-                            if message.is_none() {
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
+                drain_until_shutdown(request_rx, shutdown).await
             }
         }
     };
@@ -314,7 +490,7 @@ async fn slot_panic_restarts_agent() {
     let slot = spawn_slot(
         agent_config,
         tool_surface,
-        crate::runtime::agent::retry::RetryPolicy {
+        RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 1,
@@ -352,26 +528,13 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let agent_config = PendingAgent::new("general").build_with_identity_for_test(
         gents_store::test_support::test_identity("slot-abort-on-owner-drop"),
     );
-    let tool_surface = Arc::new(
-        agent_config
-            .tools
-            .resolve(
-                &node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &gents_tools::plugin_host::NoPluginHost,
-            )
-            .await
-            .unwrap(),
-    );
+    let tool_surface = resolve_surface(&node, &agent_config).await;
     let entered = Arc::new(Notify::new());
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let runner = {
-        let entered = entered.clone();
-        let dropped = dropped.clone();
+        let (entered, dropped) = (entered.clone(), dropped.clone());
         move |_, _, _, _, _, _| {
-            let entered = entered.clone();
-            let dropped = dropped.clone();
+            let (entered, dropped) = (entered.clone(), dropped.clone());
             async move {
                 let _probe = DropProbe(dropped);
                 entered.notify_one();
@@ -384,7 +547,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let slot = spawn_slot(
         agent_config,
         tool_surface,
-        crate::runtime::agent::retry::RetryPolicy::default(),
+        RetryPolicy::default(),
         runner,
         shutdown_rx,
     );
@@ -447,10 +610,8 @@ async fn seed_fixture_agent_session(
     let session_id = session_id.to_string();
     access
         .transact_write("test.reconcile.seed_session", |txn| {
-            let actor = &actor;
-            let node_did = &node_did;
-            let agent_did = &agent_did;
-            let session_id = &session_id;
+            let (actor, node_did, agent_did, session_id) =
+                (&actor, &node_did, &agent_did, &session_id);
             Box::pin(async move {
                 let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
@@ -529,7 +690,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         config.config_fingerprint = connection;
         RapidHashMap::from_iter([("backend-general".to_string(), config)])
     };
-    let initial_snapshot = snapshot_for_agents_with_admission(
+    let initial_snapshot = snapshot_for_agents_with_admission_and_node(
         &node,
         &agent_did,
         vec![agent_config.clone()],
@@ -538,25 +699,25 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
                 &agent_config.agent,
             ),
         ),
+        agent_config.agent.node.clone(),
     )
-    .await
-    .with_node(agent_config.agent.node.clone());
-    let rotated_snapshot = snapshot_for_agents_with_admission(
+    .await;
+    let rotated_snapshot = snapshot_for_agents_with_admission_and_node(
         &node,
         &agent_did,
         vec![rotated],
         admission(new_connection.clone()),
+        agent_config.agent.node.clone(),
     )
-    .await
-    .with_node(agent_config.agent.node.clone());
+    .await;
 
     let (built_tx, mut built_rx) = mpsc::unbounded_channel::<(u64, String)>();
     let runner = move |agent_config: AgentWithTools,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-                       _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+                       _capacity: Arc<WorkerCapacity>,
                        generation: u64,
-                       mut shutdown: watch::Receiver<bool>| {
+                       shutdown: watch::Receiver<bool>| {
         let built_tx = built_tx.clone();
         async move {
             let key = match &agent_config.agent.backend_auth {
@@ -564,19 +725,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
                 _ => String::new(),
             };
             let _ = built_tx.send((generation, key));
-            loop {
-                tokio::select! {
-                    _ = shutdown.changed() => return Ok(()),
-                    message = async {
-                        let mut receiver = request_rx.lock().await;
-                        receiver.recv().await
-                    } => {
-                        if message.is_none() {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
+            drain_until_shutdown(request_rx, shutdown).await
         }
     };
 
@@ -585,7 +734,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         registry.clone(),
-        crate::runtime::agent::retry::RetryPolicy {
+        RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -657,16 +806,8 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
 async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     use gents_documents::BackendAuth;
 
-    let db = test_node().await;
-    let node = db.node.clone();
-    let node_did = node
-        .node_identity_did()
-        .expect("fixture node has an identity");
-    let runtime_status = runtime_status_handle(&node, node_did);
-
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(gents_store::test_support::test_identity("switch-general"));
-    let agent_did = agent_config.agent.agent_did.clone();
     Arc::make_mut(&mut agent_config.agent).backend_id = Some("claude".to_string());
     Arc::make_mut(&mut agent_config.agent).backend_auth =
         BackendAuth::NodeOAuth { account_ref: None };
@@ -675,141 +816,37 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     Arc::make_mut(&mut switched.agent).backend_auth = BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".to_string()),
     };
-    let runtime_node = stub_runtime_node();
-    let initial_snapshot =
-        snapshot_for_agents_with_node(&node, &agent_did, vec![agent_config], runtime_node.clone())
-            .await;
-    let switched_snapshot =
-        snapshot_for_agents_with_node(&node, &agent_did, vec![switched], runtime_node).await;
 
-    let (done_tx, mut done_rx) =
-        mpsc::unbounded_channel::<(String, u64, Option<String>, Option<String>)>();
-    let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
-    let release = Arc::new(Notify::new());
-    let runner = {
-        let release = release.clone();
-        move |agent_config: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let (done_tx, held_tx, release) = (done_tx.clone(), held_tx.clone(), release.clone());
-            async move {
-                loop {
-                    let request = tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => match message {
-                            Some(request) => request,
-                            None => return Ok(()),
-                        },
-                    };
-                    if request.request_id == "held" {
-                        let _ = held_tx.send(request.request_id.clone());
-                        release.notified().await;
-                    }
-                    let _ = done_tx.send((
-                        request.request_id,
-                        generation,
-                        agent_config.agent.backend_id.clone(),
-                        agent_config
-                            .agent
-                            .backend_auth
-                            .oauth_account_ref()
-                            .map(str::to_owned),
-                    ));
-                }
-            }
-        }
-    };
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let supervisor = GenerationSupervisor::bootstrap(
-        initial_snapshot,
-        gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 3,
-            base_delay_ms: 5,
-            max_delay_ms: 25,
-        },
-        runner,
-        runtime_status,
-        shutdown_rx.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-    let initial = supervisor.current_snapshot();
-    let mut held = background_child_request(0, &agent_did);
-    held.request_id = "held".to_string();
-    initial.dispatchers[&agent_did]
-        .for_request(&held)
-        .send(held)
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
-        .await
-        .expect("the old slot claims the first request")
-        .unwrap();
-
-    let (active_tx, mut active_rx) = watch::channel(initial.clone());
-    let (proposal_tx, proposal_rx) = mpsc::channel(4);
-    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
-    proposal_tx.send(switched_snapshot).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
-        .await
-        .expect("a backend change publishes a generation while a call is in flight")
-        .unwrap();
-    let updated = active_rx.borrow().clone();
-    assert!(
-        !initial.dispatchers[&agent_did].same_channel(&updated.dispatchers[&agent_did]),
-        "a backend change must restage the slot"
-    );
-    drop(initial);
-
-    let mut queued = background_child_request(1, &agent_did);
-    queued.request_id = "queued".to_string();
-    updated.dispatchers[&agent_did]
-        .for_request(&queued)
-        .send(queued)
-        .await
-        .unwrap();
-    let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
-        .await
-        .expect("the queued request runs on the new slot")
-        .unwrap();
+    let (updated_generation, next, drained) =
+        run_restage_and_drain(agent_config, switched, |agent_config, _generation| {
+            (
+                agent_config.agent.backend_id.clone(),
+                agent_config
+                    .agent
+                    .backend_auth
+                    .oauth_account_ref()
+                    .map(str::to_owned),
+            )
+        })
+        .await;
     assert_eq!(
         next,
         (
             "queued".to_string(),
-            updated.generation,
-            Some("claude-subscription-acct-b".to_string()),
-            Some("acct-b".to_string()),
+            updated_generation,
+            (
+                Some("claude-subscription-acct-b".to_string()),
+                Some("acct-b".to_string()),
+            ),
         )
     );
-
-    release.notify_one();
-    let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
-        .await
-        .expect("the call in flight finishes on the retired slot")
-        .unwrap();
     assert_eq!(drained.0, "held");
-    assert_ne!(drained.1, updated.generation);
+    assert_ne!(drained.1, updated_generation);
     assert_eq!(
-        (drained.2, drained.3),
+        drained.2,
         (Some("claude".to_string()), None),
         "the call in flight keeps the old account"
     );
-
-    let _ = shutdown_tx.send(true);
-    tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .expect("supervisor should stop on shutdown")
-        .unwrap()
-        .unwrap();
 }
 
 #[tokio::test]
@@ -852,132 +889,29 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
         ),
     ];
 
-    for (changed, switched_settings) in changes {
-        let db = test_node().await;
-        let node = db.node.clone();
-        let node_did = node
-            .node_identity_did()
-            .expect("fixture node has an identity");
-        let runtime_status = runtime_status_handle(&node, node_did);
+    let apply = |agent_config: &mut ResolvedAgent, settings: Settings| {
+        agent_config.model_name = settings.model_name.to_string();
+        agent_config.sampling.reasoning_effort = settings.reasoning_effort;
+        agent_config.service_tier = settings.service_tier;
+    };
 
-        let apply = |agent_config: &mut ResolvedAgent, settings: Settings| {
-            agent_config.model_name = settings.model_name.to_string();
-            agent_config.sampling.reasoning_effort = settings.reasoning_effort;
-            agent_config.service_tier = settings.service_tier;
-        };
+    for (changed, switched_settings) in changes {
         let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(
             gents_store::test_support::test_identity(&format!("settings-{changed}")),
         );
-        let agent_did = agent_config.agent.agent_did.clone();
         Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
         apply(Arc::make_mut(&mut agent_config.agent), ORIGINAL);
         let mut switched = agent_config.clone();
         apply(Arc::make_mut(&mut switched.agent), switched_settings);
 
-        let runtime_node = stub_runtime_node();
-        let initial_snapshot = snapshot_for_agents_with_node(
-            &node,
-            &agent_did,
-            vec![agent_config],
-            runtime_node.clone(),
-        )
-        .await;
-        let switched_snapshot =
-            snapshot_for_agents_with_node(&node, &agent_did, vec![switched], runtime_node).await;
+        let (updated_generation, next, drained) =
+            run_restage_and_drain(agent_config, switched, |agent_config, generation| {
+                agent_config.agent.executed_inference(generation)
+            })
+            .await;
 
-        type Observed = (String, u64, gents_protocol::row::ExecutedInferenceSettings);
-        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Observed>();
-        let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
-        let release = Arc::new(Notify::new());
-        let runner = {
-            let release = release.clone();
-            move |agent_config: AgentWithTools,
-                  _tool_surface: Arc<ToolSurface>,
-                  request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-                  _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-                  generation: u64,
-                  mut shutdown: watch::Receiver<bool>| {
-                let (done_tx, held_tx, release) =
-                    (done_tx.clone(), held_tx.clone(), release.clone());
-                async move {
-                    loop {
-                        let request = tokio::select! {
-                            _ = shutdown.changed() => return Ok(()),
-                            message = async {
-                                let mut receiver = request_rx.lock().await;
-                                receiver.recv().await
-                            } => match message {
-                                Some(request) => request,
-                                None => return Ok(()),
-                            },
-                        };
-                        if request.request_id == "held" {
-                            let _ = held_tx.send(request.request_id.clone());
-                            release.notified().await;
-                        }
-                        let _ = done_tx.send((
-                            request.request_id,
-                            generation,
-                            agent_config.agent.executed_inference(generation),
-                        ));
-                    }
-                }
-            }
-        };
-
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let supervisor = GenerationSupervisor::bootstrap(
-            initial_snapshot,
-            gents_inference::admission::AdmissionRegistry::new(node.clone()),
-            crate::runtime::agent::retry::RetryPolicy {
-                max_retries: 3,
-                base_delay_ms: 5,
-                max_delay_ms: 25,
-            },
-            runner,
-            runtime_status,
-            shutdown_rx.clone(),
-            None,
-        )
-        .await
-        .unwrap();
-        let initial = supervisor.current_snapshot();
-        let mut held = background_child_request(0, &agent_did);
-        held.request_id = "held".to_string();
-        initial.dispatchers[&agent_did]
-            .for_request(&held)
-            .send(held)
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
-            .await
-            .expect("the old slot claims the first request")
-            .unwrap();
-
-        let (active_tx, mut active_rx) = watch::channel(initial.clone());
-        let (proposal_tx, proposal_rx) = mpsc::channel(4);
-        let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
-        proposal_tx.send(switched_snapshot).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
-            .await
-            .expect("a settings change publishes a generation while a call is in flight")
-            .unwrap();
-        let updated = active_rx.borrow().clone();
-        drop(initial);
-
-        let mut queued = background_child_request(1, &agent_did);
-        queued.request_id = "queued".to_string();
-        updated.dispatchers[&agent_did]
-            .for_request(&queued)
-            .send(queued)
-            .await
-            .unwrap();
-        let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
-            .await
-            .expect("the queued request runs on the new slot")
-            .unwrap();
         assert_eq!(next.0, "queued");
-        assert_eq!(next.1, updated.generation);
+        assert_eq!(next.1, updated_generation);
         assert_eq!(next.2.model_name, switched_settings.model_name);
         assert_eq!(
             next.2.reasoning_effort.as_deref(),
@@ -989,15 +923,10 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
             next.2.service_tier.as_deref(),
             switched_settings.service_tier.map(ServiceTier::as_str)
         );
-        assert_eq!(next.2.runtime_generation, Some(updated.generation));
+        assert_eq!(next.2.runtime_generation, Some(updated_generation));
 
-        release.notify_one();
-        let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
-            .await
-            .expect("the call in flight finishes on the retired slot")
-            .unwrap();
         assert_eq!(drained.0, "held");
-        assert_ne!(drained.1, updated.generation);
+        assert_ne!(drained.1, updated_generation);
         assert_eq!(drained.2.model_name, ORIGINAL.model_name);
         assert_eq!(
             drained.2.reasoning_effort.as_deref(),
@@ -1009,15 +938,7 @@ async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_fl
             ORIGINAL.service_tier.map(ServiceTier::as_str),
             "the call in flight keeps the tier it was dispatched with"
         );
-        assert_ne!(drained.2.runtime_generation, Some(updated.generation));
-
-        let _ = shutdown_tx.send(true);
-        tokio::time::timeout(Duration::from_secs(5), task)
-            .await
-            .expect("supervisor should stop on shutdown")
-            .unwrap()
-            .unwrap();
-        node.shutdown().await.unwrap();
+        assert_ne!(drained.2.runtime_generation, Some(updated_generation));
     }
 }
 
@@ -1048,13 +969,12 @@ async fn published_readiness_carries_the_generations_effective_inference() {
         gents_store::test_support::test_identity("readiness-effective-inference"),
     );
     let agent_did = agent_config.agent.agent_did.clone();
-    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
-    Arc::make_mut(&mut agent_config.agent).model_name = "model-a".to_string();
-    Arc::make_mut(&mut agent_config.agent)
-        .sampling
-        .reasoning_effort = Some(ReasoningEffort::Low);
-    Arc::make_mut(&mut agent_config.agent).service_tier = Some(ServiceTier::Fast);
-    Arc::make_mut(&mut agent_config.agent).profile_id = Some("profile-a".to_string());
+    let resolved = Arc::make_mut(&mut agent_config.agent);
+    resolved.backend_id = Some("backend-a".to_string());
+    resolved.model_name = "model-a".to_string();
+    resolved.sampling.reasoning_effort = Some(ReasoningEffort::Low);
+    resolved.service_tier = Some(ServiceTier::Fast);
+    resolved.profile_id = Some("profile-a".to_string());
     let snapshot =
         snapshot_for_agents_with_node(&node, &agent_did, vec![agent_config], stub_runtime_node())
             .await;
@@ -1063,14 +983,8 @@ async fn published_readiness_carries_the_generations_effective_inference() {
     let supervisor = GenerationSupervisor::bootstrap(
         snapshot,
         gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
-        |_agent_config, _tool_surface, _request_rx, _capacity, _generation, _shutdown| async {
-            Ok(())
-        },
+        fast_retry_policy(),
+        |_, _, _, _, _, _| async { Ok(()) },
         runtime_status.clone(),
         shutdown_rx,
         None,
@@ -1151,12 +1065,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
     let runner = {
         let started_generations = started_generations.clone();
-        move |_agent: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
+        move |_, _, _, _, generation: u64, mut shutdown: watch::Receiver<bool>| {
             started_generations.lock().unwrap().push(generation);
             async move {
                 let _ = shutdown.changed().await;
@@ -1164,23 +1073,16 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
             }
         }
     };
-    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
-        node.clone(),
+    let (runtime_status_owner, runtime_status) = runtime_status_pair(
+        &node,
         node.node_identity_did()
             .expect("fixture node has an identity"),
-        Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
-        Duration::from_millis(1),
-        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
+        fast_retry_policy(),
         runner,
         runtime_status,
         shutdown_rx.clone(),
@@ -1237,21 +1139,13 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
         snapshot_for_agents_with_node(&node, &agent_did, vec![initial], runtime_node.clone()).await;
     let replacement_snapshot =
         snapshot_for_agents_with_node(&node, &agent_did, vec![replacement], runtime_node).await;
-    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
-        node.clone(),
+    let (runtime_status_owner, runtime_status) = runtime_status_pair(
+        &node,
         node.node_identity_did()
             .expect("fixture node has an identity"),
-        Arc::new(crate::test_support::readiness::AcceptingReadinessWriter),
-        Duration::from_millis(1),
-        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let runner = move |_agent: AgentWithTools,
-                       _tool_surface: Arc<ToolSurface>,
-                       _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-                       _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-                       generation: u64,
-                       mut shutdown: watch::Receiver<bool>| {
+    let runner = move |_, _, _, _, generation: u64, mut shutdown: watch::Receiver<bool>| {
         let started_tx = started_tx.clone();
         async move {
             let _ = started_tx.send(generation);
@@ -1266,11 +1160,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
+        fast_retry_policy(),
         runner,
         runtime_status,
         shutdown_rx.clone(),
@@ -1328,9 +1218,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
 
     let fatal_attempted = Arc::new(Notify::new());
     let fatal_release = Arc::new(Semaphore::new(0));
-    let generation_one_exit = Arc::new(Semaphore::new(0));
-    let generation_two_exit = Arc::new(Semaphore::new(0));
-    let generation_two_waiting_exit = Arc::new(Notify::new());
+    let gates = GatedExitGates::new();
     let writer = Arc::new(
         crate::test_support::readiness::GatedGenerationSourceWriter::new(
             2,
@@ -1352,50 +1240,12 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
             runtime_status: runtime_status.clone(),
         },
     );
-    let runner = {
-        let generation_one_exit = generation_one_exit.clone();
-        let generation_two_exit = generation_two_exit.clone();
-        let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_agent: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let generation_one_exit = generation_one_exit.clone();
-            let generation_two_exit = generation_two_exit.clone();
-            let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-            async move {
-                tokio::select! {
-                    _ = shutdown.changed() => {}
-                    _ = async {
-                        let mut receiver = request_rx.lock().await;
-                        while receiver.recv().await.is_some() {}
-                    } => {}
-                }
-                if generation == 2 {
-                    generation_two_waiting_exit.notify_one();
-                }
-                let permit = if generation == 1 {
-                    generation_one_exit.acquire().await.unwrap()
-                } else {
-                    generation_two_exit.acquire().await.unwrap()
-                };
-                permit.forget();
-                Ok(())
-            }
-        }
-    };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
-        runner,
+        fast_retry_policy(),
+        gates.runner(),
         runtime_status.clone(),
         shutdown_rx.clone(),
         Some(slot_failure_policy),
@@ -1431,12 +1281,12 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
 
     fatal_attempted.notified().await;
     fatal_release.add_permits(1);
-    generation_two_waiting_exit.notified().await;
+    gates.gen2_waiting.notified().await;
     assert!(
         !apply.is_finished(),
         "failed source publication detached the staged generation"
     );
-    generation_two_exit.add_permits(workers_per_slot);
+    gates.gen2_exit.add_permits(workers_per_slot);
     let (supervisor, result) = apply.await.unwrap();
     let error = result.expect_err("injected source publication must fail apply");
     assert!(error.to_string().contains("node readiness"));
@@ -1466,7 +1316,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
             .is_err(),
         "old active generation was detached during staged rollback"
     );
-    generation_one_exit.add_permits(workers_per_slot);
+    gates.gen1_exit.add_permits(workers_per_slot);
     shutdown.await.unwrap().unwrap();
     runtime_status_owner.close().await.unwrap();
 }
@@ -1498,61 +1348,13 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     Arc::make_mut(&mut replacement.agent).system_prompt = "replacement".to_string();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial]).await;
     let replacement_snapshot = snapshot_for_agents(&node, &agent_did, vec![replacement]).await;
-    let exited = Arc::new(AtomicUsize::new(0));
-    let generation_one_exit = Arc::new(Semaphore::new(0));
-    let generation_two_exit = Arc::new(Semaphore::new(0));
-    let generation_two_waiting_exit = Arc::new(Notify::new());
-    let runner = {
-        let exited = exited.clone();
-        let generation_one_exit = generation_one_exit.clone();
-        let generation_two_exit = generation_two_exit.clone();
-        let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_agent: AgentWithTools,
-              _tool_surface: Arc<ToolSurface>,
-              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-              generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let exited = exited.clone();
-            let generation_one_exit = generation_one_exit.clone();
-            let generation_two_exit = generation_two_exit.clone();
-            let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-            async move {
-                loop {
-                    let should_exit = tokio::select! {
-                        _ = shutdown.changed() => true,
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => message.is_none(),
-                    };
-                    if should_exit {
-                        if generation == 2 {
-                            generation_two_waiting_exit.notify_one();
-                        }
-                        let permit = if generation == 1 {
-                            generation_one_exit.acquire().await.unwrap()
-                        } else {
-                            generation_two_exit.acquire().await.unwrap()
-                        };
-                        permit.forget();
-                        exited.fetch_add(1, Ordering::SeqCst);
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    };
+    let gates = GatedExitGates::new();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
-        runner,
+        fast_retry_policy(),
+        gates.runner(),
         runtime_status,
         shutdown_rx.clone(),
         None,
@@ -1572,12 +1374,12 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     source_attempted.notified().await;
     drop(active_rx);
     source_release.add_permits(1);
-    generation_two_waiting_exit.notified().await;
+    gates.gen2_waiting.notified().await;
     assert!(
         !apply.is_finished(),
         "closed watch rollback must retain the staged generation until it joins"
     );
-    generation_two_exit.add_permits(workers_per_slot);
+    gates.gen2_exit.add_permits(workers_per_slot);
     let (supervisor, result) = apply.await.unwrap();
     let error = result.expect_err("closed active snapshot receiver must reject publication");
     assert!(error.to_string().contains("receiver closed"));
@@ -1591,18 +1393,18 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             .is_err(),
         "shutdown detached the blocked slot owners"
     );
-    assert_eq!(exited.load(Ordering::SeqCst), workers_per_slot);
+    assert_eq!(gates.exited.load(Ordering::SeqCst), workers_per_slot);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut shutdown_task)
             .await
             .is_err(),
         "shutdown completed before joining the retired generation-one slot"
     );
-    generation_one_exit.add_permits(workers_per_slot);
+    gates.gen1_exit.add_permits(workers_per_slot);
     shutdown_task.await.unwrap().unwrap();
     runtime_status_owner.close().await.unwrap();
     assert_eq!(
-        exited.load(Ordering::SeqCst),
+        gates.exited.load(Ordering::SeqCst),
         2 * workers_per_slot,
         "both the retired generation and replacement generation must be joined"
     );
@@ -1616,72 +1418,18 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         .node_identity_did()
         .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
-    let identity = Arc::new(gents_store::test_support::test_identity(
-        "tool-surface-general",
-    ));
-    let runtime_node = Arc::new(RuntimeNode {
-        node_did: identity.did().to_string(),
-        identity: identity.clone(),
-        default_agent_did: String::new(),
-        display_name: None,
-        enabled: true,
-    });
-
-    let binding =
-        gents_store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
-    let agent_identity =
-        gents_store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
-            .unwrap();
-    let agent_did = binding.agent_did.clone();
-    let initial_agent = AgentWithTools::new(
-        ResolvedAgent {
-            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
-            profile_id: None,
-            skills: Vec::new(),
-            oauth_pool: Vec::new(),
-            agent_did: agent_did.clone(),
-            node: runtime_node.clone(),
-            agent_identity,
-            backend_id: Some("backend-general".to_string()),
-            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            claude_platform: None,
-            client_version: None,
-            backend_auth: gents_documents::BackendAuth::Unauthenticated,
-            model_name: "default".to_string(),
-            service_tier: None,
-            resolved_reasoning_efforts: None,
-            context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
-            max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
-            max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
-            system_prompt: "initial".to_string(),
-            compaction: None,
-            compaction_inference: None,
-            max_total_tokens: None,
-            max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
-            repeated_tool_failure_limit:
-                gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
-            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
-            stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
-            stream_liveness_timeout: Duration::from_secs(
-                gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-            ),
-            deadline_duration: Duration::from_secs(
-                gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
-            ),
-            title_timeout: Duration::from_secs(
-                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
-            ),
-            provider_idle_timeout: Duration::from_secs(
-                gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
-            ),
-            completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
-            sampling: gents_inference::resolved::SamplingConfig::default(),
-        },
-        AgentToolSurfaceConfig::meta_only(),
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+        gents_store::test_support::test_identity("tool-surface-general"),
     );
+    let runtime_node = crate::support::fixtures::test_node_for(identity, "");
+    let mut resolved =
+        crate::support::fixtures::test_agent_for_node("general", runtime_node.clone());
+    resolved.backend_id = Some("backend-general".to_string());
+    resolved.backend_endpoint = "http://127.0.0.1:8999/v1".to_string();
+    resolved.model_name = "default".to_string();
+    resolved.system_prompt = "initial".to_string();
+    let agent_did = resolved.agent_did.clone();
+    let initial_agent = AgentWithTools::new(resolved, AgentToolSurfaceConfig::meta_only());
     let updated_tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "general-tools",
         "node_did": runtime_node.node_did,
@@ -1708,35 +1456,23 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let observed_notify = Arc::new(Notify::new());
     let runner = {
-        let observed_tool_names = observed_tool_names.clone();
-        let observed_notify = observed_notify.clone();
+        let (observed_tool_names, observed_notify) =
+            (observed_tool_names.clone(), observed_notify.clone());
         move |_agent: AgentWithTools,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+              _capacity: Arc<WorkerCapacity>,
               _generation: u64,
-              mut shutdown: watch::Receiver<bool>| {
-            let observed_tool_names = observed_tool_names.clone();
-            let observed_notify = observed_notify.clone();
+              shutdown: watch::Receiver<bool>| {
+            let (observed_tool_names, observed_notify) =
+                (observed_tool_names.clone(), observed_notify.clone());
             async move {
                 observed_tool_names
                     .lock()
                     .unwrap()
                     .push(tool_surface.tool_names());
                 observed_notify.notify_waiters();
-                loop {
-                    tokio::select! {
-                        _ = shutdown.changed() => return Ok(()),
-                        message = async {
-                            let mut receiver = request_rx.lock().await;
-                            receiver.recv().await
-                        } => {
-                            if message.is_none() {
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
+                drain_until_shutdown(request_rx, shutdown).await
             }
         }
     };
@@ -1745,7 +1481,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
+        RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -1757,10 +1493,8 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     )
     .await
     .unwrap();
-    let active_snapshot = supervisor.current_snapshot();
-    let (active_tx, mut active_rx) = watch::channel(active_snapshot);
+    let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
-
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
     proposal_tx.send(updated_snapshot).await.unwrap();
@@ -1799,8 +1533,6 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
 
 #[tokio::test]
 async fn retiring_a_slot_notifies_the_failure_policy() {
-    use std::sync::atomic::AtomicUsize;
-
     let db = test_node().await;
     let node = db.node.clone();
     let runtime_status = runtime_status_handle(
@@ -1813,12 +1545,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     );
     let agent_did = agent_config.agent.agent_did.clone();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![agent_config.clone()]).await;
-    let runner = |_agent: AgentWithTools,
-                  _tool_surface: Arc<ToolSurface>,
-                  _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-                  _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
-                  _generation: u64,
-                  mut shutdown: watch::Receiver<bool>| async move {
+    let runner = |_, _, _, _, _, mut shutdown: watch::Receiver<bool>| async move {
         let _ = shutdown.changed().await;
         Ok(())
     };
@@ -1832,11 +1559,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         gents_inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::runtime::agent::retry::RetryPolicy {
-            max_retries: 1,
-            base_delay_ms: 1,
-            max_delay_ms: 2,
-        },
+        fast_retry_policy(),
         runner,
         runtime_status,
         shutdown_rx.clone(),
@@ -1935,27 +1658,20 @@ async fn plugin_resolution_surfaces(
         Some(installed_home.path().to_path_buf()),
     ));
 
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     let absent = Arc::new(
         agent_config
             .tools
-            .resolve(
-                node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &*absent_plugins,
-            )
+            .resolve(node, node_did, &*absent_plugins)
             .await
             .unwrap(),
     );
     let installed = Arc::new(
         agent_config
             .tools
-            .resolve(
-                node,
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-                &*installed_plugins,
-            )
+            .resolve(node, node_did, &*installed_plugins)
             .await
             .unwrap(),
     );
@@ -2008,7 +1724,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let slot = spawn_slot(
         agent_config.clone(),
         Arc::clone(&absent_surface),
-        crate::runtime::agent::retry::RetryPolicy {
+        RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 1,
@@ -2056,3 +1772,5 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         "a same-artifact reinstall that changes the declaration must refresh the slot"
     );
 }
+
+mod placement;

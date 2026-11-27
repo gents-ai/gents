@@ -1,19 +1,12 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   ChatSendRequest,
   ChatSendResult,
-  DesktopApiAdapter,
-  DesktopClientSnapshot,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
 import {
   CHAT_SEND_DEADLINE_MS,
-  createChatDelivery,
   observeLandedChatSends,
 } from "../../src/hooks/chatDelivery";
 import { writeSession } from "../../src/hooks/sessionStore";
@@ -28,10 +21,9 @@ import {
   type KeptRow,
   type SendStatus,
 } from "../../src/hooks/chatDeliveryView";
-import { acceptedChat } from "../chat-delivery-fixture";
+import { acceptedChat, chatDeliveryFixture } from "../chat-delivery-fixture";
 import { goalDeliveryStorage } from "../goal-delivery-storage";
-import { shellStores } from "../shell-fixture";
-import { memorySendAttachments } from "../send-attachments-fixture";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
@@ -54,32 +46,21 @@ type Snapshot = {
 };
 type Action = { kind: string; ok?: boolean };
 type Trace = { actions: Action[]; after: Snapshot[] };
-const run = promisify(execFile);
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-async function leanCases() {
-  const cwd = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../../crates/gents/proofs",
-  );
-  await run("lake", ["build", "Proofs.Conformance.ClientOptimisticSend"], {
-    cwd,
-    timeout: 240_000,
-  });
-  const { stdout } = await run(
-    "lake",
-    ["env", "lean", "--run", "Proofs/Conformance/ClientOptimisticSend.lean"],
-    { cwd, timeout: 240_000, maxBuffer: 64 * 1024 * 1024 },
-  );
-  return JSON.parse(stdout) as {
+function leanCases() {
+  return runLeanGeneratorJson<{
     views: ViewCase[];
     rows: RowCase[];
     traces: Trace[];
-  };
+  }>(
+    "Proofs.Conformance.ClientOptimisticSend:olean",
+    "Proofs/Conformance/ClientOptimisticSend.lean",
+  );
 }
 
 const flush = async () => {
@@ -94,13 +75,6 @@ const flush = async () => {
 async function replay(trace: Trace, mailbox: boolean) {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", goalDeliveryStorage());
-  const stores = shellStores({
-    deployments: [{ nodeDid: "node", sessions: [], mailboxItems: [] }],
-    selection: { nodeDid: "node", sessionId: "session" },
-  });
-  stores.client.setState({
-    snapshot: { client: { clientDid: "client" } } as DesktopClientSnapshot,
-  });
   type Dispatched = {
     request: ChatSendRequest;
     resolve: (result: ChatSendResult) => void;
@@ -108,13 +82,10 @@ async function replay(trace: Trace, mailbox: boolean) {
   };
   const wire: Dispatched[] = [];
   const replies: { ok: boolean; deliver: () => void }[] = [];
-  const api = {
-    sendChatMessage: (request: ChatSendRequest) =>
-      new Promise<ChatSendResult>((resolve, reject) =>
-        wire.push({ request, resolve, reject }),
-      ),
-  } as unknown as DesktopApiAdapter;
-  const delivery = createChatDelivery(api, stores, memorySendAttachments());
+  const { stores, delivery } = chatDeliveryFixture(
+    (request) =>
+      new Promise((resolve, reject) => wire.push({ request, resolve, reject })),
+  );
   const stopClock = keepSendDeadlineClock(stores.chat);
   const stopObserving = observeLandedChatSends(stores);
   const applied = async () => true;

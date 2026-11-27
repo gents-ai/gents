@@ -164,6 +164,7 @@ import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.DecisionRead
 import Proofs.Conformance.AssignmentReceiver
+import Proofs.Conformance.Placement
 import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
@@ -283,12 +284,10 @@ import Proofs.Conformance.InvocationReply
 import Proofs.Conformance.InterruptedDiagnostic
 import Proofs.Conformance.HookInterrupt
 import Proofs.Conformance.PluginJobDispatch
-import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
 import Proofs.Conformance.Contracts.Json.ClaudePlatform
 import Proofs.Conformance.Contracts.Json.PackInstallation
-import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
@@ -414,6 +413,7 @@ import Proofs.Conformance.WorkspacePermissions
 import Proofs.Conformance.InstallRepair
 import Proofs.Conformance.RepairBackups
 import Proofs.Conformance.DesktopConnect
+import Proofs.Conformance.OperationRecovery
 
 namespace Conformance.Contracts
 

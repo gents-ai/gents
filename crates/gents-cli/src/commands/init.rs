@@ -243,6 +243,8 @@ pub(crate) async fn init_home_with_core_packs(
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
     let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite).await?;
+    let recorded_registry = gents_store::local::home::normalize_registry(registry.as_deref())
+        .or_else(|| gents_store::local::home::recorded_registry(&home_dir));
     let fresh_store = tokio::fs::read_dir(&data_dir)
         .await?
         .next_entry()
@@ -291,6 +293,7 @@ pub(crate) async fn init_home_with_core_packs(
             store_lock: &store_lock,
             owner: owner.did(),
             client_identity: client_identity.recorded.clone(),
+            registry: recorded_registry.clone(),
         })
         .await?;
         let output = json!({
@@ -431,6 +434,7 @@ pub(crate) async fn init_home_with_core_packs(
         store_encryption: None,
         document_acp,
         client_identity: client_identity_record,
+        registry: recorded_registry.clone(),
     };
     let store_key = initialize_home_store(
         &home_dir,
@@ -490,9 +494,13 @@ pub(crate) async fn init_home_with_core_packs(
     // Init publishes through this loopback endpoint as the client, so its
     // owner-staged changes are decided by the node's own route.
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let fence_route = owner_staged.clone();
     node_builder = node_builder.with_http(
         gents::defra_node::HttpConfig::with_listener(listener)?
-            .with_extra_routes(owner_staged.router()),
+            .with_extra_routes(owner_staged.router())
+            .with_router_transform(Arc::new(move |router| {
+                fence_route.wrap_relationship_fence(router)
+            })),
     );
     let node_arc = gents_store::local::backend_protection::build_configured(
         node_builder,
@@ -696,8 +704,13 @@ pub(crate) async fn init_home_with_core_packs(
             .as_str()
             .context("init reports no default agent")?
             .to_owned();
-        output["default_packs"] =
-            default_packs::install(&home_dir, &engineer, core_packs, registry.as_deref()).await;
+        output["default_packs"] = default_packs::install(
+            &home_dir,
+            &engineer,
+            core_packs,
+            recorded_registry.as_deref(),
+        )
+        .await;
         default_packs::record_installed(&home_dir)?;
     }
     Ok(output)
@@ -1031,6 +1044,8 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) owner: &'a str,
     /// The folder holding `owner`'s key, recorded when it is not the default.
     pub(crate) client_identity: Option<String>,
+    /// The pack registry base URL this home records, when not the public default.
+    pub(crate) registry: Option<String>,
 }
 
 /// The CLI client identity `init` sets a home up with: `--desktop-home`'s
@@ -1158,6 +1173,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         store_encryption: None,
         document_acp,
         client_identity: options.client_identity.clone(),
+        registry: options.registry.clone(),
     };
     let store_key = initialize_home_store(
         options.home,
@@ -1873,7 +1889,6 @@ fn tools_for_package(
             enable_p2p_tool: None,
             enable_p2p_mutations: None,
             enable_context_budget: Some(true),
-            ..Default::default()
         }),
         datastore: Some(DatastoreTools {
             write_collections: None,
@@ -2266,6 +2281,7 @@ mod tests {
             store_lock: &lock,
             owner: owner.did(),
             client_identity: None,
+            registry: None,
         };
         assert!(write_identity_only_home_metadata(options()).await.is_err());
         assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
@@ -2295,6 +2311,7 @@ mod tests {
             store_lock: &lock,
             owner: owner.did(),
             client_identity: None,
+            registry: None,
         })
         .await
         .unwrap();
@@ -3435,6 +3452,7 @@ mod tests {
                 store_encryption: None,
                 document_acp,
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();

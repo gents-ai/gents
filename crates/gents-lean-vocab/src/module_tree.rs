@@ -37,10 +37,19 @@ pub fn workspace_members(workspace: &Path) -> Vec<PathBuf> {
 }
 
 pub fn module_tree(workspace: &Path) -> ModuleTree {
+    collect_modules(workspace, false)
+}
+
+#[cfg(test)]
+pub(crate) fn enabled_module_tree(workspace: &Path) -> ModuleTree {
+    collect_modules(workspace, true)
+}
+
+fn collect_modules(workspace: &Path, enabled_only: bool) -> ModuleTree {
     let mut tree = ModuleTree::default();
     for member in workspace_members(workspace) {
         for root in target_roots(&member) {
-            tree.visit_file(&root, module_directory(&root, true));
+            tree.visit_file(&root, module_directory(&root, true), enabled_only);
         }
     }
     tree
@@ -165,17 +174,20 @@ fn included(mac: &syn::Macro) -> Option<(String, String)> {
 }
 
 impl ModuleTree {
-    fn visit_file(&mut self, file: &Path, directory: PathBuf) {
+    fn visit_file(&mut self, file: &Path, directory: PathBuf, enabled_only: bool) {
         let file = normalize(file);
         if !self.compiled.insert(file.clone()) {
             return;
         }
         let source = fs::read_to_string(&file)
             .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
-        let syntax = syn::parse_file(&source)
+        let mut syntax = syn::parse_file(&source)
             .unwrap_or_else(|error| panic!("parse {}: {error}", file.display()));
+        if enabled_only {
+            crate::consumer_scan::retain_enabled_syntax(&mut syntax);
+        }
         let base = parent(&file);
-        self.visit_items(&file, &base, &directory, &syntax.items);
+        self.visit_items(&file, &base, &directory, &syntax.items, enabled_only);
         let mut macros = Macros::default();
         macros.visit_file(&syntax);
         for (name, path) in macros.found {
@@ -183,7 +195,7 @@ impl ModuleTree {
             if name != "include" {
                 self.data.insert(target);
             } else if target.is_file() {
-                self.visit_file(&target, directory.clone());
+                self.visit_file(&target, directory.clone(), enabled_only);
             }
         }
     }
@@ -194,6 +206,7 @@ impl ModuleTree {
         path_base: &Path,
         directory: &Path,
         items: &[syn::Item],
+        enabled_only: bool,
     ) {
         for item in items {
             let syn::Item::Mod(module) = item else {
@@ -204,7 +217,7 @@ impl ModuleTree {
             match &module.content {
                 Some((_, nested)) => {
                     let inner = explicit.unwrap_or_else(|| directory.join(&name));
-                    self.visit_items(file, &inner, &inner, nested);
+                    self.visit_items(file, &inner, &inner, nested, enabled_only);
                 }
                 None => {
                     let target = explicit.clone().or_else(|| {
@@ -218,7 +231,7 @@ impl ModuleTree {
                     match target {
                         Some(target) if target.is_file() => {
                             let directory = module_directory(&target, explicit.is_some());
-                            self.visit_file(&target, directory);
+                            self.visit_file(&target, directory, enabled_only);
                         }
                         _ => panic!("{}: `mod {name};` names no file", file.display()),
                     }
@@ -231,12 +244,45 @@ impl ModuleTree {
 #[derive(Default)]
 struct Macros {
     found: Vec<(String, String)>,
+    tests_only: bool,
+    in_test: bool,
 }
 
 impl<'ast> Visit<'ast> for Macros {
-    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        self.found.extend(included(mac));
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        let outer = self.in_test;
+        self.in_test = function.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "test")
+        });
+        if !self.tests_only || self.in_test {
+            syn::visit::visit_item_fn(self, function);
+        }
+        self.in_test = outer;
     }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if !self.tests_only || self.in_test {
+            self.found.extend(included(mac));
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_includes(mut file: syn::File) -> Vec<String> {
+    crate::consumer_scan::retain_enabled_syntax(&mut file);
+    let mut visitor = Macros {
+        tests_only: true,
+        ..Default::default()
+    };
+    visitor.visit_file(&file);
+    visitor
+        .found
+        .into_iter()
+        .filter_map(|(kind, path)| (kind == "include_str").then_some(path))
+        .collect()
 }
 
 /// Removes `.` and `..` components without touching the filesystem, so a file
@@ -270,7 +316,7 @@ mod tests {
         file(
             "src/lib.rs",
             r#"mod feature; #[cfg(test)] #[path = "elsewhere/fixture.rs"] mod fixture;
-               mod inline { mod nested; }"#,
+               mod inline { mod nested; } #[cfg(false)] mod inert;"#,
         );
         file(
             "src/feature.rs",
@@ -283,9 +329,10 @@ mod tests {
         file("src/elsewhere/sibling.rs", "");
         file("src/inline/nested.rs", "");
         file("src/orphan.rs", "");
+        file("src/inert.rs", "");
         let mut tree = ModuleTree::default();
         let lib = root.join("src/lib.rs");
-        tree.visit_file(&lib, module_directory(&lib, true));
+        tree.visit_file(&lib, module_directory(&lib, true), false);
         let compiled: BTreeSet<String> = tree
             .compiled
             .iter()
@@ -298,9 +345,13 @@ mod tests {
             "src/feature/cases.rs",
             "src/feature/tests.rs",
             "src/inline/nested.rs",
+            "src/inert.rs",
             "src/lib.rs",
         ];
         assert_eq!(compiled, expected.into_iter().map(str::to_owned).collect());
+        let mut active = ModuleTree::default();
+        active.visit_file(&lib, module_directory(&lib, true), true);
+        assert!(!active.compiled.contains(&root.join("src/inert.rs")));
         assert!(tree.data.contains(&root.join("src/feature/data.rs")));
         fs::remove_dir_all(&root).unwrap();
     }

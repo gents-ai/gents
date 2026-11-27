@@ -256,7 +256,8 @@
       { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_drop_return_releases" },
       { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.scheduled_rollback_timeout_releases_gate" },
       { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.suspended_forever_is_valid" },
-      { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.cases" }
+      { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.cases" },
+      { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.lifecycle" }
     ],
     "constructors": [
       "StorageWriteGate.Event.siblingWait",
@@ -270,8 +271,8 @@
       "StorageWriteGate.Event.release",
       "StorageWriteGate.Event.consumerDrop"
     ],
-    "generated_groups": [],
-    "fixture_status": "not_exported",
+    "generated_groups": ["families"],
+    "fixture_status": "concrete_inputs",
     "native_owner_paths": [
       "crates/gents-session/src/request/streaming.rs",
       "crates/gents-store/src/graphql.rs",
@@ -286,7 +287,7 @@
       "exercise storage return, cleanup return and drop return paths before release",
       "bind detached rollback handoff and cleanup timeout to the actual transaction and mutation gate without asserting spawned native work completed",
       "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness",
-      "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in native_execution_contracts_script, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
+      "storage_write_gate_contracts_lifecycle exports concrete StorageWriteGate.Event traces for storageReturned, elapsed, deadlineObserved, cleanupReturned, cleanupDeadlineObserved, dropReturned and release; rollbackOwnerScheduled is covered by storage_write_gate_contracts_handoff, consumerDrop by storage_write_gate_contracts_stream_finalization, and siblingWait by suspended_same_task_holder_append_rejected in native_execution_contracts_script."
     ],
     "retired_bindings": [],
     "admission": {

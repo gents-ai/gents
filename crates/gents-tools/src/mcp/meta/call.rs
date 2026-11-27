@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::mcp::health::HealthStatus;
+use crate::mcp::pool::{McpCallOptions, McpCallRetryPolicy, McpToolRetryMetadata};
 use gents_loop::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
 use super::shared::{
@@ -136,7 +137,7 @@ impl Tool for CallToolTool {
             crate::mcp::pool::MCP_CONNECT_TIMEOUT_SECS,
         )?;
 
-        if let Some(error) = self
+        let retry_metadata = match self
             .preflight_arguments(
                 &args.service_id,
                 &service.endpoint,
@@ -146,8 +147,9 @@ impl Tool for CallToolTool {
             )
             .await
         {
-            return Err(MetaToolError::structured(error));
-        }
+            Ok(metadata) => metadata,
+            Err(error) => return Err(MetaToolError::structured(*error)),
+        };
 
         let current = lookup_service(&self.ctx, &args.service_id)
             .await
@@ -157,13 +159,16 @@ impl Tool for CallToolTool {
         }
         let result = tokio::time::timeout(
             call_timeout,
-            self.ctx.mcp_pool.call_tool_with_connect_timeout(
+            self.ctx.mcp_pool.call_tool_with_options(
                 &args.service_id,
                 &service.endpoint,
                 &args.tool_name,
                 arguments,
-                outbound_node_did,
-                connect_timeout,
+                McpCallOptions {
+                    node_did: outbound_node_did,
+                    connect_timeout,
+                    retry_policy: McpCallRetryPolicy::for_metadata(retry_metadata),
+                },
             ),
         )
         .await
@@ -218,7 +223,7 @@ impl CallToolTool {
         tool_name: &str,
         arguments: &Map<String, Value>,
         node_did: Option<&str>,
-    ) -> Option<StructuredToolError> {
+    ) -> Result<McpToolRetryMetadata, Box<StructuredToolError>> {
         let service = super::shared::ResolvedMcpService {
             endpoint: endpoint.to_string(),
             send_node_did: node_did.is_some(),
@@ -226,12 +231,12 @@ impl CallToolTool {
         let list_result = match self.ctx.list_tools(service_id, &service).await {
             Ok(result) => result,
             Err(error) => {
-                return Some(StructuredToolError::service_unavailable(
+                return Err(Box::new(StructuredToolError::service_unavailable(
                     service_id,
                     tool_name,
                     format!("MCP catalog unavailable: {error:#}"),
                     true,
-                ));
+                )));
             }
         };
 
@@ -242,11 +247,11 @@ impl CallToolTool {
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         let Some(tool) = list_result.tools.iter().find(|tool| tool.name == tool_name) else {
-            return Some(StructuredToolError::tool_not_found(
+            return Err(Box::new(StructuredToolError::tool_not_found(
                 service_id,
                 tool_name,
                 available_tools,
-            ));
+            )));
         };
 
         validate_arguments_against_schema(
@@ -254,9 +259,11 @@ impl CallToolTool {
             tool_name,
             arguments,
             tool.input_schema.as_ref(),
-        )
-        .err()
-        .map(|error| *error)
+        )?;
+
+        Ok(McpToolRetryMetadata::from_annotations(
+            tool.annotations.as_ref(),
+        ))
     }
 }
 

@@ -495,9 +495,10 @@ jobs:
         with:
           unit: lint
 
-  # The builds beside the product's: clippy over the live suites in their own
-  # incremental tree, the CLI's Vera feature, gents-loop for WASI and the
-  # desktop app's native-e2e capability check, for the crates the change reaches.
+  # The builds beside the product's: clippy over the live suites, the CLI's
+  # Vera feature and gents-loop for WASI each in their own incremental tree,
+  # plus the desktop app's native-e2e capability check, for the crates the
+  # change reaches.
   lint-variants:
     needs: plan
     if: >-
@@ -509,6 +510,7 @@ jobs:
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
       CARGO_BUILD_JOBS: ${{ fromJSON(needs.plan.outputs.plan).build_jobs.portable || vars.CARGO_BUILD_JOBS || '12' }}
+      PROFILE: ci-native
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -834,14 +836,15 @@ jobs:
     needs: plan
     if: >-
       contains(fromJSON(needs.plan.outputs.jobs), 'ts-unit') ||
+      contains(fromJSON(needs.plan.outputs.jobs), 'ts-mobile-perf') ||
       contains(fromJSON(needs.plan.outputs.jobs), 'ts-browser')
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
-    # The unit suite and the browser shards (gate.py BROWSER_SHARDS) the
-    # plan did not reuse. The job allows a cold browser install (30) plus the
-    # suite (25).
+    # The unit suite, the mobile interaction budgets and the browser shards
+    # (gate.py BROWSER_SHARDS) the plan did not reuse. The job allows a cold
+    # browser install (30) plus the suite (25).
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -870,8 +873,10 @@ jobs:
       # apt download alone took 27 minutes from a slow Ubuntu mirror (run
       # 44319819879), so the packages and the browsers are cached, keyed by
       # the runner image, the Playwright version and the browsers a lane needs.
+      # The unit lane runs Vitest/jsdom only and needs no browser binaries.
       - name: Select the browsers and their cache key
         id: browsers
+        if: matrix.suite != 'unit'
         env:
           SUITE: ${{ matrix.suite }}
         run: |
@@ -883,7 +888,7 @@ jobs:
 
       - name: Restore the browser packages and browsers
         id: browser-cache
-        if: runner.environment == 'github-hosted'
+        if: matrix.suite != 'unit' && runner.environment == 'github-hosted'
         uses: actions/cache/restore@v5.0.5
         with:
           path: |
@@ -892,7 +897,7 @@ jobs:
           key: browsers-${{ steps.browsers.outputs.key }}
 
       - name: Use the Ubuntu archive for browser system dependencies
-        if: runner.environment == 'github-hosted'
+        if: matrix.suite != 'unit' && runner.environment == 'github-hosted'
         run: |
           sudo python3 - <<'PYTHON'
           from pathlib import Path
@@ -922,11 +927,12 @@ jobs:
             'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "3";' \
             | sudo tee /etc/apt/apt.conf.d/90browser-dependencies >/dev/null
 
-      # The unit lane's interaction budgets drive Chromium; the journeys
-      # also need WebKit. Its own timeout keeps a slow install from spending
-      # the suite's time; the system packages download in parallel
-      # (install-browser-deps.sh), and a warm cache takes about a minute.
+      # The mobile-perf lane drives Chromium; the journeys also need WebKit.
+      # Its own timeout keeps a slow install from spending the suite's time;
+      # the system packages download in parallel (install-browser-deps.sh),
+      # and a warm cache takes about a minute.
       - name: Install Playwright browsers
+        if: matrix.suite != 'unit'
         working-directory: apps/gents-desktop
         timeout-minutes: 30
         env:
@@ -945,7 +951,7 @@ jobs:
       # so one runner's cold download warms the next run's.
       - name: Save the browser packages and browsers
         if: >-
-          always() && runner.environment == 'github-hosted' &&
+          always() && matrix.suite != 'unit' && runner.environment == 'github-hosted' &&
           steps.browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5.0.5
         with:

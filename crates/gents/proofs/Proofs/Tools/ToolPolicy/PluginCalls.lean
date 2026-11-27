@@ -198,15 +198,14 @@ which traps at the guest's next epoch check.
 
 External premise (afterburner's shared epoch VM, pinned by Gents): the epoch
 deadline is a number of ticks, and one process-wide ticker thread advances the
-epoch by one each time its `period` sleep ends. A sleep ends no earlier than
-its period and arbitrarily later under scheduling or timer coalescing, so the
-allowance is counted in wake-ups, not in elapsed time (`wakeCountedEpoch`):
-with every wake `late` past its period, `allowanceTicks a p` ticks last
-`allowanceTicks a p * (p + late)`, unbounded in `late`. The stop is late, never
-lost. The ticker owns the fix: advancing the epoch to the whole periods
-elapsed since it started (`catchUpEpoch`) bounds the stop by the allowance plus
-one period and one late wake, whatever every other wake did
-(`tla/GuestAllowance.tla`, `MCGuestAllowance` and `MCGuestAllowanceWakeCounted`). -/
+epoch to the whole `period` intervals elapsed since it started (`catchUpEpoch`),
+catching up after a late wake; a store created while the ticker is overdue has
+that backlog added to its deadline. A sleep ends no earlier than its period and
+up to `late` past it under scheduling or timer coalescing, so the stop is
+bounded by the allowance plus one period and one late wake, whatever every
+other wake did (`tla/GuestAllowance.tla`, `MCGuestAllowance`). Without catch-up
+(`wakeCountedEpoch`), counting one tick per wake stretches `allowanceTicks a p`
+ticks to `allowanceTicks a p * (p + late)` (`MCGuestAllowanceWakeCounted`). -/
 def allowanceTicks (allowance period : Nat) : Nat :=
   (allowance + period - 1) / period
 
@@ -230,11 +229,12 @@ theorem no_allowance_is_no_ticks (period : Nat) : allowanceTicks 0 period = 0 :=
   · simp [h]
   · exact Nat.div_eq_of_lt (by omega)
 
-/-- The shipped ticker: each wake adds one to the epoch, whenever it happens. -/
+/-- A wake-counted ticker without catch-up: each wake adds one to the epoch,
+whenever it happens. -/
 def wakeCountedEpoch (wakes : List Nat) : Nat := wakes.length
 
-/-- The proposed ticker: a wake at `elapsed` (time since the ticker started)
-sets the epoch to the whole periods elapsed, and never moves it back. -/
+/-- The shipped catch-up ticker: a wake at `elapsed` (time since the ticker
+started) sets the epoch to the whole periods elapsed, and never moves it back. -/
 def catchUpEpoch (period : Nat) : List Nat → Nat
   | [] => 0
   | elapsed :: earlier => max (catchUpEpoch period earlier + 1) (elapsed / period)

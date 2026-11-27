@@ -10,15 +10,7 @@ import Proofs.Tools.ToolPolicy.WorkspacePermissions
 
 namespace Conformance.Contracts
 
-def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : Lean.Json :=
-  Lean.Json.mkObj [("workspace", Lean.toJson scope.workspace), ("revision", Lean.toJson scope.revision)]
-
-def permissionGrantJson (grant : ToolPolicy.WorkspacePermissions.Grant) : Lean.Json :=
-  Lean.Json.mkObj [("scope", permissionScopeJson grant.scope), ("action", Lean.toJson grant.action)]
-
 open ToolPolicy.ContractCases
-
-def boolJson (b : Bool) : String := if b then "true" else "false"
 
 structure FieldReadInput where
   widths : List Nat

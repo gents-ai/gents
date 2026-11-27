@@ -39,6 +39,7 @@ pub struct NodeProjection {
 pub struct HomeServing {
     pub routes: Option<HomeRoutes>,
     pub configure: Option<NodeConfigure>,
+    pub durability: storage::backends::DurabilityMode,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,7 +169,7 @@ impl ServedHome {
         } else {
             None
         };
-        let store_key = custodied_store_key(&path, &data_path, fresh).await?;
+        let store_key = custodied_store_key(&path, &data_path, fresh, serving.durability).await?;
         if let Some(fresh_store) = fresh_store {
             // A home's NAC is owned by its own owner key, never its Node
             // (`Identity.NodeProvisioning.nacOwner`).
@@ -177,6 +178,7 @@ impl ServedHome {
                 tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
                     .await??;
             fresh_store
+                .with_durability(serving.durability)
                 .initialize(
                     &store_key,
                     &identity,
@@ -326,6 +328,7 @@ async fn start(
 ) -> Result<(Arc<defra_node::Node>, String, BackendAdmission)> {
     let protected = ProtectedBackendStore::open(data_path, key, lock)
         .await?
+        .with_durability(serving.durability)
         .preflight(key, &identity, DocumentAcp::Local)
         .await?;
     let served = ServedNode::default();
@@ -336,9 +339,13 @@ async fn start(
     if let Some(routes) = &serving.routes {
         authenticated = authenticated.merge(routes(served.clone()));
     }
+    let fence_route = owner_staged.clone();
     let http = defra_node::HttpConfig::with_listener(listener.into_std()?)?
         .with_extra_routes(status_route(served.clone()))
-        .with_authenticated_routes(authenticated);
+        .with_authenticated_routes(authenticated)
+        .with_router_transform(Arc::new(move |router| {
+            fence_route.wrap_relationship_fence(router)
+        }));
     let configure = serving.configure.clone();
     let path = path.to_owned();
     let (node, admission) = protected
@@ -362,7 +369,12 @@ async fn start(
     Ok((node, endpoint, admission))
 }
 
-async fn custodied_store_key(path: &Path, data: &Path, fresh: bool) -> Result<StoreKey> {
+async fn custodied_store_key(
+    path: &Path,
+    data: &Path,
+    fresh: bool,
+    durability: storage::backends::DurabilityMode,
+) -> Result<StoreKey> {
     use tokio::io::AsyncWriteExt;
     let key_file = path.join("store.key");
     let record_path = path.join("store-custody.json");
@@ -378,7 +390,12 @@ async fn custodied_store_key(path: &Path, data: &Path, fresh: bool) -> Result<St
             .open(&record_path)
             .await?;
         file.write_all(&serde_json::to_vec(&record)?).await?;
-        file.sync_all().await?;
+        // tokio::fs::File completes writes on a blocking thread; flush waits
+        // for the OS write to finish before drop when sync_all is skipped.
+        file.flush().await?;
+        if durability == storage::backends::DurabilityMode::Immediate {
+            file.sync_all().await?;
+        }
         record
     } else {
         serde_json::from_slice::<StoreEncryption>(&tokio::fs::read(&record_path).await?)?

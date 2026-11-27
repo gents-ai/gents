@@ -1,13 +1,16 @@
 import Proofs.Shared.ToolPolicy.Presentation
 import Proofs.Shared.AccountRotation.Policy
+import Proofs.Shared.AccountRotation.Pool
 import Proofs.Shared.CompletionRetry.OutputObligation
 import Proofs.Conformance.Family
 
 namespace AccountRotation
 
-deriving instance Lean.ToJson for Family, Claim, Overage
+deriving instance Lean.ToJson for Family, Claim, Overage, LiveLimitStatus, Tier,
+  CursorAction, CapStatus, SessionMapAction, Reselection
 
-attribute [conformance_function] Claim.binds Overage.serves
+attribute [conformance_function] Claim.binds Overage.serves tierOfStatus Tier.rank
+  cursorAction sessionMapAction markRotatedOnFailure
 
 end AccountRotation
 

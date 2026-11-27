@@ -404,6 +404,7 @@ fn status_test_snapshot(
     dispatcher: mpsc::Sender<gents_protocol::row::AgentRequest>,
 ) -> ActiveRuntimeSnapshot {
     ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation,
         node: None,
         local_did: String::new(),
@@ -429,16 +430,26 @@ fn status_test_snapshot(
 
 #[tokio::test]
 async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_work() {
+    for claim in gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+        gents_protocol::node_readiness::NodeReadinessProcessState,
+    >() {
+        replay_startup_claim_case(&claim).await;
+    }
+}
+
+async fn replay_startup_claim_case(
+    claim: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ReadinessInput<
+            gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+            gents_protocol::node_readiness::NodeReadinessProcessState,
+        >,
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ClaimedRowOutput,
+    >,
+) {
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
-    let claim = gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
-        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
-        gents_protocol::node_readiness::NodeReadinessProcessState,
-    >()
-    .into_iter()
-    .find(|claim| claim.input.name == "restart_claim_demotes_stale_ready")
-    .expect("modeled restart claim case");
     let case = &claim.input;
     let (dispatcher, _requests) = mpsc::channel(1);
 
@@ -526,6 +537,7 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
             generation: 1,
             node: None,
             local_did: String::new(),
@@ -575,6 +587,7 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
 
     let (tx, _rx) = mpsc::channel(2);
     let snapshot = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -620,6 +633,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -639,6 +653,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         agent_executor_queue_capacities: RapidHashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 2,
         node: None,
         local_did: String::new(),
@@ -688,6 +703,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
 fn reconcile_snapshot(generation: u64) -> ActiveRuntimeSnapshot {
     ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation,
         node: None,
         local_did: String::new(),

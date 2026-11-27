@@ -289,6 +289,7 @@ async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
 pub struct FreshBackendStore<'a> {
     data: PathBuf,
     _lock: &'a StoreLock,
+    durability: storage::backends::DurabilityMode,
 }
 
 impl<'a> FreshBackendStore<'a> {
@@ -302,7 +303,17 @@ impl<'a> FreshBackendStore<'a> {
         {
             return Err(BackendProtectionError::NotFresh);
         }
-        Ok(Self { data, _lock: lock })
+        Ok(Self {
+            data,
+            _lock: lock,
+            durability: storage::backends::DurabilityMode::Immediate,
+        })
+    }
+
+    #[must_use]
+    pub fn with_durability(mut self, durability: storage::backends::DurabilityMode) -> Self {
+        self.durability = durability;
+        self
     }
 
     /// The temporary native Node has no HTTP or P2P transport. An interrupted
@@ -348,6 +359,7 @@ impl<'a> FreshBackendStore<'a> {
             crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
         )
         .map_err(|error| BackendProtectionError::Schema(error.into()))?
+        .with_storage_durability(self.durability)
         .with_node_identity_did(did.clone())
         .with_node_acp_owner(nac_owner.as_str());
         let builder = document_acp::configure_fresh(
@@ -366,8 +378,12 @@ impl<'a> FreshBackendStore<'a> {
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
                 let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
                 let route = crate::config_client::OwnerStagedRoute::new();
+                let fence_route = route.clone();
                 let http = defra_node::HttpConfig::with_listener(listener)?
-                    .with_authenticated_routes(route.router());
+                    .with_authenticated_routes(route.router())
+                    .with_router_transform(Arc::new(move |router| {
+                        fence_route.wrap_relationship_fence(router)
+                    }));
                 (
                     builder.with_http(http),
                     Some((url, signer, route, node.clone())),
@@ -441,17 +457,18 @@ impl<'a> FreshBackendStore<'a> {
                 .await
                 .map_err(BackendProtectionError::Schema)?;
             validate_binding(&node).await?;
-            Ok(deployment)
+            Ok((deployment, ids))
         }
         .await;
         let shutdown = node.shutdown().await;
-        let deployment = result?;
+        let (deployment, ids) = result?;
         shutdown?;
         drop(node);
         if let Some(deployment) = deployment {
             let data = self.data.clone();
             tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
         }
+        super::store_compat::record_compatible(&self.data, ids)?;
         let nonce = *uuid::Uuid::new_v4().as_bytes();
         let mut mac = key
             .with_secret(|secret| MarkerMac::new_from_slice(secret).expect("HMAC accepts any key"));
@@ -466,13 +483,19 @@ impl<'a> FreshBackendStore<'a> {
             .open(self.data.join(MARKER))
             .await?;
         file.write_all(&bytes).await?;
-        file.sync_all().await?;
-        // A directory handle is unix-only: Windows refuses `File::open` on a
-        // directory (os error 5), and NTFS journals the new entry itself.
-        #[cfg(unix)]
-        {
-            let data = self.data.clone();
-            tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all()).await??;
+        // tokio::fs::File completes writes on a blocking thread; flush waits
+        // for the OS write to finish before drop when sync_all is skipped.
+        file.flush().await?;
+        if self.durability == storage::backends::DurabilityMode::Immediate {
+            file.sync_all().await?;
+            // A directory handle is unix-only: Windows refuses `File::open` on a
+            // directory (os error 5), and NTFS journals the new entry itself.
+            #[cfg(unix)]
+            {
+                let data = self.data.clone();
+                tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all())
+                    .await??;
+            }
         }
         Ok(())
     }
@@ -483,6 +506,7 @@ impl<'a> FreshBackendStore<'a> {
 pub struct ProtectedBackendStore<'a> {
     data: PathBuf,
     _lock: &'a StoreLock,
+    durability: storage::backends::DurabilityMode,
 }
 
 impl<'a> ProtectedBackendStore<'a> {
@@ -501,7 +525,17 @@ impl<'a> ProtectedBackendStore<'a> {
         mac.update(&bytes[..DOMAIN.len() + 16]);
         mac.verify_slice(&bytes[DOMAIN.len() + 16..])
             .map_err(|_| BackendProtectionError::InvalidProvenance)?;
-        Ok(Self { data, _lock: lock })
+        Ok(Self {
+            data,
+            _lock: lock,
+            durability: storage::backends::DurabilityMode::Immediate,
+        })
+    }
+
+    #[must_use]
+    pub fn with_durability(mut self, durability: storage::backends::DurabilityMode) -> Self {
+        self.durability = durability;
+        self
     }
 
     /// Check the current binding before opening any network listener.
@@ -550,6 +584,7 @@ impl<'a> ProtectedBackendStore<'a> {
             crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
         )
         .map_err(|error| BackendProtectionError::Schema(error.into()))?
+        .with_storage_durability(self.durability)
         .with_node_identity_did(did.clone())
         .with_node_acp_enabled();
         let builder =
@@ -665,6 +700,7 @@ impl PreflightProtectedBackendStore<'_> {
         let builder =
             super::store_key::persistent_builder(&self.store.data, key, self.block_cache_bytes)
                 .map_err(|error| BackendProtectionError::Schema(error.into()))?
+                .with_storage_durability(self.store.durability)
                 .with_document_projector(projection)
                 .with_node_identity_did(self.node_did)
                 .with_node_acp_enabled();

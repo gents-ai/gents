@@ -52,8 +52,13 @@ pub(crate) struct PackSearchArgs {
     pub(crate) query: Option<String>,
     #[arg(long, default_value_t = 1, help = "Result page, 50 packs each")]
     pub(crate) page: u32,
-    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to the home's registry or the public registry"
+    )]
     pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home whose configured registry to query")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -117,8 +122,13 @@ pub(crate) struct PackAccountArgs {
 pub(crate) struct PackInfoArgs {
     #[arg(help = "The package, as name or namespace/name")]
     pub(crate) package: String,
-    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to the home's registry or the public registry"
+    )]
     pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home whose configured registry to query")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

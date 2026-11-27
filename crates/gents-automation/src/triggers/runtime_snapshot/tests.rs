@@ -38,6 +38,7 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
 #[test]
 fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
     let mut resolved = ResolvedRuntimeSnapshot {
+        placement_basis: Default::default(),
         node: None,
         local_did: String::new(),
         default_agent_did: "missing".to_string(),
@@ -70,6 +71,7 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
 #[test]
 fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
+        placement_basis: Default::default(),
         node: None,
         local_did: String::new(),
         default_agent_did: "general".to_string(),
@@ -128,6 +130,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
 #[test]
 fn configuration_fingerprint_reflects_lsp_configuration() {
     let base = ResolvedRuntimeSnapshot {
+        placement_basis: Default::default(),
         node: None,
         local_did: String::new(),
         default_agent_did: "general".to_string(),

@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   foldSessionGoalRead,
@@ -17,6 +13,7 @@ import {
 import { GOAL_NEXT_STEP, goalShown } from "../../src/hooks/goalState";
 import { goalCommand } from "../../src/ui/screens/session/goalMode";
 import { goalControl, observedGoal } from "../goal-state-fixture";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type Reference = { goal: number; root: number | null };
 type ModeledState =
@@ -54,28 +51,15 @@ type FoldCase = {
     revision: GoalRevision | null;
   } | null;
 };
-const run = promisify(execFile);
 const NODE = "did:test:node";
 const sessionIdOf = (session: number) => `session-${session}`;
 
 let generated: Promise<{ cases: Case[]; fold_cases: FoldCase[] }> | null = null;
 function leanCases() {
-  generated ??= (async () => {
-    const cwd = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../../crates/gents/proofs",
-    );
-    await run("lake", ["build", "Proofs.Conformance.GoalSessionObservation"], {
-      cwd,
-      timeout: 240_000,
-    });
-    const { stdout } = await run(
-      "lake",
-      ["env", "lean", "--run", "GoalSessionObservationConformance.lean"],
-      { cwd, timeout: 240_000 },
-    );
-    return JSON.parse(stdout);
-  })();
+  generated ??= runLeanGeneratorJson<{ cases: Case[]; fold_cases: FoldCase[] }>(
+    "Proofs.Conformance.GoalSessionObservationConformance:olean",
+    "Proofs/Conformance/GoalSessionObservationConformance.lean",
+  );
   return generated;
 }
 

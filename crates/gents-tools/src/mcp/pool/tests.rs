@@ -49,7 +49,12 @@ async fn list_tools_after_transport_failure(
                         })
                     }),
                     call_tool_fn: Box::new(|_params| {
-                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                        Box::pin(async {
+                            Err(McpCallFailure::new(
+                                McpCallFailureClass::ProtocolOrToolError,
+                                "call_tool was not expected",
+                            ))
+                        })
                     }),
                 })
             }
@@ -104,7 +109,10 @@ async fn call_tool_after_transport_failure(
                     let calls = Arc::clone(&calls_for_fn);
                     Box::pin(async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        anyhow::bail!("transport dropped after dispatch")
+                        Err(McpCallFailure::new(
+                            McpCallFailureClass::TransportDropped,
+                            "transport dropped after dispatch",
+                        ))
                     })
                 }),
             }),
@@ -686,7 +694,12 @@ async fn hung_connect_does_not_wedge_other_services() {
                 trace_context_headers: trace_headers,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpCallFailure::new(
+                            McpCallFailureClass::ProtocolOrToolError,
+                            "call_tool was not expected",
+                        ))
+                    })
                 }),
                 last_used: super::fresh_last_used(),
                 resume_policy: SessionResumePolicy::detached(&service_id),
@@ -746,7 +759,12 @@ fn counting_pool(
                 resume_policy,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpCallFailure::new(
+                            McpCallFailureClass::ProtocolOrToolError,
+                            "call_tool was not expected",
+                        ))
+                    })
                 }),
             })
         }
@@ -940,7 +958,12 @@ async fn healthy_service_concurrent_cold_connects_stay_benign() {
                 resume_policy: SessionResumePolicy::detached(&service_id),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpCallFailure::new(
+                            McpCallFailureClass::ProtocolOrToolError,
+                            "call_tool was not expected",
+                        ))
+                    })
                 }),
             })
         }
@@ -1001,7 +1024,12 @@ async fn poison_recovery_preserves_list_tools_safe_read_retry() {
                     })
                 }),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpCallFailure::new(
+                            McpCallFailureClass::ProtocolOrToolError,
+                            "call_tool was not expected",
+                        ))
+                    })
                 }),
             })
         }
@@ -1345,4 +1373,316 @@ async fn handshake_403_scope_challenge_is_a_typed_auth_refusal() {
             scope: Some("files:write".into())
         }
     );
+}
+
+fn decode_hint_value(value: &str) -> Option<bool> {
+    match value {
+        "absent" => None,
+        "is_false" => Some(false),
+        "is_true" => Some(true),
+        other => panic!("unexpected Lean HintValue: {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_annotation_classification_matches_lean() {
+    gents_lean_vocab::families::tool_execution_mcp_retry_classify_annotations::replay::<
+        String,
+        McpToolRetryMetadata,
+    >(|input| {
+        let read_only_hint = decode_hint_value(&input.read_only_hint);
+        let idempotent_hint = decode_hint_value(&input.idempotent_hint);
+        let annotations = match (read_only_hint, idempotent_hint) {
+            (None, None) => None,
+            _ => {
+                let mut annotations = rmcp::model::ToolAnnotations::default();
+                annotations.read_only_hint = read_only_hint;
+                annotations.idempotent_hint = idempotent_hint;
+                Some(annotations)
+            }
+        };
+        McpToolRetryMetadata::from_annotations(annotations.as_ref())
+    });
+}
+
+#[tokio::test]
+async fn mcp_call_tool_retry_matches_lean_contract() {
+    use gents_lean_vocab::families::contracts_mcp_call_retry::{cases, McpCallRetryOutput};
+
+    for case in cases::<McpCallFailureClass, McpCallRetryDecision, McpToolRetryMetadata>() {
+        let connect_attempts = Arc::new(AtomicUsize::new(0));
+        let call_attempts = Arc::new(AtomicUsize::new(0));
+        let seen_params = Arc::new(Mutex::new(Vec::<CallToolRequestParams>::new()));
+        let failure_class = case.input.failure;
+        let service_id = format!("retry-contract-{}", case.input.name);
+        let endpoint = "http://mcp.test/mcp";
+
+        let connect_attempts_for_fn = Arc::clone(&connect_attempts);
+        let call_attempts_for_fn = Arc::clone(&call_attempts);
+        let seen_params_for_fn = Arc::clone(&seen_params);
+        let pool = McpPool::new_with_connector(
+            move |service_id, endpoint, node_did_header, trace_headers| {
+                let connect_attempts = Arc::clone(&connect_attempts_for_fn);
+                let call_attempts = Arc::clone(&call_attempts_for_fn);
+                let seen_params = Arc::clone(&seen_params_for_fn);
+                async move {
+                    connect_attempts.fetch_add(1, Ordering::SeqCst);
+                    match failure_class {
+                        McpCallFailureClass::AuthRefused => {
+                            return Err(anyhow::Error::new(McpHandshakeRefused {
+                                service_id,
+                                endpoint,
+                                refusal: McpAuthRefusal::Required {
+                                    resource_metadata: None,
+                                    scope: Some("tools:call".into()),
+                                },
+                            }));
+                        }
+                        McpCallFailureClass::ConnectFailed => {
+                            anyhow::bail!("connection refused");
+                        }
+                        _ => {}
+                    }
+                    Ok(McpConnection {
+                        endpoint,
+                        node_did_header,
+                        trace_context_headers: trace_headers,
+                        last_used: super::fresh_last_used(),
+                        resume_policy: SessionResumePolicy::detached(&service_id),
+                        list_tools_fn: Box::new(|| {
+                            Box::pin(async { Ok(ListToolsResult::default()) })
+                        }),
+                        call_tool_fn: Box::new(move |params| {
+                            let call_attempts = Arc::clone(&call_attempts);
+                            let seen_params = Arc::clone(&seen_params);
+                            Box::pin(async move {
+                                call_attempts.fetch_add(1, Ordering::SeqCst);
+                                seen_params.lock().expect("seen_params lock").push(params);
+                                Err(McpCallFailure::new(
+                                    failure_class,
+                                    format!("simulated {failure_class:?}"),
+                                ))
+                            })
+                        }),
+                    })
+                }
+            },
+        );
+
+        let arguments = serde_json::json!({ "key": "alpha", "count": 7 });
+        let max_retries = usize::try_from(case.input.max_retries).expect("max_retries fits usize");
+        let policy =
+            McpCallRetryPolicy::for_metadata(case.input.metadata).with_max_retries(max_retries);
+
+        let error = pool
+            .call_tool_with_options(
+                &service_id,
+                endpoint,
+                "target_tool",
+                arguments.clone(),
+                McpCallOptions {
+                    node_did: None,
+                    connect_timeout: MCP_CONNECT_TIMEOUT,
+                    retry_policy: policy,
+                },
+            )
+            .await
+            .expect_err("all-failing attempt sequence must return an error");
+        let _ = error;
+
+        let connects = connect_attempts.load(Ordering::SeqCst);
+        let calls = call_attempts.load(Ordering::SeqCst);
+        let retries_performed = calls.saturating_sub(1);
+        let evicted_connection = connects > 1;
+        let first_decision = if retries_performed > 0 {
+            McpCallRetryDecision::EvictAndRetry
+        } else {
+            McpCallRetryDecision::FailFinal
+        };
+
+        if matches!(
+            failure_class,
+            McpCallFailureClass::AuthRefused | McpCallFailureClass::ConnectFailed
+        ) {
+            assert_eq!(
+                connects, 1,
+                "{}: connect/auth failure must not redial",
+                case.input.name
+            );
+            assert_eq!(
+                calls, 0,
+                "{}: connect/auth failure must not dispatch call_tool",
+                case.input.name
+            );
+        } else {
+            assert_eq!(
+                connects, calls,
+                "{}: each retry must dial one fresh connection",
+                case.input.name
+            );
+            if !evicted_connection {
+                assert!(
+                    pool.inner.read().await.contains_key(&super::ParkKey::new(
+                        &service_id,
+                        endpoint,
+                        None
+                    )),
+                    "{}: non-retried failure must keep the pooled connection",
+                    case.input.name
+                );
+            }
+        }
+
+        let captured = seen_params.lock().expect("seen_params lock");
+        let expected_params = build_call_tool_params("target_tool", arguments);
+        for replay_params in captured.iter() {
+            assert_eq!(
+                replay_params.name, expected_params.name,
+                "{}: retried call must keep identical tool name",
+                case.input.name
+            );
+            assert_eq!(
+                replay_params.arguments, expected_params.arguments,
+                "{}: retried call must keep identical arguments",
+                case.input.name
+            );
+        }
+
+        case.check(McpCallRetryOutput {
+            first_decision,
+            retries_performed: retries_performed as u64,
+            evicted_connection,
+        });
+    }
+}
+
+/// Spawns a streamable HTTP MCP server whose first `tools/call` drops the TCP
+/// socket mid-response and whose second `tools/call` succeeds, or returns a
+/// JSON-RPC error / `isError: true` payload depending on tool name.
+async fn spawn_flaky_call_tool_mcp_server() -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind flaky MCP server");
+    let addr = listener.local_addr().expect("flaky MCP server address");
+    let initialize_count = Arc::new(AtomicUsize::new(0));
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let init_for_server = Arc::clone(&initialize_count);
+    let calls_for_server = Arc::clone(&call_count);
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let init_count = Arc::clone(&init_for_server);
+            let call_count = Arc::clone(&calls_for_server);
+            tokio::spawn(async move {
+                let Ok(request) = read_mcp_http_request(&mut stream).await else {
+                    return;
+                };
+                if request.http_method == "GET" {
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    return;
+                }
+                if request.http_method == "DELETE" {
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    return;
+                }
+                match request.method.as_str() {
+                    "initialize" => {
+                        let session_n = init_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        let response = mcp_http_response_with_session(
+                            "initialize",
+                            request.id,
+                            Some(&format!("flaky-session-{session_n}")),
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    }
+                    "notifications/initialized" => {
+                        let response = mcp_http_response("notifications/initialized", None);
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    }
+                    "tools/call" => {
+                        let attempt = call_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        if attempt == 1 {
+                            drop(stream);
+                            return;
+                        }
+                        let body = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": request.id.unwrap_or_else(|| serde_json::json!(1)),
+                            "result": {
+                                "content": [{ "type": "text", "text": "recovered-ok" }],
+                                "isError": false
+                            }
+                        })
+                        .to_string();
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    }
+                    other => {
+                        let response = mcp_http_response(other, request.id);
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    }
+                }
+            });
+        }
+    });
+
+    (format!("http://{addr}/mcp"), initialize_count, call_count)
+}
+
+#[tokio::test]
+async fn streamable_http_idempotent_call_recovers_after_dropped_connection_while_default_does_not()
+{
+    let (idempotent_endpoint, idempotent_inits, idempotent_calls) =
+        spawn_flaky_call_tool_mcp_server().await;
+    let pool = McpPool::new();
+
+    let result = pool
+        .call_tool_with_options(
+            "idempotent-http-svc",
+            &idempotent_endpoint,
+            "fetch_item",
+            serde_json::json!({ "id": "42" }),
+            McpCallOptions {
+                node_did: None,
+                connect_timeout: MCP_CONNECT_TIMEOUT,
+                retry_policy: McpCallRetryPolicy::for_metadata(McpToolRetryMetadata::Idempotent),
+            },
+        )
+        .await
+        .expect("idempotent tool call must recover on fresh session after TCP drop");
+    assert_eq!(
+        result.content[0].raw.as_text().unwrap().text,
+        "recovered-ok"
+    );
+    assert_eq!(idempotent_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(idempotent_inits.load(Ordering::SeqCst), 2);
+
+    let (default_endpoint, default_inits, default_calls) = spawn_flaky_call_tool_mcp_server().await;
+    let error = pool
+        .call_tool(
+            "default-http-svc",
+            &default_endpoint,
+            "create_item",
+            serde_json::json!({ "id": "42" }),
+        )
+        .await
+        .expect_err("tool without retry metadata must not retry after TCP drop");
+    let _ = error;
+    assert_eq!(default_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(default_inits.load(Ordering::SeqCst), 1);
 }

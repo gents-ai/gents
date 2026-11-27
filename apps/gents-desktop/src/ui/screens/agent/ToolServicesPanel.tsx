@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ToolServiceRegistry } from "@source-inc/gents-desktop-client";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { navigate } from "@/lib/router";
@@ -210,7 +210,7 @@ function Editor({
       {!draft && (
         <DeleteButton
           label={service.display_name ?? service.service_id}
-          warning={dependentsWarning(deployment, "tool-service", service.service_id)}
+          blocked={deleteBlocker(deployment, "tool-service", service.service_id)}
           base={base}
           onDelete={() =>
             changeConfig("deleteToolServiceConfig", {

@@ -130,14 +130,24 @@ async fn live_agent_session_and_delegation_access_match_the_model() -> anyhow::R
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
+    for trace in gents_lean_vocab::families::household_configuration_grant_trace::cases() {
+        replay_configuration_grant_trace(&trace).await?;
+    }
+    replay_configuration_atomic().await
+}
+
+async fn replay_configuration_grant_trace(
+    trace: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::household_configuration_grant_trace::PolicyTraceInput,
+        Vec<Option<bool>>,
+    >,
+) -> anyhow::Result<()> {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::NodePermission;
     use gents_store::graphql::{created_doc_id, escape_graphql_string};
     use gents_store::identity::NodeIdentity;
 
-    let traces = gents_lean_vocab::families::household_configuration_grant_trace::cases();
-    let trace = traces.first().expect("modeled configuration trace");
     let role = |modeled: &str| -> anyhow::Result<&str> {
         trace
             .input
@@ -387,6 +397,66 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         outcomes.push(outcome);
     }
     trace.check(outcomes);
+    node.shutdown().await?;
+    Ok(())
+}
+
+async fn replay_configuration_atomic() -> anyhow::Result<()> {
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::config_client::NodePermission;
+    use gents_store::graphql::escape_graphql_string;
+    use gents_store::identity::NodeIdentity;
+
+    let db = crate::support::trial_store("modeled-configuration-atomic").await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
+    let user_access = fixture.access.clone();
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(fixture.agent.did())?,
+        fixture.agent.as_ref(),
+    )?;
+    let sibling_binding = gents_store::identity::provision_agent_identity_authorized(
+        &node,
+        db.node_identity.as_ref(),
+        &Did::new(fixture.user.did())?,
+    )
+    .await?;
+    let sibling_signer =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &sibling_binding)?;
+    let sibling_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(sibling_signer.did())?,
+        sibling_signer.as_ref(),
+    )?;
+    let runtime_access =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
+    for actual in [
+        fixture.user.did(),
+        fixture.agent.did(),
+        sibling_signer.did(),
+    ] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::CollectionGet,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            runtime_access
+                .grant_node_permission(&Did::new(actual)?, permission)
+                .await?;
+        }
+    }
+    let query = |id: &str| {
+        format!(
+            "{{ Tools(filter: {{node_did: {{_eq: \"{}\"}}, tools_id: {{_eq: \"{}\"}}}}) {{_docID display_name}} }}",
+            escape_graphql_string(node_did),
+            escape_graphql_string(id),
+        )
+    };
     let actual_agent = Did::new(fixture.agent.did())?;
     for observation in gents_lean_vocab::families::household_configuration_atomic::cases() {
         let commit = observation.input.commit;
@@ -451,12 +521,25 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
 
 #[tokio::test]
 async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
+    let mut replay_lookup = true;
+    for trace in gents_lean_vocab::families::household_self_config_trace::cases() {
+        replay_self_config_trace(&trace, replay_lookup).await?;
+        replay_lookup = false;
+    }
+    Ok(())
+}
+
+async fn replay_self_config_trace(
+    trace: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::household_self_config_trace::PolicyTraceInput,
+        Vec<Option<bool>>,
+    >,
+    replay_lookup: bool,
+) -> anyhow::Result<()> {
     use anyhow::Context;
     use gents_store::config_client::AgentSelfConfigPermission;
     use gents_store::identity::NodeIdentity;
 
-    let traces = gents_lean_vocab::families::household_self_config_trace::cases();
-    let trace = traces.first().expect("modeled self-config trace");
     let db = crate::support::trial_store("modeled-self-config-native").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
@@ -538,52 +621,54 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         };
         Ok(Did::new(did)?)
     };
-    for observation in gents_lean_vocab::families::household_self_config_lookup::cases() {
-        let attempt = &observation.input;
-        let (caller, requested): (&str, &str) =
-            match (attempt.present, attempt.visible, attempt.native_allows) {
-                (false, false, _) => (user.did(), &sibling.agent_did),
-                (true, false, _) => (&sibling.agent_did, &agent.agent_did),
-                (true, true, false) => (&agent.agent_did, &agent.agent_did),
-                (true, true, true) => (user.did(), &agent.agent_did),
-                _ => anyhow::bail!("unrepresentable modeled lookup case {}", attempt.name),
-            };
-        let access = access_for(caller)?;
-        let outcome = match access
-            .set_agent_self_config_permission(
-                runtime.did(),
-                requested,
-                AgentSelfConfigPermission::Grant,
-            )
-            .await
-        {
-            Ok(()) => "applied",
-            Err(gents_store::config_client::AgentSelfConfigPermissionError::AgentUnavailable) => {
-                "unavailable"
-            }
-            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(
-                gents_store::config_client::ConfigClientError::DocumentRelationshipStatus {
-                    status,
-                    ..
-                },
-            )) if status.is_client_error() => "denied",
-            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(error))
-                if error.is_permission_denied() =>
-            {
-                "denied"
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if outcome == "applied" {
-            access
+    if replay_lookup {
+        for observation in gents_lean_vocab::families::household_self_config_lookup::cases() {
+            let attempt = &observation.input;
+            let (caller, requested): (&str, &str) =
+                match (attempt.present, attempt.visible, attempt.native_allows) {
+                    (false, false, _) => (user.did(), &sibling.agent_did),
+                    (true, false, _) => (&sibling.agent_did, &agent.agent_did),
+                    (true, true, false) => (&agent.agent_did, &agent.agent_did),
+                    (true, true, true) => (user.did(), &agent.agent_did),
+                    _ => anyhow::bail!("unrepresentable modeled lookup case {}", attempt.name),
+                };
+            let access = access_for(caller)?;
+            let outcome = match access
                 .set_agent_self_config_permission(
                     runtime.did(),
                     requested,
-                    AgentSelfConfigPermission::Revoke,
+                    AgentSelfConfigPermission::Grant,
                 )
-                .await?;
+                .await
+            {
+                Ok(()) => "applied",
+                Err(
+                    gents_store::config_client::AgentSelfConfigPermissionError::AgentUnavailable,
+                ) => "unavailable",
+                Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(
+                    gents_store::config_client::ConfigClientError::DocumentRelationshipStatus {
+                        status,
+                        ..
+                    },
+                )) if status.is_client_error() => "denied",
+                Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(error))
+                    if error.is_permission_denied() =>
+                {
+                    "denied"
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if outcome == "applied" {
+                access
+                    .set_agent_self_config_permission(
+                        runtime.did(),
+                        requested,
+                        AgentSelfConfigPermission::Revoke,
+                    )
+                    .await?;
+            }
+            observation.check(outcome.to_owned());
         }
-        observation.check(outcome.to_owned());
     }
     let mut outcomes = Vec::new();
     for action in &trace.input.steps {

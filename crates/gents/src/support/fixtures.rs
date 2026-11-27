@@ -204,6 +204,7 @@ pub async fn session_command_agent_snapshot(
     let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
     let tool_configs = default_tool_configs(&agents);
     let snapshot = gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: Some(runtime_node),
         local_did: db.node_identity.did().into(),
@@ -376,7 +377,7 @@ pub async fn bind_default_agent_backend(
     backend_id: &str,
     endpoint: &str,
 ) {
-    bind_agent_backend_chain(db, None, backend_id, endpoint, "default").await;
+    bind_agent_backend_chain(db, backend_id, endpoint, "default").await;
 }
 
 pub async fn held_fixture_history(
@@ -447,23 +448,6 @@ pub async fn held_canonical_message(
             Err(error) => panic!("read fixture canonical message {header}: {error:#}"),
         }
     }
-}
-
-/// The request's run timeline as `access` reads it. Like
-/// [`held_canonical_message`], a header published before its segments'
-/// relationships is incomplete, not failed: wait out that window and fail on
-/// any other error.
-pub async fn canonical_run_timeline_rows(
-    access: &gents_store::config_client::ConfigAccess,
-    request_id: &str,
-) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
-    gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
-        access,
-        request_id,
-        gents_observe::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
-    )
-    .await
-    .unwrap_or_else(|error| panic!("load canonical run timeline for {request_id}: {error:#}"))
 }
 
 pub async fn bind_managed_agent_backend(
@@ -577,21 +561,8 @@ pub async fn bind_selected_managed_agent_backend(
     .expect("mark test backend healthy");
 }
 
-/// Binds an installed Agent to a backend as the Node's configuring User and
-/// makes it the Node default.
-pub async fn bind_agent_backend(
-    db: &gents_store::test_support::TestStore,
-    agent_did: &str,
-    backend_id: &str,
-    endpoint: &str,
-    model_name: &str,
-) {
-    bind_agent_backend_chain(db, Some(agent_did), backend_id, endpoint, model_name).await;
-}
-
 async fn bind_agent_backend_chain(
     db: &gents_store::test_support::TestStore,
-    agent_did: Option<&str>,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
@@ -656,27 +627,22 @@ async fn bind_agent_backend_chain(
             .await
             .expect("install fixture Node as its User");
     }
-    let agent_did = match agent_did {
+    let selection = read(
+        gents_store::collection::Collection::DefaultAgentSelection,
+        owner.to_owned(),
+    )
+    .await
+    .unwrap_or_default();
+    let agent_did = match selection["default_agent_did"]
+        .as_str()
+        .filter(|did| !did.is_empty())
+    {
         Some(agent_did) => agent_did.to_owned(),
         None => {
-            let selection = read(
-                gents_store::collection::Collection::DefaultAgentSelection,
-                owner.to_owned(),
-            )
-            .await
-            .unwrap_or_default();
-            match selection["default_agent_did"]
-                .as_str()
-                .filter(|did| !did.is_empty())
-            {
-                Some(agent_did) => agent_did.to_owned(),
-                None => {
-                    super::install_managed_agent(db, &access, &user, "Default fixture agent")
-                        .await
-                        .1
-                        .agent_did
-                }
-            }
+            super::install_managed_agent(db, &access, &user, "Default fixture agent")
+                .await
+                .1
+                .agent_did
         }
     };
     let fixture = super::ManagedAgentFixture {
@@ -707,44 +673,6 @@ async fn bind_agent_backend_chain(
         db, &fixture, &agent_did, true, backend_id, endpoint, model_name,
     )
     .await;
-}
-
-/// The session's working Agent as its managed signer, derived by the runtime
-/// that holds the Node key, for owners that act only as that Agent.
-pub async fn session_agent_identity(
-    node: &std::sync::Arc<gents::defra_node::Node>,
-    runtime: &dyn gents_store::identity::NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(runtime.did()).expect("runtime DID"),
-    );
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ agent_did }} }}"#,
-            gents_store::graphql::escape_graphql_string(node_did),
-            gents_store::graphql::escape_graphql_string(session_id),
-        ))
-        .await
-        .expect("read session Agent");
-    let agent_did = response["data"]["AgentSession"][0]["agent_did"]
-        .as_str()
-        .expect("session has a working Agent")
-        .to_owned();
-    let agent = gents_documents::load_agent(node, node_did, &agent_did)
-        .await
-        .expect("load session Agent")
-        .expect("session Agent exists");
-    gents_store::identity::resolve_agent_identity(
-        runtime,
-        &gents_protocol::agent_identity::AgentIdentityBinding {
-            agent_did: agent.agent_did,
-            creation_nonce: agent.creation_nonce,
-        },
-    )
-    .expect("derive session Agent signer")
 }
 
 /// Rebinds an InferenceBackend's `auth` as its configuring User through the

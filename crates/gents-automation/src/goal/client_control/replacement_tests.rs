@@ -443,7 +443,10 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
         )
         .await
         .unwrap();
-        let mut prepared = prepare_goal_control(&txn, &command).await.unwrap().unwrap();
+        let mut prepared = prepare_goal_control(&txn, &command, true)
+            .await
+            .unwrap()
+            .unwrap();
         attach_client_goal_graphs(&txn, &command, &mut prepared)
             .await
             .unwrap()

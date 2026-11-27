@@ -28,9 +28,6 @@ def messages (values : List CanonicalOutput.MessageEnvelope) : Json :=
 def reconstructed (value : CanonicalOutput.ReconstructedMessage) : Json :=
   parsed (reconstructedMessageJson value)
 
-def reconstructedList (values : List CanonicalOutput.ReconstructedMessage) : Json :=
-  Json.arr (values.map reconstructed).toArray
-
 def payloadSpec (value : CanonicalOutput.PayloadSpec) : Json := parsed (payloadSpecJson value)
 
 def streams (value : CanonicalOutput.Streams) : Json := parsed (streamsJson value)

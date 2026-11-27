@@ -1,3 +1,7 @@
+use super::relationship_fence::{
+    decide_grant, CompletionDecision, GrantOrigin, RelationshipRevocationFence, RelationshipTuple,
+    DETACHED_GRANT_EPOCH_HEADER,
+};
 use super::{graphql, graphql_api_base, ConfigAccess, ConfigClientError};
 use crate::config_client::WriteRoute;
 use crate::node_scope::ContextCalls as _;
@@ -29,13 +33,28 @@ pub enum ConfigRelationshipGrant {
 impl ConfigAccess {
     /// Complete grants returned by a committed-but-incomplete transaction.
     /// The original creator must authenticate again; successful grants are not
-    /// replayed, since an owner may have revoked them subsequently.
+    /// replayed, and grants revoked since their baseline epoch are skipped
+    /// under the node's revocation fence (`Identity.DetachedGrantFence.decideGrant`).
     pub async fn complete_relationship_grants(
         &self,
         creator: &str,
         grants: &[ConfigRelationshipGrant],
     ) -> Result<(), ConfigClientError> {
-        if self.actor_did().as_deref() != Some(creator) {
+        self.complete_relationship_grants_since(creator, grants, 0)
+            .await
+    }
+
+    pub(super) async fn complete_relationship_grants_since(
+        &self,
+        creator: &str,
+        grants: &[ConfigRelationshipGrant],
+        baseline_epoch: u64,
+    ) -> Result<(), ConfigClientError> {
+        let creator_matches = self.actor_did().as_deref() == Some(creator);
+        if matches!(
+            decide_grant(GrantOrigin::Detached, creator_matches, false),
+            CompletionDecision::RefuseActorMismatch
+        ) {
             return Err(ConfigClientError::TransactionActorMismatch);
         }
         for (index, grant) in grants.iter().enumerate() {
@@ -47,8 +66,15 @@ impl ConfigAccess {
                     target,
                 } => match identity::Did::new(target) {
                     Ok(target) => {
-                        self.add_actor_relationship(collection, doc_id, relation, &target)
-                            .await
+                        self.change_document_relationship_with_origin(
+                            collection,
+                            doc_id,
+                            relation,
+                            target.as_str(),
+                            false,
+                            Some(baseline_epoch),
+                        )
+                        .await
                     }
                     Err(error) => Err(ConfigClientError::RelationshipTargetIdentity(error)),
                 },
@@ -58,18 +84,23 @@ impl ConfigAccess {
                     relation,
                     target_resource,
                     target_doc_id,
-                } => {
-                    self.add_resource_relationship(
-                        collection,
-                        doc_id,
-                        relation,
-                        target_resource,
-                        target_doc_id,
-                    )
-                    .await
-                }
+                } => match resource_target(target_resource, target_doc_id) {
+                    Ok(target) => {
+                        self.change_document_relationship_with_origin(
+                            collection,
+                            doc_id,
+                            relation,
+                            &target,
+                            false,
+                            Some(baseline_epoch),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
                 ConfigRelationshipGrant::OwnerStaged { change } => {
-                    self.request_owner_staged(change, true).await
+                    self.complete_owner_staged_grant(change, baseline_epoch)
+                        .await
                 }
             };
             if let Err(source) = result {
@@ -81,6 +112,36 @@ impl ConfigAccess {
             }
         }
         Ok(())
+    }
+
+    async fn complete_owner_staged_grant(
+        &self,
+        change: &gents_protocol::owner_staged::OwnerStagedChange,
+        baseline_epoch: u64,
+    ) -> Result<(), ConfigClientError> {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => {
+                super::owner_staged_route::request_detached(endpoint, change, baseline_epoch).await
+            }
+            WriteRoute::Local(local) => {
+                let staged = super::txn::StagedRelation::of(change)?;
+                let fence = RelationshipRevocationFence::for_node(local.node());
+                let _gate = fence.lock_gate().await;
+                let revoked = fence.is_revoked_since(&staged.tuple(), baseline_epoch);
+                match decide_grant(GrantOrigin::Detached, true, revoked) {
+                    CompletionDecision::SkipRevoked => Ok(()),
+                    CompletionDecision::RefuseActorMismatch => {
+                        Err(ConfigClientError::TransactionActorMismatch)
+                    }
+                    CompletionDecision::Grant => {
+                        self.transact_write("config.request_owner_staged", |txn| {
+                            Box::pin(async move { txn.request_owner_staged(change, true).await })
+                        })
+                        .await
+                    }
+                }
+            }
+        }
     }
     /// Request one owner-staged change as this access's actor
     /// (`Identity.OwnerStaged.request`). Over HTTP it is one signed command to
@@ -166,6 +227,21 @@ impl ConfigAccess {
         target: &str,
         delete: bool,
     ) -> Result<(), ConfigClientError> {
+        self.change_document_relationship_with_origin(
+            collection, doc_id, relation, target, delete, None,
+        )
+        .await
+    }
+
+    async fn change_document_relationship_with_origin(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        target: &str,
+        delete: bool,
+        detached_baseline: Option<u64>,
+    ) -> Result<(), ConfigClientError> {
         crate::graphql::validate_collection_identifier(collection)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         super::txn::before_relationship_change_for_test(None, collection, relation, delete)?;
@@ -186,8 +262,32 @@ impl ConfigAccess {
                     relation.to_owned(),
                     target.to_owned(),
                 );
+                let tuple = RelationshipTuple {
+                    collection: collection.clone(),
+                    doc_id: doc_id.clone(),
+                    relation: relation.clone(),
+                    target: target.clone(),
+                };
                 let deliberate = grants_member_admin.then(|| (doc_id.clone(), target.clone()));
                 let node = local.node().clone();
+                let fence = RelationshipRevocationFence::for_node(&node);
+                let _gate = if delete || detached_baseline.is_some() {
+                    Some(fence.lock_gate().await)
+                } else {
+                    None
+                };
+                if !delete {
+                    if let Some(baseline_epoch) = detached_baseline {
+                        let revoked = fence.is_revoked_since(&tuple, baseline_epoch);
+                        match decide_grant(GrantOrigin::Detached, true, revoked) {
+                            CompletionDecision::SkipRevoked => return Ok(()),
+                            CompletionDecision::RefuseActorMismatch => {
+                                return Err(ConfigClientError::TransactionActorMismatch);
+                            }
+                            CompletionDecision::Grant => {}
+                        }
+                    }
+                }
                 local
                     .run_owned(move |node| async move {
                         if delete {
@@ -212,6 +312,11 @@ impl ConfigAccess {
                         Ok::<_, ConfigClientError>(())
                     })
                     .await?;
+                if delete {
+                    fence.record_revocation(tuple);
+                } else if detached_baseline.is_some() {
+                    fence.record_detached_grant(&tuple);
+                }
                 if let Some((doc, member)) = deliberate {
                     crate::identity::close_owed_removal(&node, &doc, &member).await?;
                 }
@@ -238,7 +343,16 @@ impl ConfigAccess {
                 });
                 let response = endpoint
                     .send_resolving(|endpoint| {
-                        endpoint.authorize(client.request(method.clone(), &url).json(&body))
+                        let mut request = client.request(method.clone(), &url).json(&body);
+                        if !delete {
+                            if let Some(baseline_epoch) = detached_baseline {
+                                request = request.header(
+                                    DETACHED_GRANT_EPOCH_HEADER,
+                                    baseline_epoch.to_string(),
+                                );
+                            }
+                        }
+                        endpoint.authorize(request)
                     })
                     .await??;
                 let status = response.status();

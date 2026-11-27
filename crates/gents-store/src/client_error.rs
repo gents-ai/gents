@@ -156,12 +156,19 @@ impl Eq for BridgeError {}
 
 impl BridgeError {
     pub fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
-        if error.status().is_some_and(|status| {
+        if let Some(status) = error.status().filter(|status| {
             matches!(
                 status,
-                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                &reqwest::StatusCode::UNAUTHORIZED | &reqwest::StatusCode::FORBIDDEN
             )
         }) {
+            tracing::warn!(
+                target: "gents_store::client_error",
+                status = %status,
+                detail = %message,
+                error = %error,
+                "classified HTTP permission denial"
+            );
             anyhow::Error::from(Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
@@ -278,6 +285,11 @@ impl BridgeError {
             return Self::update_required();
         }
         if crate::config_client::TransactionFailure::permission_denied(&error) {
+            tracing::warn!(
+                target: "gents_store::client_error",
+                error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+                "classified permission denial"
+            );
             return Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
@@ -311,11 +323,14 @@ pub fn agent_operation_failure(
     error: gents_protocol::operations::agent::AgentOperationError,
     next_call: gents_protocol::operations::NextCall,
 ) -> anyhow::Error {
+    if let gents_protocol::operations::agent::AgentOperationError::Passthrough(cause) = error {
+        return anyhow::Error::new(OperationCause(Box::new(cause)));
+    }
     let message = refusal_message(
         &gents_protocol::error_chain::ErrorChain(&error).to_string(),
         next_call,
     );
-    anyhow::Error::new(error).context(message)
+    anyhow::Error::new(error).context(BridgeError::untyped(message))
 }
 
 /// An inference backend or profile write or removal the shared handler
@@ -326,10 +341,18 @@ pub fn inference_operation_failure(
     next_call: gents_protocol::operations::NextCall,
 ) -> anyhow::Error {
     use gents_protocol::operations::NextCall;
+    if let gents_protocol::operations::inference::InferenceOperationError::Passthrough(cause) =
+        error
+    {
+        return anyhow::Error::new(OperationCause(Box::new(cause)));
+    }
     let next = match next_call {
         NextCall::Verb {
             verb: "accounts", ..
         } => "Open Accounts to see the signed-in accounts and which is each provider's default.",
+        NextCall::Verb { verb: "remove", .. } | NextCall::VerbHelp { verb: "remove", .. } => {
+            "Update or remove anything still using it, then try removing it again."
+        }
         NextCall::List { .. } => "Open the list and choose an existing one.",
         NextCall::Inspect { .. } => "Open it and review what it holds.",
         NextCall::Verb { .. } | NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
@@ -343,7 +366,7 @@ pub fn inference_operation_failure(
             .to_string()
             .trim_end_matches('.')
     );
-    anyhow::Error::new(error).context(message)
+    anyhow::Error::new(error).context(BridgeError::untyped(message))
 }
 
 /// A refused or failed request operation with its code and next call carried
@@ -455,6 +478,9 @@ pub fn mailbox_operation_failure(
     error: gents_protocol::operations::mailbox::MailboxOperationError,
 ) -> anyhow::Error {
     use gents_protocol::operations::NextCall;
+    if let gents_protocol::operations::mailbox::MailboxOperationError::Passthrough(cause) = error {
+        return anyhow::Error::new(OperationCause(Box::new(cause)));
+    }
     let next = match error.recovery() {
         NextCall::List { .. } => "Reload the mailbox; this item may already be closed.",
         NextCall::Inspect { .. } => "Open the item again and reply to what it now shows.",
@@ -469,7 +495,7 @@ pub fn mailbox_operation_failure(
             .to_string()
             .trim_end_matches('.')
     );
-    anyhow::Error::new(error).context(message)
+    anyhow::Error::new(error).context(BridgeError::untyped(message))
 }
 
 fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCall) -> String {
@@ -680,6 +706,59 @@ mod tests {
         ));
         assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
         assert_eq!(lookalike.endpoint, None);
+    }
+
+    #[test]
+    fn inference_remove_passthrough_refusal_is_not_duplicated_and_has_no_save_hint() {
+        use gents_protocol::operations::inference::{InferenceDocument, InferenceOperationError};
+        let cause =
+            "InferenceProfile profile-local-2 field backend_id references missing InferenceBackendMetadata \"local-2\"";
+        let error = InferenceOperationError::Passthrough(
+            gents_protocol::error_chain::PassedThrough::new(anyhow::anyhow!(cause)),
+        );
+        let next = error.recovery(InferenceDocument::Backend, "remove");
+        let bridge =
+            BridgeError::classify_transport_error(inference_operation_failure(error, next));
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+        assert_eq!(bridge.message, cause);
+        assert!(!bridge.message.contains("Review the fields and save again"));
+    }
+
+    #[test]
+    fn operation_refusals_do_not_repeat_themselves_and_remove_uses_remove_hint() {
+        use gents_protocol::operations::agent::AgentOperationError;
+        use gents_protocol::operations::inference::{InferenceDocument, InferenceOperationError};
+        let remove = InferenceOperationError::IdRequired(InferenceDocument::Backend);
+        let remove_next = remove.recovery(InferenceDocument::Backend, "remove");
+        let remove_bridge =
+            BridgeError::classify_transport_error(inference_operation_failure(remove, remove_next));
+        assert_eq!(
+            remove_bridge.message,
+            "backend requires a document ID. Update or remove anything still using it, then try removing it again."
+        );
+        assert_eq!(
+            remove_bridge
+                .message
+                .matches("backend requires a document ID")
+                .count(),
+            1
+        );
+
+        let agent = AgentOperationError::SystemPromptRequired;
+        let agent_next = agent.edit_recovery();
+        let agent_bridge =
+            BridgeError::classify_transport_error(agent_operation_failure(agent, agent_next));
+        assert_eq!(
+            agent_bridge.message,
+            "fresh agents require system_prompt. Review the agent's fields and save again."
+        );
+        assert_eq!(
+            agent_bridge
+                .message
+                .matches("fresh agents require system_prompt")
+                .count(),
+            1
+        );
     }
 }
 

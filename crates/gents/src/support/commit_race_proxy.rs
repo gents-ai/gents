@@ -1,16 +1,23 @@
 //! An HTTP proxy in front of the test home's DefraDB endpoint that runs a
-//! hook before forwarding each request. A test uses it to land a concurrent
+//! hook before a write transaction begins or commits. A test uses it to land a concurrent
 //! write between a client transaction's reads and its commit, so DefraDB
 //! itself aborts that commit with a genuine transaction conflict. A
 //! client-signed creation conversation (a WebSocket) passes through
 //! unobserved; its transaction still commits over HTTP.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use rapidhash::RapidHashSet;
 
 use futures::future::BoxFuture;
 
-/// Runs before a request is forwarded, with its method and path.
-pub type ProxyHook = Arc<dyn Fn(String, String) -> BoxFuture<'static, ()> + Send + Sync>;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WriteCheckpoint {
+    Begin,
+    Commit,
+}
+
+pub type ProxyHook = Arc<dyn Fn(WriteCheckpoint) -> BoxFuture<'static, ()> + Send + Sync>;
 
 pub struct CommitRaceProxy {
     /// The proxy's GraphQL URL, in the upstream's `/api/v0/graphql` form.
@@ -28,6 +35,7 @@ struct ProxyState {
     upstream: String,
     hook: ProxyHook,
     client: reqwest::Client,
+    writes: Mutex<RapidHashSet<u64>>,
 }
 
 impl CommitRaceProxy {
@@ -40,6 +48,7 @@ impl CommitRaceProxy {
             upstream,
             hook,
             client: reqwest::Client::new(),
+            writes: Mutex::default(),
         });
         let router = axum::Router::new().fallback(forward).with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -72,12 +81,21 @@ impl CommitRaceProxy {
     }
 }
 
-/// A DefraDB HTTP transaction commit: `POST /api/v0/tx/{id}`.
-pub fn is_commit(method: &str, path: &str) -> bool {
-    method == "POST"
-        && path
-            .strip_prefix("/api/v0/tx/")
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+impl ProxyState {
+    fn checkpoint(&self, method: &str, path: &str) -> Option<WriteCheckpoint> {
+        if method == "POST" && path == "/api/v0/tx" {
+            return Some(WriteCheckpoint::Begin);
+        }
+        let id = path.strip_prefix("/api/v0/tx/")?.parse::<u64>().ok()?;
+        match method {
+            "DELETE" => {
+                self.writes.lock().unwrap().remove(&id);
+                None
+            }
+            "POST" if self.writes.lock().unwrap().remove(&id) => Some(WriteCheckpoint::Commit),
+            _ => None,
+        }
+    }
 }
 
 async fn forward(
@@ -107,7 +125,10 @@ async fn forward(
         .path_and_query()
         .map(|path| path.as_str().to_owned())
         .unwrap_or_default();
-    (state.hook)(parts.method.as_str().to_owned(), path.clone()).await;
+    let checkpoint = state.checkpoint(parts.method.as_str(), &path);
+    if let Some(step) = checkpoint {
+        (state.hook)(step).await;
+    }
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
         .expect("proxied request method");
     let mut outbound = state
@@ -140,6 +161,15 @@ async fn forward(
         }
     }
     let bytes = response.bytes().await.unwrap_or_default();
+    if checkpoint == Some(WriteCheckpoint::Begin) && status.is_success() {
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("DefraDB transaction receipt");
+        state
+            .writes
+            .lock()
+            .unwrap()
+            .insert(receipt["id"].as_u64().expect("DefraDB transaction id"));
+    }
     (status, headers, bytes).into_response()
 }
 

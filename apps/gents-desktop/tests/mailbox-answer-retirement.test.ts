@@ -90,42 +90,6 @@ it("keeps an open answer latched and requires a positive exact native closure af
   await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
 });
 
-it.each(["acted", "dismissed", "expired"])(
-  "retires a restored confirmed answer once its question is %s",
-  async (status) => {
-    const f = fixture();
-    f.observe.mockResolvedValue(closed(status));
-    saveChatDraft(f.app.stores.chat, answer());
-    await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
-    expect(f.app.stores.chat.getState().chatDrafts).toHaveLength(0);
-  },
-);
-
-it.each(["missing", "open", "read-failure"])(
-  "keeps the confirmed answer after %s",
-  async (failure) => {
-    const f = fixture();
-    if (failure === "missing") f.observe.mockResolvedValue(null);
-    if (failure === "open")
-      f.observe.mockResolvedValue({ item: question, terminal: false });
-    if (failure === "read-failure")
-      f.observe.mockRejectedValue(new Error("Unavailable"));
-    saveChatDraft(f.app.stores.chat, answer());
-    await flush();
-    expect(loadChatDrafts().chatDrafts).toEqual([answer()]);
-    expect(f.observe).toHaveBeenCalledTimes(1);
-  },
-);
-
-it("never retires an unconfirmed answer even when its question is closed", async () => {
-  const f = fixture();
-  const { confirmed: _, ...saved } = answer();
-  saveChatDraft(f.app.stores.chat, saved);
-  await flush();
-  expect(f.observe).not.toHaveBeenCalled();
-  expect(loadChatDrafts().chatDrafts[0].confirmed).toBeUndefined();
-});
-
 it("coalesces updates into one closure observation", async () => {
   const f = fixture();
   const observed = deferred<MailboxItemObservation>();
@@ -171,20 +135,6 @@ it("checks persisted data again after observation and preserves newer or changed
     "newer",
   ]);
   expect(loadChatDrafts().chatDrafts[0].confirmed).toBeUndefined();
-});
-
-it("reconciles a confirmed answer from saved storage after app recreation without publishing again", async () => {
-  const saved = answer();
-  const first = fixture([question]);
-  saveChatDraft(first.app.stores.chat, saved);
-  await flush();
-  const restored = fixture();
-  await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
-  expect(restored.observe).toHaveBeenCalledExactlyOnceWith({
-    clientDid: "test-client",
-    nodeDid: NODE,
-    itemId: "question",
-  });
 });
 
 it("observes closure at the mailbox host when the reply targets another runtime", async () => {

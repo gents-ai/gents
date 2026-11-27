@@ -22,21 +22,13 @@ impl Drop for SpawnedGroupGuard {
 #[cfg(unix)]
 #[tokio::test]
 async fn shutdown_terminates_a_live_background_process_group() {
+    use crate::test_support::held_process::{HeldProcess, HOLD};
     use gents_session::exec::ownership::{ProcessObservation, KILL_GRACE};
-    use std::time::Duration;
+    use gents_store::test_support::STALL_CEILING;
     use tokio_util::sync::CancellationToken;
 
     let directory = tempfile::tempdir().unwrap();
-    let ready = directory.path().join("ready");
-    let gate = directory.path().join("gate");
-    for pipe in [&ready, &gate] {
-        assert!(tokio::process::Command::new("mkfifo")
-            .arg(pipe)
-            .status()
-            .await
-            .unwrap()
-            .success());
-    }
+    let mut process = HeldProcess::new(directory.path()).await;
 
     let registry =
         BackgroundExecutionRegistry::default().with_process_records(directory.path().to_owned());
@@ -54,10 +46,7 @@ async fn shutdown_terminates_a_live_background_process_group() {
     let argv = vec![
         "/bin/sh".to_owned(),
         "-c".to_owned(),
-        r#"trap '' TERM; : > "$1"; read ignored < "$2""#.to_owned(),
-        "gents-shutdown-probe".to_owned(),
-        ready.to_string_lossy().into_owned(),
-        gate.to_string_lossy().into_owned(),
+        format!("trap '' TERM; {HOLD}"),
     ];
     let worker = tokio::spawn(async move {
         let outcome =
@@ -78,14 +67,8 @@ async fn shutdown_terminates_a_live_background_process_group() {
         outcome
     });
 
-    let identity = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut ready_pipe = tokio::net::unix::pipe::OpenOptions::new()
-            .open_receiver(&ready)
-            .unwrap();
-        let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut ready_pipe, &mut buf)
-            .await
-            .unwrap();
+    process.entered().await;
+    let identity = tokio::time::timeout(STALL_CEILING, async {
         loop {
             let notified = registry.process_record_notified();
             if let Some(record) = registry.process_record("shutdown-call", "shutdown-doc") {
@@ -115,7 +98,7 @@ async fn shutdown_terminates_a_live_background_process_group() {
     assert!(token.is_cancelled());
     drop(guard);
 
-    let outcome = tokio::time::timeout(Duration::from_secs(30), worker)
+    let outcome = tokio::time::timeout(STALL_CEILING, worker)
         .await
         .expect("the stopped worker releases its execution")
         .expect("worker task joins");

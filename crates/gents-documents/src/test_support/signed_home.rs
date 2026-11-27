@@ -1,10 +1,15 @@
+use std::sync::Arc;
+
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::node_extension::Extensions;
-use gents_store::test_support::TestStore;
+use gents_store::test_support::template_pool::TemplateHomePool;
+use gents_store::test_support::{NoToolSources, TestStore};
 
 use crate::inference_backend::AdvertisedProfilePolicy;
+
+static SIGNED_HOME_TEMPLATES: TemplateHomePool<KeyIdentity> = TemplateHomePool::new();
 
 /// A [`TestStore`] with an enrolled User whose key the test holds, as a
 /// client holds it, and the runtime's Node document the User published.
@@ -26,7 +31,47 @@ impl std::ops::Deref for SignedHome {
 
 impl SignedHome {
     pub async fn start(name: &str, composition: Extensions) -> Self {
-        Self::enroll(TestStore::start(name, composition).await, name).await
+        let (lease, template_dir, user) = SIGNED_HOME_TEMPLATES
+            .checkout(|| async {
+                let dir = tempfile::Builder::new()
+                    .prefix("gents-signed-template-")
+                    .tempdir()
+                    .expect("signed template tempdir");
+                let store = TestStore::open_at(dir.path(), None, Extensions::none())
+                    .await
+                    .expect("signed template store");
+                let home = Self::enroll(store, "signed-template").await;
+                let (store, user, _access) = home.into_parts();
+                store
+                    .node
+                    .shutdown()
+                    .await
+                    .expect("shutdown signed template");
+                drop(store);
+                gents_store::local::home::wait_for_store_release(
+                    dir.path(),
+                    &dir.path().join("data"),
+                )
+                .await
+                .expect("release signed template");
+                (dir, user)
+            })
+            .await;
+        let store = TestStore::start_from_template(
+            name,
+            &template_dir,
+            lease,
+            None,
+            composition,
+            Arc::new(NoToolSources),
+        )
+        .await;
+        let user_access = store.client_access(&user);
+        Self {
+            store,
+            user,
+            user_access,
+        }
     }
 
     pub async fn enroll(store: TestStore, name: &str) -> Self {

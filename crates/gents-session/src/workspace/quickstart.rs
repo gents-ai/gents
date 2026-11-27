@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
+use super::transition::{transition_workspace_lifecycle, WorkspaceLifecycleState};
 use super::{
     emit_create_workspace_plan, emit_freeze_workspace_base_plan, execute_create_workspace_plan,
     execute_freeze_workspace_base_plan, flush_workspace_docs, ActionJournalEntry,
@@ -271,7 +272,9 @@ pub async fn provision_read_only_workspace(
             stored == expected,
             "retained quickstart workspace differs from the selected inputs"
         );
-        if stored.lifecycle_state == "sealed" {
+        let stored_state = WorkspaceLifecycleState::parse(&stored.lifecycle_state)
+            .context("quickstart workspace state invalid")?;
+        if stored_state == WorkspaceLifecycleState::Sealed {
             let placement = documents
                 .load_placement(&workspace_id)?
                 .context("sealed quickstart placement is unavailable")?;
@@ -281,10 +284,15 @@ pub async fn provision_read_only_workspace(
             });
         }
         anyhow::ensure!(
-            stored.lifecycle_state == "provisioning",
+            stored_state == WorkspaceLifecycleState::Provisioning,
             "quickstart workspace requires explicit recovery from state {}",
             stored.lifecycle_state
         );
+        transition_workspace_lifecycle(
+            &stored.lifecycle_state,
+            WorkspaceLifecycleState::Sealed.as_str(),
+            stored.seal_hash.as_deref(),
+        )?;
     } else {
         documents.write_isolated_workspace(reservation)?;
         flush_workspace_docs(agent, &documents, &selected.creator_agent_did, &action).await?;

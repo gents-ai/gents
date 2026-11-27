@@ -547,7 +547,7 @@ impl Drop for BootedRuntime {
     }
 }
 
-struct RetiredSlots(mpsc::UnboundedSender<(String, u64)>);
+pub(crate) struct RetiredSlots(pub(crate) mpsc::UnboundedSender<(String, u64)>);
 
 impl RuntimeSnapshotObserver for RetiredSlots {
     fn on_generation_published(&self, _: u64, _: &str, _: &[String]) {}

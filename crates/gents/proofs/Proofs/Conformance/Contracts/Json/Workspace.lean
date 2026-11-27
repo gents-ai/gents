@@ -37,19 +37,11 @@ private def workspaceTransitionOf (i : WorkspaceTransitionInput) : WorkspaceTran
     | none => { legal := false, state := pre.state.toDefraDB }
   | _, _ => { legal := false, state := i.fromState }
 
-private def quickstartNames : List String := ["provision_frozen_base"]
-
-/-- Quickstart provisioning is the production path that persists a workspace
-straight from provisioning to sealed with the frozen base tree. Production has
-no other lifecycle-transition owner: each other transition is written inline by
-a host executor plan (create, seal, cleanup), and the illegal transitions
-(sealing without a hash, skipping cleaning) have no production path. The other
-cases of `Workspace.Conformance.workspaceCases` stay checked by the theorems in
-`Proofs.Session.Workspace.Conformance`. -/
+/-- Isolated workspace lifecycle transitions, replayed directly against the
+single transition owner in `gents-session` (`IsolatedWorkspace.step?`). -/
 @[conformance_family]
-def workspaceQuickstartTransition : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
-  inputs := (Workspace.Conformance.workspaceCases.filter (quickstartNames.contains ·.name)).map
-    workspaceTransitionInput
+def workspaceTransition : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
+  inputs := Workspace.Conformance.workspaceCases.map workspaceTransitionInput
   model := workspaceTransitionOf
 
 /-- The wire carries each workspace and binding enum as its DefraDB name, the

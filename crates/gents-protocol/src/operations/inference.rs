@@ -355,7 +355,11 @@ impl InferenceOperationError {
                 resource: document.resource(),
                 verb: "update",
             },
-            Self::IdRequired(_) | Self::Invalid(_) | Self::Passthrough(_) => NextCall::VerbHelp {
+            Self::IdRequired(document) => NextCall::VerbHelp {
+                resource: document.resource(),
+                verb,
+            },
+            Self::Invalid(_) | Self::Passthrough(_) => NextCall::VerbHelp {
                 resource: document.resource(),
                 verb,
             },

@@ -469,11 +469,6 @@ impl AgentBuilder {
         self
     }
 
-    pub fn custom_tool_factory(mut self, tool: CustomToolFactory) -> Self {
-        self.pending_agent.custom_tools.push(tool);
-        self
-    }
-
     pub fn compaction_threshold(mut self, compaction_threshold: f64) -> Self {
         self.pending_agent.compaction_threshold = compaction_threshold;
         self

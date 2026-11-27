@@ -422,9 +422,9 @@ pub async fn start(
 /// A set the handler admitted: the observed Goal and the state it moves to.
 pub struct GoalSetPlan {
     goal: GoalDocument,
-    objective: Option<String>,
-    token_budget: Option<Option<i64>>,
-    post: GoalState,
+    pub(crate) objective: Option<String>,
+    pub(crate) token_budget: Option<Option<i64>>,
+    pub(crate) post: GoalState,
     auto_resume: Option<bool>,
     completion_evidence: Option<Option<String>>,
     blocked_reason: Option<String>,
@@ -479,7 +479,7 @@ pub async fn admit_set_in_txn(
     Ok(plan_set(actor, goal, input, obligations_unmet))
 }
 
-fn plan_set(
+pub(crate) fn plan_set(
     actor: GoalActor,
     goal: &GoalDocument,
     input: &GoalSetInput,

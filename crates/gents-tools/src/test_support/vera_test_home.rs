@@ -87,9 +87,16 @@ async fn serve_with(
     if let Some(route) = &owner_staged {
         http = http.with_authenticated_routes(route.router());
     }
+    let fence_route = owner_staged.clone();
     let http = http.with_router_transform(Arc::new({
         let edge = HttpEdge::new(document_acp, home.node.did());
-        move |router| edge.wrap(router)
+        move |router| {
+            let router = match &fence_route {
+                Some(route) => route.wrap_relationship_fence(router),
+                None => router,
+            };
+            edge.wrap(router)
+        }
     }));
     let p2p = transport_account.map(|_| {
         gents_p2p::test_support::transport::test_p2p_config(&Default::default(), &home.data)

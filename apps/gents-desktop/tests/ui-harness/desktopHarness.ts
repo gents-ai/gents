@@ -180,488 +180,6 @@ function dayItems(): RenderedTimelineItem[] {
   ];
 }
 
-/* turns the person did not type: a message from another session, a run
-   of finished background calls and a scheduled run */
-function automatedInputItems(): RenderedTimelineItem[] {
-  const durable = (itemKey: string, sequence: number, timestamp: string) => ({
-    kind: "automatedInput" as const,
-    itemKey,
-    requestId: `request-${itemKey}`,
-    sequence,
-    timestamp,
-    reconstruction: HARNESS_READY_RECONSTRUCTION,
-  });
-  const completion = (id: string, tool: string, status: string, result: string) =>
-    `<tool-completion tool_call_id="${id}" tool_name="${tool}" status="${status}">\n  <result>${result}</result>\n</tool-completion>`;
-  const command = (itemKey: string, toolCallId: string, text: string) => ({
-    itemKey,
-    toolName: "bash",
-    toolCallId,
-    toolCallDocId: `doc-${toolCallId}`,
-    statusKind: "success",
-    awaitMode: "background",
-    reconstruction: HARNESS_READY_RECONSTRUCTION,
-    presentation: {
-      kind: "command" as const,
-      command: text,
-      exitCode: 0,
-      timedOut: false,
-      failed: false,
-      durationMs: null,
-      cwd: null,
-      executionMode: "read_only",
-      networkMode: "disabled",
-      stdout: "",
-      stderr: "",
-      fallbackOutput: null,
-    },
-  });
-  return [
-    {
-      kind: "userMessage" as const,
-      itemKey: "auto-user",
-      requestId: "request-auto-user",
-      ownsTurn: true,
-      sequence: 2,
-      content: "Run the tests and the lints in the background, and ask the reviewer.",
-      timestamp: "2026-06-03T14:06:00Z",
-      reconstruction: HARNESS_READY_RECONSTRUCTION,
-    },
-    {
-      kind: "toolGroup" as const,
-      itemKey: "auto-tools",
-      messageSequence: 3,
-      tools: [
-        command("auto-test", "call-auto-test", "cargo test -p gents"),
-        command("auto-lint", "call-auto-lint", "make lint"),
-        {
-          itemKey: "auto-worker",
-          toolName: "agent_new",
-          toolCallId: "call-auto-worker",
-          toolCallDocId: "doc-call-auto-worker",
-          requestId: "request-auto-user",
-          statusKind: "success",
-          awaitMode: "background",
-          reconstruction: HARNESS_READY_RECONSTRUCTION,
-          presentation: {
-            kind: "agent" as const,
-            action: "start",
-            name: "ops",
-            sessionId: "session-worker",
-            description: "Profile the slow parser path.",
-            output: "Session started.",
-          },
-        },
-      ],
-    },
-    harnessAssistantItem({
-      itemKey: "auto-reply",
-      sequence: 4,
-      content: "Both are running in the background; I asked the reviewer too.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:06:30Z",
-    }),
-    {
-      ...durable("auto-message", 5, "2026-06-03T14:08:00Z"),
-      origin: {
-        kind: "sessionMessage" as const,
-        senderNodeDid: NODE_DID,
-        senderSessionId: "session-reviewer",
-        senderRequestId: "request-reviewer",
-        displayBody:
-          "The parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
-      },
-      content:
-        "[message agent:default session:session-reviewer node:did:key:z6MkHarness · at:2026-06-03T14:08:00Z · cause:request-reviewer]\n\nThe parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
-    },
-    harnessAssistantItem({
-      itemKey: "auto-message-reply",
-      sequence: 6,
-      content: "Thanks — added the early return.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:08:30Z",
-    }),
-    {
-      ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: "call-auto-test",
-        toolCallDocId: "doc-call-auto-test",
-        toolName: "bash",
-        statusKind: "completed",
-        reason: null,
-        resultRange: null,
-        notification: true,
-      },
-      content: completion(
-        "call-auto-test",
-        "bash",
-        "completed",
-        "test result: ok. 412 passed; 0 failed",
-      ),
-    },
-    {
-      ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: "call-auto-lint",
-        toolCallDocId: "doc-call-auto-lint",
-        toolName: "bash",
-        statusKind: "failed",
-        reason: null,
-        resultRange: null,
-        notification: true,
-      },
-      content: completion(
-        "call-auto-lint",
-        "bash",
-        "failed",
-        "error: unused import: `HashMap`",
-      ),
-    },
-    {
-      ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: "call-auto-worker",
-        toolCallDocId: "doc-call-auto-worker",
-        toolName: "agent_new",
-        statusKind: "completed",
-        reason: null,
-        resultRange: null,
-        notification: true,
-      },
-      content: completion(
-        "call-auto-worker",
-        "agent_new",
-        "completed",
-        "The slow path was a quadratic scan; profile attached.",
-      ),
-    },
-    {
-      ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: null,
-        reason: null,
-        resultRange: null,
-        notification: false,
-      },
-      content:
-        "Review the new background completion results and continue the task if needed.",
-    },
-    harnessAssistantItem({
-      itemKey: "auto-bg-reply",
-      sequence: 11,
-      content: "Tests pass; lint flagged an unused import, which I removed.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:10:30Z",
-    }),
-    {
-      ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: "call-auto-other",
-        toolCallDocId: "doc-call-auto-other",
-        toolName: "spawn_process",
-        statusKind: "completed",
-        reason: null,
-        resultRange: null,
-        notification: true,
-      },
-      content: completion("call-auto-other", "spawn_process", "completed", "done"),
-    },
-    harnessAssistantItem({
-      itemKey: "auto-bg-single-reply",
-      sequence: 13,
-      content: "The validation suite finished too.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:11:30Z",
-    }),
-    {
-      ...durable("auto-routed", 14, "2026-06-03T14:12:00Z"),
-      origin: {
-        kind: "sessionMessage" as const,
-        senderNodeDid: NODE_DID,
-        senderSessionId: "session-worker",
-        senderRequestId: "request-worker-note",
-      },
-      content: `[message agent:ops session:session-worker node:${
-        NODE_DID.length > 20
-          ? `${NODE_DID.slice(0, 16)}..${NODE_DID.slice(-4)}`
-          : NODE_DID
-      } · at:2026-06-03T14:12:00Z · cause:request-worker-note]\n\nI also left a flame graph in \`target/profile.svg\`.`,
-    },
-    {
-      ...durable("auto-remote", 15, "2026-06-03T14:13:00Z"),
-      origin: {
-        kind: "sessionMessage" as const,
-        senderNodeDid: "did:key:z6MkSomeOtherNodeEntirely",
-        senderSessionId: null,
-        senderRequestId: null,
-      },
-      content: "A build on the release node is waiting for review.",
-    },
-    harnessAssistantItem({
-      itemKey: "auto-routed-reply",
-      sequence: 16,
-      content: "Noted both.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:13:30Z",
-    }),
-    {
-      ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: null,
-        reason: null,
-        resultRange: null,
-        notification: false,
-      },
-      content:
-        "Review the new background completion results and continue the task if needed.",
-    },
-    {
-      ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
-      origin: {
-        kind: "backgroundCompletion" as const,
-        toolCallId: null,
-        reason: null,
-        resultRange: null,
-        notification: true,
-      },
-      content:
-        "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
-    },
-    harnessAssistantItem({
-      itemKey: "auto-bg-note-reply",
-      sequence: 19,
-      content: "Checked the preview.",
-      reasoning: null,
-      timestamp: "2026-06-03T14:20:30Z",
-    }),
-    {
-      ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
-      origin: {
-        kind: "trigger" as const,
-        displayBody:
-          "Write the nightly report: what changed, what failed, what is next.",
-        triggerId: "nightly-report",
-        triggerKind: "schedule",
-      },
-      content: "Write the nightly report: what changed, what failed, what is next.",
-    },
-    harnessAssistantItem({
-      itemKey: "auto-schedule-reply",
-      sequence: 21,
-      content: "Nightly report: the parser fix landed and every check passes.",
-      reasoning: null,
-      timestamp: "2026-06-04T07:01:00Z",
-    }),
-    {
-      ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
-      origin: {
-        kind: "goalContinuation" as const,
-        retry: null,
-        goalId: "goal-1",
-        sequence: 2,
-      },
-      content: "You are running under the durable goal controller. Continue the goal.",
-    },
-  ];
-}
-
-/* commands left running in the background, and ones that have ended each way */
-function answeredItems(): RenderedTimelineItem[] {
-  const answered = (
-    itemKey: string,
-    docId: string,
-    prompt: string,
-    sequence: number,
-    answer: { option_ids: string[]; free_text?: string; skip?: boolean },
-  ): RenderedTimelineItem[] => [
-    {
-      kind: "toolGroup" as const,
-      itemKey: `${itemKey}-ask`,
-      messageSequence: sequence,
-      tools: [
-        {
-          itemKey: `${itemKey}-tool`,
-          toolName: "file_mailbox_item",
-          statusKind: "success",
-          requestId: "request-intro",
-          toolCallId: `call-${itemKey}`,
-          reconstruction: HARNESS_READY_RECONSTRUCTION,
-          presentation: {
-            kind: "generic" as const,
-            summary: null,
-            input: JSON.stringify({ kind: "ask", title: prompt, question: { prompt } }),
-            output: JSON.stringify({
-              item: {
-                _docID: docId,
-                kind: "ask",
-                action: "start_request",
-                payload: JSON.stringify({
-                  version: 2,
-                  prompt,
-                  options: [
-                    { id: "tea", label: "Tea" },
-                    { id: "coffee", label: "Coffee" },
-                    { id: "water", label: "Sparkling water" },
-                  ],
-                  multi_select: true,
-                  allow_free_text: true,
-                  optional: true,
-                }),
-              },
-              outcome: "created",
-            }),
-          },
-        },
-      ],
-    } as unknown as RenderedTimelineItem,
-    {
-      kind: "userMessage" as const,
-      itemKey: `${itemKey}-reply`,
-      requestId: `request-${itemKey}`,
-      ownsTurn: true,
-      sequence: sequence + 1,
-      content: "answer",
-      timestamp: "2026-06-16T20:05:00Z",
-      reconstruction: HARNESS_READY_RECONSTRUCTION,
-      questionReply: { sourceDocId: docId, answer },
-    } as unknown as RenderedTimelineItem,
-  ];
-  return [
-    ...answered(
-      "answer-one",
-      "item-answer-one",
-      "Which of these do you like best? (This is a test of the mailbox answer flow. Nothing happens based on your answer.)",
-      2,
-      { option_ids: ["tea"] },
-    ),
-    ...answered("answer-many", "item-answer-many", "What should we stock?", 4, {
-      option_ids: ["tea", "water"],
-      free_text: "And oat milk, please.",
-    }),
-    ...answered("answer-skip", "item-answer-skip", "Anything else?", 6, {
-      option_ids: [],
-      skip: true,
-    }),
-  ];
-}
-
-function backgroundItems(): RenderedTimelineItem[] {
-  const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
-  const run = (
-    id: string,
-    command: string,
-    statusKind: string,
-    times: { started: number; ended?: number },
-    result: Partial<
-      Extract<RenderedToolCallView["presentation"], { kind: "command" }>
-    > = {},
-    tail: string | null = null,
-  ): RenderedToolCallView => ({
-    itemKey: `background-${id}`,
-    toolName: "bash",
-    statusKind,
-    requestId: "request-background",
-    toolCallId: `call-background-${id}`,
-    toolCallDocId: `doc-background-${id}`,
-    awaitMode: "background",
-    startedAt: ago(times.started),
-    completedAt: times.ended === undefined ? null : ago(times.ended),
-    partialOutputTail: tail,
-    reconstruction: HARNESS_READY_RECONSTRUCTION,
-    presentation: {
-      kind: "command",
-      command,
-      exitCode: null,
-      timedOut: false,
-      failed: false,
-      durationMs: null,
-      cwd: "~/src/gents",
-      executionMode: null,
-      networkMode: null,
-      stdout: "",
-      stderr: "",
-      fallbackOutput: null,
-      ...result,
-    },
-  });
-  return [
-    {
-      kind: "userMessage" as const,
-      itemKey: "background-user",
-      requestId: "request-background",
-      ownsTurn: true,
-      sequence: 2,
-      content: "Start the dev server and run the checks in the background.",
-      timestamp: ago(4_000),
-      reconstruction: HARNESS_READY_RECONSTRUCTION,
-    },
-    {
-      kind: "toolGroup" as const,
-      itemKey: "background-tools",
-      messageSequence: 3,
-      tools: [
-        run(
-          "build",
-          "cargo build --release",
-          "success",
-          { started: 4_000, ended: 3_748 },
-          { durationMs: 252_000, exitCode: 0, stdout: "Finished release" },
-        ),
-        run(
-          "e2e",
-          "npm run e2e",
-          "failed",
-          { started: 4_000, ended: 3_700 },
-          { durationMs: 300_000, timedOut: true },
-        ),
-        run(
-          "lint",
-          "pnpm lint --max-warnings 0",
-          "failed",
-          { started: 330, ended: 300 },
-          { durationMs: 30_000, failed: true },
-        ),
-        run(
-          "test",
-          "cargo test -p gents --lib",
-          "error",
-          { started: 158, ended: 120 },
-          {
-            durationMs: 38_000,
-            exitCode: 1,
-            failed: true,
-            stdout: "running 412 tests\ntest lifecycle::claims ... ok",
-            stderr: "test lifecycle::persistence ... FAILED",
-          },
-        ),
-        run("tail", "tail -f logs/dev.log", "cancelled", { started: 32, ended: 20 }),
-        run(
-          "watch",
-          "cargo watch -x check",
-          "running",
-          { started: 372 },
-          {},
-          "[Running 'cargo check']\n    Checking gents v0.7.0\n    Finished dev",
-        ),
-        run(
-          "dev",
-          "npm run dev -- --host 127.0.0.1 --port 5173",
-          "running",
-          { started: 42 },
-          {},
-          "VITE ready in 412 ms\n\n  ➜  Local:   http://127.0.0.1:5173/",
-        ),
-      ],
-    },
-  ];
-}
-
 const WORKFLOW_ROW = "doc-workflow-review";
 const WORKFLOW_PRIOR_ROW = "doc-workflow-review-prior";
 const WORKFLOW_STARTED_MS = Date.parse("2026-06-17T00:00:00.000Z");
@@ -820,30 +338,20 @@ function harnessAssistantItem(
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
-  | "joined-access"
   | "empty-fleet"
-  | "loading"
   | "bridge-unavailable"
-  | "save-error"
-  | "backend-health-error"
-  | "backend-unavailable"
   | "mailbox-overflow"
   | "mailbox-question"
   | "mailbox-many"
-  | "long-content"
   | "active-turn"
   | "coding"
   | "mobile-performance"
   | "discovery-offline"
   | "storage-recovery"
   | "days"
-  | "automated-inputs"
-  | "background"
   | "workflows"
-  | "answered"
   | "notices"
   | "startup-port-in-use"
-  | "starter-packs"
   | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
@@ -1008,8 +516,7 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
-  let starterPacks: DefaultPack[] =
-    scenario === "starter-packs" || options.starterPacks ? STARTER_PACKS : [];
+  let starterPacks: DefaultPack[] = options.starterPacks ? STARTER_PACKS : [];
   const sessionIndexCount =
     options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
   if (
@@ -1053,24 +560,6 @@ export function createDesktopUiHarness(
       ...deployment,
       inferenceBackends: [],
       inferenceProfiles: [],
-    };
-  }
-  if (scenario === "backend-unavailable") {
-    deployment = {
-      ...deployment,
-      local: true,
-      nodeReadiness: {
-        ...deployment.nodeReadiness,
-        agents: deployment.nodeReadiness.agents.map((agent) => ({
-          state: "unavailable" as const,
-          agentDid: agent.agentDid,
-          reason: "backend_disabled" as const,
-        })),
-      },
-      inferenceBackends: deployment.inferenceBackends.map((backend) => ({
-        ...backend,
-        enabled: false,
-      })),
     };
   }
   if (scenario === "mailbox-question") {
@@ -1313,9 +802,7 @@ export function createDesktopUiHarness(
   let commits: MobilePerformanceCommit[] = [];
 
   const greeting =
-    scenario === "long-content"
-      ? longHarnessMessage()
-      : "I am your desktop UI test agent. This seeded turn gives the transcript a stable row for duplicate-message checks.";
+    "I am your desktop UI test agent. This seeded turn gives the transcript a stable row for duplicate-message checks.";
   const activeTurn = scenario === "active-turn";
   sessions.set("session-intro", {
     sessionId: "session-intro",
@@ -1332,17 +819,7 @@ export function createDesktopUiHarness(
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    context:
-      scenario === "long-content"
-        ? harnessSessionContext({
-            estimatedDurableTokens: 142_031,
-            estimatedConversationTokens: 142_031,
-            contextWindow: 480_000,
-            compactionThresholdTokens: 360_000,
-            durableMessageCount: 8,
-            providerMessageCount: 8,
-          })
-        : harnessSessionContext(),
+    context: harnessSessionContext(),
     timelineItems: [
       harnessAssistantItem({
         itemKey: "intro-assistant",
@@ -1395,10 +872,7 @@ export function createDesktopUiHarness(
           ]
         : []),
       ...(scenario === "days" ? dayItems() : []),
-      ...(scenario === "automated-inputs" ? automatedInputItems() : []),
-      ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "workflows" ? workflowItems() : []),
-      ...(scenario === "answered" ? answeredItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -1549,44 +1023,6 @@ export function createDesktopUiHarness(
       inferenceBackends: [],
       inferenceProfiles: [],
     };
-  }
-  if (scenario === "automated-inputs") {
-    sessions.set("session-worker", {
-      sessionId: "session-worker",
-      nodeDid: NODE_DID,
-      agentDid: "ops",
-      title: "slow worker (ops)",
-      previewText: "The slow path was a quadratic scan.",
-      status: "active",
-      turnState: "completed",
-      latestRequestId: "request-worker",
-      goal: verifiedNoGoal("session-worker"),
-      retryEligibility: { eligible: false, denialReason: null },
-      latestRequestOutcome: null,
-      pendingTurn: null,
-      queuedTurns: [],
-      foldedInputs: [],
-      context: harnessSessionContext(),
-      timelineItems: [],
-    });
-    sessions.set("session-reviewer", {
-      sessionId: "session-reviewer",
-      nodeDid: NODE_DID,
-      agentDid: DEFAULT_AGENT_DID,
-      title: "Review the parser change",
-      previewText: "The parser change looks right.",
-      status: "active",
-      turnState: "completed",
-      latestRequestId: "request-reviewer",
-      goal: verifiedNoGoal("session-reviewer"),
-      retryEligibility: { eligible: false, denialReason: null },
-      latestRequestOutcome: null,
-      pendingTurn: null,
-      queuedTurns: [],
-      foldedInputs: [],
-      context: harnessSessionContext(),
-      timelineItems: [],
-    });
   }
   if (scenario === "workflows") {
     for (const [sessionId, agentDid, title] of [
@@ -2055,10 +1491,7 @@ export function createDesktopUiHarness(
       runtimeConnection: p2pStatus === "healthy" ? "connected" : "disconnected",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
-    if (
-      (scenario === "active-nodes" || scenario === "joined-access") &&
-      deployments.length
-    ) {
+    if (scenario === "active-nodes" && deployments.length) {
       const remoteDid = "did:key:harness-remote";
       deployments.push({
         ...visibleDeployment,
@@ -2330,9 +1763,6 @@ export function createDesktopUiHarness(
         throw new Error(
           "Desktop native bridge is unavailable in the UI harness scenario.",
         );
-      }
-      if (scenario === "loading") {
-        await wait(250);
       }
       return snapshot();
     },
@@ -2974,217 +2404,74 @@ export function createDesktopUiHarness(
       return undefined;
     },
     async applyConfigComponents(request) {
-      if (scenario === "save-error") {
-        throw new Error("Harness rejected config apply for sad-path coverage.");
-      }
+      const doc = request.document;
       deployment = {
         ...deployment,
-        agentConfigs: [
-          ...deployment.agentConfigs.filter(
-            (agent) =>
-              !request.document.agents?.some(
-                (candidate) => candidate.agent_did === agent.agent_did,
-              ),
+        agentConfigs: mergeBy(deployment.agentConfigs, doc.agents, (a) => a.agent_did),
+        contexts: mergeBy(deployment.contexts, doc.contexts, (c) => c.context_id),
+        compactions: mergeBy(
+          deployment.compactions,
+          doc.compactions,
+          (c) => c.compaction_id,
+        ),
+        tools: mergeBy(deployment.tools, doc.tools, (t) => t.tools_id),
+        agentTargets: mergeBy(
+          deployment.agentTargets,
+          doc.agent_targets,
+          (t) => t.target_id,
+        ),
+        skills: mergeBy(
+          deployment.skills,
+          doc.skills?.map((skill) =>
+            projectSkillDoc(skill, skill.node_did, null, false),
           ),
-          ...(request.document.agents ?? []),
-        ],
-        contexts: [
-          ...deployment.contexts.filter(
-            (context) =>
-              !request.document.contexts?.some(
-                (candidate) => candidate.context_id === context.context_id,
-              ),
+          (s) => s.skillId,
+        ),
+        inferenceProfiles: mergeBy(
+          deployment.inferenceProfiles,
+          doc.inference_profiles,
+          (p) => p.profile_id,
+        ),
+        inferenceBackends: mergeBy(
+          deployment.inferenceBackends,
+          doc.inference_backends?.map((backend) =>
+            projectBackendDoc(backend, backend.backend_id, backend.name, true),
           ),
-          ...(request.document.contexts ?? []),
-        ],
-        compactions: [
-          ...deployment.compactions.filter(
-            (compaction) =>
-              !request.document.compactions?.some(
-                (candidate) => candidate.compaction_id === compaction.compaction_id,
-              ),
+          (b) => b.backendId,
+        ),
+        inferenceSampling: mergeBy(
+          deployment.inferenceSampling,
+          doc.inference_sampling,
+          (s) => s.sampling_id,
+        ),
+        inferenceExecution: mergeBy(
+          deployment.inferenceExecution,
+          doc.inference_execution,
+          (e) => e.execution_id,
+        ),
+        toolServiceRegistries: mergeBy(
+          deployment.toolServiceRegistries,
+          doc.tool_service_registries,
+          (s) => s.service_id,
+        ),
+        tasks: mergeBy(
+          deployment.tasks,
+          doc.tasks?.map((task) =>
+            projectTaskDoc(task, task.task_id, task.display_name ?? null, 0),
           ),
-          ...(request.document.compactions ?? []),
-        ],
-        tools: [
-          ...deployment.tools.filter(
-            (entry) =>
-              !request.document.tools?.some(
-                (candidate) => candidate.tools_id === entry.tools_id,
-              ),
-          ),
-          ...(request.document.tools ?? []),
-        ],
-        agentTargets: [
-          ...deployment.agentTargets.filter(
-            (target) =>
-              !request.document.agent_targets?.some(
-                (candidate) => candidate.target_id === target.target_id,
-              ),
-          ),
-          ...(request.document.agent_targets ?? []),
-        ],
-        skills: [
-          ...deployment.skills.filter(
-            (skill) =>
-              !request.document.skills?.some(
-                (candidate) => candidate.skill_id === skill.skillId,
-              ),
-          ),
-          ...(request.document.skills ?? []).map((document) => ({
-            skillId: document.skill_id,
-            nodeDid: document.node_did,
-            name: document.name ?? null,
-            description: document.description ?? null,
-            instructions: document.instructions ?? null,
-            toolRefs: document.tool_refs ?? [],
-            displayName: document.display_name ?? null,
-            interfaceJson: document.interface_json ?? null,
-            enabled: document.enabled ?? true,
-            createdAt: document.created_at ?? null,
-            tags: document.tags ?? [],
-            sourceDirectory: null,
-          })),
-        ],
-        inferenceProfiles: [
-          ...deployment.inferenceProfiles.filter(
-            (profile) =>
-              !request.document.inference_profiles?.some(
-                (candidate) => candidate.profile_id === profile.profile_id,
-              ),
-          ),
-          ...(request.document.inference_profiles ?? []),
-        ],
-        inferenceBackends: [
-          ...deployment.inferenceBackends.filter(
-            (backend) =>
-              !request.document.inference_backends?.some(
-                (candidate) => candidate.backend_id === backend.backendId,
-              ),
-          ),
-          ...(request.document.inference_backends ?? []).map((backend) => ({
-            backendId: backend.backend_id,
-            name: backend.name,
-            providerKind: backend.provider_kind,
-            openaiWireApi: backend.openai_wire_api ?? null,
-            endpoint: backend.endpoint,
-            authKind: backend.auth.kind,
-            connectTimeoutSecs: backend.connect_timeout_secs ?? null,
-            discoveryTimeoutSecs: backend.discovery_timeout_secs ?? null,
-            requestTimeoutSecs: backend.request_timeout_secs ?? null,
-            clientVersion: backend.client_version ?? null,
-            apiKeyConfigured: backend.auth.kind === "api_key",
-            apiKeyEnvVar:
-              backend.auth.kind === "environment" ? backend.auth.variable : null,
-            maxConcurrent: backend.max_concurrent ?? null,
-            maxQueueDepth: backend.max_queue_depth ?? null,
-            enabled: backend.enabled ?? true,
-            tags: backend.tags ?? [],
-            models: [],
-            advertisedModels: [],
-            probeStatus: "healthy",
-            accountRef: null,
-            allowOverage:
-              backend.auth.kind === "node_oauth_pool"
-                ? backend.auth.allow_overage
-                : null,
-          })),
-        ],
-        inferenceSampling: [
-          ...deployment.inferenceSampling.filter(
-            (sampling) =>
-              !request.document.inference_sampling?.some(
-                (candidate) => candidate.sampling_id === sampling.sampling_id,
-              ),
-          ),
-          ...(request.document.inference_sampling ?? []),
-        ],
-        inferenceExecution: [
-          ...deployment.inferenceExecution.filter(
-            (execution) =>
-              !request.document.inference_execution?.some(
-                (candidate) => candidate.execution_id === execution.execution_id,
-              ),
-          ),
-          ...(request.document.inference_execution ?? []),
-        ],
-        toolServiceRegistries: [
-          ...deployment.toolServiceRegistries.filter(
-            (service) =>
-              !request.document.tool_service_registries?.some(
-                (candidate) => candidate.service_id === service.service_id,
-              ),
-          ),
-          ...(request.document.tool_service_registries ?? []),
-        ],
-        tasks: [
-          ...deployment.tasks.filter(
-            (task) =>
-              !request.document.tasks?.some(
-                (candidate) => candidate.task_id === task.taskId,
-              ),
-          ),
-          ...(request.document.tasks ?? []).map((document) => ({
-            taskId: document.task_id,
-            name: document.display_name ?? null,
-            description: document.description ?? null,
-            agentDid: document.agent_did ?? "",
-            promptTemplate: document.prompt_template ?? "",
-            emitOutcome: document.emit_outcome,
-            goalObjectiveTemplate: document.goal_objective_template ?? null,
-            goalTokenBudget: document.goal_token_budget ?? null,
-            goalMaxInfrastructureRetries:
-              document.goal_max_infrastructure_retries ?? null,
-            enabled: document.enabled ?? true,
-            outputSchemaRef: document.output_schema_ref ?? null,
-            hooks: document.hooks ?? [],
-            tags: document.tags ?? [],
-            recentRuns: {
-              totalFires: 0,
-              lastAttemptAt: null,
-              lastStatus: null,
-              lastError: null,
-              scheduleCount: 0,
-              eventCount: 0,
-            },
-            runHistory: [],
-          })),
-        ],
-        schedules: [
-          ...deployment.schedules.filter(
-            (schedule) =>
-              !request.document.schedules?.some(
-                (candidate) => candidate.schedule_id === schedule.schedule_id,
-              ),
-          ),
-          ...(request.document.schedules ?? []),
-        ],
-        eventSources: [
-          ...deployment.eventSources.filter(
-            (source) =>
-              !request.document.event_sources?.some(
-                (candidate) => candidate.event_source_id === source.event_source_id,
-              ),
-          ),
-          ...(request.document.event_sources ?? []),
-        ],
-        triggers: [
-          ...deployment.triggers.filter(
-            (trigger) =>
-              !request.document.triggers?.some(
-                (candidate) => candidate.trigger_id === trigger.config.trigger_id,
-              ),
-          ),
-          ...(request.document.triggers ?? []).map((config) => ({
-            config,
-            nextRunAt: null,
-            lastAttemptAt: null,
-            lastFiredSourceDocId: null,
-            lastStatus: null,
-            lastError: null,
-            fireCount: 0,
-          })),
-        ],
+          (t) => t.taskId,
+        ),
+        schedules: mergeBy(deployment.schedules, doc.schedules, (s) => s.schedule_id),
+        eventSources: mergeBy(
+          deployment.eventSources,
+          doc.event_sources,
+          (s) => s.event_source_id,
+        ),
+        triggers: mergeBy(
+          deployment.triggers,
+          doc.triggers?.map(projectTriggerDoc),
+          (t) => t.config.trigger_id,
+        ),
       };
       notify("config");
       return snapshot();
@@ -3250,9 +2537,6 @@ export function createDesktopUiHarness(
       };
     },
     async saveAgentConfig(request) {
-      if (scenario === "save-error") {
-        throw new Error("Harness rejected agent save for sad-path coverage.");
-      }
       const document: Agent = request.document;
       const agentDid = document.agent_did.trim() || `agent-${requestSeq}`;
       const nextAgent: AgentView = {
@@ -3282,23 +2566,19 @@ export function createDesktopUiHarness(
     async saveSkillConfig(request) {
       const document = request.document;
       const skillId = document.skill_id.trim() || `skill-${requestSeq}`;
-      const name = document.name?.trim() || skillId;
       deployment = {
         ...deployment,
-        skills: upsertBy(deployment.skills ?? [], "skillId", skillId, {
+        skills: upsertBy(
+          deployment.skills ?? [],
+          "skillId",
           skillId,
-          nodeDid: document.node_did || deployment.nodeDid,
-          name,
-          description: document.description ?? null,
-          instructions: document.instructions ?? null,
-          toolRefs: document.tool_refs ?? [],
-          displayName: document.display_name?.trim() || name,
-          interfaceJson: document.interface_json ?? null,
-          enabled: document.enabled ?? true,
-          createdAt: document.created_at ?? STARTED_AT,
-          tags: document.tags ?? [],
-          sourceDirectory: null,
-        }),
+          projectSkillDoc(
+            { ...document, skill_id: skillId },
+            document.node_did || deployment.nodeDid,
+            STARTED_AT,
+            true,
+          ),
+        ),
       };
       return snapshot();
     },
@@ -3500,40 +2780,18 @@ export function createDesktopUiHarness(
     async saveBackendConfig(request) {
       const document = request.document;
       const backendId = document.backend_id.trim() || `backend-${requestSeq}`;
-      const apiKeyEnvVar =
-        document.auth.kind === "environment" ? document.auth.variable : null;
       deployment = {
         ...deployment,
         inferenceBackends: upsertBy(
           deployment.inferenceBackends,
           "backendId",
           backendId,
-          {
+          projectBackendDoc(
+            document,
             backendId,
-            name: document.name.trim() || backendId,
-            providerKind: document.provider_kind,
-            openaiWireApi: document.openai_wire_api ?? null,
-            endpoint: document.endpoint,
-            authKind: document.auth.kind,
-            connectTimeoutSecs: document.connect_timeout_secs ?? null,
-            discoveryTimeoutSecs: document.discovery_timeout_secs ?? null,
-            requestTimeoutSecs: document.request_timeout_secs ?? null,
-            clientVersion: document.client_version ?? null,
-            apiKeyConfigured: document.auth.kind !== "unauthenticated",
-            apiKeyEnvVar,
-            maxConcurrent: document.max_concurrent ?? null,
-            maxQueueDepth: document.max_queue_depth ?? null,
-            enabled: document.enabled ?? true,
-            tags: document.tags ?? [],
-            models: [],
-            advertisedModels: [],
-            probeStatus: "healthy",
-            accountRef: null,
-            allowOverage:
-              document.auth.kind === "node_oauth_pool"
-                ? document.auth.allow_overage
-                : null,
-          },
+            document.name.trim() || backendId,
+            false,
+          ),
         ),
       };
       return snapshot();
@@ -3606,37 +2864,23 @@ export function createDesktopUiHarness(
     async saveTaskConfig(request) {
       const document: Task = request.document;
       const taskId = document.task_id.trim() || `task-${requestSeq}`;
+      const eventCount = deployment.triggers.filter(
+        (trigger) =>
+          trigger.config.task_id === taskId && trigger.config.source.kind === "event",
+      ).length;
       deployment = {
         ...deployment,
-        tasks: upsertBy(deployment.tasks, "taskId", taskId, {
+        tasks: upsertBy(
+          deployment.tasks,
+          "taskId",
           taskId,
-          name: document.display_name?.trim() || taskId,
-          description: document.description ?? null,
-          agentDid: document.agent_did ?? "",
-          promptTemplate: document.prompt_template ?? "",
-          emitOutcome: document.emit_outcome,
-          goalObjectiveTemplate: document.goal_objective_template ?? null,
-          goalTokenBudget: document.goal_token_budget ?? null,
-          goalMaxInfrastructureRetries:
-            document.goal_max_infrastructure_retries ?? null,
-          enabled: document.enabled ?? true,
-          outputSchemaRef: document.output_schema_ref ?? null,
-          hooks: document.hooks ?? [],
-          tags: document.tags ?? [],
-          recentRuns: {
-            totalFires: 0,
-            lastAttemptAt: null,
-            lastStatus: null,
-            lastError: null,
-            scheduleCount: 0,
-            eventCount: deployment.triggers.filter(
-              (trigger) =>
-                trigger.config.task_id === taskId &&
-                trigger.config.source.kind === "event",
-            ).length,
-          },
-          runHistory: [],
-        }),
+          projectTaskDoc(
+            document,
+            taskId,
+            document.display_name?.trim() || taskId,
+            eventCount,
+          ),
+        ),
       };
       return snapshot();
     },
@@ -3673,24 +2917,13 @@ export function createDesktopUiHarness(
     async saveTriggerConfig(request) {
       const document: Trigger = request.document;
       const triggerId = document.trigger_id.trim() || `trigger-${requestSeq}`;
-      const next: TriggerView = {
-        config: { ...document, trigger_id: triggerId },
-        nextRunAt: null,
-        lastAttemptAt: null,
-        lastFiredSourceDocId: null,
-        lastStatus: null,
-        lastError: null,
-        fireCount: 0,
-      };
-      const index = deployment.triggers.findIndex(
-        (row) => row.config.trigger_id === triggerId,
-      );
       deployment = {
         ...deployment,
-        triggers:
-          index < 0
-            ? [...deployment.triggers, next]
-            : deployment.triggers.map((row, i) => (i === index ? next : row)),
+        triggers: mergeBy(
+          deployment.triggers,
+          [projectTriggerDoc({ ...document, trigger_id: triggerId })],
+          (row) => row.config.trigger_id,
+        ),
       };
       return snapshot();
     },
@@ -3700,16 +2933,12 @@ export function createDesktopUiHarness(
     async saveEventSourceConfig(request) {
       const document = request.document;
       const sourceId = document.event_source_id.trim() || `event-source-${requestSeq}`;
-      const next = { ...document, event_source_id: sourceId };
-      const index = deployment.eventSources.findIndex(
-        (row) => row.event_source_id === sourceId,
-      );
       deployment = {
         ...deployment,
-        eventSources:
-          index < 0
-            ? [...deployment.eventSources, next]
-            : deployment.eventSources.map((row, i) => (i === index ? next : row)),
+        eventSources: upsertBy(deployment.eventSources, "event_source_id", sourceId, {
+          ...document,
+          event_source_id: sourceId,
+        }),
       };
       return snapshot();
     },
@@ -4019,30 +3248,11 @@ export function createDesktopUiHarness(
         sent: [],
         received: [],
         senders: [],
-        calls:
-          scenario === "automated-inputs" && request.sessionId === "session-intro"
-            ? [
-                {
-                  requestId: "request-auto-user",
-                  toolCallId: "call-auto-worker",
-                  caused: {
-                    requestId: "request-worker",
-                    nodeDid: NODE_DID,
-                    sessionId: "session-worker",
-                    requesterDid: null,
-                    lifecycleState: "completed",
-                    createdAt: null,
-                  },
-                },
-              ]
-            : [],
+        calls: [],
       };
       return view;
     },
     async listBackendsWithHealth() {
-      if (scenario === "backend-health-error") {
-        throw new Error("Harness backend health bridge unavailable.");
-      }
       const backends: InferenceBackendView[] = deployment.inferenceBackends;
       const rows: BackendHealth[] = backends.map((backend) => ({
         backendId: backend.backendId,
@@ -4998,6 +4208,127 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
   return rows.map((row, i) => (i === index ? next : row));
 }
 
+function mergeBy<T>(
+  existing: T[],
+  incoming: T[] | null | undefined,
+  key: (row: T) => string,
+): T[] {
+  if (!incoming?.length) return existing;
+  const incomingKeys = new Set(incoming.map(key));
+  return [...existing.filter((row) => !incomingKeys.has(key(row))), ...incoming];
+}
+
+function projectSkillDoc(
+  document: NonNullable<
+    Parameters<DesktopApiAdapter["applyConfigComponents"]>[0]["document"]["skills"]
+  >[number],
+  nodeDid: string,
+  fallbackCreatedAt: string | null,
+  defaultNameToId: boolean,
+) {
+  const name = defaultNameToId
+    ? document.name?.trim() || document.skill_id
+    : (document.name ?? null);
+  return {
+    skillId: document.skill_id,
+    nodeDid,
+    name,
+    description: document.description ?? null,
+    instructions: document.instructions ?? null,
+    toolRefs: document.tool_refs ?? [],
+    displayName: defaultNameToId
+      ? document.display_name?.trim() || name
+      : (document.display_name ?? null),
+    interfaceJson: document.interface_json ?? null,
+    enabled: document.enabled ?? true,
+    createdAt: document.created_at ?? fallbackCreatedAt,
+    tags: document.tags ?? [],
+    sourceDirectory: null,
+  };
+}
+
+function projectBackendDoc(
+  document: NonNullable<
+    Parameters<
+      DesktopApiAdapter["applyConfigComponents"]
+    >[0]["document"]["inference_backends"]
+  >[number],
+  backendId: string,
+  name: string,
+  apiKeyOnly: boolean,
+): InferenceBackendView {
+  return {
+    backendId,
+    name,
+    providerKind: document.provider_kind,
+    openaiWireApi: document.openai_wire_api ?? null,
+    endpoint: document.endpoint,
+    authKind: document.auth.kind,
+    connectTimeoutSecs: document.connect_timeout_secs ?? null,
+    discoveryTimeoutSecs: document.discovery_timeout_secs ?? null,
+    requestTimeoutSecs: document.request_timeout_secs ?? null,
+    clientVersion: document.client_version ?? null,
+    apiKeyConfigured: apiKeyOnly
+      ? document.auth.kind === "api_key"
+      : document.auth.kind !== "unauthenticated",
+    apiKeyEnvVar: document.auth.kind === "environment" ? document.auth.variable : null,
+    maxConcurrent: document.max_concurrent ?? null,
+    maxQueueDepth: document.max_queue_depth ?? null,
+    enabled: document.enabled ?? true,
+    tags: document.tags ?? [],
+    models: [],
+    advertisedModels: [],
+    probeStatus: "healthy",
+    accountRef: null,
+    allowOverage:
+      document.auth.kind === "node_oauth_pool" ? document.auth.allow_overage : null,
+  };
+}
+
+function projectTaskDoc(
+  document: Task,
+  taskId: string,
+  name: string | null,
+  eventCount: number,
+) {
+  return {
+    taskId,
+    name,
+    description: document.description ?? null,
+    agentDid: document.agent_did ?? "",
+    promptTemplate: document.prompt_template ?? "",
+    emitOutcome: document.emit_outcome,
+    goalObjectiveTemplate: document.goal_objective_template ?? null,
+    goalTokenBudget: document.goal_token_budget ?? null,
+    goalMaxInfrastructureRetries: document.goal_max_infrastructure_retries ?? null,
+    enabled: document.enabled ?? true,
+    outputSchemaRef: document.output_schema_ref ?? null,
+    hooks: document.hooks ?? [],
+    tags: document.tags ?? [],
+    recentRuns: {
+      totalFires: 0,
+      lastAttemptAt: null,
+      lastStatus: null,
+      lastError: null,
+      scheduleCount: 0,
+      eventCount,
+    },
+    runHistory: [],
+  };
+}
+
+function projectTriggerDoc(config: Trigger): TriggerView {
+  return {
+    config,
+    nextRunAt: null,
+    lastAttemptAt: null,
+    lastFiredSourceDocId: null,
+    lastStatus: null,
+    lastError: null,
+    fireCount: 0,
+  };
+}
+
 function initialSyncHealth(): SyncHealthView {
   return {
     state: "healthy",
@@ -5056,43 +4387,24 @@ const STARTER_PACKS: DefaultPack[] = [
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
-    case "joined-access":
     case "empty-fleet":
-    case "loading":
     case "bridge-unavailable":
-    case "save-error":
-    case "backend-health-error":
-    case "backend-unavailable":
     case "mailbox-overflow":
     case "mailbox-question":
     case "mailbox-many":
-    case "long-content":
     case "active-turn":
     case "coding":
     case "mobile-performance":
     case "discovery-offline":
     case "storage-recovery":
     case "startup-port-in-use":
-    case "starter-packs":
     case "days":
-    case "automated-inputs":
-    case "background":
     case "workflows":
-    case "answered":
     case "notices":
       return value;
     default:
       return isSharingScenario(value) ? value : "default";
   }
-}
-
-function longHarnessMessage() {
-  return [
-    "I am your desktop UI test agent with a deliberately long transcript row.",
-    "This content exercises wrapping, scrolling, markdown layout, and composer stability without relying on a real model.",
-    "The message keeps going so deterministic browser tests can capture a stable long-content chat state.",
-    "Observation: fleet healthy, backend available, MCP service reachable, no duplicate assistant rows expected.",
-  ].join("\n\n");
 }
 
 function wait(ms: number) {

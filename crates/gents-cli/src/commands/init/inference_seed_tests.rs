@@ -62,8 +62,8 @@ mod generated_initial_inference_keeps_unselected_models_and_limits_unpinned {
             "{} cases leave shards empty; declare at most that many shards",
             cases.len()
         );
-        for case in cases.iter().skip(shard).step_by(SHARDS.len()) {
-            replay_case(case).await?;
+        for case in gents_lean_vocab::family::shard(cases, shard, SHARDS.len()) {
+            replay_case(&case).await?;
         }
         Ok(())
     }

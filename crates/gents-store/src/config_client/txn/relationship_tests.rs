@@ -685,7 +685,10 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         operation: None,
         contends_with_request_siblings: AtomicBool::new(false),
         client_signed_write_dispatched: AtomicBool::new(false),
+        relationship_fence_epoch: 0,
+        relationship_grant_seq: 0,
         relationship_grants: Mutex::new(Vec::new()),
+        revoked_relationships: Mutex::new(Vec::new()),
         owed_deliveries: Mutex::new(Vec::new()),
         rerun_notes: Vec::new(),
         owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
@@ -871,6 +874,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let runtime = Arc::new(runtime);
     let grants = crate::config_client::OwnerStagedRoute::new();
+    let fence_route = grants.clone();
     let node = Arc::new(
         defra_node::Node::builder()
             .enable_signing()
@@ -878,7 +882,10 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
             .with_node_acp_owner(user.did().to_owned())
             .with_http(
                 defra_node::HttpConfig::with_listener(listener)?
-                    .with_authenticated_routes(grants.router()),
+                    .with_authenticated_routes(grants.router())
+                    .with_router_transform(Arc::new(move |router| {
+                        fence_route.wrap_relationship_fence(router)
+                    })),
             )
             .build()
             .await?,

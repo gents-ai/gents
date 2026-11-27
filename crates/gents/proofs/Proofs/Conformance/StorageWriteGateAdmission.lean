@@ -1,5 +1,6 @@
 import Proofs.Store.StorageWriteGate
 import Proofs.Conformance.Family
+import Proofs.Conformance.StorageWriteGate
 
 namespace Conformance.StorageWriteGateAdmission
 open StorageWriteGate StorageWriteGate.Admission
@@ -14,7 +15,7 @@ inductive StepKind where
   | request | observe | release
   deriving DecidableEq, Repr
 
-deriving instance Lean.ToJson for StepKind, StorageWriteGate.Event
+deriving instance Lean.ToJson for StepKind
 
 structure Step where
   kind : StepKind

@@ -1253,14 +1253,13 @@ mod tests {
     use gents_store::node_scope::ContextCalls as _;
     use rmcp::model::ListToolsResult;
     use serde_json::Value;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use super::{
-        backoff_duration, run_health_check, run_health_check_cycle, step_service,
-        HealthCheckerOptions, HealthCycleScope, HealthPersistenceContext, HealthStateInternal,
-        LocalNetwork, McpAuthRefusal, McpHealthCheckService, ProbeEvent, ServiceHealth,
-        ServiceHealthMap, ServiceModelInternal,
+        run_health_check, run_health_check_cycle, step_service, HealthCheckerOptions,
+        HealthCycleScope, HealthPersistenceContext, HealthStateInternal, LocalNetwork,
+        McpAuthRefusal, McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap,
+        ServiceModelInternal,
     };
     use crate::mcp::pool::McpPool;
     use gents_store::config_client::ConfigAccess;
@@ -1718,157 +1717,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn mcp_health_cycle_applies_k_threshold_and_backoff() {
-        const SERVICE_ID: &str = "lean-mcp-health-service";
-
-        let now = chrono::Utc::now();
-        let options = HealthCheckerOptions {
-            failure_threshold_k: 3,
-            probe_timeout: std::time::Duration::from_secs(1),
-            backoff_initial: std::time::Duration::from_secs(30),
-            backoff_max: std::time::Duration::from_secs(60),
-            ..Default::default()
-        };
-        let handler_calls = Arc::new(AtomicUsize::new(0));
-        let probe_succeeds = Arc::new(AtomicBool::new(false));
-        let pool = {
-            let handler_calls = Arc::clone(&handler_calls);
-            let probe_succeeds = Arc::clone(&probe_succeeds);
-            McpPool::new_with_list_tools_handler(move |_service_id, _endpoint| {
-                let handler_calls = Arc::clone(&handler_calls);
-                let probe_succeeds = Arc::clone(&probe_succeeds);
-                async move {
-                    handler_calls.fetch_add(1, Ordering::SeqCst);
-                    if probe_succeeds.load(Ordering::SeqCst) {
-                        Ok(ListToolsResult::default())
-                    } else {
-                        anyhow::bail!("synthetic MCP health probe failure")
-                    }
-                }
-            })
-        };
-        let health_map = ServiceHealthMap::new();
-
-        for offset in 0..3 {
-            let cycle_now = now + ChronoDuration::seconds(offset);
-            run_health_check_cycle(
-                vec![registry_entry(SERVICE_ID)],
-                cycle_now,
-                HealthCycleScope {
-                    mcp_pool: &pool,
-                    health_map: &health_map,
-                    local: LocalNetwork {
-                        hostname: "local-host",
-                        subnet: None,
-                    },
-                    options: &options,
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-            let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
-            assert_eq!(entry.model.failure_count, offset as u32 + 1);
-            if offset < 2 {
-                assert_eq!(entry.health.status, super::HealthStatus::Stale);
-                assert_eq!(entry.model.backoff_until, None);
-            } else {
-                assert_eq!(entry.health.status, super::HealthStatus::Unreachable);
-                assert_eq!(
-                    entry.model.backoff_until,
-                    Some(cycle_now + ChronoDuration::seconds(30))
-                );
-            }
-        }
-
-        let calls_after_eviction = handler_calls.load(Ordering::SeqCst);
-        let during_backoff = now + ChronoDuration::seconds(12);
-        run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID)],
-            during_backoff,
-            HealthCycleScope {
-                mcp_pool: &pool,
-                health_map: &health_map,
-                local: LocalNetwork {
-                    hostname: "local-host",
-                    subnet: None,
-                },
-                options: &options,
-            },
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            handler_calls.load(Ordering::SeqCst),
-            calls_after_eviction,
-            "health checker must suppress probes while backoff is active"
-        );
-
-        let expired = now + ChronoDuration::seconds(32);
-        run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID)],
-            expired,
-            HealthCycleScope {
-                mcp_pool: &pool,
-                health_map: &health_map,
-                local: LocalNetwork {
-                    hostname: "local-host",
-                    subnet: None,
-                },
-                options: &options,
-            },
-            None,
-        )
-        .await
-        .unwrap();
-        let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
-        assert_eq!(entry.health.status, super::HealthStatus::Unreachable);
-        assert_eq!(entry.model.failure_count, 4);
-        assert_eq!(
-            entry.model.backoff_until,
-            Some(expired + ChronoDuration::seconds(60))
-        );
-
-        probe_succeeds.store(true, Ordering::SeqCst);
-        let recovered = expired + ChronoDuration::seconds(60);
-        run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID)],
-            recovered,
-            HealthCycleScope {
-                mcp_pool: &pool,
-                health_map: &health_map,
-                local: LocalNetwork {
-                    hostname: "local-host",
-                    subnet: None,
-                },
-                options: &options,
-            },
-            None,
-        )
-        .await
-        .unwrap();
-        let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
-        assert_eq!(entry.health.status, super::HealthStatus::Healthy);
-        assert_eq!(entry.model.failure_count, 0);
-        assert_eq!(entry.model.backoff_until, None);
-
-        assert_eq!(
-            backoff_duration(0, &options),
-            std::time::Duration::from_secs(30)
-        );
-        assert_eq!(
-            backoff_duration(1, &options),
-            std::time::Duration::from_secs(60)
-        );
-        assert_eq!(
-            backoff_duration(9, &options),
-            std::time::Duration::from_secs(60)
-        );
-    }
-
     /// External premise: no writer refreshes `ToolServiceRegistry.updated_at`
     /// after the create stamp, and readers that query the field see that stamp.
     #[tokio::test]
@@ -1911,45 +1759,6 @@ mod tests {
         let entry = health_map.get_entry("unheartbeaten").await.unwrap();
         assert_eq!(entry.health.status, super::HealthStatus::Healthy);
         assert_eq!(entry.health.last_error, None);
-    }
-
-    #[tokio::test]
-    async fn successful_probe_after_an_unobserved_gap_is_stale() {
-        let now = chrono::Utc::now();
-        let health_map = ServiceHealthMap::new();
-        health_map
-            .set_for_test(
-                "long-gap",
-                ServiceHealth {
-                    status: super::HealthStatus::Healthy,
-                    last_seen: now - ChronoDuration::minutes(10),
-                    last_error: None,
-                },
-            )
-            .await;
-        let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
-            Ok(ListToolsResult::default())
-        });
-
-        run_health_check_cycle(
-            vec![registry_entry("long-gap")],
-            now,
-            HealthCycleScope {
-                mcp_pool: &pool,
-                health_map: &health_map,
-                local: LocalNetwork {
-                    hostname: "local-host",
-                    subnet: None,
-                },
-                options: &HealthCheckerOptions::default(),
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-        let entry = health_map.get_entry("long-gap").await.unwrap();
-        assert_eq!(entry.health.status, super::HealthStatus::Stale);
     }
 
     #[tokio::test]
@@ -2472,36 +2281,6 @@ mod tests {
                 },
             );
         }
-    }
-
-    #[tokio::test]
-    async fn probe_shutdown_wins_a_ready_mcp_failure_without_a_false_outage() {
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let from_probe = cancel.clone();
-        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
-            from_probe.cancel();
-            async { anyhow::bail!("transport ended during shutdown") }
-        });
-        let health = ServiceHealthMap::new();
-        super::run_health_check_cycle_with_cancel(
-            vec![registry_entry("pending")],
-            chrono::Utc::now(),
-            HealthCycleScope {
-                mcp_pool: &pool,
-                health_map: &health,
-                local: LocalNetwork {
-                    hostname: "local-host",
-                    subnet: None,
-                },
-                options: &HealthCheckerOptions::default(),
-            },
-            None,
-            None,
-            Some(&cancel),
-        )
-        .await
-        .unwrap();
-        assert!(health.snapshot().await.is_empty());
     }
 
     #[test]

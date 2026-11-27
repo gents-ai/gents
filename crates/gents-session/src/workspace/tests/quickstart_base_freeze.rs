@@ -105,10 +105,10 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         &fx.repo,
         &["rev-parse", &format!("{}^{{tree}}", fx.base_sha)],
     );
-    let provisioned =
-        provision_read_only_workspace(&operator, &access, &fx.repo, &fx.base_sha, &selection).await;
-    let legal = provisioned.is_ok();
-    let outcome = provisioned.unwrap();
+    let outcome =
+        provision_read_only_workspace(&operator, &access, &fx.repo, &fx.base_sha, &selection)
+            .await
+            .unwrap();
     let target_query = format!(
         "{{Agent(filter:{{agent_did:{{_eq:\"{}\"}}}}) {{_docID}}}}",
         gents_store::graphql::escape_graphql_string(writer.did())
@@ -133,20 +133,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .is_empty();
         selected_before.push(visible);
     }
-    for case in gents_lean_vocab::families::contracts_workspace_quickstart_transition::cases() {
-        assert_eq!(case.input.name, "provision_frozen_base");
-        assert_eq!(case.input.from_state, "provisioning");
-        assert_eq!(
-            outcome.workspace.seal_hash.is_some(),
-            case.input.seal_hash.is_some()
-        );
-        case.check(
-            gents_lean_vocab::families::contracts_workspace_quickstart_transition::WorkspaceTransitionOutput {
-                legal,
-                state: outcome.workspace.lifecycle_state.clone(),
-            },
-        );
-    }
+    assert_eq!(outcome.workspace.lifecycle_state, "sealed");
     assert_eq!(outcome.workspace.base_sha, fx.base_sha);
     assert_eq!(outcome.workspace.owner_node_did, runtime.did());
     assert_eq!(

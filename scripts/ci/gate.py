@@ -249,8 +249,12 @@ TS_JOBS = {
         "npm --prefix apps/gents-desktop run typecheck",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop test",
-        # the interaction budgets drive Chromium; they run here, beside the
-        # browser lane's shards, rather than after one of them
+    ],
+    # The mobile interaction budgets drive Chromium; run them beside ts-unit and
+    # the browser shards rather than serially after Vitest.
+    "ts-mobile-perf": [
+        "npm run build:packages",
+        "npm --prefix apps/gents-desktop run build:sandbox",
         "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-browser": [
@@ -777,6 +781,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         "notary-control": everything or "notary" in tags,
         "ts-packages": ts,
         "ts-unit": ts,
+        "ts-mobile-perf": ts,
         "ts-browser": ts,
         "ts-fuzz": ts,
     }
@@ -854,6 +859,8 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         jobs[f"build:{ARCHIVE}"] = True
         jobs[f"shard:{ARCHIVE}"] = bool(shards)
     desktop_ui = [{"suite": "unit", "unit": "ts-unit"}] if jobs.get("ts-unit") else []
+    if jobs.get("ts-mobile-perf"):
+        desktop_ui.append({"suite": "mobile-perf", "unit": "ts-mobile-perf"})
     if jobs.get("ts-browser"):
         desktop_ui += [{"suite": "browser", "shard": f"{index}/{BROWSER_SHARDS}",
                         "unit": f"ts-browser:{index}/{BROWSER_SHARDS}"} for index in range(1, BROWSER_SHARDS + 1)]
@@ -1142,14 +1149,21 @@ def run_lint_variants(selection):
         return
     built, profile = set(selection["built"]), profile_flags()
     # Live suites run after merge; they must still compile and lint clean.
-    for package in selection.get("live_e2e_lint", []):
-        sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
+    # Combine selected packages into one Cargo invocation so the shared runtime
+    # chain is checked once under a unified feature set instead of twice.
+    live_e2e = selection.get("live_e2e_lint", [])
+    if live_e2e:
+        packages = [flag for package in live_e2e for flag in ("-p", package)]
+        features = ",".join(f"{package}/live-e2e" for package in live_e2e)
+        sh(["cargo", "clippy", *packages, "--tests", "--features", features, *profile, "--", "-D", "warnings"],
            env={**os.environ, **side_tree_env("live-e2e")})
     if selection.get("lint_vera"):
-        sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
+        sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile],
+           env={**os.environ, **side_tree_env("vera")})
     if "gents-loop" in built:
         sh(["rustup", "target", "add", "wasm32-wasip1"])
-        sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
+        sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile],
+           env={**os.environ, **side_tree_env("wasm32-wasip1")})
     if "gents-desktop-tauri" in built:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
 
@@ -1188,6 +1202,7 @@ def run_contract(selection):
     tla = selection["contract"].get("tla", [])
     if tla:
         sh(["python3", str(TLA_CHECK), "check-headers"])
+        sh(["python3", str(TLA_CHECK), "traces", "--check"])
         selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
         sh(["python3", str(TLA_CHECK), "run", *selected])
     if selection["contract"]["ts_lean"]:
@@ -1741,14 +1756,14 @@ def run_shard(selection, name, index=None):
 
 
 def side_tree_env(name):
-    """A lint build's own target tree inside the kept one, built incrementally.
+    """A lint variant's own target tree inside the kept one, built incrementally.
 
-    The live-e2e lints build every crate below gents and gents-cli under a
-    feature set no other build shares (11 min from scratch on a Studio,
-    #3926), which sccache does not serve. They get their own incremental
-    tree: incremental units in the shared tree would replace the
-    non-incremental ones the other builds reuse. Inside the kept tree, it
-    survives the checkout's `git clean` and counts toward the runner's
+    The live-e2e, vera and wasm32-wasip1 builds each compile under a feature
+    set or target no other build shares (11 min from scratch on a Studio,
+    #3926), which sccache does not serve well under host contention. They get
+    their own incremental tree: incremental units in the shared tree would
+    replace the non-incremental ones the other builds reuse. Inside the kept
+    tree, it survives the checkout's `git clean` and counts toward the runner's
     reclamation.
     """
     target = os.environ.get("CARGO_TARGET_DIR")
@@ -1815,7 +1830,8 @@ def run(selection, job):
 WORKFLOW_JOBS = {
     "fmt": "fmt", "lint": "lint", "lint-variants": "lint-variants", "contract": "contract",
     "notary-control": "notary-control-tests", "ts-packages": "desktop-packages",
-    "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
+    "ts-unit": "desktop-ui", "ts-mobile-perf": "desktop-ui", "ts-browser": "desktop-ui",
+    "ts-fuzz": "desktop-ui-bombadil",
 }
 # Matrix jobs: a plan job `<prefix>:<name>` runs in the workflow job `<prefix>`.
 MATRIX_JOBS = ("test", "build", "shard")

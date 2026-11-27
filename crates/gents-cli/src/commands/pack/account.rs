@@ -5,8 +5,8 @@ use gents_pack::pack::registry::credentials;
 use serde_json::json;
 
 use super::registry::{
-    environment_registry_token, read_stdin_line, resolve_registry_token, resolve_registry_url,
-    resolve_token_flag, RegistryClient,
+    environment_registry_token, read_stdin_line, resolve_registry_token,
+    resolve_registry_url_for_home, resolve_token_flag, RegistryClient,
 };
 use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
@@ -45,8 +45,8 @@ async fn login_with_password(
 }
 
 pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
-    let registry = resolve_registry_url(args.registry.as_deref());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let client = RegistryClient::new(registry.clone());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = match (token_flag, args.username) {
@@ -72,23 +72,32 @@ pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
 }
 
 pub(crate) fn logout(args: PackAccountArgs) -> Result<()> {
-    let registry = resolve_registry_url(args.registry.as_deref());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let removed = credentials::remove(&home, &registry)?;
     crate::print_json(&json!({ "registry": registry, "signed_out": removed }))
 }
 
 pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
-    let registry = resolve_registry_url(args.registry.as_deref());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let token = resolve_publish_token(None, &registry, &home)?;
     let me = RegistryClient::new(registry.clone()).me(&token).await?;
     crate::print_json(&json!({ "registry": registry, "account": me }))
 }
 
 pub(crate) async fn info(args: PackInfoArgs) -> Result<()> {
-    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    info_for_home(args.registry.as_deref(), Some(&home), &args.package).await
+}
+
+pub(crate) async fn info_for_home(
+    registry: Option<&str>,
+    home: Option<&Path>,
+    package: &str,
+) -> Result<()> {
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(package);
+    let client = RegistryClient::new(resolve_registry_url_for_home(registry, home));
     crate::print_json(&client.package(namespace, name).await?)
 }
 
@@ -100,8 +109,8 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
         )
     })?;
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
-    let registry = resolve_registry_url(args.registry.as_deref());
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let response = RegistryClient::new(registry)
@@ -112,7 +121,8 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
 
 pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
-    let registry = resolve_registry_url(args.registry.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = resolve_registry_url_for_home(args.registry.as_deref(), Some(&home));
     let client = RegistryClient::new(registry.clone());
     let Some(username) = args.transfer else {
         let package = client.package(namespace, name).await?;
@@ -125,7 +135,6 @@ pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
         args.yes,
         "transferring {namespace}/{name} to {username} cannot be undone; pass --yes to confirm"
     );
-    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     crate::print_json(

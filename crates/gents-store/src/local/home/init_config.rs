@@ -33,6 +33,34 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     /// desktop home's `cli` folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_identity: Option<String>,
+    /// The pack registry base URL this home was set up with (`init --registry`);
+    /// unset uses the public registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+}
+
+/// Normalizes an optional pack registry URL: trims whitespace and trailing
+/// slashes, treating blank or slash-only values as unset.
+pub fn normalize_registry(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|url| url.trim_end_matches('/').to_owned())
+        .filter(|url| !url.is_empty())
+}
+
+/// The pack registry URL `home`'s settings record, if any. Only the one field
+/// is read, so a settings file of another shape or none at all records
+/// nothing; whether such a home can be opened is the repair owner's to report.
+pub fn recorded_registry(home_dir: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Recorded {
+        #[serde(default)]
+        registry: Option<String>,
+    }
+    let contents = fs::read(init_config_path(home_dir)).ok()?;
+    let registry = serde_json::from_slice::<Recorded>(&contents).ok()?.registry;
+    normalize_registry(registry.as_deref())
 }
 
 /// The client identity folder `home`'s settings record, if any. Only the one

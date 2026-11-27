@@ -291,6 +291,7 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
             store_encryption: None,
             document_acp: Default::default(),
             client_identity: None,
+            registry: None,
         },
     )
     .unwrap();

@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::cli::args::{JobPromoteArgs, PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
-    PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackRemoveArgs,
-    PackSearchArgs, PackUpdateArgs, PackWireArgs, ScopeArgs,
+    PackAccountArgs, PackDriftArgs, PackInstallArgs, PackLoginArgs, PackRemoveArgs, PackUpdateArgs,
+    PackWireArgs, ScopeArgs,
 };
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
@@ -56,17 +56,32 @@ pub async fn installed_with_access(
     Ok(serde_json::json!({ "packs": packs }))
 }
 
-pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {
-    capture_report(command::registry::search(PackSearchArgs {
-        query: Some(query),
+pub async fn search(
+    home: Option<PathBuf>,
+    registry: Option<String>,
+    query: String,
+    page: u32,
+) -> Result<Value> {
+    capture_report(command::registry::search_for_home(
+        registry.as_deref(),
+        home.as_deref(),
+        &query,
         page,
-        registry,
-    }))
+    ))
     .await
 }
 
-pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
-    capture_report(command::account::info(PackInfoArgs { package, registry })).await
+pub async fn info(
+    home: Option<PathBuf>,
+    registry: Option<String>,
+    package: String,
+) -> Result<Value> {
+    capture_report(command::account::info_for_home(
+        registry.as_deref(),
+        home.as_deref(),
+        &package,
+    ))
+    .await
 }
 
 #[derive(Debug, Default)]
@@ -618,6 +633,7 @@ mod tests {
                 store_encryption: None,
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();
@@ -711,5 +727,108 @@ mod tests {
             "examples/board_pack"
         );
         assert!(refused("examples/board_pack/board", "other").contains("ships no plugin"));
+    }
+
+    #[tokio::test]
+    async fn home_initialized_with_non_default_registry_resolves_packs_through_in_app_routes() {
+        use clap::Parser as _;
+        use sha2::Digest as _;
+        use std::sync::atomic::Ordering;
+
+        let dir = crate::commands::pack::test_support::assets_pack_dir("acme", "demo", "1.0.0");
+        let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
+        let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+        let (base_url, state) =
+            crate::commands::pack::registry::tests::serve_fake_pack("demo", "1.0.0", bytes, digest)
+                .await;
+
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("node");
+        let desktop = temp.path().join("desktop");
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--home",
+            home.to_str().unwrap(),
+            "--desktop-home",
+            desktop.to_str().unwrap(),
+            "--node-name",
+            "local",
+            "--store-key-custody",
+            "file",
+            "--no-default-packs",
+            "--registry",
+            &format!("{base_url}/"),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
+            panic!("expected init command");
+        };
+        crate::commands::init::init_home(init_args).await.unwrap();
+        assert_eq!(
+            gents_store::local::home::recorded_registry(&home).as_deref(),
+            Some(base_url.as_str())
+        );
+
+        let info_view = info(Some(home.clone()), None, "acme/demo".into())
+            .await
+            .unwrap();
+        assert_eq!(info_view["latest"], "1.0.0");
+
+        let install_report = install(
+            home.clone(),
+            PackInstall {
+                package: "acme/demo".into(),
+                registry: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(install_report["pack"], "demo");
+        assert_eq!(state.downloads.load(Ordering::SeqCst), 1);
+
+        let installed_view = installed(home.clone(), None).await.unwrap();
+        let packs = installed_view["packs"].as_array().unwrap();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0]["pack"], "acme/demo");
+        assert_eq!(packs[0]["latest"], "1.0.0");
+        assert_eq!(packs[0]["outdated"], false);
+        assert!(packs[0]["error"].is_null(), "{installed_view}");
+
+        let signed_in = login(
+            home.clone(),
+            None,
+            crate::commands::pack::registry::tests::FAKE_TOKEN.into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(signed_in["registry"], base_url);
+        let account = whoami(home.clone(), None).await.unwrap();
+        assert_eq!(account["registry"], base_url);
+        let signed_out = logout(home.clone(), None).await.unwrap();
+        assert_eq!(signed_out["registry"], base_url);
+        assert_eq!(signed_out["signed_out"], true);
+
+        // Desktop re-provisioning without an explicit registry keeps the home's registry.
+        crate::server_host::ensure_standard_home(
+            &gents_store::test_support::runtime_handle(),
+            crate::server_host::ProvisionOptions {
+                home: home.clone(),
+                desktop_root: desktop,
+                node_name: "local".into(),
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
+                tool_root: None,
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                default_packs: false,
+                registry: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gents_store::local::home::recorded_registry(&home).as_deref(),
+            Some(base_url.as_str())
+        );
     }
 }

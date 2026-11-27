@@ -223,7 +223,15 @@ impl ClientRuntime {
     }
 
     fn record_mutation_error(&self, operation: &str, error: anyhow::Error) -> anyhow::Error {
-        self.record_mutation_error_message(operation, &error);
+        let detail = gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string();
+        tracing::warn!(
+            target: "gents_desktop_core::writes",
+            operation = %operation,
+            error = %detail,
+            "desktop write failed"
+        );
+        crate::logging::append_desktop_error(self.paths.root(), operation, &detail);
+        self.record_mutation_error_message(operation, &detail);
         error
     }
 

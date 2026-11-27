@@ -93,20 +93,10 @@ private def delete (collection doc : String) (expected : Nat) : HookEffect :=
 
 private def coreOp (name : String) : HookEffect := .core name
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-
 private def accessString : Access → String
   | .create => "create"
   | .update => "update"
   | .delete => "delete"
-
-private def refusalJson : Refusal → String
-  | .core => "{\"kind\":\"core\"}"
-  | .refused plugin reason =>
-      "{\"kind\":\"refused\",\"plugin\":" ++ jsonString plugin ++
-        ",\"reason\":" ++ jsonString reason ++ "}"
-  | .invalid plugin => "{\"kind\":\"invalid\",\"plugin\":" ++ jsonString plugin ++ "}"
-  | .conflict plugin => "{\"kind\":\"conflict\",\"plugin\":" ++ jsonString plugin ++ "}"
 
 /-! Effect validation and application: `Hooks.valid` and `Hooks.commit`. -/
 

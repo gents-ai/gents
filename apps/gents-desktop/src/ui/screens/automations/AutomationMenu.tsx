@@ -3,7 +3,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "../agent/enabled";
 import { RowMenu } from "../agent/RowMenu";
 import { taskDocument } from "../agent/TasksPanel";
-import { dependentsWarning } from "../agent/dependents";
+import { deleteBlocker } from "../agent/dependents";
 import { newId } from "../agent/draft";
 import { MANUAL, type Automation } from "./model";
 
@@ -72,7 +72,7 @@ export function AutomationMenu({
             })
           : changeConfig("deleteTaskConfig", { taskId: taskId!, nodeDid: node.nodeDid })
       }
-      warning={taskId ? dependentsWarning(node, "task", taskId) : undefined}
+      blocked={!a.trigger && taskId ? deleteBlocker(node, "task", taskId) : undefined}
     />
   );
 }

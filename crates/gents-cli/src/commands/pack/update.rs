@@ -5,7 +5,7 @@ use gents_pack::pack::registry::{advertised_release, open_candidate, CandidateEr
 use gents_pack::pack::PackChangeError;
 use serde_json::{json, Value};
 
-use super::registry::{resolve_registry_url, RegistryClient};
+use super::registry::{resolve_registry_url_for_home, RegistryClient};
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
@@ -43,7 +43,7 @@ pub(crate) async fn outdated_packs_on(
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
     let installed = gents_pack::pack::installed_packs(home, node).await?;
-    let client = RegistryClient::new(resolve_registry_url(registry));
+    let client = RegistryClient::new(resolve_registry_url_for_home(registry, home));
     let runtime = core_packs::runtime_release();
     let mut report = Vec::new();
     for pack in installed {
@@ -202,8 +202,12 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
 }
 
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> {
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
+    let client = RegistryClient::new(resolve_registry_url_for_home(
+        args.registry.as_deref(),
+        args.scope.graphql.is_none().then_some(home.as_path()),
+    ));
     let selected = select_packs(&packs, args.package.as_deref())?;
     // A caller of one named pack, such as the shell or the desktop, drops the report, so its
     // failure is returned itself, after the report a person at the command line reads.

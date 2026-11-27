@@ -119,7 +119,7 @@ async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
     let held = gents_store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
-    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("seeded arrival reads must not wait for the mutation gate")
         .expect("source remains open");
@@ -160,7 +160,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
             .unwrap();
         gents_store::graphql::created_doc_id(&response, "OutcomePing").unwrap()
     });
-    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("the seeded document was never delivered")
         .expect("source closed");
@@ -310,7 +310,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         .send(ping_snapshot(&delivery.node, 2, false).await)
         .unwrap();
     let node = delivery.node.clone();
-    let intent = tokio::time::timeout(Duration::from_secs(5), delivery.source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, delivery.source.next_fire())
         .await
         .expect("the pending arrival was not retried after the configuration changed")
         .expect("source closed");
@@ -480,7 +480,7 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
         delivery.source.drop_subscription();
     }
     let node = delivery.node.clone();
-    let intent = tokio::time::timeout(Duration::from_secs(5), delivery.source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, delivery.source.next_fire())
         .await
         .expect("the repaired document was not retried")
         .expect("source closed");

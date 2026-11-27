@@ -407,6 +407,7 @@ async fn run_agent_owned(
     .await?
     .with_observer(agent.runtime_snapshot_observer.clone());
     let initial_active_snapshot = generation_supervisor.current_snapshot();
+    let placement_resolves = generation_supervisor.placement().resolve_requests();
     if let Err(error) = runtime_status
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
         .await
@@ -482,6 +483,7 @@ async fn run_agent_owned(
         &reconcile_tx,
         control_tool_runtime,
         backend_health_events_rx,
+        placement_resolves,
     );
 
     let service_admission = agent.service_admission();

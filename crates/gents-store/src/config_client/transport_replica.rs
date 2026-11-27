@@ -103,17 +103,14 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_cannot_lend_its_registration_permission_to_a_replica_signer() {
-        use gents_protocol::schemas::{HomePolicyIds, PEER_REGISTRY};
+        use gents_protocol::schemas::{HomePolicyIds, NODE, PEER_REGISTRY, PEER_REGISTRY_NAME};
         let ids = HomePolicyIds::embedded_vera_transport_v2();
         let policy = ids.id(BuiltInPolicy::Household);
-        let collection = query::parse_sdl_with_known_types(
-            &ids.render(PEER_REGISTRY),
-            [gents_protocol::schemas::NODE_NAME.to_owned()]
-                .into_iter()
-                .collect(),
-        )
-        .unwrap()
-        .remove(0);
+        let collection = query::parse_sdl(&ids.render(&format!("{NODE}\n{PEER_REGISTRY}")))
+            .unwrap()
+            .into_iter()
+            .find(|collection| collection.name == PEER_REGISTRY_NAME)
+            .unwrap();
         assert!(collection.policy_bindings().next().is_some());
         let receiver = TransportReplica(ReplicaGroup {
             owner: Did::new(crate::test_support::config_signer().did()).unwrap(),
