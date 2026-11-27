@@ -1,4 +1,4 @@
-use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,25 +16,34 @@ use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::snapshots::fetch_message_snapshots_for_session_as;
 use crate::support::trial_store;
 use gents::test_support::subscription::MockUpdateSubscriptionSource;
-use gents_store::test_support::snapshot_reader::SnapshotReader;
-use gents_store::test_support::TestStore;
-use gents_store::test_support::STALL_CEILING;
+use gents_store::test_support::{read_when_changed, rows_when, TestStore, STALL_CEILING};
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
+fn managed_agent_access(db: &TestStore, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
+    ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
+}
+
 async fn goal_creation_actors(
     db: &TestStore,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
+    use gents_store::config_client::NodePermission;
     let fixture = crate::support::managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
     for actor in [fixture.user.did(), fixture.agent.did()] {
         for permission in [
-            gents_store::config_client::NodePermission::DocumentDelete,
-            gents_store::config_client::NodePermission::CollectionGet,
-            gents_store::config_client::NodePermission::DacRelationDelete,
+            NodePermission::DocumentDelete,
+            NodePermission::CollectionGet,
+            NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -60,60 +69,27 @@ async fn load_goal_as(
         .unwrap()
 }
 
-fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
-    Arc::new(ActiveRuntimeSnapshot {
-        placement_basis: Default::default(),
-        generation: 1,
-        node: None,
-        local_did: local_did.to_string(),
-        default_agent_did: agent_did.to_string(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    })
-}
-
-async fn publish_node_readiness_for_agent(
-    db: &TestStore,
-    process_state: gents_protocol::row::NodeReadinessProcessState,
-    behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
-    agent_did: &str,
-) {
+async fn publish_ready_node_readiness(db: &TestStore, agent_did: &str) {
     use gents_protocol::row::{
-        AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
     };
 
     let snapshot = NodeReadinessSnapshot {
         format_version: NODE_READINESS_FORMAT_VERSION,
-        process_state,
+        process_state: NodeReadinessProcessState::Ready,
         active_generation: 1,
         router_generation: 1,
         default_agent_did: agent_did.to_string(),
         agents: vec![AgentReadinessEntry {
             agent_did: agent_did.to_string(),
-            state: if behavior.is_some() {
-                AgentReadinessState::Unavailable
-            } else {
-                AgentReadinessState::Ready
-            },
-            reason: behavior,
+            state: AgentReadinessState::Ready,
+            reason: None,
             effective_inference: None,
         }],
     };
-    let did = gents_store::graphql::escape_graphql_string(db.node_identity.did());
-    let snapshot_json =
-        gents_store::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+    let did = escape_graphql_string(db.node_identity.did());
+    let snapshot_json = escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
     let updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let access = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
     let response = access
@@ -127,34 +103,49 @@ async fn publish_node_readiness_for_agent(
         .as_str()
         .expect("visible readiness Node");
     let readiness = response["data"]["NodeReadiness"].as_array().unwrap();
+    let update_readiness = |label: &'static str, doc: &str, fields: &str| {
+        let access = access.clone();
+        let query = format!(
+            r#"mutation {{update_NodeReadiness(docID: "{}", input: {{{fields}}}) {{_docID}}}}"#,
+            escape_graphql_string(doc)
+        );
+        async move {
+            let response = access.write(label, &query).await.unwrap();
+            assert_eq!(
+                response["data"]["update_NodeReadiness"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    };
     if let Some(existing) = readiness.first() {
         assert_eq!(readiness.len(), 1);
-        let doc = escape_graphql_string(existing["_docID"].as_str().unwrap());
-        let response = access.write("test.goal_readiness.update", &format!(r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#)).await.unwrap();
-        assert_eq!(
-            response["data"]["update_NodeReadiness"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        let doc = existing["_docID"].as_str().unwrap();
+        update_readiness(
+            "test.goal_readiness.update",
+            doc,
+            &format!(r#"snapshot_json: "{snapshot_json}", updated_at: "{updated_at}""#),
+        )
+        .await;
     } else {
         let escaped_parent = escape_graphql_string(parent);
-        let response = access.write("test.goal_readiness.create", &format!(r#"mutation {{create_NodeReadiness(input: {{node_did: "{did}", node_doc_id: "{escaped_parent}", parent_linked: false, snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#)).await.unwrap();
+        let response = access
+            .write(
+                "test.goal_readiness.create",
+                &format!(
+                    r#"mutation {{create_NodeReadiness(input: {{node_did: "{did}", node_doc_id: "{escaped_parent}", parent_linked: false, snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#
+                ),
+            )
+            .await
+            .unwrap();
         let doc = gents_store::graphql::created_doc_id(&response, "NodeReadiness").unwrap();
         access
             .add_resource_relationship("NodeReadiness", &doc, "parent", "nodes", parent)
             .await
             .unwrap();
-        let doc = escape_graphql_string(&doc);
-        let response = access.write("test.goal_readiness.linked", &format!(r#"mutation {{update_NodeReadiness(docID: "{doc}", input: {{parent_linked: true}}) {{_docID}}}}"#)).await.unwrap();
-        assert_eq!(
-            response["data"]["update_NodeReadiness"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        update_readiness("test.goal_readiness.linked", &doc, "parent_linked: true").await;
     }
 }
 
@@ -162,38 +153,34 @@ async fn source_for_agent(
     db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    publish_node_readiness_for_agent(
-        db,
-        gents_protocol::row::NodeReadinessProcessState::Ready,
-        None,
-        agent_identity.did(),
-    )
-    .await;
-    unready_source_for_agent(db, agent_identity)
-}
-
-fn agent_snapshot(
-    db: &TestStore,
-    agent_identity: &Arc<dyn NodeIdentity>,
-) -> Arc<ActiveRuntimeSnapshot> {
+    publish_ready_node_readiness(db, agent_identity.did()).await;
     let node =
         crate::support::fixtures::test_node_for(db.node_identity.clone(), agent_identity.did());
     let agent =
         crate::support::fixtures::test_agent_with_identity(node.clone(), agent_identity.clone());
-    let mut current = (*snapshot(db.node_identity.did(), agent_identity.did())).clone();
-    current.node = Some(node);
-    current.default_agent_did = agent_identity.did().to_owned();
-    current
-        .agents
-        .insert(agent_identity.did().to_owned(), Arc::new(agent));
-    Arc::new(current)
-}
-
-fn unready_source_for_agent(
-    db: &TestStore,
-    agent_identity: &Arc<dyn NodeIdentity>,
-) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
+    let mut agents = RapidHashMap::new();
+    agents.insert(agent_identity.did().to_owned(), Arc::new(agent));
+    let snapshot = Arc::new(ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
+        generation: 1,
+        node: Some(node),
+        local_did: db.node_identity.did().to_owned(),
+        default_agent_did: agent_identity.did().to_owned(),
+        tool_configs: Default::default(),
+        agents,
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_agents: Default::default(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
+    });
+    let (tx, rx) = watch::channel(snapshot);
     let subscriptions: Arc<dyn UpdateSubscriptionSource> =
         Arc::new(MockUpdateSubscriptionSource::new());
     (
@@ -297,10 +284,9 @@ async fn boot_goal_background_handoff_with_plans(
         Vec::new(),
     )
     .await;
-    let identity: Arc<dyn gents_store::identity::NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
-        identity,
+        db.node_identity.clone(),
         gents::DocumentRuntimeOptions {
             backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
@@ -323,27 +309,34 @@ async fn boot_goal_background_handoff_with_plans(
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
-    let (process_tool_call_id, release) = tokio::time::timeout(STALL_CEILING, async {
-        let mut changes = fixture.access.subscribe_changes("AgentToolCall").await;
-        let release = tokio::task::spawn_blocking(move || {
+    let release = tokio::time::timeout(
+        STALL_CEILING,
+        tokio::task::spawn_blocking(move || {
             std::fs::OpenOptions::new().write(true).open(release_gate)
-        })
-        .await
-        .unwrap()
-        .expect("the held process opens its release gate");
-        loop {
-            let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents_store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
-            if let Some(row) = response["data"]["AgentToolCall"].as_array().unwrap().first() {
-                break (
-                    row["tool_call_id"].as_str().unwrap().to_owned(),
-                    release,
-                );
-            }
-            changes.recv().await;
-        }
-    })
+        }),
+    )
     .await
-    .expect("accepted goal background handoff did not start before its deadline");
+    .expect("accepted goal background handoff did not start before its deadline")
+    .unwrap()
+    .expect("the held process opens its release gate");
+    let running = rows_when(
+        &fixture.access,
+        "AgentToolCall",
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#,
+            escape_graphql_string(&parent_doc)
+        ),
+        |data| {
+            data["AgentToolCall"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+        },
+    )
+    .await;
+    let process_tool_call_id = running["AgentToolCall"][0]["tool_call_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     GoalBackgroundHandoff {
         runtime,
         agent_identity,
@@ -361,7 +354,6 @@ struct ChildRow {
     doc_id: String,
     #[cfg(test)]
     request_id: String,
-    node_did: String,
     session_id: String,
     caused_by_parent_request_id: Option<String>,
     input: Option<serde_json::Value>,
@@ -378,12 +370,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let db = trial_store(&format!("goal-budget-after-{terminal}")).await;
         let fixture = crate::support::managed_agent_fixture(&db).await;
         let agent_identity = fixture.agent.clone();
-        let access = ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent_identity.did().parse().unwrap(),
-            agent_identity.as_ref(),
-        )
-        .unwrap();
+        let access = managed_agent_access(&db, &agent_identity);
         reserve_goal_session(&db, &fixture.user, &agent_identity, SESSION).await;
         seed_goal_from_access(
             &access,
@@ -447,18 +434,16 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             expected_usage,
         );
 
-        tokio::time::timeout(STALL_CEILING, async {
-            let mut changes = access.subscribe_changes("AgentRequest").await;
-            loop {
-                if goal_children_from_access(&access).await.len() == 1 {
-                    break;
-                }
-                changes.recv().await;
-            }
-            runtime.backend.wait_for_request(objective).await;
+        read_when_changed(&access, "AgentRequest", "Goal wrapup request", async || {
+            let children = goal_children_from_access(&access).await;
+            (children.len() == 1)
+                .then_some(())
+                .ok_or_else(|| format!("{children:?}"))
         })
-        .await
-        .expect("Goal wrapup did not reach its provider before the deadline");
+        .await;
+        tokio::time::timeout(STALL_CEILING, runtime.backend.wait_for_request(objective))
+            .await
+            .expect("Goal wrapup did not reach its provider before the deadline");
         assert_eq!(
             goal_children_from_access(&access).await.len(),
             1,
@@ -475,10 +460,14 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             background_executions.wait_for_completion(&process_tool_call_id),
         )
         .await;
-        let observed = fixture.access.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
-            gents_store::graphql::escape_graphql_string(&process_tool_call_id),
-        )).await.unwrap();
+        let observed = fixture
+            .access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
+                escape_graphql_string(&process_tool_call_id),
+            ))
+            .await
+            .unwrap();
         let delivery = observed["data"].clone();
         assert!(
             completion.is_ok(),
@@ -497,16 +486,20 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         )
         .await
         .unwrap();
-        let observed = fixture.access.execute(
-            "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
-        ).await.unwrap();
+        let observed = fixture
+            .access
+            .execute(
+                "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
+            )
+            .await
+            .unwrap();
         let data = observed["data"].clone();
+        let requests = data["AgentRequest"].as_array().unwrap();
         assert_eq!(
-            data["AgentRequest"].as_array().unwrap().len(),
+            requests.len(),
             3,
             "expected the parent, the Goal wrapup and one completion wake; observed={data}"
         );
-        let requests = data["AgentRequest"].as_array().unwrap();
         let goal_requests = requests
             .iter()
             .filter(|row| row["caused_by_trigger_kind"].as_str() == Some("goal"))
@@ -532,10 +525,9 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             wrapup["caused_by_parent_request_id"], parent,
             "the wrapup must continue the session's latest request: {requests:?}"
         );
-        assert_eq!(goal_requests[0]["execution_origin"], "scheduled");
-        let messages = data["AgentMessage"].as_array().unwrap();
+        assert_eq!(wrapup["execution_origin"], "scheduled");
         let mut completions = Vec::new();
-        for header in messages {
+        for header in data["AgentMessage"].as_array().unwrap() {
             let (_, message) = gents_session::session::load_canonical_message(
                 &fixture.access,
                 header["_docID"].as_str().unwrap(),
@@ -594,13 +586,12 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         );
         let input = children[0].input.as_ref().unwrap();
         assert_eq!(input["goal_continuation"]["wrapup"], true, "{terminal}");
-        let history = load_history_as(
-            &fixture.access,
-            &children[0].node_did,
-            fixture.user.did(),
-            &children[0].session_id,
-        )
-        .await;
+        let history: Vec<_> =
+            fetch_message_snapshots_for_session_as(&fixture.access, &children[0].session_id)
+                .await
+                .into_iter()
+                .map(|message| message.native)
+                .collect();
         assert!(
             serde_json::to_string(&history)
                 .unwrap()
@@ -633,6 +624,33 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 #[path = "goal_controller/control_failure.rs"]
 mod control_failure;
 
+fn client_request_spec(
+    db: &TestStore,
+    user: &gents_store::identity::KeyIdentity,
+    agent: &Arc<dyn NodeIdentity>,
+    session: &str,
+    request_id: String,
+    content: &str,
+    created_at: &str,
+) -> gents_session::request::lifecycle::RequestSpec {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{ExecutionOrigin, RequestIdentity, RequestSpec};
+    RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(user.did().into()),
+            agent_did: agent.did().into(),
+            session_id: session.into(),
+            request_id,
+            content: content.into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: created_at.into(),
+        },
+        AgentRequestAdmissionRecord::client(user.did()),
+    )
+}
+
 async fn goal_fixture_request_with_state(
     db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
@@ -640,50 +658,18 @@ async fn goal_fixture_request_with_state(
     request_id: &str,
     state: &str,
 ) -> String {
-    goal_fixture_request_with_state_at(db, user, agent, request_id, state, "2026-07-15T00:00:00Z")
-        .await
-}
-
-async fn goal_fixture_request_with_state_at(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-    state: &str,
-    created_at: &str,
-) -> String {
-    goal_fixture_request_in_session_at(db, user, agent, SESSION, request_id, state, created_at)
-        .await
-}
-
-async fn goal_fixture_request_in_session_at(
-    db: &TestStore,
-    user: &gents_store::identity::KeyIdentity,
-    agent: &Arc<dyn NodeIdentity>,
-    session: &str,
-    request_id: &str,
-    state: &str,
-    created_at: &str,
-) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
+        build_signed_client_request, submit_client_request, RequestSigner,
     };
     let client = db.client_access(user);
-    let spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: agent.did().into(),
-            session_id: session.into(),
-            request_id: request_id.into(),
-            content: "completed baseline request".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: created_at.into(),
-        },
-        AgentRequestAdmissionRecord::client(user.did()),
+    let spec = client_request_spec(
+        db,
+        user,
+        agent,
+        SESSION,
+        request_id.into(),
+        "completed baseline request",
+        "2026-07-15T00:00:00Z",
     );
     let create = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
         .await
@@ -700,22 +686,7 @@ async fn goal_fixture_request_in_session_at(
         .as_str()
         .unwrap()
         .to_owned();
-    let agent_access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let escaped = escape_graphql_string(&doc);
-    let state = escape_graphql_string(state);
-    let changed = agent_access.write("test.goal_baseline_complete", &format!(r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{lifecycle_state: "{state}"}}) {{_docID}}}}"#)).await.unwrap();
-    assert_eq!(
-        changed["data"]["update_AgentRequest"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    set_request_state_as(&managed_agent_access(db, agent), &doc, state).await;
     doc
 }
 
@@ -725,26 +696,16 @@ async fn reserve_goal_session(
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
 ) -> String {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    use gents_session::request::lifecycle::{
-        build_signed_reserved_client_request, ExecutionOrigin, RequestIdentity, RequestSigner,
-        RequestSpec,
-    };
-
+    use gents_session::request::lifecycle::{build_signed_reserved_client_request, RequestSigner};
     let access = db.client_access(user);
-    let spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: agent.did().into(),
-            session_id: session.into(),
-            request_id: format!("goal-session-reservation-{session}"),
-            content: "reserve session".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-07-14T00:00:00Z".into(),
-        },
-        AgentRequestAdmissionRecord::client(user.did()),
+    let spec = client_request_spec(
+        db,
+        user,
+        agent,
+        session,
+        format!("goal-session-reservation-{session}"),
+        "reserve session",
+        "2026-07-14T00:00:00Z",
     );
     build_signed_reserved_client_request(&access, spec, RequestSigner::Identity(user))
         .await
@@ -769,15 +730,29 @@ async fn publish_owned_terminal_activity(
         StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
     let escaped = escape_graphql_string(request_doc_id);
-    let response = access.execute(&format!(r#"{{AgentRequest(docID: "{escaped}") {{node_did requester_did session_id session_doc_id agent_did}}}}"#)).await.unwrap();
+    let response = access
+        .execute(&format!(
+            r#"{{AgentRequest(docID: "{escaped}") {{node_did requester_did session_id session_doc_id agent_did}}}}"#
+        ))
+        .await
+        .unwrap();
     let row = &response["data"]["AgentRequest"][0];
-    let node_did = row["node_did"].as_str().unwrap();
-    let requester_did = row["requester_did"].as_str();
-    let session_id = row["session_id"].as_str().unwrap();
-    let session_doc = row["session_doc_id"].as_str().unwrap();
+    let (node_did, requester_did, session_id, session_doc) = (
+        row["node_did"].as_str().unwrap(),
+        row["requester_did"].as_str(),
+        row["session_id"].as_str().unwrap(),
+        row["session_doc_id"].as_str().unwrap(),
+    );
     assert_eq!(row["agent_did"], agent.did());
-    let existing = access.execute(&format!(r#"{{AgentMessage(filter: {{session_doc_id: {{_eq: "{}"}}}}, order: {{sequence: DESC}}, limit: 1) {{sequence}}}}"#, escape_graphql_string(session_doc))).await.unwrap();
+    let existing = access
+        .execute(&format!(
+            r#"{{AgentMessage(filter: {{session_doc_id: {{_eq: "{}"}}}}, order: {{sequence: DESC}}, limit: 1) {{sequence}}}}"#,
+            escape_graphql_string(session_doc)
+        ))
+        .await
+        .unwrap();
     let sequence = existing["data"]["AgentMessage"]
         .as_array()
         .unwrap()
@@ -786,20 +761,19 @@ async fn publish_owned_terminal_activity(
         .unwrap_or(0) as u32
         + 1;
     let generation = format!("goal-observation-{request_doc_id}");
-    let source = OutputSource::ProviderTurn {
-        scope: CaptureScope {
-            kind: CaptureScopeKind::Inference,
-            seq: u64::from(sequence),
-        },
-        turn_index: 0,
-        attempt: 0,
-    };
     let segment = OutputSegment {
         node_did: node_did.into(),
         requester_did: requester_did.map(Into::into),
         session_id: session_id.into(),
         request_doc_id: request_doc_id.into(),
-        source,
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: u64::from(sequence),
+            },
+            turn_index: 0,
+            attempt: 0,
+        },
         writer: OutputWriter::RequestExecution {
             execution_generation: generation.clone(),
         },
@@ -821,42 +795,94 @@ async fn publish_owned_terminal_activity(
         }),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    access.transact_write("test.goal_owned_terminal_output", |txn| {
-        let generation = &generation;
-        let segment = &segment;
-        let escaped = &escaped;
-        Box::pin(async move {
-            let mut variables = output_segment_create_variables(segment)?;
-            variables["input"]["session_doc_id"] = serde_json::json!(session_doc);
-            variables["input"]["agent_did"] = serde_json::json!(agent.did());
-            variables["input"]["creator_did"] = serde_json::json!(agent.did());
-            variables["input"]["parent_linked"] = serde_json::json!(true);
-            let created = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables).await?;
-            let close_doc_id = gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?;
-            txn.add_resource_relationship("AgentOutputSegment", &close_doc_id, "parent", "sessions", session_doc).await?;
-            txn.add_actor_relationship("AgentOutputSegment", &close_doc_id, "working_agent", &agent.did().parse()?).await?;
-            let message = TranscriptMessage {
-                native_request_id: None, message_key: gents_session::session::sequence_message_key(node_did, session_id, requester_did, sequence),
-                session_id: session_id.into(), node_did: node_did.into(), requester_did: requester_did.map(Into::into),
-                request_doc_id: Some(request_doc_id.into()), publication: MessagePublication::RequestExecution {execution_generation: generation.clone()},
-                outcome: OutputOutcome::Complete, sequence, role: MessageRole::Assistant, native_id: Some(format!("goal-terminal-{sequence}")),
-                blocks: vec![MessageBlock::Text { text: PresentedPayload {output: PayloadRef {close_doc_id, stream: 0}, presentation: PayloadPresentation::Full} }],
-                created_at: chrono::Utc::now().to_rfc3339(),
-            };
-            let mut variables = transcript_message_create_variables(&message)?;
-            variables["input"]["session_doc_id"] = serde_json::json!(session_doc);
-            variables["input"]["agent_did"] = serde_json::json!(agent.did());
-            variables["input"]["creator_did"] = serde_json::json!(agent.did());
-            variables["input"]["parent_linked"] = serde_json::json!(true);
-            let created = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &variables).await?;
-            let message_doc_id = gents_store::graphql::created_doc_id(&created, "AgentMessage")?;
-            txn.add_resource_relationship("AgentMessage", &message_doc_id, "parent", "sessions", session_doc).await?;
-            txn.add_actor_relationship("AgentMessage", &message_doc_id, "working_agent", &agent.did().parse()?).await?;
-            let terminal = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(TerminalOutput::Message {message_doc_id})?)?;
-            txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{execution_generation: "{}", terminal_output: {terminal}}}) {{_docID}}}}"#, escape_graphql_string(generation))).await?;
-            Ok::<_, anyhow::Error>(())
+    access
+        .transact_write("test.goal_owned_terminal_output", |txn| {
+            let (generation, segment, escaped) = (&generation, &segment, &escaped);
+            Box::pin(async move {
+                let bind = |mut variables: serde_json::Value| {
+                    variables["input"]["session_doc_id"] = session_doc.into();
+                    variables["input"]["agent_did"] = agent.did().into();
+                    variables["input"]["creator_did"] = agent.did().into();
+                    variables["input"]["parent_linked"] = true.into();
+                    variables
+                };
+                let relate = |collection: &'static str, doc: String| async move {
+                    txn.add_resource_relationship(collection, &doc, "parent", "sessions", session_doc)
+                        .await?;
+                    txn.add_actor_relationship(
+                        collection,
+                        &doc,
+                        "working_agent",
+                        &agent.did().parse()?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(doc)
+                };
+                let created = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &bind(output_segment_create_variables(segment)?),
+                    )
+                    .await?;
+                let close_doc_id = relate(
+                    "AgentOutputSegment",
+                    gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                )
+                .await?;
+                let message = TranscriptMessage {
+                    native_request_id: None,
+                    message_key: gents_session::session::sequence_message_key(
+                        node_did,
+                        session_id,
+                        requester_did,
+                        sequence,
+                    ),
+                    session_id: session_id.into(),
+                    node_did: node_did.into(),
+                    requester_did: requester_did.map(Into::into),
+                    request_doc_id: Some(request_doc_id.into()),
+                    publication: MessagePublication::RequestExecution {
+                        execution_generation: generation.clone(),
+                    },
+                    outcome: OutputOutcome::Complete,
+                    sequence,
+                    role: MessageRole::Assistant,
+                    native_id: Some(format!("goal-terminal-{sequence}")),
+                    blocks: vec![MessageBlock::Text {
+                        text: PresentedPayload {
+                            output: PayloadRef {
+                                close_doc_id,
+                                stream: 0,
+                            },
+                            presentation: PayloadPresentation::Full,
+                        },
+                    }],
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                let created = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_MESSAGE_MUTATION,
+                        &bind(transcript_message_create_variables(&message)?),
+                    )
+                    .await?;
+                let message_doc_id = relate(
+                    "AgentMessage",
+                    gents_store::graphql::created_doc_id(&created, "AgentMessage")?,
+                )
+                .await?;
+                let terminal = gents_protocol::graphql::graphql_input_literal(
+                    &serde_json::to_value(TerminalOutput::Message { message_doc_id })?,
+                )?;
+                txn.execute(&format!(
+                    r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{execution_generation: "{}", terminal_output: {terminal}}}) {{_docID}}}}"#,
+                    escape_graphql_string(generation)
+                ))
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await.unwrap();
+        .await
+        .unwrap();
 }
 
 async fn goal_recovery_actors(
@@ -870,12 +896,7 @@ async fn goal_recovery_actors(
 ) {
     let (user, agent) = goal_creation_actors(db).await;
     let doc = goal_fixture_request_with_state(db, &user, &agent, request_id, state).await;
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
+    let access = managed_agent_access(db, &agent);
     if state == "completed" {
         publish_owned_terminal_activity(&access, agent.as_ref(), &doc, "durable progress").await;
     }
@@ -887,7 +908,7 @@ async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
         .execute(
             r#"{
         AgentRequest(filter: {caused_by_trigger_kind: {_eq: "goal"}}) {
-            _docID request_id node_did session_id caused_by_parent_request_id input
+            _docID request_id session_id caused_by_parent_request_id input
         }
     }"#,
         )
@@ -896,14 +917,17 @@ async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
     serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")
 }
 
-async fn wait_for_goal_transition_as(
+async fn wait_for_goal_transition_as<F>(
     access: &ConfigAccess,
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     source: &mut GoalSource,
     description: &str,
-    reached: impl Fn(&gents_automation::goal::GoalDocument) -> bool,
-) -> gents_automation::goal::GoalDocument {
+    reached: F,
+) -> gents_automation::goal::GoalDocument
+where
+    F: Fn(&gents_automation::goal::GoalDocument) -> bool,
+{
     let mut updates = node.subscribe_updates();
     tokio::time::timeout(STALL_CEILING, async {
         tokio::select! {
@@ -911,19 +935,30 @@ async fn wait_for_goal_transition_as(
             goal = async {
                 loop {
                     let goal = load_goal_as(access, node_did).await.expect("Goal exists");
-                    if reached(&goal) { break goal; }
+                    if reached(&goal) {
+                        break goal;
+                    }
                     updates.recv().await.expect("native update subscription closed");
                 }
             } => goal,
         }
-    }).await.unwrap_or_else(|_| panic!("goal transition did not complete: {description}"))
+    })
+    .await
+    .unwrap_or_else(|_| panic!("goal transition did not complete: {description}"))
 }
 
 async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
-    let response = access.write("test.goal_request_state", &format!(
-        r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
-        escape_graphql_string(doc), escape_graphql_string(state),
-    )).await.unwrap();
+    let response = access
+        .write(
+            "test.goal_request_state",
+            &format!(
+                r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
+                escape_graphql_string(doc),
+                escape_graphql_string(state),
+            ),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         response["data"]["update_AgentRequest"]
             .as_array()
@@ -931,32 +966,6 @@ async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
             .len(),
         1
     );
-}
-
-async fn load_history_as(
-    access: &ConfigAccess,
-    node_did: &str,
-    requester_did: &str,
-    session_id: &str,
-) -> Vec<gents_inference::llm::message::Message> {
-    let node = escape_graphql_string(node_did);
-    let requester = escape_graphql_string(requester_did);
-    let session = escape_graphql_string(session_id);
-    let response = access.execute(&format!(r#"{{AgentMessage(filter: {{node_did: {{_eq: "{node}"}}, requester_did: {{_eq: "{requester}"}}, session_id: {{_eq: "{session}"}}}}, order: {{sequence: ASC}}) {{_docID}}}}"#)).await.unwrap();
-    let mut messages = Vec::new();
-    for row in response["data"]["AgentMessage"].as_array().unwrap() {
-        let doc = row["_docID"].as_str().unwrap();
-        let (_, message) = gents_session::session::load_canonical_message(
-            access,
-            doc,
-            node_did,
-            Some(requester_did),
-        )
-        .await
-        .unwrap();
-        messages.push(message);
-    }
-    messages
 }
 
 async fn fail_request_with_usage(
@@ -967,21 +976,52 @@ async fn fail_request_with_usage(
     request_doc: &str,
     terminal: &str,
 ) {
-    access.transact_write("test.goal_failure_and_budget_usage", |txn| {
-        Box::pin(async move {
-            let request = txn.execute(&format!(r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#, escape_graphql_string(request_doc))).await?;
-            let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"].as_str().expect("physical session");
-            let changed = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#, escape_graphql_string(request_doc), escape_graphql_string(terminal))).await?;
-            anyhow::ensure!(changed["data"]["update_AgentRequest"].as_array().is_some_and(|rows| rows.len()==1), "parent was not terminalized");
-            let input = serde_json::json!({"call_id":"over-budget-failed-call", "node_did":node_did,
-                "agent_did":agent.did(), "session_id":SESSION, "request_id":request_id, "request_doc_id":request_doc,
-                "backend_id":"goal-background-backend", "call_seq":1, "attempt":1, "call_kind":"inference",
-                "call_state":"failed", "failure_reason":"provider stream interrupted after reporting usage",
-                "prompt_tokens":100, "completion_tokens":5});
-            let created = txn.execute_with_variables("mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
-            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
-            Ok::<_, anyhow::Error>(())
+    access
+        .transact_write("test.goal_failure_and_budget_usage", |txn| {
+            Box::pin(async move {
+                let request = txn
+                    .execute(&format!(
+                        r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#,
+                        escape_graphql_string(request_doc)
+                    ))
+                    .await?;
+                let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"]
+                    .as_str()
+                    .expect("physical session");
+                let changed = txn
+                    .execute(&format!(
+                        r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "{}"}}) {{_docID}}}}"#,
+                        escape_graphql_string(request_doc),
+                        escape_graphql_string(terminal)
+                    ))
+                    .await?;
+                anyhow::ensure!(
+                    changed["data"]["update_AgentRequest"]
+                        .as_array()
+                        .is_some_and(|rows| rows.len() == 1),
+                    "parent was not terminalized"
+                );
+                let input = serde_json::json!({
+                    "call_id": "over-budget-failed-call", "node_did": node_did,
+                    "agent_did": agent.did(), "session_id": SESSION, "request_id": request_id,
+                    "request_doc_id": request_doc, "backend_id": "goal-background-backend",
+                    "call_seq": 1, "attempt": 1, "call_kind": "inference",
+                    "call_state": "failed",
+                    "failure_reason": "provider stream interrupted after reporting usage",
+                    "prompt_tokens": 100, "completion_tokens": 5
+                });
+                let created = txn
+                    .execute_with_variables(
+                        "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}",
+                        &serde_json::json!({"input": input}),
+                    )
+                    .await?;
+                let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
+                txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await.unwrap();
+        .await
+        .unwrap();
 }
