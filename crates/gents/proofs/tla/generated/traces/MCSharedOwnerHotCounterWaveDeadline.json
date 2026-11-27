@@ -1,0 +1,1575 @@
+{
+  "config": "MCSharedOwnerHotCounterWaveDeadline",
+  "constants": {
+    "AbortOnOpenWriter": false,
+    "Attempts": 4,
+    "BoundedRetry": true,
+    "CanTimeout": false,
+    "Capacity": 2,
+    "CheckDeadline": true,
+    "ConflictAsSuccess": false,
+    "Deadline": 2,
+    "Iters": 2,
+    "LostWakeup": false,
+    "ReadOutsideTxn": false,
+    "RetryAmbiguous": false,
+    "StaleRetry": false,
+    "Writers": [
+      {
+        "$model": "w1"
+      },
+      {
+        "$model": "w2"
+      },
+      {
+        "$model": "w3"
+      }
+    ]
+  },
+  "expect": "violates WaveDeadline",
+  "spec": "SharedOwnerHotCounter",
+  "steps": [
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 1,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      },
+      "before": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 0,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 2,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      },
+      "before": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 1,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 3,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      },
+      "before": {
+        "applied": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              0
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              0
+            ]
+          ]
+        },
+        "clock": 2,
+        "held": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              false
+            ]
+          ]
+        },
+        "hist": [
+          0
+        ],
+        "it": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              1
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              1
+            ]
+          ]
+        },
+        "outcome": {
+          "$function": [
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w1"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w2"
+                },
+                2
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                1
+              ],
+              "none"
+            ],
+            [
+              [
+                {
+                  "$model": "w3"
+                },
+                2
+              ],
+              "none"
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              "start"
+            ]
+          ]
+        },
+        "permits": 2,
+        "rv": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "snap": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        },
+        "tries": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w3"
+              },
+              0
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

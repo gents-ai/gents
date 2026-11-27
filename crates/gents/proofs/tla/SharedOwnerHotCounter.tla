@@ -1,6 +1,7 @@
 ---- MODULE SharedOwnerHotCounter ----
 \* lean: none
 \* crates: gents-store
+\* traces: violates
 \* models: TransactionReplay.disposition
 \* Concurrent read-modify-write increments of one document through the shared
 \* transaction owner (`ConfigAccess::transact_write` on an embedded node), as

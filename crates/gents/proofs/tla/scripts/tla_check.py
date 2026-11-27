@@ -777,7 +777,8 @@ def traces(check):
             raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
         return directory / (cfg.stem + ".json"), data
 
-    participating = {"ClientSubmissionContention", "InterruptLatchContention"}
+    participating = {spec for spec in nodes
+                     if r"\* traces: violates" in (TLA / (spec + ".tla")).read_text().splitlines()}
     boundaries = {entry["config"] for entry in json.loads((TLA / "trace-coverage.json").read_text())}
     configs = [(spec, cfg) for spec, node in nodes.items() for cfg in node["configs"]
                if (spec in participating or cfg.stem in boundaries)

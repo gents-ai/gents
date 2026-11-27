@@ -22,6 +22,7 @@ use tokio::task::JoinSet;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
+use crate::test_support::writer_counter;
 
 const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
@@ -524,9 +525,6 @@ fn report(name: &str, value: Value) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA: &str = "type WriterCounter { key: String @index(unique: true) value: Int }
-type WriterReceipt { writer: Int iteration: Int }";
-
 async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
     let home = tempfile::tempdir()?;
     let node = Arc::new(
@@ -536,7 +534,9 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
             .await?,
     );
     ConfigAccess::local(node.clone())
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SCHEMA))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(writer_counter::SCHEMA),
+        )
         .await?;
     Ok((home, node))
 }
@@ -551,12 +551,7 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
 async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
     let (_home, node) = node().await?;
     let access = ConfigAccess::local(node.clone());
-    access
-        .write(
-            "writer_probe.seed",
-            r#"mutation { create_WriterCounter(input: {key: "hot", value: 0}) {_docID} }"#,
-        )
-        .await?;
+    writer_counter::seed(&access).await?;
     let mut measurements = Vec::new();
     let mut committed = BTreeSet::new();
     let mut next_writer = 0i64;
@@ -573,19 +568,25 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
                 let mut observations = Vec::new();
                 for iteration in 0..8 {
                     let started = Instant::now();
-                    let result = access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
-                        let row = txn.execute("{ WriterCounter {value} }").await?;
-                        let value = row["data"]["WriterCounter"][0]["value"].as_i64().context("counter absent")?;
-                        tokio::task::yield_now().await;
-                        txn.execute(&format!(r#"mutation {{ update_WriterCounter(filter: {{key: {{_eq: "hot"}}}}, input: {{value: {}}}) {{_docID}} create_WriterReceipt(input: {{writer: {writer}, iteration: {iteration}}}) {{_docID}} }}"#, value + 1)).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })).await;
+                    let result = access
+                        .transact_write("writer_probe.increment", |txn| {
+                            Box::pin(async move {
+                                let value = writer_counter::read(txn).await?;
+                                tokio::task::yield_now().await;
+                                writer_counter::increment(txn, value, writer, iteration).await
+                            })
+                        })
+                        .await;
                     let accepted = match result {
                         Ok(()) => true,
                         Err(error) if error.to_string() == "DefraDB transaction conflict" => false,
                         Err(error) => return Err(error),
                     };
-                    observations.push(((writer, iteration), accepted, started.elapsed().as_secs_f64() * 1000.0));
+                    observations.push((
+                        (writer, iteration),
+                        accepted,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    ));
                 }
                 Ok::<_, anyhow::Error>(observations)
             });
@@ -599,9 +600,7 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         let accepted = observations.iter().filter(|row| row.1).count();
         assert!(accepted > 0, "at least one hot-counter update commits");
         committed.extend(observations.iter().filter(|row| row.1).map(|row| row.0));
-        let after = access
-            .execute("{ WriterCounter {value} WriterReceipt {writer iteration} }")
-            .await?;
+        let after = access.execute(writer_counter::OBSERVE).await?;
         assert_eq!(
             after["data"]["WriterCounter"][0]["value"],
             committed.len() as i64
