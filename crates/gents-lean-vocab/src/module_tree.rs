@@ -181,18 +181,14 @@ impl ModuleTree {
         }
         let source = fs::read_to_string(&file)
             .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
-        let syntax = syn::parse_file(&source)
+        let mut syntax = syn::parse_file(&source)
             .unwrap_or_else(|error| panic!("parse {}: {error}", file.display()));
-        if enabled_only && crate::consumer_scan::is_disabled(&syntax.attrs) {
-            self.compiled.remove(&file);
-            return;
+        if enabled_only {
+            crate::consumer_scan::retain_enabled_syntax(&mut syntax);
         }
         let base = parent(&file);
         self.visit_items(&file, &base, &directory, &syntax.items, enabled_only);
-        let mut macros = Macros {
-            enabled_only,
-            ..Default::default()
-        };
+        let mut macros = Macros::default();
         macros.visit_file(&syntax);
         for (name, path) in macros.found {
             let target = normalize(&base.join(path));
@@ -216,9 +212,6 @@ impl ModuleTree {
             let syn::Item::Mod(module) = item else {
                 continue;
             };
-            if enabled_only && crate::consumer_scan::is_disabled(&module.attrs) {
-                continue;
-            }
             let name = module.ident.to_string();
             let explicit = path_attribute(&module.attrs).map(|path| path_base.join(path));
             match &module.content {
@@ -251,42 +244,11 @@ impl ModuleTree {
 #[derive(Default)]
 struct Macros {
     found: Vec<(String, String)>,
-    enabled_only: bool,
     tests_only: bool,
     in_test: bool,
 }
 
 impl<'ast> Visit<'ast> for Macros {
-    fn visit_file(&mut self, file: &'ast syn::File) {
-        if !self.enabled_only || !crate::consumer_scan::is_disabled(&file.attrs) {
-            syn::visit::visit_file(self, file);
-        }
-    }
-
-    fn visit_item(&mut self, item: &'ast syn::Item) {
-        if !self.enabled_only
-            || !crate::consumer_scan::is_disabled(crate::consumer_scan::item_attrs(item))
-        {
-            syn::visit::visit_item(self, item);
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        if !self.enabled_only
-            || !crate::consumer_scan::is_disabled(crate::consumer_scan::stmt_attrs(stmt))
-        {
-            syn::visit::visit_stmt(self, stmt);
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
-        if !self.enabled_only
-            || !crate::consumer_scan::is_disabled(crate::consumer_scan::expr_attrs(expr))
-        {
-            syn::visit::visit_expr(self, expr);
-        }
-    }
-
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
         let outer = self.in_test;
         self.in_test = function.attrs.iter().any(|attr| {
@@ -309,13 +271,13 @@ impl<'ast> Visit<'ast> for Macros {
 }
 
 #[cfg(test)]
-pub(crate) fn test_string_includes(file: &syn::File) -> Vec<String> {
+pub(crate) fn test_string_includes(mut file: syn::File) -> Vec<String> {
+    crate::consumer_scan::retain_enabled_syntax(&mut file);
     let mut visitor = Macros {
         tests_only: true,
-        enabled_only: true,
         ..Default::default()
     };
-    visitor.visit_file(file);
+    visitor.visit_file(&file);
     visitor
         .found
         .into_iter()

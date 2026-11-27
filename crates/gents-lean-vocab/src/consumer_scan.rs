@@ -158,11 +158,11 @@ fn has_ignore(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-pub(crate) fn is_disabled(attrs: &[syn::Attribute]) -> bool {
+fn is_disabled(attrs: &[syn::Attribute]) -> bool {
     has_cfg_false(attrs) || has_ignore(attrs)
 }
 
-pub(crate) fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     match item {
         syn::Item::Const(item) => &item.attrs,
         syn::Item::Enum(item) => &item.attrs,
@@ -193,7 +193,7 @@ fn impl_item_attrs(item: &syn::ImplItem) -> &[syn::Attribute] {
     }
 }
 
-pub(crate) fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
+fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
     match stmt {
         syn::Stmt::Local(local) => &local.attrs,
         syn::Stmt::Item(item) => item_attrs(item),
@@ -202,7 +202,7 @@ pub(crate) fn stmt_attrs(stmt: &syn::Stmt) -> &[syn::Attribute] {
     }
 }
 
-pub(crate) fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
+fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
     match expr {
         syn::Expr::Array(expr) => &expr.attrs,
         syn::Expr::Assign(expr) => &expr.attrs,
@@ -243,6 +243,41 @@ pub(crate) fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
         syn::Expr::While(expr) => &expr.attrs,
         syn::Expr::Yield(expr) => &expr.attrs,
         _ => &[],
+    }
+}
+
+pub(crate) fn retain_enabled_syntax(file: &mut syn::File) {
+    use syn::visit_mut::{self, VisitMut};
+
+    struct Enabled;
+
+    impl VisitMut for Enabled {
+        fn visit_item_mut(&mut self, item: &mut syn::Item) {
+            if is_disabled(item_attrs(item)) {
+                *item = syn::Item::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_item_mut(self, item);
+            }
+        }
+
+        fn visit_block_mut(&mut self, block: &mut syn::Block) {
+            block.stmts.retain(|stmt| !is_disabled(stmt_attrs(stmt)));
+            visit_mut::visit_block_mut(self, block);
+        }
+
+        fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
+            if is_disabled(expr_attrs(expr)) {
+                *expr = syn::Expr::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_expr_mut(self, expr);
+            }
+        }
+    }
+
+    if is_disabled(&file.attrs) {
+        file.items.clear();
+    } else {
+        Enabled.visit_file_mut(file);
     }
 }
 
@@ -685,7 +720,7 @@ mod tests {
             fn helper() { include_str!("helper"); }
         "#;
         let includes =
-            |source| crate::module_tree::test_string_includes(&syn::parse_file(source).unwrap());
+            |source| crate::module_tree::test_string_includes(syn::parse_file(source).unwrap());
         assert_eq!(includes(rust), ["active"]);
         assert!(includes(&format!("#![cfg(false)]\n{rust}")).is_empty());
         assert_eq!(
@@ -731,7 +766,7 @@ mod tests {
             let imports = if ts {
                 ts_trace_imports(&source)
             } else {
-                crate::module_tree::test_string_includes(&syn::parse_file(&source).unwrap())
+                crate::module_tree::test_string_includes(syn::parse_file(&source).unwrap())
             };
             for import in imports.iter().filter(|s| s.contains("/generated/traces/")) {
                 let file = path.parent().unwrap().join(import).canonicalize().unwrap();
