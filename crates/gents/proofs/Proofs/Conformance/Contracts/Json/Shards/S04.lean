@@ -1,0 +1,25 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.ClientShell.Contracts.SessionTurn
+import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Contracts.Json.CatalogRefresh
+import Proofs.Conformance.EnrollmentAutoRenewal
+import Proofs.Conformance.EventSourceCursor
+import Proofs.Conformance.GoalClaimedReadiness
+import Proofs.Conformance.Identity.HouseholdP2p
+import Proofs.Conformance.InterruptGenerationClaim
+import Proofs.Conformance.LineageReturn
+import Proofs.Conformance.MailboxQuestion
+import Proofs.Conformance.PairingSweepScheduling
+import Proofs.Conformance.RequestTransition
+import Proofs.Conformance.RootCandidates.CompletionParameters
+import Proofs.Conformance.SessionObservation
+import Proofs.Conformance.TransactionReplay
+import Proofs.Conformance.TriggerDeliveryLatestAdmission
+import Proofs.Store.Identity.AgentTargetAccess
+
+namespace Conformance.Contracts.Shards.S04
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S04

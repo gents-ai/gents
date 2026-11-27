@@ -679,7 +679,7 @@ jobs:
   # from the build; with more they go into a nextest archive and `shard` runs
   # slices of it, compiling nothing.
   build:
-    name: build (${{ matrix.archive }}${{ matrix.partition && format(' {0}/{1}', matrix.partition, matrix.partitions) || '' }})
+    name: build (${{ matrix.archive }}${{ matrix.partitions && format(' {0}/{1}', matrix.partition, matrix.partitions) || (matrix.partition && format(' {0}', matrix.partition) || '') }})
     needs: plan
     if: >-
       (github.event_name != 'pull_request' ||

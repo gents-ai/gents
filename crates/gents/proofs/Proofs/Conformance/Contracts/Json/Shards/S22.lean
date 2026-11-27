@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AgentWorkers
+import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.ContractCases.LiveOverlay
+import Proofs.Conformance.Eval
+import Proofs.Conformance.EventGroupClock
+import Proofs.Conformance.GoalClientControl
+import Proofs.Conformance.GoalFirstRequestBinding
+import Proofs.Conformance.GoalSessionObservation
+import Proofs.Conformance.Identity.CreatedAgentAccess
+import Proofs.Conformance.Identity.GoalLinks
+import Proofs.Conformance.InferenceContextViews
+import Proofs.Conformance.InferenceObservation
+import Proofs.Conformance.NodePublication
+import Proofs.Conformance.OwedRegistration
+import Proofs.Conformance.PluginStoreHome
+import Proofs.Conformance.RenderedCaptureBlockTurns
+import Proofs.Conformance.RootCandidates
+import Proofs.Conformance.SchemaObligations
+import Proofs.Conformance.TitleAdmission
+
+namespace Conformance.Contracts.Shards.S22
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S22
