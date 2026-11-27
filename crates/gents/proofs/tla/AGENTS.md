@@ -95,10 +95,11 @@ stale.
 Run `make tla-traces` to regenerate the participating specs' counterexamples
 in `generated/traces/`. The pinned TLC rejects `-dumpTrace`. Its `-tool`
 state messages carry the numbered full snapshots and named actions. The
-generator drops source locations, recovers the client actor from the changed
-queue entry and compares two fresh runs byte for byte. The contract gate checks
+generator drops source locations, recovers actor identities from state changes
+and compares two fresh runs byte for byte. The contract gate checks
 the generated files against TLC. The vocabulary tests check that each has one
-replay consumer.
+replay consumer or a boundary in `trace-coverage.json` with an active test
+that exercises the internal step.
 
 Give each disjunct of `Next` a named operator, including its quantifier.
 Add the spec to `traces` in `tla_check.py`. In its e2e test, load each trace,
@@ -109,3 +110,11 @@ operation receipt. A defect replay satisfies the named property, a premise
 replay exhibits its violation, and a witness reaches the state its invariant
 excludes. Client draft and deadline steps run through the desktop delivery
 owner with its clock under test control.
+
+An action whose parameter TLC elides names its actor source on a
+`\* trace actors: Action1, Action2 => field` line. A function field
+identifies its one changed key. Use `field{2}` for two symmetric actors,
+or `queue.id` for the identity of one replaced or removed queue entry.
+TLC model values use `{"$model":"w1"}` and functions use `{"$function":[[key,value],…]}`
+to retain composite keys. A temporal trace ends with its closing transition,
+whose `backToState` names the one-based TLC state it revisits.
