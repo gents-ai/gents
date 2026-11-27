@@ -4011,7 +4011,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -6808,6 +6808,7 @@ dependencies = [
 name = "gents-shell"
 version = "1.0.0-rc2"
 dependencies = [
+ "pulldown-cmark",
  "rapidhash",
  "ratatui",
  "tui-test-rs",
@@ -7151,9 +7152,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "toml 0.8.2",
- "toml_datetime 0.6.3",
  "toml_datetime 1.1.1+spec-1.1.0",
- "toml_edit 0.20.2",
  "toml_parser",
  "tower",
  "tracing",
@@ -10524,7 +10523,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -12615,6 +12614,17 @@ dependencies = [
  "rustc-hash",
  "thiserror 2.0.18",
  "version-ranges",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags 2.13.2",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]

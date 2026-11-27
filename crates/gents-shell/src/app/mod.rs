@@ -3,6 +3,7 @@ pub mod fields;
 pub mod form;
 pub mod input;
 pub mod layers;
+pub(crate) mod markdown;
 mod mouse;
 mod prompt;
 pub mod search;
