@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   ChatSendRequest,
@@ -27,6 +23,7 @@ import {
 } from "../../src/hooks/chatDeliveryView";
 import { acceptedChat, chatDeliveryFixture } from "../chat-delivery-fixture";
 import { goalDeliveryStorage } from "../goal-delivery-storage";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
@@ -49,32 +46,21 @@ type Snapshot = {
 };
 type Action = { kind: string; ok?: boolean };
 type Trace = { actions: Action[]; after: Snapshot[] };
-const run = promisify(execFile);
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-async function leanCases() {
-  const cwd = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../../crates/gents/proofs",
-  );
-  await run("lake", ["build", "Proofs.Conformance.ClientOptimisticSend"], {
-    cwd,
-    timeout: 240_000,
-  });
-  const { stdout } = await run(
-    "lake",
-    ["env", "lean", "--run", "Proofs/Conformance/ClientOptimisticSend.lean"],
-    { cwd, timeout: 240_000, maxBuffer: 64 * 1024 * 1024 },
-  );
-  return JSON.parse(stdout) as {
+function leanCases() {
+  return runLeanGeneratorJson<{
     views: ViewCase[];
     rows: RowCase[];
     traces: Trace[];
-  };
+  }>(
+    "Proofs.Conformance.ClientOptimisticSend:olean",
+    "Proofs/Conformance/ClientOptimisticSend.lean",
+  );
 }
 
 const flush = async () => {

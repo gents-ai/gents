@@ -29,6 +29,8 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientOptimisticSend,
   `Proofs.Conformance.JobRead,
   `Proofs.Conformance.GoalClientDelivery,
+  `Proofs.Conformance.GoalSessionObservationConformance,
+  `Proofs.Conformance.MailboxAnswerCacheConformance,
   `Proofs.Conformance.EditorUndo,
   `Proofs.Conformance.ObserverResync,
   `Proofs.Conformance.ClientWindowScope,

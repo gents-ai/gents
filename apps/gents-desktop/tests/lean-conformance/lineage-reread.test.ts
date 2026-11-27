@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -15,6 +11,7 @@ import {
   sessionMoment,
   type LineageAsked,
 } from "../../src/hooks/provenance";
+import { loadLeanFamilyCases } from "./leanGenerator";
 
 type Link = { node: string; session: string };
 type Listed = { session: string; started_by: Link | null; moment: string };
@@ -42,36 +39,8 @@ type Input = {
 };
 type Decision = { movable: string[]; asks_again: boolean };
 
-const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
-const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
-
-const run = promisify(execFile);
-
-/** The Lean family's cases, from the contract snapshot. */
-async function leanFamilyCases(
-  path: string,
-): Promise<{ input: Input; expected: Decision }[]> {
-  const key = /^families::(\w+)::cases\(\)$/.exec(path)![1]!;
-  const proofsDir = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../../crates/gents/proofs",
-  );
-  await run("lake", ["build", "Proofs.Conformance.Contracts"], {
-    cwd: proofsDir,
-    timeout: 240_000,
-  });
-  const { stdout } = await run(
-    "lake",
-    ["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
-    { cwd: proofsDir, encoding: "utf8", timeout: 240_000, maxBuffer: 1 << 30 },
-  );
-  const begin = stdout.indexOf(CONTRACT_JSON_BEGIN) + CONTRACT_JSON_BEGIN.length;
-  const end = stdout.indexOf(CONTRACT_JSON_END);
-  const snapshot = JSON.parse(stdout.slice(begin, end)) as {
-    families: Record<string, { cases: { input: Input; expected: Decision }[] }>;
-  };
-  return snapshot.families[key]!.cases;
-}
+const leanFamilyCases = (path: string) =>
+  loadLeanFamilyCases<{ input: Input; expected: Decision }>(path);
 
 const linked = (link: Link): LinkedSessionView => ({
   nodeDid: link.node,

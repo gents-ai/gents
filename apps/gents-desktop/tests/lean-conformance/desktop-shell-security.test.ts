@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn(async () => undefined));
@@ -14,8 +10,8 @@ import {
   scanRuntimeUxPlugins,
 } from "@/contrib/runtime-door";
 import { resetUxPluginStore, setUxPluginEnabled } from "@/contrib/plugins-store";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
-const run = promisify(execFile);
 type Cases = {
   plugins: {
     development: boolean;
@@ -42,21 +38,10 @@ afterEach(() => {
 });
 
 it("binds plugin loading and message consent to the executable shell model", async () => {
-  const cwd = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../..",
-    "crates/gents/proofs",
+  const cases = await runLeanGeneratorJson<Cases>(
+    "Proofs.Conformance.DesktopShellSecurity:olean",
+    "Proofs/Conformance/DesktopShellSecurity.lean",
   );
-  await run("lake", ["build", "Proofs.Conformance.DesktopShellSecurity"], {
-    cwd,
-    timeout: 240_000,
-  });
-  const { stdout } = await run(
-    "lake",
-    ["env", "lean", "--run", "Proofs/Conformance/DesktopShellSecurity.lean"],
-    { cwd },
-  );
-  const cases = JSON.parse(stdout) as Cases;
   expect(cases.plugins).toHaveLength(18);
   for (const row of cases.plugins) {
     resetRuntimeDoor();

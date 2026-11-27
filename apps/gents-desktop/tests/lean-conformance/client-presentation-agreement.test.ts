@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +11,7 @@ import { deployment } from "../config-panel-wiring/fixtures";
 
 import type { ChatShellProjection } from "@source-inc/gents-desktop-chat";
 import { presentedComposerSendStatus } from "../../src/ui/screens/session/composerParts";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type GeneratedPresentationCase = {
   name: string;
@@ -38,33 +37,11 @@ type GeneratedCases = {
   recoveryCases: GeneratedRecoveryCase[];
 };
 
-function runLean(proofsDir: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("lake", args, { cwd: proofsDir });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (status) => {
-      if (status === 0) resolve(stdout);
-      else reject(new Error(`lake ${args.join(" ")} failed\n${stdout}\n${stderr}`));
-    });
-  });
-}
-
-async function generatedPresentationCases(): Promise<GeneratedCases> {
-  const proofsDir = path.resolve(process.cwd(), "../../crates/gents/proofs");
-  await runLean(proofsDir, ["build", "Proofs.Conformance.ClientPresentationAgreement"]);
-  const stdout = await runLean(proofsDir, [
-    "env",
-    "lean",
-    "--run",
+function generatedPresentationCases(): Promise<GeneratedCases> {
+  return runLeanGeneratorJson<GeneratedCases>(
+    "Proofs.Conformance.ClientPresentationAgreement:olean",
     "Proofs/Conformance/ClientPresentationAgreement.lean",
-  ]);
-  return JSON.parse(stdout.trim()) as GeneratedCases;
+  );
 }
 
 describe("ClientShell presentation agreement", () => {

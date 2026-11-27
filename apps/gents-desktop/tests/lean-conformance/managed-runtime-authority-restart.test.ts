@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
 import {
@@ -10,25 +6,15 @@ import {
   type AuthorityRestartObservation,
   type AuthorityRestartPlan,
 } from "../../src/ui/lib/managedRuntimeAuthority";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type Case = AuthorityRestartObservation & { plan: AuthorityRestartPlan };
-const run = promisify(execFile);
 
 it("derives the access-change restart plan from the Lean AuthorityRestart owner", async () => {
-  const cwd = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../../crates/gents/proofs",
+  const cases = await runLeanGeneratorJson<Case[]>(
+    "Proofs.Conformance.ClientAuthorityRestart:olean",
+    "Proofs/Conformance/ClientAuthorityRestart.lean",
   );
-  await run("lake", ["build", "Proofs.Conformance.ClientAuthorityRestart"], {
-    cwd,
-    timeout: 240_000,
-  });
-  const { stdout } = await run(
-    "lake",
-    ["env", "lean", "--run", "Proofs/Conformance/ClientAuthorityRestart.lean"],
-    { cwd, timeout: 240_000 },
-  );
-  const cases = JSON.parse(stdout) as Case[];
   // The model enumerates every observation: three independent booleans.
   expect(cases).toHaveLength(2 ** 3);
   for (const { plan, ...observation } of cases) {

@@ -2825,28 +2825,26 @@ describe("configuration panels", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      it(testCase.value, async () => {
-        const { api, app } = harness();
-        const view = renderIn(app, testCase.renderPanel());
-        if (testCase.method === "applyConfigComponents") {
-          await screen.findByLabelText("Temperature");
-        }
-        const user = await replace(testCase.field, testCase.value);
-        await user.click(screen.getByRole("button", { name: "Save" }));
-        expect(api[testCase.method], testCase.method).toHaveBeenCalledTimes(1);
-        if (testCase.method === "saveSkillConfig") {
-          expect(api.saveSkillConfig).toHaveBeenCalledWith(
-            expect.objectContaining({
-              document: expect.objectContaining({
-                source_directory: "/skills/skill-a",
-              }),
+    it.each(cases)("$value", async (testCase) => {
+      const { api, app } = harness();
+      const view = renderIn(app, testCase.renderPanel());
+      if (testCase.method === "applyConfigComponents") {
+        await screen.findByLabelText("Temperature");
+      }
+      const user = await replace(testCase.field, testCase.value);
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      expect(api[testCase.method], testCase.method).toHaveBeenCalledTimes(1);
+      if (testCase.method === "saveSkillConfig") {
+        expect(api.saveSkillConfig).toHaveBeenCalledWith(
+          expect.objectContaining({
+            document: expect.objectContaining({
+              source_directory: "/skills/skill-a",
             }),
-          );
-        }
-        view.unmount();
-      });
-    }
+          }),
+        );
+      }
+      view.unmount();
+    });
   });
 
   it("blocks delete up front and lists dependents when a backend, profile, or schedule is still in use", async () => {
