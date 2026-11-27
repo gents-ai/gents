@@ -1,0 +1,356 @@
+{
+  "case_id": "pricing-rule-rebuild",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build_v1",
+      "prompt": "Build and test a JavaScript plugin named tier_discount returning ok true and finalPrice = amount * (tier === 'vip' ? 0.9 : 1), and give a new agent pricing-clerk access to it.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "tier_discount"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/tier_discount"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "datastore",
+            "integrations",
+            "self_config"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "tier_discount",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/tier_discount",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "tools",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "integrations",
+                "matches": "node/tier_discount"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "rebuild_v2",
+      "prompt": "Update tier_discount so vip gets 20% off (0.8 multiplier), rebuild with updated tests, and ask pricing-clerk to price amount 200 for tier vip.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/tier_discount"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "datastore",
+            "integrations",
+            "self_config"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agent_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)pricing[- ]?clerk"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "agent_runs",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/tier_discount",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.1"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "tools",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "integrations",
+                "matches": "node/tier_discount"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b160\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

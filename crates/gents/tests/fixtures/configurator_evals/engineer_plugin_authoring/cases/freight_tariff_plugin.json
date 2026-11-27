@@ -1,0 +1,162 @@
+{
+  "case_id": "freight-tariff-plugin",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Build and test a sealed JavaScript plugin named freight_tariff: given weightKg, distanceKm, and hazard (bool), return ok true with fee = weightKg*2 + distanceKm + (hazard ? 40 : 0); refuse weightKg <= 0 or distanceKm <= 0 with ok false and code INVALID_INPUT.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "freight_tariff"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/freight_tariff"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "freight_tariff",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/freight_tariff",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "run",
+      "prompt": "Run freight_tariff for weightKg 10, distanceKm 25, hazard true and also for weightKg 0, distanceKm 10, hazard false; report both results.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/freight_tariff"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "install",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b85\\b"
+              },
+              {
+                "matches": "INVALID_INPUT"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

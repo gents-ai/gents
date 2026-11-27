@@ -182,11 +182,13 @@ example : (policyCase? "disabled_network_read_only_curl_denies_before_allowlist"
       c.decision.denialReason?.bind CommandPolicy.DenialReason.command?)) =
       some (some "disabledNetworkCommand", some "curl") := by native_decide
 
+deriving instance Lean.ToJson for CommandPolicy.SandboxBackend
+
 structure SandboxInput where
   name : String
   category : String
   mode : CommandPolicy.ExecutionMode
-  workspaceWriteSandboxEnforced : Bool
+  sandboxBackend : CommandPolicy.SandboxBackend
   lookupCommand : String
   networkMode : CommandPolicy.NetworkMode
   deriving Lean.ToJson
@@ -208,11 +210,11 @@ reads. -/
 def commandSandboxSelection : Family SandboxInput SandboxOutput where
   inputs := CommandPolicy.commandSandboxCases.map fun c =>
     { name := c.name, category := c.category, mode := c.mode
-      workspaceWriteSandboxEnforced := c.workspaceWriteSandboxEnforced
+      sandboxBackend := c.sandboxBackend
       lookupCommand := c.lookupCommand, networkMode := c.networkMode }
   model := fun i =>
     let support : CommandPolicy.RuntimeSupport :=
-      { workspaceWriteSandboxEnforced := i.workspaceWriteSandboxEnforced }
+      { sandboxBackend := i.sandboxBackend }
     let decision := CommandPolicy.selectSandbox support i.mode
     let profile := CommandPolicy.commandProfile support
       { mode := i.mode, allowedArgvPrefixes := [], forbiddenArgvPrefixes := []
@@ -231,6 +233,12 @@ private def sandboxCase? (name : String) : Option CommandPolicy.CommandSandboxCa
 example : (sandboxCase? "workspace_write_enforced_selects_macos_seatbelt").map (·.decision) =
     some (.selected .macosSeatbelt) := by native_decide
 
+example : (sandboxCase? "workspace_write_enforced_selects_linux_landlock").map (·.decision) =
+    some (.selected .linuxLandlock) := by native_decide
+
+example : (sandboxCase? "artifact_write_enforced_selects_linux_landlock").map (·.decision) =
+    some (.selected .linuxLandlock) := by native_decide
+
 example : (sandboxCase? "unrestricted_selects_unsandboxed_unrestricted").map (·.decision) =
     some (.selected .unsandboxedUnrestricted) := by native_decide
 
@@ -239,6 +247,12 @@ example : [ "read_only_with_backend_selects_the_read_only_profile",
     "read_only_network_reader_under_disabled_network_is_offline" ].all
       (fun n => (sandboxCase? n).map (·.decision) ==
         some (.selected .macosSeatbeltReadOnly)) = true := by native_decide
+
+example : [ "read_only_with_linux_landlock_selects_the_read_only_profile",
+    "read_only_linux_network_reader_reaches_the_network",
+    "read_only_linux_network_reader_under_disabled_network_is_offline" ].all
+      (fun n => (sandboxCase? n).map (·.decision) ==
+        some (.selected .linuxLandlockReadOnly)) = true := by native_decide
 
 example : (sandboxCase? "read_only_without_backend_selects_policy_read_only").map
     (·.decision) = some (.selected .policyReadOnly) := by native_decide

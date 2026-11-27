@@ -10,6 +10,7 @@ use std::process::Stdio;
 use tokio::process::{Child, Command};
 
 use super::super::native_spawn::spawn_tokio;
+use crate::workspace::sandbox::LinuxSandboxConfig;
 
 #[cfg(test)]
 mod tests;
@@ -23,7 +24,16 @@ pub(super) fn spawn_child(
     cwd: &Path,
     environment: Option<&RapidHashMap<String, String>>,
     piped_stdin: bool,
+    linux_sandbox: Option<&LinuxSandboxConfig>,
 ) -> io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    let prepared_sandbox = linux_sandbox
+        .map(crate::workspace::sandbox::linux::PreparedLinuxSandbox::prepare)
+        .transpose()?
+        .map(std::sync::Arc::new);
+    #[cfg(not(target_os = "linux"))]
+    let _ = linux_sandbox;
+
     let spawn = |executable: &OsStr, script: Option<&OsStr>| {
         let mut command = Command::new(executable);
         if let Some(script) = script {
@@ -44,6 +54,16 @@ pub(super) fn spawn_child(
         command.as_std_mut().arg0(program);
         if let Some(environment) = environment {
             command.env_clear().envs(environment);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(sandbox) = prepared_sandbox.clone() {
+            // SAFETY: apply_in_child performs only async-signal-safe raw
+            // prctl/landlock/close syscalls over pre-opened descriptors.
+            unsafe {
+                command
+                    .as_std_mut()
+                    .pre_exec(move || sandbox.apply_in_child());
+            }
         }
         spawn_tokio(&mut command)
     };

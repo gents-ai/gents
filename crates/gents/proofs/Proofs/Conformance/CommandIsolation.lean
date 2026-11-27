@@ -27,7 +27,7 @@ structure SeatbeltOutput where
 
 /-- The sandbox each kernel-contained mode selects on a host with a backend. -/
 def containedSandbox (mode : ExecutionMode) : SandboxKind :=
-  match selectSandbox { workspaceWriteSandboxEnforced := true } mode with
+  match selectSandbox { sandboxBackend := .macosSeatbelt } mode with
   | .selected sandbox => sandbox
   | .denied _ => .policyReadOnly
 

@@ -384,14 +384,18 @@ impl DenialReason {
                 _ => format!("{command} is not allowed when command_network_mode=disabled"),
             },
             Self::ArtifactWriteSandboxUnavailable => {
-                "artifact_write requires macOS Seatbelt sandbox enforcement".into()
+                "artifact_write requires kernel sandbox enforcement (macOS Seatbelt or Linux Landlock)"
+                    .into()
             }
             Self::WorkspaceWriteSandboxUnavailable => {
                 if cfg!(target_os = "macos") {
                     "macOS sandbox-exec is required for workspace_write bash but was not found"
                         .into()
+                } else if cfg!(target_os = "linux") {
+                    "Linux Landlock kernel sandbox is required for workspace_write bash but is unavailable on this host"
+                        .into()
                 } else {
-                    "workspace_write bash requires macOS seatbelt sandbox enforcement on this build"
+                    "workspace_write bash requires kernel sandbox enforcement (macOS Seatbelt or Linux Landlock) on this build"
                         .into()
                 }
             }

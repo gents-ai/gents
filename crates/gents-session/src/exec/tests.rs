@@ -49,6 +49,7 @@ async fn managed_exec_deadline_kills_process_group() {
             tool_name: Some(tool_name.to_string()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         })
         .await
     });
@@ -107,6 +108,7 @@ async fn managed_exec_deadline_kills_process_group() {
             tool_name: Some("r3-soak-next".to_string()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         }),
     )
     .await
@@ -140,6 +142,7 @@ async fn managed_exec_cancellation_kills_process_group() {
             tool_name: Some(tool_name.to_string()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         })
         .await
     });
@@ -195,6 +198,7 @@ async fn managed_exec_deadline_kills_job_object() {
                 tool_name: Some(tool_name.to_string()),
                 live_output: Some(writer),
                 process_recorder: None,
+                linux_sandbox: None,
             })
             .await
         }
@@ -242,6 +246,7 @@ async fn managed_exec_cancellation_kills_job_object() {
                 tool_name: Some(tool_name.to_string()),
                 live_output: Some(writer),
                 process_recorder: None,
+                linux_sandbox: None,
             })
             .await
         }
@@ -365,6 +370,7 @@ async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
         tool_name: Some("stdin-passthrough".to_string()),
         live_output: None,
         process_recorder: None,
+        linux_sandbox: None,
     })
     .await;
 
@@ -399,6 +405,7 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
         tool_name: Some("env-scope".to_string()),
         live_output: None,
         process_recorder: None,
+        linux_sandbox: None,
     })
     .await;
     match outcome {
@@ -429,6 +436,7 @@ async fn managed_exec_spawn_outcome_matches_the_lean_model() {
             tool_name: Some("spawn-failure".to_string()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         })
         .await;
         if let ManagedExecOutcome::SpawnFailed { error } = &outcome {
@@ -533,6 +541,7 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
             tool_name: Some(tool_name.clone()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         }),
     )
     .await;
@@ -591,6 +600,7 @@ async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_
             tool_name: Some("continuous-descendant-pipe".to_string()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: None,
         }),
     )
     .await;
@@ -712,6 +722,7 @@ fn concurrent_managed_commands_retain_complete_output() {
                                 tool_name: None,
                                 live_output: None,
                                 process_recorder: None,
+            linux_sandbox: None,
                             })
                             .await;
                             match outcome {
@@ -780,6 +791,7 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
                 tool_name: Some(tool_name),
                 live_output: None,
                 process_recorder: None,
+                linux_sandbox: None,
             }),
         )
         .await

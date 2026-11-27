@@ -1,0 +1,38 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_plugin_authoring",
+  "namespace": "gents",
+  "version": "1.0.0-rc2",
+  "description": "Native eval definition engineer-plugin-authoring: the Engineer authors, tests, rebuilds, wires, and packages sealed JavaScript WASM plugins using native node tools without bash.",
+  "authors": [
+    "gents contributors"
+  ],
+  "kind": "documents",
+  "config": "pack_config.json",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "suite.json",
+    "cases/freight_tariff_plugin.json",
+    "cases/vault_ledger_plugin.json",
+    "cases/pricing_rule_rebuild.json",
+    "cases/dice_turn_engine.json",
+    "cases/clerk_plugin_delegation.json",
+    "cases/harbor_fee_app_pack.json",
+    "cases/customs_duty_plugin.json",
+    "cases/inventory_reserve_plugin.json",
+    "cases/clinic_triage_plugin_pack.json",
+    "cases/escrow_release_plugin.json",
+    "cases/permit_fee_rebuild.json",
+    "cases/fleet_audit_plugin_pack.json"
+  ],
+  "schemas": [],
+  "dependencies": [],
+  "inference_slots": [],
+  "tags": [
+    "eval",
+    "engineer",
+    "plugins",
+    "wasm"
+  ]
+}

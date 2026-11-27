@@ -1785,10 +1785,10 @@ async fn assert_unix_process_exited(pid: i32) {
     .expect("pidfd wait task");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn workspace_write_bash_contains_writes_to_tool_root() {
-    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         return;
     }
 
@@ -1827,7 +1827,12 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
     };
 
     let meta = compact_exec_meta(&output);
-    assert_eq!(meta["sandbox"], "macos_seatbelt");
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt"
+    } else {
+        "linux_landlock"
+    };
+    assert_eq!(meta["sandbox"], expected_sandbox);
     assert_ne!(meta["exit_code"].as_i64(), Some(0));
     assert_eq!(
         std::fs::read_to_string(root.join("inside.txt")).unwrap(),
@@ -1878,7 +1883,12 @@ async fn workspace_write_bash_cannot_signal_a_process_outside_its_sandbox() {
         panic!("a refused signal must fail the command, got {outcome:?}");
     };
     let meta = compact_exec_meta(&output);
-    assert_eq!(meta["sandbox"], "macos_seatbelt");
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt"
+    } else {
+        "linux_landlock"
+    };
+    assert_eq!(meta["sandbox"], expected_sandbox);
     assert_ne!(meta["exit_code"].as_i64(), Some(0));
     assert!(
         root.join("own.txt").exists(),
@@ -1890,7 +1900,7 @@ async fn workspace_write_bash_cannot_signal_a_process_outside_its_sandbox() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
     read_only_bash_in(
         root,
@@ -1901,7 +1911,7 @@ async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
     .await
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn read_only_bash_in(
     root: &Path,
     call: &gents_loop::tool::ToolCallEnvelope,
@@ -1929,12 +1939,17 @@ async fn read_only_bash_in(
 
 /// The read-only profile reads everywhere except the credential namespace,
 /// which it excludes as the workspace profile does.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn read_only_bash_cannot_read_a_protected_credential() {
-    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         return;
     }
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt_read_only"
+    } else {
+        "linux_landlock_read_only"
+    };
     let root = temp_root("gents-bash-read-only-credential")
         .canonicalize()
         .unwrap();
@@ -1954,7 +1969,7 @@ async fn read_only_bash_cannot_read_a_protected_credential() {
 
     let ordinary = read_only_bash_in(&root, &call, "cat", &["ordinary.txt"]).await;
     let meta = compact_exec_meta(&ordinary);
-    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{ordinary}");
+    assert_eq!(meta["sandbox"], expected_sandbox, "{ordinary}");
     assert_eq!(meta["exit_code"].as_i64(), Some(0), "{ordinary}");
     assert!(ordinary.contains("ordinary content"), "{ordinary}");
 
@@ -1962,7 +1977,7 @@ async fn read_only_bash_cannot_read_a_protected_credential() {
     let relative = credential.strip_prefix(&root).unwrap().to_str().unwrap();
     let output = read_only_bash_in(&root, &call, "cat", &[relative]).await;
     let meta = compact_exec_meta(&output);
-    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{output}");
+    assert_eq!(meta["sandbox"], expected_sandbox, "{output}");
     assert_ne!(meta["exit_code"].as_i64(), Some(0), "{output}");
     assert!(!output.contains("fixture credential"), "{output}");
 }
@@ -1970,12 +1985,17 @@ async fn read_only_bash_cannot_read_a_protected_credential() {
 /// A clean filter that `.gitattributes` names is a configured program no
 /// launch option disables: `git diff` starts it, and the read-only profile
 /// refuses its write.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn read_only_bash_git_runs_under_the_read_only_profile() {
-    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         return;
     }
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt_read_only"
+    } else {
+        "linux_landlock_read_only"
+    };
     let root = temp_root("gents-bash-read-only-profile")
         .canonicalize()
         .unwrap();
@@ -2013,7 +2033,7 @@ async fn read_only_bash_git_runs_under_the_read_only_profile() {
 
     let output = read_only_bash(&root, "git", &["diff"]).await;
     let meta = compact_exec_meta(&output);
-    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{output}");
+    assert_eq!(meta["sandbox"], expected_sandbox, "{output}");
     assert!(
         !marker.exists(),
         "a program git started wrote under the read-only profile"
@@ -2811,7 +2831,12 @@ with socket.socket() as connection:
         )
         .await
         .unwrap();
-        assert_eq!(command.sandbox, "macos_seatbelt");
+        let expected_sandbox = if cfg!(target_os = "macos") {
+            "macos_seatbelt"
+        } else {
+            "linux_landlock"
+        };
+        assert_eq!(command.sandbox, expected_sandbox);
         assert_eq!(
             command.environment["CARGO_TARGET_DIR"],
             fx.grant.root().join("target").to_string_lossy()
@@ -2833,6 +2858,7 @@ with socket.socket() as connection:
             tool_name: Some("artifact-probe".into()),
             live_output: None,
             process_recorder: None,
+            linux_sandbox: command.linux_sandbox,
         })
         .await
     }
@@ -2957,7 +2983,12 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
         let output: serde_json::Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
         assert_eq!(output["execution_mode"], "artifact_write");
         assert_eq!(output["network_mode"], "disabled");
-        assert_eq!(output["sandbox"], "macos_seatbelt");
+        let expected_sandbox = if cfg!(target_os = "macos") {
+            "macos_seatbelt"
+        } else {
+            "linux_landlock"
+        };
+        assert_eq!(output["sandbox"], expected_sandbox);
         assert_eq!(output["exit_code"], 0);
         if subcommand == "test" {
             assert!(

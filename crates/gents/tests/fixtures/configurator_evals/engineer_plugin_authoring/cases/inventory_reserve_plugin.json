@@ -1,0 +1,322 @@
+{
+  "case_id": "inventory-reserve-plugin",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "setup",
+      "prompt": "Create StockItem(sku, available: Int) and add sku P9 with available 2. Build a JavaScript plugin named claim_stock that reads StockItem, decrements available by qty if available >= qty or refuses OUT_OF_STOCK. Create agent stock-clerk with only claim_stock.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "StockItem"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "claim_stock"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/claim_stock"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "datastore",
+            "integrations",
+            "self_config"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "StockItem",
+          "filter": {},
+          "fields": [
+            "sku",
+            "available"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type StockItem { sku: String available: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "rows",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "claim_stock",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"StockItem\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"query\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"update\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/claim_stock",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "tools",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "integrations",
+                "matches": "node/claim_stock"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask stock-clerk to claim qty 2 of sku P9, then try claiming qty 1 of sku P9; report both outcomes.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "StockItem",
+          "filter": {},
+          "fields": [
+            "sku",
+            "available"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "agent_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)stock[- ]?clerk"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "agent_runs",
+            "min": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "rows",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "sku",
+                "equals": "P9"
+              },
+              {
+                "field": "available",
+                "equals": 0
+              }
+            ],
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "OUT_OF_STOCK"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

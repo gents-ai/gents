@@ -1,0 +1,162 @@
+{
+  "case_id": "customs-duty-plugin",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Build and test a sealed JavaScript plugin named customs_duty: given valueUsd and category ('tech' 5%, 'luxury' 20%, 'books' 0%), return ok true with duty = valueUsd * rate; refuse valueUsd < 0 or unknown category with ok false and code INVALID_DECLARATION.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "customs_duty"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/customs_duty"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "customs_duty",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/customs_duty",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "run",
+      "prompt": "Run customs_duty for valueUsd 500 category luxury, and also valueUsd 100 category unknown; report both results.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/customs_duty"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "install",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b100\\b"
+              },
+              {
+                "matches": "INVALID_DECLARATION"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

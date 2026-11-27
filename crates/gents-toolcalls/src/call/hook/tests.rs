@@ -1018,6 +1018,7 @@ async fn interruption_leaves_background_workers_running() {
                     started_notify.notify_one();
                 },
             )),
+            linux_sandbox: None,
         })
         .await
     });

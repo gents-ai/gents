@@ -130,10 +130,27 @@ structure Policy where
   readOnlyAllowlist : List String
   deriving DecidableEq, Repr
 
+inductive SandboxBackend where
+  | none
+  | macosSeatbelt
+  | linuxLandlock
+  deriving DecidableEq, Repr
+
+namespace SandboxBackend
+
+def toContract : SandboxBackend → String
+  | .none => "none"
+  | .macosSeatbelt => "macos_seatbelt"
+  | .linuxLandlock => "linux_landlock"
+
+end SandboxBackend
+
 inductive SandboxKind where
   | policyReadOnly
   | macosSeatbeltReadOnly
   | macosSeatbelt
+  | linuxLandlockReadOnly
+  | linuxLandlock
   | unsandboxedUnrestricted
   deriving DecidableEq, Repr
 
@@ -143,7 +160,17 @@ def toContract : SandboxKind → String
   | .policyReadOnly => "policy_read_only"
   | .macosSeatbeltReadOnly => "macos_seatbelt_read_only"
   | .macosSeatbelt => "macos_seatbelt"
+  | .linuxLandlockReadOnly => "linux_landlock_read_only"
+  | .linuxLandlock => "linux_landlock"
   | .unsandboxedUnrestricted => "unsandboxed_unrestricted"
+
+def isWriteKernelSandbox : SandboxKind → Bool
+  | .macosSeatbelt | .linuxLandlock => true
+  | _ => false
+
+def isReadOnlyKernelSandbox : SandboxKind → Bool
+  | .macosSeatbeltReadOnly | .linuxLandlockReadOnly => true
+  | _ => false
 
 end SandboxKind
 
@@ -206,7 +233,14 @@ def denialReason? : SandboxDecision → Option DenialReason
 end SandboxDecision
 
 structure RuntimeSupport where
-  workspaceWriteSandboxEnforced : Bool
+  sandboxBackend : SandboxBackend
   deriving DecidableEq, Repr
+
+namespace RuntimeSupport
+
+def workspaceWriteSandboxEnforced (support : RuntimeSupport) : Bool :=
+  support.sandboxBackend != .none
+
+end RuntimeSupport
 
 end CommandPolicy

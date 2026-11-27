@@ -1,0 +1,11 @@
+{
+  "id": "engineer-plugin-authoring",
+  "title": "Engineer plugin authoring",
+  "coverage": [
+    "pure JavaScript sealed rules plugin built, tested with inline cases and refusals, and run live",
+    "data-backed plugin using data_calls reads and atomic writes with balance and duplicate-sequence invariants",
+    "in-place plugin rebuild bumping version with automatic Tools digest pin migration",
+    "least-privilege specialist agent executing a compiled data-mutating plugin",
+    "zero-bash pack export and pack build bundling a compiled WASM plugin with schema and linted UI page"
+  ]
+}

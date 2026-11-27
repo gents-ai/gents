@@ -34,7 +34,7 @@ pub fn protect(home: &Path) {
 
 pub struct CommandProtection {
     home: PathBuf,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     paths: Vec<PathBuf>,
 }
 
@@ -65,17 +65,17 @@ impl CommandProtection {
         );
         Ok(Self {
             home: canonical,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             paths,
         })
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn paths(&self) -> &[PathBuf] {
         &self.paths
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn ancestors(&self) -> std::collections::BTreeSet<PathBuf> {
         self.paths
             .iter()

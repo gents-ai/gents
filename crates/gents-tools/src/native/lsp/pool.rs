@@ -564,6 +564,7 @@ impl LspPool {
             environment: Some(command.environment),
             tool_name: Some("lsp".into()),
             kind: ManagedExecKind::PersistentService,
+            linux_sandbox: command.linux_sandbox,
         })
         .await
         .map_err(ClientStartError::Initialization)?;

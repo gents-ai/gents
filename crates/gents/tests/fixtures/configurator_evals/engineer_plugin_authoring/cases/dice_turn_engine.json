@@ -1,0 +1,198 @@
+{
+  "case_id": "dice-turn-engine",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create collection TurnLog(matchId, seq: Int, actor, points: Int). Build and test a JavaScript plugin named match_step that reads TurnLog for matchId, refuses duplicate seq with code DUP_SEQ, inserts the turn, and returns winner when actor reaches 10 points.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "TurnLog"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "match_step"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/match_step"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type TurnLog { matchId: String seq: Int actor: String points: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "match_step",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"TurnLog\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"query\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"insert\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/match_step",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "run",
+      "prompt": "Run match_step for matchId m1: seq 1 actor ada points 6, seq 2 actor bob points 4, duplicate seq 2 actor bob points 1, then seq 3 actor ada points 5. Report each result and the winner.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "TurnLog",
+          "filter": {},
+          "fields": [
+            "matchId",
+            "seq",
+            "actor",
+            "points"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "rows",
+            "min": 3,
+            "max": 3
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "rows",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "matchId",
+                "equals": "m1"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "DUP_SEQ"
+              },
+              {
+                "matches": "(?i)\\bada\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

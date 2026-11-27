@@ -54,6 +54,7 @@ pub(crate) fn hook_exec_request(
         tool_name: Some(format!("task_hook:{}", hook.hook_id)),
         live_output: None,
         process_recorder: recorder,
+        linux_sandbox: None,
     }
 }
 

@@ -1,0 +1,197 @@
+{
+  "case_id": "vault-ledger-plugin",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create collection VaultEntry(entryId, delta: Int, note). Build and test a JavaScript plugin named vault_post that reads VaultEntry rows to sum balance, inserts the entry if balance + delta >= 0 returning new balance, or refuses with code INSUFFICIENT_FUNDS.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "VaultEntry"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "vault_post"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/vault_post"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type VaultEntry { entryId: String delta: Int note: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "vault_post",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"VaultEntry\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"query\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"insert\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/vault_post",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "run",
+      "prompt": "Run vault_post with entryId e1 delta 100 note opening, then entryId e2 delta -40 note transfer, then entryId e3 delta -90 note overdraft. Report all outcomes and final balance.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "VaultEntry",
+          "filter": {},
+          "fields": [
+            "entryId",
+            "delta",
+            "note"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "rows",
+            "min": 2,
+            "max": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "rows",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entryId",
+                "matches": "^(?:e1|e2)$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "INSUFFICIENT_FUNDS"
+              },
+              {
+                "matches": "\\b60\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

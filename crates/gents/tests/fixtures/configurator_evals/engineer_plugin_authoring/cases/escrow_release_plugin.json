@@ -1,0 +1,197 @@
+{
+  "case_id": "escrow-release-plugin",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create collection EscrowTx(txId, amount: Int, kind). Build and test a JavaScript plugin named escrow_apply that sums deposits minus releases in EscrowTx, inserts a deposit or release if balance stays >= 0 returning new balance, or refuses with code OVERDRAWN.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "EscrowTx"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "escrow_apply"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/escrow_apply"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type EscrowTx { txId: String amount: Int kind: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "escrow_apply",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"EscrowTx\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"query\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"insert\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/escrow_apply",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "equals": "0.1.0"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "run",
+      "prompt": "Run escrow_apply for txId t1 amount 250 kind deposit, txId t2 amount 100 kind release, and txId t3 amount 200 kind release; report each result and final balance.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "EscrowTx",
+          "filter": {},
+          "fields": [
+            "txId",
+            "amount",
+            "kind"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "rows",
+            "min": 2,
+            "max": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "rows",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "txId",
+                "matches": "^(?:t1|t2)$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "OVERDRAWN"
+              },
+              {
+                "matches": "\\b150\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

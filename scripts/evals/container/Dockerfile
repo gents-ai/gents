@@ -60,9 +60,23 @@ FROM ubuntu:24.04
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bash ca-certificates coreutils curl findutils git grep iproute2 jq less \
-        libgcc-s1 liblzma5 libssl3t64 libstdc++6 procps python3 sed \
-    && rm -rf /var/lib/apt/lists/*
+        bash ca-certificates coreutils curl findutils git grep gzip iproute2 jq less \
+        libgcc-s1 liblzma5 libssl3t64 libstdc++6 procps python3 sed tar \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --fail --location --retry 3 --retry-all-errors -o /tmp/javy.gz \
+        "https://github.com/bytecodealliance/javy/releases/download/v8.1.1/javy-x86_64-linux-v8.1.1.gz" \
+    && echo "4bec224e1d51827808fd063541a2b4d94cf474744636b692be63e7a29bec83a6  /tmp/javy.gz" | sha256sum -c - \
+    && gzip -dc /tmp/javy.gz > /usr/local/bin/javy \
+    && chmod 0755 /usr/local/bin/javy \
+    && rm -f /tmp/javy.gz \
+    && curl --fail --location --retry 3 --retry-all-errors -o /tmp/binaryen.tar.gz \
+        "https://github.com/WebAssembly/binaryen/releases/download/version_131/binaryen-version_131-x86_64-linux.tar.gz" \
+    && echo "b5bf1f0eaf17c63ee588ff7a5954dc8f6ce2c26989051c66f24dfe9ece3e46db  /tmp/binaryen.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/binaryen.tar.gz -C /opt \
+    && ln -sf /opt/binaryen-version_131/bin/wasm-opt /usr/local/bin/wasm-opt \
+    && rm -f /tmp/binaryen.tar.gz \
+    && javy --version \
+    && wasm-opt --version
 
 COPY scripts/evals /opt/gents/src/scripts/evals
 COPY crates/gents-protocol/prompts /opt/gents/src/crates/gents-protocol/prompts

@@ -171,6 +171,7 @@ impl CredentialProtection {
         self.paths.iter().cloned().collect()
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn protect_launch(&self, args: &mut Vec<String>) -> Result<()> {
         let profile = args
             .get_mut(1)
@@ -228,6 +229,7 @@ impl CredentialProtection {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn apply(&self, profile: &mut String, parameters: &mut Vec<String>) -> Result<()> {
         for (index, path) in self.paths.iter().enumerate() {
             profile.push_str(&format!("\n(deny file-read* file-write* file-link (subpath (param \"CREDENTIAL_{index}\")))\n"));

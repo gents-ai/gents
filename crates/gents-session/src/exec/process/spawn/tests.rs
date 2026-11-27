@@ -19,6 +19,7 @@ async fn capture(cwd: PathBuf, path: &str, program: &str, script: &str) -> Manag
         tool_name: None,
         live_output: None,
         process_recorder: None,
+        linux_sandbox: None,
     })
     .await
 }
@@ -133,7 +134,7 @@ async fn supplied_path_preserves_native_spawn_errors() {
         reference.as_std_mut().arg0(program);
         let expected = reference.spawn().expect_err("invalid native spawn").kind();
         let environment = RapidHashMap::from_iter([("PATH".into(), path.into())]);
-        let actual = super::spawn_child(program, &[], &cwd, Some(&environment), false)
+        let actual = super::spawn_child(program, &[], &cwd, Some(&environment), false, None)
             .expect_err("invalid managed spawn")
             .kind();
         assert_eq!(actual, expected, "program {program:?}, cwd {cwd:?}");
@@ -384,6 +385,7 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
                     environment: Some(RapidHashMap::from_iter([("PATH".into(), search_path)])),
                     tool_name: None,
                     kind: ManagedExecKind::PersistentService,
+                    linux_sandbox: None,
                 })
                 .await
                 .unwrap();
