@@ -565,61 +565,64 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
             .unwrap();
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
-    let mut documents = MemoryWorkspaceDocuments::default();
-    let mut context = HostExecutorContext {
-        provenance: crate::workspace::WorkspaceProvenance {
-            owner_node_did: workspace_owner.clone(),
-            writer_principal: did.clone(),
-            integrator_principal: did.clone(),
-            caused_by_invocation_id: "artifact-invocation".into(),
-            caused_by_correlation: "artifact-correlation".into(),
-            route: Default::default(),
-        },
-        repository: RepositoryPlacementRef {
-            repository_id: "artifact-repo".into(),
-            owner_node_did: workspace_owner.clone(),
-            host_path: repo.clone(),
-            enabled: true,
-        },
-        ceiling: Some(&repo),
-        capabilities: BTreeSet::from([
-            CAP_CREATE_WORKSPACE.to_owned(),
-            CAP_OBSERVE_DIRTY_BASE.to_owned(),
-            CAP_SEAL_WORKSPACE.to_owned(),
-        ]),
-        documents: &mut documents,
+    let (created, sealed) = {
+        let mut documents = MemoryWorkspaceDocuments::default();
+        let mut context = HostExecutorContext {
+            provenance: crate::workspace::WorkspaceProvenance {
+                owner_node_did: workspace_owner.clone(),
+                writer_principal: did.clone(),
+                integrator_principal: did.clone(),
+                caused_by_invocation_id: "artifact-invocation".into(),
+                caused_by_correlation: "artifact-correlation".into(),
+                route: Default::default(),
+            },
+            repository: RepositoryPlacementRef {
+                repository_id: "artifact-repo".into(),
+                owner_node_did: workspace_owner.clone(),
+                host_path: repo.clone(),
+                enabled: true,
+            },
+            ceiling: Some(&repo),
+            capabilities: BTreeSet::from([
+                CAP_CREATE_WORKSPACE.to_owned(),
+                CAP_OBSERVE_DIRTY_BASE.to_owned(),
+                CAP_SEAL_WORKSPACE.to_owned(),
+            ]),
+            documents: &mut documents,
+        };
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(CreateWorkspaceAction {
+                writer_agent_did: None,
+                writer_agent_doc_id: None,
+                integrator_agent_did: None,
+                integrator_agent_doc_id: None,
+                readers: Vec::new(),
+                path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                workspace_id: "artifact-workspace".into(),
+                work_unit_id: "artifact-unit".into(),
+                repository_id: "artifact-repo".into(),
+                base_sha: git(&repo, &["rev-parse", "HEAD"]),
+                branch: "artifact-review".into(),
+                creation_policy: CreationPolicy::GitWorktreeDiff,
+                adapter: WorkspaceAdapterKind::GitWorktree,
+                clone_artifacts: None,
+            }),
+            &mut Vec::new(),
+            &mut context,
+        )
+        .unwrap();
+        let sealed = execute_seal_workspace_plan(
+            &emit_seal_workspace_plan(SealWorkspaceAction {
+                workspace_id: "artifact-workspace".into(),
+                produced_by_request_id: "artifact-writer".into(),
+                produced_by_request_doc_id: "artifact-writer-doc".into(),
+            }),
+            &mut Vec::new(),
+            &mut context,
+        )
+        .unwrap();
+        (created, sealed)
     };
-    let created = execute_create_workspace_plan(
-        &emit_create_workspace_plan(CreateWorkspaceAction {
-            writer_agent_did: None,
-            writer_agent_doc_id: None,
-            integrator_agent_did: None,
-            integrator_agent_doc_id: None,
-            readers: Vec::new(),
-            path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
-            workspace_id: "artifact-workspace".into(),
-            work_unit_id: "artifact-unit".into(),
-            repository_id: "artifact-repo".into(),
-            base_sha: git(&repo, &["rev-parse", "HEAD"]),
-            branch: "artifact-review".into(),
-            creation_policy: CreationPolicy::GitWorktreeDiff,
-            adapter: WorkspaceAdapterKind::GitWorktree,
-            clone_artifacts: None,
-        }),
-        &mut Vec::new(),
-        &mut context,
-    )
-    .unwrap();
-    let sealed = execute_seal_workspace_plan(
-        &emit_seal_workspace_plan(SealWorkspaceAction {
-            workspace_id: "artifact-workspace".into(),
-            produced_by_request_id: "artifact-writer".into(),
-            produced_by_request_doc_id: "artifact-writer-doc".into(),
-        }),
-        &mut Vec::new(),
-        &mut context,
-    )
-    .unwrap();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut placement = created.placement;
     placement.observed_tree_hash = sealed.workspace.seal_hash.clone().unwrap();

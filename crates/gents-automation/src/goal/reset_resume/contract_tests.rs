@@ -107,128 +107,143 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
     permit_recorded(&text, Utc::now()).0
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn generated_goal_reset_resume_cases_drive_real_transactions() {
-    for modeled in
-        gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>()
-    {
-        let case = &modeled.input;
-        let before = serde_json::to_value(&case.before).unwrap();
-        let f = Fixture::new(&before).await;
-        if !case.before.children.is_empty() {
-            f.seed_child(false).await;
-        }
-        let first_child = goal_continuation_identity(&f.goal.goal_id, PARENT, 1)
-            .unwrap()
-            .request_id;
-        let repeat = case.name == "repeat_limit_resumes_at_its_new_reset";
-        let stopped = if repeat { first_child.as_str() } else { PARENT };
-        match case.name.as_str() {
-            "reset_reached_resumes"
-            | "retry_after_reset_resume_is_noop"
-            | "not_opted_in_waits"
-            | "reset_not_reported_waits"
-            | "before_reset_waits"
-            | "profile_moved_waits"
-            | "account_disabled_waits"
-            | "backend_disabled_waits"
-            | "stale_reset_waits"
-            | "paused_goal_is_not_timer_resumed"
-            | "repeat_limit_resumes_at_its_new_reset" => {}
-            name => panic!("unmapped generated reset case {name}"),
-        }
-        assert!(case.commit, "{}: a reset resume commits", case.name);
-        let accounts = f.claude_accounts().await;
-        connect_accounts_at(&f, -1).await;
-        let facts = &case.facts;
-        let failure = usage_limit(facts.reset_at.map(|seconds| seconds as i64));
-        f.fail_with_call(
-            stopped,
-            "inference",
-            &accounts.a,
-            &failure,
-            &at(facts.limit_started_at as i64).to_rfc3339(),
-        )
-        .await;
-        execute(
-            &f.agent_access(),
-            &format!(
-                r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ last_failure: "{}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&f.goal.doc_id),
-                escape_graphql_string(&failure)
-            ),
-        )
-        .await;
-        let did = f.identity.did();
-        if facts.opted_in {
-            seed_goal_from_access(&accounts.access, did, SESSION, None, None, None, Some(true))
+    use futures::StreamExt;
+    let cases =
+        gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>();
+    futures::stream::iter(cases)
+        .map(|modeled| {
+            tokio::spawn(async move {
+                let case = &modeled.input;
+                let before = serde_json::to_value(&case.before).unwrap();
+                let f = Fixture::new(&before).await;
+                if !case.before.children.is_empty() {
+                    f.seed_child(false).await;
+                }
+                let first_child = goal_continuation_identity(&f.goal.goal_id, PARENT, 1)
+                    .unwrap()
+                    .request_id;
+                let repeat = case.name == "repeat_limit_resumes_at_its_new_reset";
+                let stopped = if repeat { first_child.as_str() } else { PARENT };
+                match case.name.as_str() {
+                    "reset_reached_resumes"
+                    | "retry_after_reset_resume_is_noop"
+                    | "not_opted_in_waits"
+                    | "reset_not_reported_waits"
+                    | "before_reset_waits"
+                    | "profile_moved_waits"
+                    | "account_disabled_waits"
+                    | "backend_disabled_waits"
+                    | "stale_reset_waits"
+                    | "paused_goal_is_not_timer_resumed"
+                    | "repeat_limit_resumes_at_its_new_reset" => {}
+                    name => panic!("unmapped generated reset case {name}"),
+                }
+                assert!(case.commit, "{}: a reset resume commits", case.name);
+                let accounts = f.claude_accounts().await;
+                connect_accounts_at(&f, -1).await;
+                let facts = &case.facts;
+                let failure = usage_limit(facts.reset_at.map(|seconds| seconds as i64));
+                f.fail_with_call(
+                    stopped,
+                    "inference",
+                    &accounts.a,
+                    &failure,
+                    &at(facts.limit_started_at as i64).to_rfc3339(),
+                )
+                .await;
+                execute(
+                    &f.agent_access(),
+                    &format!(
+                        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ last_failure: "{}" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&f.goal.doc_id),
+                        escape_graphql_string(&failure)
+                    ),
+                )
+                .await;
+                let did = f.identity.did();
+                if facts.opted_in {
+                    seed_goal_from_access(
+                        &accounts.access,
+                        did,
+                        SESSION,
+                        None,
+                        None,
+                        None,
+                        Some(true),
+                    )
+                    .await
+                    .unwrap();
+                }
+                if !facts.profile_names_account {
+                    gents_inference::profile_switch::switch_profile_account(
+                        &accounts.access,
+                        did,
+                        PROFILE,
+                        &accounts.b,
+                        false,
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+                }
+                if !facts.account_enabled {
+                    gents_inference::auth::credential::set_account_enabled(
+                        &accounts.access,
+                        did,
+                        &accounts.a_credential,
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                }
+                if !facts.backend_enabled {
+                    disable_backend(&f, &accounts.a).await;
+                }
+                assert_eq!(f.observe().await, before, "{} initial", case.name);
+
+                let goal = f.current_goal().await;
+                let result = resume_at_reset(
+                    &f.node,
+                    f.identity.as_ref(),
+                    f.agent.as_ref(),
+                    &goal,
+                    at(facts.now as i64),
+                )
                 .await
                 .unwrap();
-        }
-        if !facts.profile_names_account {
-            gents_inference::profile_switch::switch_profile_account(
-                &accounts.access,
-                did,
-                PROFILE,
-                &accounts.b,
-                false,
-                &[],
-            )
-            .await
-            .unwrap();
-        }
-        if !facts.account_enabled {
-            gents_inference::auth::credential::set_account_enabled(
-                &accounts.access,
-                did,
-                &accounts.a_credential,
-                false,
-            )
-            .await
-            .unwrap();
-        }
-        if !facts.backend_enabled {
-            disable_backend(&f, &accounts.a).await;
-        }
-        assert_eq!(f.observe().await, before, "{} initial", case.name);
-
-        let goal = f.current_goal().await;
-        let result = resume_at_reset(
-            &f.node,
-            f.identity.as_ref(),
-            f.agent.as_ref(),
-            &goal,
-            at(facts.now as i64),
-        )
-        .await
-        .unwrap();
-        let outcome = match result {
-            ResetResume::Resumed(receipt) => {
-                assert_eq!(receipt.goal_status, GoalStatus::Active);
-                let sequence = f.current_goal().await.continuation_sequence();
-                let expected =
-                    goal_continuation_identity(&goal.goal_id, stopped, sequence).unwrap();
-                assert_eq!(receipt.request_id, expected.request_id);
-                if receipt.created {
-                    "created"
+                let outcome = match result {
+                    ResetResume::Resumed(receipt) => {
+                        assert_eq!(receipt.goal_status, GoalStatus::Active);
+                        let sequence = f.current_goal().await.continuation_sequence();
+                        let expected =
+                            goal_continuation_identity(&goal.goal_id, stopped, sequence).unwrap();
+                        assert_eq!(receipt.request_id, expected.request_id);
+                        if receipt.created {
+                            "created"
+                        } else {
+                            "recovered"
+                        }
+                    }
+                    ResetResume::Deferred => "deferred",
+                    ResetResume::NotUsageLimited => "illegal",
+                };
+                let observed = if repeat {
+                    observe_repeat(&f, &first_child).await
                 } else {
-                    "recovered"
-                }
-            }
-            ResetResume::Deferred => "deferred",
-            ResetResume::NotUsageLimited => "illegal",
-        };
-        let observed = if repeat {
-            observe_repeat(&f, &first_child).await
-        } else {
-            f.observe().await
-        };
-        modeled.check(wire::ResetOutput {
-            expected: serde_json::from_value(observed).unwrap(),
-            outcome: outcome.to_owned(),
-        });
-        f.node.shutdown().await.expect("node shutdown");
-    }
+                    f.observe().await
+                };
+                modeled.check(wire::ResetOutput {
+                    expected: serde_json::from_value(observed).unwrap(),
+                    outcome: outcome.to_owned(),
+                });
+                f.node.shutdown().await.expect("node shutdown");
+            })
+        })
+        .buffer_unordered(6)
+        .for_each(|result| async { result.unwrap() })
+        .await;
 }
 
 async fn observe_repeat(f: &Fixture, first_child: &str) -> Value {
