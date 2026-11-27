@@ -72,6 +72,7 @@ mod graphql;
 mod held_audience;
 mod home_provider;
 pub mod home_status;
+pub mod host_grant;
 #[cfg(test)]
 mod isolation_premise_tests;
 pub mod node_deferred_operation;
@@ -156,8 +157,8 @@ pub use authored_document::{
     create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
 };
 pub use client_agent_publication::{
-    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, PublicationStage,
-    PublicationStatus, RecoveryDisposition,
+    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, HostReading,
+    PublicationStage, PublicationStatus, RecoveryDisposition,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use node_deferred_operation::recover_deferred_node_operations;

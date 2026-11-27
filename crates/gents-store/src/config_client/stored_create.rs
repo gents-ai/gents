@@ -3,6 +3,8 @@ use gents_protocol::request_admission::AgentRequestCreate;
 use super::user_write::{Carried, Scope, Verdict};
 use super::{ClientSigningCapability, ConfigClientError, DelegationError, RequestBoundAudience};
 
+pub(crate) const HOST_RELATION: &str = "host";
+
 /// The relationships a User's request create writes on the request it
 /// creates, as that User: what a stored create sends besides its registration.
 pub(crate) fn request_relations(
@@ -131,6 +133,31 @@ impl StoredCreateCommands {
             }));
         }
         Ok(Self(commands))
+    }
+
+    /// The one policy command an Agent's `host` grant to `node` sends
+    /// (`Identity.ClientAgentJournal.resumeAttempt`).
+    pub(crate) fn of_host(
+        agent_doc: &str,
+        node: &identity::Did,
+        ids: &gents_protocol::schemas::HomePolicyIds,
+    ) -> Result<Self, ConfigClientError> {
+        let policy = super::client_signed_agent::signing_schema(
+            gents_protocol::schemas::AGENT,
+            "Agent",
+            ids,
+        )?
+        .policy
+        .ok_or(ConfigClientError::ClientConfigurationUpdateInvalid)?;
+        Ok(Self(vec![Command {
+            policy_id: policy.id,
+            resource: policy.resource_name,
+            object_id: agent_doc.to_owned(),
+            action: Action::Relate {
+                relation: HOST_RELATION.to_owned(),
+                subject: Subject::Actor(vera_delegation::SubjectRef::Actor(node.to_string())),
+            },
+        }]))
     }
 
     /// One credential for each command, bound to it, minted by

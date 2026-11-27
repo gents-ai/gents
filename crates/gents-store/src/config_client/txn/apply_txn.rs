@@ -572,31 +572,23 @@ impl<'a> ConfigApplyTxn<'a> {
         let creator = self
             .actor_did()
             .ok_or(ConfigClientError::RelationshipActorRequired)?;
-        let access = match &self.backend {
-            TxnBackend::Http { endpoint, .. } => super::ConfigAccess::Graphql((*endpoint).clone()),
-            TxnBackend::Embedded {
-                node,
-                identity: Some(actor),
-                agent_signer,
-                ..
-            } => super::ConfigAccess::local_with_optional_agent_signer(
-                Arc::clone(node),
-                actor.clone(),
-                agent_signer.as_deref().cloned(),
-            )?,
-            TxnBackend::Embedded { identity: None, .. } => {
-                return Err(ConfigClientError::RelationshipActorRequired)
-            }
-        };
+        let access = self.grant_access()?;
         if let Some(observer) = &self.publication_observer {
             for grant in &grants {
                 observer.before_grant(grant).await.map_err(|error| {
                     ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(error))
                 })?;
-                if let Err(error) = access
-                    .complete_relationship_grants(creator, std::slice::from_ref(grant))
-                    .await
-                {
+                let sent = match (grant, observer.host_credential(grant).await) {
+                    (ConfigRelationshipGrant::Actor { doc_id, target, .. }, Some(credential)) => {
+                        access.grant_host_bound(doc_id, target, &credential).await
+                    }
+                    _ => {
+                        access
+                            .complete_relationship_grants(creator, std::slice::from_ref(grant))
+                            .await
+                    }
+                };
+                if let Err(error) = sent {
                     return Err(ConfigClientError::ClientAgentPublicationUnconfirmed(
                         Box::new(error),
                     ));
@@ -613,6 +605,25 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
+    fn grant_access(&self) -> Result<super::ConfigAccess> {
+        Ok(match &self.backend {
+            TxnBackend::Http { endpoint, .. } => super::ConfigAccess::Graphql((*endpoint).clone()),
+            TxnBackend::Embedded {
+                node,
+                identity: Some(actor),
+                agent_signer,
+                ..
+            } => super::ConfigAccess::local_with_optional_agent_signer(
+                Arc::clone(node),
+                actor.clone(),
+                agent_signer.as_deref().cloned(),
+            )?,
+            TxnBackend::Embedded { identity: None, .. } => {
+                return Err(ConfigClientError::RelationshipActorRequired)
+            }
+        })
+    }
+
     pub(super) async fn observe_before_commit(&self) -> Result<()> {
         if let Some(observer) = &self.publication_observer {
             let grants = self
@@ -624,7 +635,27 @@ impl<'a> ConfigApplyTxn<'a> {
                 let creator = self
                     .actor_did()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
-                observer.before_commit(creator, &grants).await?;
+                let access = self.grant_access()?;
+                let mut host_credentials = Vec::new();
+                for grant in &grants {
+                    if let ConfigRelationshipGrant::Actor {
+                        collection,
+                        doc_id,
+                        relation,
+                        target,
+                    } = grant
+                    {
+                        if collection == "Agent" && relation == "host" {
+                            if let Some(credential) = access.host_credential(doc_id, target).await?
+                            {
+                                host_credentials.push((grant.clone(), credential));
+                            }
+                        }
+                    }
+                }
+                observer
+                    .before_commit(creator, &grants, &host_credentials)
+                    .await?;
             }
         }
         Ok(())

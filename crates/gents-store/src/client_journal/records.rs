@@ -19,7 +19,7 @@ pub fn require_client_signer(node: &EmbeddedNode, client: &str) -> Result<()> {
 enum Envelope {
     #[serde(rename = "goalCallerReceipt-v1")]
     Goal(Box<super::goal_delivery::Record>),
-    #[serde(rename = "agentPublication-v2")]
+    #[serde(rename = "agentPublication-v3")]
     Publication(Box<publication::Record>),
 }
 

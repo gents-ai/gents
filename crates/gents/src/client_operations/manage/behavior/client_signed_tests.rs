@@ -211,7 +211,7 @@ async fn proxy(
                         if count == 0 { return Ok(()); }
                         request.extend_from_slice(&bytes[..count]);
                     }
-                    if headers.lines().next().is_some_and(|line| line.contains("/acp/document/relationship")) {
+                    if headers.lines().next().and_then(|line| line.split_whitespace().nth(1)).is_some_and(|path| path.ends_with("/acp/document/relationship")) {
                         let body: Value = serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
                         let method = headers.split_whitespace().next().unwrap().to_owned();
                         let relation = body["relation"].as_str().unwrap().to_owned();
@@ -368,39 +368,114 @@ async fn save_stopped_at_host(
     }
 }
 
-async fn host_grant_unfinished(applied: bool) -> Result<()> {
-    let fixture = Fixture::new().await?;
-    let journal = fixture.client_journal().await?;
-    let answer = save_stopped_at_host(&fixture, &journal, applied).await?;
-    assert_eq!(answer.starts_with("HTTP/1.1 200"), applied, "{answer}");
-    let rows = fixture.access.execute("{ Agent { _docID } }").await?;
-    assert_eq!(rows["data"]["Agent"].as_array().map(Vec::len), Some(1));
-    let error = fixture
-        .recovered(&journal)
+/// The client stopped with its `host` grant unconfirmed on a home that
+/// decides document access in its own store, which mints no request-bound
+/// delegation: recovery reads the Agent's `host` relationships and never sends
+/// the grant again.
+struct Unconfirmed {
+    fixture: Fixture,
+    journal: Arc<defra_node::Node>,
+    agent_doc: String,
+    host_posts: usize,
+}
+
+impl Unconfirmed {
+    async fn at(applied: bool) -> Result<Self> {
+        let fixture = Fixture::new().await?;
+        let journal = fixture.client_journal().await?;
+        let answer = save_stopped_at_host(&fixture, &journal, applied).await?;
+        assert_eq!(answer.starts_with("HTTP/1.1 200"), applied, "{answer}");
+        let rows = fixture.access.execute("{ Agent { _docID } }").await?;
+        let agent_doc = rows["data"]["Agent"][0]["_docID"]
+            .as_str()
+            .context("the committed Agent")?
+            .to_owned();
+        let host_posts = fixture.host_posts();
+        assert_eq!(host_posts, 1);
+        Ok(Self {
+            fixture,
+            journal,
+            agent_doc,
+            host_posts,
+        })
+    }
+
+    async fn hosts(&self) -> Result<Vec<String>> {
+        Ok(self
+            .fixture
+            .access
+            .list_document_relationships("Agent", &self.agent_doc)
+            .await?
+            .into_iter()
+            .filter(|relationship| relationship.relation == "host")
+            .map(|relationship| relationship.subject)
+            .collect())
+    }
+
+    async fn shutdown(self) -> Result<()> {
+        self.journal.shutdown().await?;
+        self.fixture.shutdown().await
+    }
+}
+
+impl Fixture {
+    fn host_posts(&self) -> usize {
+        self.relationships
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, relation)| method == "POST" && relation == "host")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn an_unconfirmed_host_grant_that_never_applied_is_reported_not_resent() -> Result<()> {
+    let unconfirmed = Unconfirmed::at(false).await?;
+    let message = unconfirmed
+        .fixture
+        .recovered(&unconfirmed.journal)
         .await
-        .expect_err("a committed Agent without a confirmed host grant is not published");
-    let message = error.to_string();
+        .expect_err("an Agent placed on no device is reported")
+        .to_string();
     assert!(
-        message.contains("executor: Succeeded, host: Pending"),
+        message.contains("is not placed on any device") && message.contains(&unconfirmed.agent_doc),
         "{message}"
     );
-    assert!(fixture
-        .relationships
-        .lock()
-        .unwrap()
-        .contains(&("POST".to_owned(), "host".to_owned())));
-    journal.shutdown().await?;
-    fixture.shutdown().await
+    assert!(unconfirmed.hosts().await?.is_empty());
+    assert_eq!(unconfirmed.fixture.host_posts(), unconfirmed.host_posts);
+    unconfirmed.shutdown().await
 }
 
 #[tokio::test]
-async fn client_stopped_before_the_host_grant_reaches_the_runtime_keeps_it_pending() -> Result<()> {
-    host_grant_unfinished(false).await
+async fn an_unconfirmed_host_grant_found_on_this_node_succeeded() -> Result<()> {
+    let unconfirmed = Unconfirmed::at(true).await?;
+    unconfirmed.fixture.recovered(&unconfirmed.journal).await?;
+    unconfirmed.fixture.recovered(&unconfirmed.journal).await?;
+    assert_eq!(
+        unconfirmed.hosts().await?,
+        [unconfirmed.fixture.runtime.node_did().to_owned()]
+    );
+    assert_eq!(unconfirmed.fixture.host_posts(), unconfirmed.host_posts);
+    unconfirmed.shutdown().await
 }
 
 #[tokio::test]
-async fn client_stopped_after_the_host_grant_before_its_answer_keeps_it_pending() -> Result<()> {
-    host_grant_unfinished(true).await
+async fn an_unconfirmed_host_grant_the_owner_moved_is_superseded() -> Result<()> {
+    let unconfirmed = Unconfirmed::at(false).await?;
+    let elsewhere = unconfirmed.fixture.runtime.provision_agent().await;
+    let elsewhere = ::identity::Did::new(&elsewhere.agent_did)?;
+    unconfirmed
+        .fixture
+        .access
+        .add_actor_relationship("Agent", &unconfirmed.agent_doc, "host", &elsewhere)
+        .await?;
+    let moved = unconfirmed.fixture.host_posts();
+    unconfirmed.fixture.recovered(&unconfirmed.journal).await?;
+    unconfirmed.fixture.recovered(&unconfirmed.journal).await?;
+    assert_eq!(unconfirmed.hosts().await?, [elsewhere.to_string()]);
+    assert_eq!(unconfirmed.fixture.host_posts(), moved);
+    unconfirmed.shutdown().await
 }
 
 #[tokio::test]

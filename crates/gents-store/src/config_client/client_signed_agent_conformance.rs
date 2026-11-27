@@ -73,7 +73,7 @@ async fn publication_observer_refuses_local_transactions_before_callback() {
 #[test]
 fn modeled_publication_journal_traces_drive_the_native_owner() {
     use super::client_agent_publication::{
-        ClientAgentJournal, PublicationStage, PublicationStatus,
+        ClientAgentJournal, HostReading, PublicationStage, PublicationStatus,
     };
     use gents_lean_vocab::families::client_agent_journal_publication_traces as family;
 
@@ -93,7 +93,7 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
             permit: journal.permit,
         }
     }
-    family::replay::<String, PublicationStage, PublicationStatus>(|i| {
+    family::replay::<String, HostReading, PublicationStage, PublicationStatus>(|i| {
         let mut journal = ClientAgentJournal::new(
             i.initial.client.clone(),
             i.initial.agent_did.clone(),
@@ -110,6 +110,8 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
                 "finish" => {
                     journal.finish_attempt(step.stage, step.success, step.confirmed_failure)
                 }
+                "resume" => journal.resume_attempt(step.token_valid),
+                "observe" => journal.observe_host(step.reading),
                 "restart" => journal.restart(),
                 "save_unrelated" => {}
                 other => panic!("unknown modeled action {other}"),
@@ -126,10 +128,12 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
 #[test]
 fn modeled_publication_recovery_drives_the_native_disposition() {
     use super::client_agent_publication::{
-        recovery_disposition, ClientAgentJournal, PublicationStatus, RecoveryDisposition,
+        recovery_disposition, ClientAgentJournal, HostReading, PublicationStatus,
+        RecoveryDisposition,
     };
 
     gents_lean_vocab::families::client_agent_journal_recovery::replay::<
+        HostReading,
         RecoveryDisposition,
         PublicationStatus,
     >(|i| {
@@ -148,6 +152,8 @@ fn modeled_publication_recovery_drives_the_native_disposition() {
             i.actor_matches,
             i.record_present.then_some(&journal),
             i.binding_matches,
+            i.token_valid,
+            i.reading,
         )
     });
 }
