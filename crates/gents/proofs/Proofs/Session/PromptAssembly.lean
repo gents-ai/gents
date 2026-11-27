@@ -19,3 +19,4 @@ import Proofs.Session.PromptAssembly.ServiceTier
 import Proofs.Session.PromptAssembly.CapturedContext
 import Proofs.Session.PromptAssembly.RequestContext
 import Proofs.Session.PromptAssembly.ToolCallIdentity
+import Proofs.Session.PromptAssembly.SourceTagging
