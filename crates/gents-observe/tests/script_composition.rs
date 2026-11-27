@@ -195,7 +195,8 @@ async fn one_unreadable_script_child_is_marked_and_the_timeline_still_loads() {
 
 #[tokio::test]
 async fn background_plugin_keeps_the_selected_tool_surface() {
-    use gents_toolcalls::test_support::{host_call_plugin_wat, installed_plugin};
+    use gents_pack::plugin::test_fixtures::installed_plugin;
+    use gents_toolcalls::test_support::host_call_plugin_wat;
     let wat = host_call_plugin_wat(&json!({"tool_name":"probe", "arguments":{}}), 3);
     let (home, mut record) = installed_plugin(&wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];

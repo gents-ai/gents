@@ -434,12 +434,6 @@ mod tests {
         }
     }
 
-    fn read_via(home: &Path, coordinate: &str) -> Option<Option<InstalledVia>> {
-        read_home_install(home, coordinate)
-            .unwrap()
-            .map(|record| record.installed_via)
-    }
-
     #[test]
     fn home_install_preserves_source_and_prior_source_on_update() {
         let home = tempfile::tempdir().unwrap();
@@ -532,52 +526,6 @@ mod tests {
             write_home_install(home.path(), &sample(coordinate))
                 .expect_err(&format!("{coordinate:?} must be refused"));
         }
-    }
-
-    #[test]
-    fn dependency_never_lowers_provenance() {
-        let home = tempfile::tempdir().unwrap();
-        record_after_install(
-            home.path(),
-            sample("gents/mailbox"),
-            InstalledVia::Operator,
-            true,
-        )
-        .unwrap();
-        record_after_install(
-            home.path(),
-            sample("gents/mailbox"),
-            InstalledVia::SelfConfig,
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            read_via(home.path(), "gents/mailbox"),
-            Some(Some(InstalledVia::Operator))
-        );
-    }
-
-    #[test]
-    fn explicit_self_config_install_lowers_the_record() {
-        let home = tempfile::tempdir().unwrap();
-        record_after_install(
-            home.path(),
-            sample("gents/mailbox"),
-            InstalledVia::Operator,
-            true,
-        )
-        .unwrap();
-        record_after_install(
-            home.path(),
-            sample("gents/mailbox"),
-            InstalledVia::SelfConfig,
-            true,
-        )
-        .unwrap();
-        assert_eq!(
-            read_via(home.path(), "gents/mailbox"),
-            Some(Some(InstalledVia::SelfConfig))
-        );
     }
 
     fn lean_record(

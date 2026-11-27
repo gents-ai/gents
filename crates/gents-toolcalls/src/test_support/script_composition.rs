@@ -82,7 +82,7 @@ impl ToolDyn for Stall {
 }
 
 pub fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
-    use crate::test_support::installed_plugin;
+    use gents_pack::plugin::test_fixtures::installed_plugin;
     let (home, mut record) = installed_plugin(wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();

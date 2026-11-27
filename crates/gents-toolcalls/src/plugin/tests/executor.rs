@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::tool::PluginTool;
-pub use crate::test_support::{
-    asking_plugin_wat, host_call_plugin_wat, installed_echo, installed_plugin,
-};
+pub use crate::test_support::host_call_plugin_wat;
 use gents_documents::PluginToolRef;
 use gents_loop::tool::ToolDyn;
 use gents_pack::plugin::store::{self, InstalledPlugin};
-use gents_pack::plugin::test_fixtures::ECHO_WAT;
+pub use gents_pack::plugin::test_fixtures::{
+    asking_plugin_wat, installed_echo, installed_plugin, ECHO_WAT,
+};
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {

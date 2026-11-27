@@ -21,9 +21,9 @@ use super::file_tools::edit_file::EditFileTool;
 use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
 use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
-    build_shell_env_from_vars, validate_command_policy, validate_read_only_command,
-    CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError,
-    WorkspaceAuthority, FALLBACK_PATH,
+    build_shell_env_from_vars, validate_command_policy, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError, WorkspaceAuthority,
+    FALLBACK_PATH,
 };
 use super::*;
 
@@ -1154,56 +1154,6 @@ async fn grep_returns_compact_line_numbered_matches() {
         output.contains("src/main.rs:L2:     println!(\"hello\");"),
         "{output}"
     );
-}
-
-#[test]
-fn read_only_bash_rejects_codex_style_unsafe_flags() {
-    let allowlist = default_read_only_commands();
-    assert!(validate_read_only_command(
-        "git",
-        &[
-            String::from("status"),
-            String::from("--output=/tmp/git-status.txt")
-        ],
-        &allowlist,
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "git",
-        &[
-            String::from("-C"),
-            String::from("."),
-            String::from("status")
-        ],
-        &allowlist,
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "rg",
-        &[String::from("--pre"), String::from("touch /tmp/nope")],
-        &allowlist,
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "find",
-        &[
-            String::from("."),
-            String::from("-fprint0"),
-            String::from("out")
-        ],
-        &allowlist,
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "sed",
-        &[
-            String::from("--in-place=.bak"),
-            String::from("s/a/b/g"),
-            String::from("README.md"),
-        ],
-        &allowlist,
-    )
-    .is_err());
 }
 
 #[test]

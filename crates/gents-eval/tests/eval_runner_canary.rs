@@ -387,30 +387,45 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         );
     }
 }
-#[tokio::test]
-async fn a_seed_no_trigger_fires_for_fails_the_subject_and_says_why() {
-    let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-quiet").await;
+async fn setup_seed_request(
+    endpoint: &str,
+    run_id: &str,
+    definition_id: &str,
+    schemas: &[&str],
+    stage: Value,
+    pack_dir: PathBuf,
+) -> (Canary, RunRequest) {
+    let (canary, mut request) = canary_request(endpoint, run_id).await;
     canary
         .install(vec![(
             Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-quiet",
-                &[SEED_ITEM_SDL, QUIET_ITEM_SDL],
-                json!({
-                    "stage_id": "fire",
-                    "seed": {"collection": "QuietItem", "document": {"label": "wh-2"}},
-                    "deadline_secs": 2,
-                    "capture": [fired_capture()],
-                    "checks": [fired_count(1, None)],
-                }),
-            ),
+            seed_definition_document(&canary.owner, definition_id, schemas, stage),
         )])
         .await;
-    request.definition_id = "seed-quiet".into();
-    request.cells[0].source = CellSource::Directory(trigger_pack_dir());
+    request.definition_id = definition_id.into();
+    request.cells[0].source = CellSource::Directory(pack_dir);
     request.cells[0].agent_slot = "seeded".into();
+    (canary, request)
+}
+
+#[tokio::test]
+async fn a_seed_no_trigger_fires_for_fails_the_subject_and_says_why() {
+    let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
+    let (canary, request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-quiet",
+        "seed-quiet",
+        &[SEED_ITEM_SDL, QUIET_ITEM_SDL],
+        json!({
+            "stage_id": "fire",
+            "seed": {"collection": "QuietItem", "document": {"label": "wh-2"}},
+            "deadline_secs": 2,
+            "capture": [fired_capture()],
+            "checks": [fired_count(1, None)],
+        }),
+        trigger_pack_dir(),
+    )
+    .await;
 
     let (outcome, verdicts) = run_seed_case(&canary, &request).await;
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
@@ -435,32 +450,26 @@ async fn a_seed_no_trigger_fires_for_fails_the_subject_and_says_why() {
 #[tokio::test]
 async fn a_seed_that_must_be_skipped_passes_once_the_home_is_quiet() {
     let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-skipped").await;
-    canary
-        .install(vec![(
-            Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-skipped",
-                &[SEED_ITEM_SDL, QUIET_ITEM_SDL],
-                json!({
-                    "stage_id": "skip",
-                    "seed": {"collection": "QuietItem", "document": {"label": "wh-3"}},
-                    "expect_fire": false,
-                    "deadline_secs": 180,
-                    "capture": [{"kind": "runs", "name": "runs", "of_seed": true}],
-                    "checks": [{
-                        "check": "captured_rows_count",
-                        "params": {"name": "runs", "min": 0, "max": 0},
-                        "tier": "acceptance",
-                    }],
-                }),
-            ),
-        )])
-        .await;
-    request.definition_id = "seed-skipped".into();
-    request.cells[0].source = CellSource::Directory(trigger_pack_dir());
-    request.cells[0].agent_slot = "seeded".into();
+    let (canary, mut request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-skipped",
+        "seed-skipped",
+        &[SEED_ITEM_SDL, QUIET_ITEM_SDL],
+        json!({
+            "stage_id": "skip",
+            "seed": {"collection": "QuietItem", "document": {"label": "wh-3"}},
+            "expect_fire": false,
+            "deadline_secs": 180,
+            "capture": [{"kind": "runs", "name": "runs", "of_seed": true}],
+            "checks": [{
+                "check": "captured_rows_count",
+                "params": {"name": "runs", "min": 0, "max": 0},
+                "tier": "acceptance",
+            }],
+        }),
+        trigger_pack_dir(),
+    )
+    .await;
     request.deadline_secs = Some(300);
 
     let (outcome, verdicts) = run_seed_case(&canary, &request).await;
@@ -479,28 +488,22 @@ async fn a_seed_that_must_be_skipped_passes_once_the_home_is_quiet() {
 #[tokio::test]
 async fn a_seed_that_must_be_skipped_fails_when_a_trigger_fires_for_it() {
     let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-unskipped").await;
-    canary
-        .install(vec![(
-            Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-unskipped",
-                &[SEED_ITEM_SDL],
-                json!({
-                    "stage_id": "skip",
-                    "seed": {"collection": "SeedItem", "document": {"label": "wh-4"}},
-                    "expect_fire": false,
-                    "deadline_secs": 180,
-                    "capture": [fired_capture()],
-                    "checks": [fired_count(0, Some(0))],
-                }),
-            ),
-        )])
-        .await;
-    request.definition_id = "seed-unskipped".into();
-    request.cells[0].source = CellSource::Directory(trigger_pack_dir());
-    request.cells[0].agent_slot = "seeded".into();
+    let (canary, request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-unskipped",
+        "seed-unskipped",
+        &[SEED_ITEM_SDL],
+        json!({
+            "stage_id": "skip",
+            "seed": {"collection": "SeedItem", "document": {"label": "wh-4"}},
+            "expect_fire": false,
+            "deadline_secs": 180,
+            "capture": [fired_capture()],
+            "checks": [fired_count(0, Some(0))],
+        }),
+        trigger_pack_dir(),
+    )
+    .await;
 
     let (outcome, verdicts) = run_seed_case(&canary, &request).await;
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
@@ -520,30 +523,24 @@ async fn a_seed_that_must_be_skipped_fails_when_a_trigger_fires_for_it() {
 #[tokio::test]
 async fn a_fire_its_task_template_fails_names_the_trigger_error_in_the_verdict() {
     let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-broken").await;
-    canary
-        .install(vec![(
-            Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-broken",
-                &[SEED_ITEM_SDL],
-                json!({
-                    "stage_id": "fire",
-                    "seed": {"collection": "SeedItem", "document": {"label": "wh-5"}},
-                    "deadline_secs": 120,
-                    "capture": [fired_capture()],
-                    "checks": [fired_count(1, None)],
-                }),
-            ),
-        )])
-        .await;
     let pack = trigger_pack_with(|config| {
         config["tasks"][0]["prompt_template"] = json!("Seeded item: {{ doc.missing_field }}");
     });
-    request.definition_id = "seed-broken".into();
-    request.cells[0].source = CellSource::Directory(pack.path().to_path_buf());
-    request.cells[0].agent_slot = "seeded".into();
+    let (canary, request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-broken",
+        "seed-broken",
+        &[SEED_ITEM_SDL],
+        json!({
+            "stage_id": "fire",
+            "seed": {"collection": "SeedItem", "document": {"label": "wh-5"}},
+            "deadline_secs": 120,
+            "capture": [fired_capture()],
+            "checks": [fired_count(1, None)],
+        }),
+        pack.path().to_path_buf(),
+    )
+    .await;
 
     let (outcome, verdicts) = run_seed_case(&canary, &request).await;
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
@@ -581,44 +578,6 @@ async fn a_runs_capture_grades_the_reply_of_a_run_the_stage_did_not_start() {
         ],
     )
     .unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-runs").await;
-    canary
-        .install(vec![(
-            Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-runs",
-                &[SEED_ITEM_SDL],
-                json!({
-                    "stage_id": "fire",
-                    "seed": {"collection": "SeedItem", "document": {"label": "wh-6"}},
-                    "deadline_secs": 240,
-                    "settle": true,
-                    "capture": [
-                        {"kind": "runs", "name": "echo", "trigger_id": "echo-trigger"},
-                        {"kind": "runs", "name": "both", "source_collection": "SeedItem", "of_seed": true},
-                    ],
-                    "checks": [
-                        {
-                            "check": "captured_fields_match",
-                            "params": {"name": "echo", "min_rows": 1, "max_rows": 1, "expect": [
-                                {"field": "final_message", "equals": "echoed wh-6"},
-                                {"field": "lifecycle_state", "equals": "completed"},
-                                {"field": "source_collection", "equals": "SeedItem"},
-                                {"field": "session_id", "matches": ".+"},
-                            ]},
-                            "tier": "acceptance",
-                        },
-                        {
-                            "check": "captured_rows_count",
-                            "params": {"name": "both", "min": 2, "max": 2},
-                            "tier": "acceptance",
-                        },
-                    ],
-                }),
-            ),
-        )])
-        .await;
     let pack = trigger_pack_with(|config| {
         config["tasks"].as_array_mut().unwrap().push(json!({
             "task_id": "echo-task",
@@ -634,9 +593,41 @@ async fn a_runs_capture_grades_the_reply_of_a_run_the_stage_did_not_start() {
             "concurrency": "serial"
         }));
     });
-    request.definition_id = "seed-runs".into();
-    request.cells[0].source = CellSource::Directory(pack.path().to_path_buf());
-    request.cells[0].agent_slot = "seeded".into();
+    let (canary, mut request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-runs",
+        "seed-runs",
+        &[SEED_ITEM_SDL],
+        json!({
+            "stage_id": "fire",
+            "seed": {"collection": "SeedItem", "document": {"label": "wh-6"}},
+            "deadline_secs": 240,
+            "settle": true,
+            "capture": [
+                {"kind": "runs", "name": "echo", "trigger_id": "echo-trigger"},
+                {"kind": "runs", "name": "both", "source_collection": "SeedItem", "of_seed": true},
+            ],
+            "checks": [
+                {
+                    "check": "captured_fields_match",
+                    "params": {"name": "echo", "min_rows": 1, "max_rows": 1, "expect": [
+                        {"field": "final_message", "equals": "echoed wh-6"},
+                        {"field": "lifecycle_state", "equals": "completed"},
+                        {"field": "source_collection", "equals": "SeedItem"},
+                        {"field": "session_id", "matches": ".+"},
+                    ]},
+                    "tier": "acceptance",
+                },
+                {
+                    "check": "captured_rows_count",
+                    "params": {"name": "both", "min": 2, "max": 2},
+                    "tier": "acceptance",
+                },
+            ],
+        }),
+        pack.path().to_path_buf(),
+    )
+    .await;
     request.deadline_secs = Some(300);
 
     let (outcome, mut verdicts) = run_seed_case(&canary, &request).await;
@@ -658,39 +649,22 @@ async fn a_runs_capture_grades_the_reply_of_a_run_the_stage_did_not_start() {
 #[tokio::test]
 async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     let backend = ScriptedBackend::start_with_plans(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed-unreconciled").await;
-    canary
-        .install(vec![(
-            Collection::EvalDefinition,
-            seed_definition_document(
-                &canary.owner,
-                "seed-unreconciled",
-                &[QUIET_ITEM_SDL],
-                json!({
-                    "stage_id": "fire",
-                    "seed": {"collection": "QuietItem", "document": {"label": "wh-2"}},
-                    "deadline_secs": 2,
-                    "capture": [fired_capture()],
-                    "checks": [fired_count(1, None)],
-                }),
-            ),
-        )])
-        .await;
-    request.definition_id = "seed-unreconciled".into();
-    request.cells[0].source = CellSource::Directory(trigger_pack_dir());
-    request.cells[0].agent_slot = "seeded".into();
-    let executor = canary.executor();
-
-    let outcome = run(
-        &canary.access,
-        &request,
-        &executor,
-        &CheckRegistry::builtin(),
-        CancellationToken::new(),
-        &RunOptions::default(),
+    let (canary, request) = setup_seed_request(
+        backend.endpoint(),
+        "run-seed-unreconciled",
+        "seed-unreconciled",
+        &[QUIET_ITEM_SDL],
+        json!({
+            "stage_id": "fire",
+            "seed": {"collection": "QuietItem", "document": {"label": "wh-2"}},
+            "deadline_secs": 2,
+            "capture": [fired_capture()],
+            "checks": [fired_count(1, None)],
+        }),
+        trigger_pack_dir(),
     )
-    .await
-    .unwrap();
+    .await;
+    let (outcome, verdicts) = run_seed_case(&canary, &request).await;
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 1));
 
     let trials = load_trials(&canary.access, &request.owner, &request.run_id)
@@ -716,9 +690,6 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     assert_eq!(seeds["data"]["QuietItem"], json!([]), "{seeds:#?}");
     home.node.shutdown().await.expect("node shutdown");
 
-    let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
-        .await
-        .unwrap();
     assert_eq!(verdicts.len(), 1, "{verdicts:#?}");
     assert_eq!(
         verdicts[0].kind,
@@ -1276,10 +1247,8 @@ async fn a_multiturn_tool_calling_stage_exports_reasoning_for_every_assistant_tu
     }
 }
 
-#[tokio::test]
-async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
-    let backend = ScriptedBackend::start(MODEL, Vec::new()).unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;
+async fn run_responses_case(backend: &ScriptedBackend, run_id: &str, case_id: &str) -> Vec<Value> {
+    let (canary, mut request) = canary_request(backend.endpoint(), run_id).await;
     let mut responses = backend_document(
         &canary.owner,
         "canary-backend",
@@ -1295,8 +1264,7 @@ async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
             (Collection::InferenceProfile, profile),
         ])
         .await;
-    request.case_ids = Some(vec!["one-stage".into()]);
-
+    request.case_ids = Some(vec![case_id.into()]);
     let outcome = run(
         &canary.access,
         &request,
@@ -1308,13 +1276,18 @@ async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
     .await
     .unwrap();
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
-
-    let bodies = backend
+    backend
         .recorded_requests()
         .into_iter()
         .filter(|request| request.path == "/v1/responses")
         .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+#[tokio::test]
+async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
+    let backend = ScriptedBackend::start(MODEL, Vec::new()).unwrap();
+    let bodies = run_responses_case(&backend, "run-responses", "one-stage").await;
     assert!(
         bodies.iter().all(|body| body.get("seed").is_none()),
         "{bodies:#?}"
@@ -1352,41 +1325,9 @@ async fn a_responses_reasoning_backend_runs_a_second_request_in_the_session() {
         .unscripted(gents_inference::test_support::scripted_backend::Unscripted::ReasoningToolTurn)
         .start()
         .unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses-replay").await;
-    let mut responses = backend_document(
-        &canary.owner,
-        "canary-backend",
-        backend.endpoint(),
-        json!({"kind": "unauthenticated"}),
-    );
-    responses["openai_wire_api"] = json!("responses");
-    let mut profile = profile_document(&canary.owner, "canary", "canary-backend", MODEL);
-    profile["reasoning_effort"] = json!("high");
-    canary
-        .install(vec![
-            (Collection::InferenceBackend, responses),
-            (Collection::InferenceProfile, profile),
-        ])
-        .await;
-    request.case_ids = Some(vec!["two-stage".into()]);
-
-    let outcome = run(
-        &canary.access,
-        &request,
-        &canary.executor(),
-        &CheckRegistry::builtin(),
-        CancellationToken::new(),
-        &RunOptions::default(),
-    )
-    .await
-    .unwrap();
-    assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
-
-    let inputs = backend
-        .recorded_requests()
+    let inputs = run_responses_case(&backend, "run-responses-replay", "two-stage")
+        .await
         .into_iter()
-        .filter(|request| request.path == "/v1/responses")
-        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
         .filter(|body| body.get("tools").is_some())
         .map(|body| body["input"].as_array().unwrap().clone())
         .collect::<Vec<_>>();
