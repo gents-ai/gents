@@ -665,9 +665,8 @@ async fn dependency_install_keeps_an_existing_operator_record() {
 #[test]
 fn local_publication_failure_restores_exactly_the_previous_records() {
     let home = tempfile::tempdir().unwrap();
-    let echo_v1 = super::super::plugin::testing::build_plugin_afb(
-        "echo",
-        b"fn main() { println!(\"{{}}\"); }",
+    let echo_v1 = gents_pack::plugin::test_fixtures::build_plugin_afb(
+        &gents_pack::plugin::test_fixtures::constant_output_wat(b"{}"),
     );
     let asset_v1 = |path: &str| -> Result<&[u8]> {
         (path == "plugins/echo.afb")
@@ -689,9 +688,8 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
 
     // A rejected synchronous local publication rolls records back under
     // the same guard; later node transaction failures do not use this path.
-    let echo_v2 = super::super::plugin::testing::build_plugin_afb(
-        "echo",
-        b"fn main() { println!(\"{{\\\"v\\\":2}}\"); }",
+    let echo_v2 = gents_pack::plugin::test_fixtures::build_plugin_afb(
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{"v":2}"#),
     );
     let asset_v2 = |path: &str| -> Result<&[u8]> {
         (path == "plugins/echo.afb")
@@ -714,9 +712,8 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
         before
     );
 
-    let new_plugin = super::super::plugin::testing::build_plugin_afb(
-        "brandnew",
-        b"fn main() { println!(\"{{}}\"); }",
+    let new_plugin = gents_pack::plugin::test_fixtures::build_plugin_afb(
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{"v":"new"}"#),
     );
     let asset_new = |path: &str| -> Result<&[u8]> {
         (path == "plugins/brandnew.afb")
