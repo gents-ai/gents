@@ -485,7 +485,7 @@ function StoppedNotice({
   );
 }
 
-function Reply({
+export function Reply({
   item,
   worked,
 }: {
@@ -494,6 +494,11 @@ function Reply({
 }) {
   const live = item.kind === "liveAssistant";
   const ready = item.kind === "liveAssistant" || item.reconstruction.state === "ready";
+  /* a reply that streamed in keeps typing after its saved message lands; its
+     copy button and time wait for the last character, so they are not pushed
+     down line by line */
+  const [revealed, setRevealed] = useState(!live);
+  const settled = !live && ready && Boolean(item.content) && revealed;
   return (
     /* the space under a reply sits below its actions, so the copy button
        and time stay with the text they belong to */
@@ -503,14 +508,8 @@ function Reply({
     >
       <AssistantMessage
         className={item.content ? "pt-4" : undefined}
-        actions={
-          !live && ready && item.content
-            ? copyActions(writtenText(item.content ?? "", []))
-            : false
-        }
-        meta={
-          !live && ready && item.content ? sentAt(item.timestamp, worked) : undefined
-        }
+        actions={settled ? copyActions(writtenText(item.content ?? "", [])) : false}
+        meta={settled ? sentAt(item.timestamp, worked) : undefined}
       >
         {ready && readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -534,17 +533,28 @@ function Reply({
                 : "Message could not be reconstructed."}
           </p>
         ) : item.content ? (
-          <ReplyText content={item.content} live={live} />
+          <ReplyText content={item.content} live={live} onRevealed={setRevealed} />
         ) : null}
       </AssistantMessage>
     </div>
   );
 }
 
-function ReplyText({ content, live }: { content: string; live: boolean }) {
+function ReplyText({
+  content,
+  live,
+  onRevealed,
+}: {
+  content: string;
+  live: boolean;
+  onRevealed: (revealed: boolean) => void;
+}) {
   const [revealing] = useState(live);
+  useEffect(() => {
+    if (!revealing) onRevealed(true);
+  }, [revealing, onRevealed]);
   if (!revealing) return <Markdown directives>{content}</Markdown>;
-  return <StreamText text={content} directives />;
+  return <StreamText text={content} directives onRevealed={onRevealed} />;
 }
 
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
