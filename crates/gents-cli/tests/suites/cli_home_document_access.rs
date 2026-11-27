@@ -205,7 +205,7 @@ async fn publish_test_peer(
 ) -> Result<String> {
     let variables = serde_json::json!({"input":{
         "peer_id": peer_id, "node_did": device,
-        "publisher_node_id": publisher, "addresses": ["loopback"],
+        "_publisher_nodeID": publisher, "addresses": ["loopback"],
     }});
     let response: Value = access.transact_write("test.shared_peer_publication", |txn| {
         let variables = variables.clone();
@@ -360,13 +360,13 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         endpoints.endpoint(follower_did, &graphql)?,
     );
     let selection = format!(
-        r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID publisher_node_id }} }}"#,
+        r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID _publisher_nodeID }} }}"#,
         gents_store::graphql::escape_graphql_string(&peer)
     );
     let rows = resumed.execute(&selection).await?;
     let rows = gents_protocol::graphql::graphql_rows_from_response(&rows, "PeerRegistry");
     anyhow::ensure!(
-        matches!(rows.as_slice(), [row] if row["_docID"] == peer && row["publisher_node_id"] == publisher_node),
+        matches!(rows.as_slice(), [row] if row["_docID"] == peer && row["_publisher_nodeID"] == publisher_node),
         "the restarted follower lost the certified publisher's record"
     );
     stop(serving).await?;

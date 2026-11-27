@@ -108,7 +108,12 @@ async fn load_or_create(
                     gents_store::local::document_acp::transport_publisher_node(node)?
                 {
                     use gents_protocol::document_query::{kind, Field};
-                    input = input.set(Field::<_, kind::Str>::new("publisher_node_id"), parent);
+                    input = input.set(
+                        Field::<_, kind::Str>::new(
+                            gents_protocol::schemas::PUBLISHER_NODE_ID_FIELD,
+                        ),
+                        parent,
+                    );
                 }
                 Create::new(input).render()
             };

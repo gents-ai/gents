@@ -27,7 +27,7 @@ group can span layers.
 | Directory | Models |
 | --- | --- |
 | `Shared` | Ids and time, provider-input shaping shared by `gents-protocol`, `gents-loop` and `gents-claude` (rendered capture, tool result text, account rotation, completion retry), canonical output state |
-| `Store` | Store access and its errors (`AccessClassification`, `DecisionRead`, `StorageFailure`), persistence and storage observation, the write gate, home opening and handoff, key custody, subscriptions, and the access policy (`Identity/`; `cargo run -p gents-lean-vocab --example regenerate_household_policy` writes its YAML into `crates/gents-schemas/schemas/agent/` through `GenerateHouseholdPolicy.lean` and `GenerateMailboxPolicy.lean`) |
+| `Store` | Store access and its errors (`AccessClassification`, `DecisionRead`, `StorageFailure`), persistence and storage observation, the write gate, home opening and handoff, key custody, subscriptions, and the access policy (`Identity/`; `cargo run -p gents-lean-vocab --example regenerate_household_policy` writes its YAML into `crates/gents-schemas/schemas/agent/` through `GenerateHouseholdPolicy.lean`, `GenerateHouseholdPolicyV2.lean` and `GenerateMailboxPolicy.lean`) |
 | `Documents` | Configuration documents and their publication (`ApplyReconcile/`), defaults, desired state, scope templates, skills, document views |
 | `Inference` | Backend admission and inference calls, scheduling, accounts and their resolver, usage reads, inference recovery |
 | `P2P` | Enrollment, pairing reconcile and routes, peer discovery, the backpressure obligation model |

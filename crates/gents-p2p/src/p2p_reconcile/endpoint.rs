@@ -401,12 +401,12 @@ mod tests {
             sig: vec![1, 2, 3],
         };
         let mutation = peer_registry_endpoint_upsert_mutation(&record);
-        assert!(!mutation.contains("publisher_node_id"));
+        assert!(!mutation.contains("_publisher_nodeID"));
         let shared =
             peer_registry_endpoint_upsert_mutation_for_publisher(&record, Some("device-node"));
         let (create, update) = shared.split_once("update:").unwrap();
-        assert!(create.contains(r#"publisher_node_id: "device-node""#));
-        assert!(!update.contains("publisher_node_id"));
+        assert!(create.contains(r#"_publisher_nodeID: "device-node""#));
+        assert!(!update.contains("_publisher_nodeID"));
         assert!(mutation.contains(r#"node_did: "did:key:z\"member""#));
         assert!(mutation.contains(r#"peer_id: { _eq: "peer\"one" }"#));
         assert!(mutation.contains("binding_sig: \"Ldp\""));

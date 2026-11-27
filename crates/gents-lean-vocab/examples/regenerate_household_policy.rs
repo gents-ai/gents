@@ -60,21 +60,13 @@ fn bind(
             + start
             + 1;
         let written = &source[start..end];
-        // A gated resource names the parent its create is checked against.
-        let parent_field = written
-            .find(", parentField: \"")
-            .map(|at| &written[at..written.len() - 1]);
-        let previous = parent_field.map_or(written.to_owned(), |field| written.replace(field, ""));
         ensure!(
-            previous == directive
+            written == directive
                 || old_ids.iter().any(
-                    |id| previous == format!("@policy(id: \"{id}\", resource: \"{resource}\")")
+                    |id| written == format!("@policy(id: \"{id}\", resource: \"{resource}\")")
                 ),
             "unexpected existing policy: {written}"
         );
-        let directive = parent_field.map_or(directive.clone(), |field| {
-            format!("{}{field})", &directive[..directive.len() - 1])
-        });
         result.replace_range(start..end, &directive);
     } else {
         result.insert_str(pos, &format!(" {directive}"));
@@ -129,13 +121,23 @@ fn main() -> Result<()> {
     ensure!(native_policy.id == id, "native policy ID mismatch");
     let yaml_path = root.join("crates/gents-schemas/schemas/agent/agent_ownership_policy.yaml");
     let previous_yaml = fs::read_to_string(&yaml_path)?;
-    let previous_policy =
-        acp::policy_yaml::parse_policy_yaml(&previous_yaml).map_err(anyhow::Error::msg)?;
-    let previous_id = acp::policy_yaml::generate_policy_id(&previous_policy, 0);
+    // A previous file the pinned parser no longer reads names no ID to accept.
+    let previous_id = acp::policy_yaml::parse_policy_yaml(&previous_yaml)
+        .map(|previous| acp::policy_yaml::generate_policy_id(&previous, 0))
+        .ok();
+    let v2_yaml = run_lean(&proofs, "GenerateHouseholdPolicyV2.lean")?;
+    let v2_parsed = acp::policy_yaml::parse_policy_yaml(&v2_yaml).map_err(anyhow::Error::msg)?;
+    acp::policy_yaml::validate_policy_expressions(&v2_parsed).map_err(anyhow::Error::msg)?;
+    acp::policy_yaml::build_policy(&v2_parsed, 0)?;
+    let v2_yaml_path =
+        root.join("crates/gents-schemas/schemas/agent/agent_ownership_policy_v2.yaml");
+    let previous_v2_yaml = fs::read_to_string(&v2_yaml_path)?;
     let shared = HomePolicyIds::node_store();
     let household = BuiltInPolicy::Household.placeholder();
     let mailbox = BuiltInPolicy::Mailbox.placeholder();
-    let old_ids = [shared.id(BuiltInPolicy::Household), previous_id.as_str()];
+    let old_ids: Vec<&str> = std::iter::once(shared.id(BuiltInPolicy::Household))
+        .chain(previous_id.as_deref())
+        .collect();
     let mailbox_yaml = run_lean(&proofs, "GenerateMailboxPolicy.lean")?;
     let mailbox_parsed =
         acp::policy_yaml::parse_policy_yaml(&mailbox_yaml).map_err(anyhow::Error::msg)?;
@@ -269,6 +271,7 @@ fn main() -> Result<()> {
     }
     changes.push((id_path, id_source, id_updated));
     changes.push((yaml_path, previous_yaml, yaml));
+    changes.push((v2_yaml_path, previous_v2_yaml, v2_yaml));
     changes.push((mailbox_yaml_path, previous_mailbox_yaml, mailbox_yaml));
 
     let mut drift = Vec::new();

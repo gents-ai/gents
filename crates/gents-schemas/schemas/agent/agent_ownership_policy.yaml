@@ -296,7 +296,8 @@ resources:
         expr: parent->session_admin
       - name: delete
         expr: parent->session_admin
-    create: {parent: parent, requires: session_admin}
+    collection:
+      create: parent->session_admin
   - name: goal_receipts
     relations:
       - name: parent

@@ -19,6 +19,10 @@ structure ResourceDefinition where
   name : String
   relations : List RelationDefinition
   permissions : List PermissionDefinition
+  /-- The resource's `collection.create` as the arrow `relation->required`:
+  the relation a governed collection binds to an `@immutable` relation field
+  with `@policy(relation:)`, and what its creator must hold on the object
+  that field names. -/
   create : Option (String × String) := none
   deriving BEq, Repr
 
@@ -253,7 +257,7 @@ def policy : List ResourceDefinition :=
 
 def transportV2Policy : List ResourceDefinition := policy.map fun resource =>
   if resource.name == "nodes" then
-    { resource with relations := resource.relations ++ [⟨"transport_publisher", ["actor:individual"], []⟩] }
+    { resource with relations := resource.relations ++ [⟨"transport_publisher", ["actor"], []⟩] }
   else if ["discovery", "scoped_discovery", "enrollment_records"].contains resource.name then
     { resource with create := some ("parent", "transport_publisher") }
   else resource
@@ -550,8 +554,11 @@ theorem without_bypass_document_acp_decides (fuel : Nat) (state : State)
 
 /-- A create gate `(relation, required)` admits a create only when the creator
 holds `required` on the object the new document names through `relation`.
-Premise: DefraDB checks the gate against the parent named in the create, in the
-creating transaction. -/
+External premise (defradb.rs `db::create_gate`, `defra.acp.create_gate`): in a
+governed collection DefraDB derives `relation` from the field bound to it with
+`@policy(relation:)` and checks `collection.create` (`relation->required`) over
+it before the create writes; under Vera, vera.rs checks it again when it
+registers the document with that relationship. -/
 def gatedCreateAllowed (definitions : List ResourceDefinition) (state : State)
     (actor resource parentResource parentId : String) : Bool :=
   match (definitions.find? (·.name == resource)).bind (·.create) with
@@ -1313,7 +1320,8 @@ def policyYamlNamed (name : String) (definitions : List ResourceDefinition) : St
        if expression.isEmpty then "" else "        expr: " ++ expression ++ "\n")) ++
     (match resource.create with
      | none => ""
-     | some (parent, required) => "    create: {parent: " ++ parent ++ ", requires: " ++ required ++ "}\n"))
+     | some (relation, required) =>
+       "    collection:\n      create: " ++ relation ++ "->" ++ required ++ "\n"))
 
 def policyYamlOf (definitions : List ResourceDefinition) : String :=
   policyYamlNamed policyName definitions
@@ -1373,10 +1381,19 @@ def subjectAdmittedIn (definitions : List ResourceDefinition) (relation : Relati
 
 def subjectAdmitted (relation : Relation) : Bool := subjectAdmittedIn policy relation
 
-theorem transport_v2_admits_individuals_not_wildcards :
+/-- A publisher grant names one device. External premise (acp-rs
+`Restriction::Actor`, ADR 0020): vera.rs has no restriction admitting single
+actors without the wildcard `actor:*`, so the policy admits a wildcard
+publisher. Decision: no relation manages `transport_publisher`, so the Node's
+owner, the account, is its only writer, and the account's publisher approval
+refuses the wildcard (`transport_sentinel::prepare_publisher`,
+`submit_publisher`). -/
+theorem transport_v2_publisher_is_written_only_by_the_node_owner :
     (subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .actor "device"⟩,
-     subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .wildcard⟩) =
-      (true, false) := by native_decide
+     subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .wildcard⟩,
+     (transportV2Policy.find? (·.name == "nodes")).map fun resource =>
+       resource.relations.any (·.manages.contains "transport_publisher")) =
+      (true, true, some false) := by native_decide
 
 /-- A relation's declared types name subject shapes, never kinds of actor: no
 policy admits one actor DID as a relation's subject and refuses another. A

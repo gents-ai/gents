@@ -3,7 +3,7 @@
 //! Access policy YAML is generated from `crates/gents/proofs/Proofs/Store/Identity/`.
 
 mod policy_ids;
-pub use policy_ids::{BuiltInPolicy, HomePolicyIds};
+pub use policy_ids::{BuiltInPolicy, HomePolicyIds, PUBLISHER_NODE_ID_FIELD};
 
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
