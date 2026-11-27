@@ -40,6 +40,7 @@ async fn replay(trace: Trace) {
     let mut clock = None;
     let mut load = None;
     let mut accepted = None;
+    let mut live_at_publication = false;
     for step in &trace.steps {
         match step.action.as_str() {
             "Claim" => {
@@ -58,7 +59,7 @@ async fn replay(trace: Trace) {
                 load.take().unwrap().await.unwrap();
             }
             "Tick" => {
-                let now = clock.as_mut().unwrap();
+                let Some(now) = clock.as_mut() else { continue };
                 *now += tick;
                 if free && load.is_some() {
                     poll(claimed.as_ref().unwrap(), *now).await;
@@ -67,6 +68,7 @@ async fn replay(trace: Trace) {
             "Poll" => poll(claimed.as_ref().unwrap(), clock.unwrap()).await,
             "Publish" => {
                 let request = claimed.as_ref().unwrap();
+                live_at_publication = clock.unwrap() < deadline(request).await;
                 accepted = Some(
                     request
                         .writer()
@@ -101,11 +103,14 @@ async fn replay(trace: Trace) {
         usize::from(accepted == Some(true))
     );
     let margin = trace.config == "MCLeaseRenewalStarvationMarginSpent";
-    let mut props = vec![("SingleWriter", accepted != Some(true) || live)];
-    if margin {
+    let mut props = vec![(
+        "SingleWriter",
+        accepted != Some(true) || live_at_publication,
+    )];
+    if margin || trace.expect == "holds" {
         props.push(("LeaseHeld", live));
     }
-    if free {
+    if free || trace.expect == "holds" {
         props.push(("OwnerPublishes", accepted == Some(true)));
     }
     trace.check(if margin { Red::Premise } else { Red::Defect }, &props);
@@ -117,6 +122,7 @@ async fn lease_renewal_starvation_traces() {
         include_str!(
             "../../proofs/tla/generated/traces/MCLeaseRenewalStarvationSyncInsideLease.json"
         ),
+        include_str!("../../proofs/tla/generated/traces/MCLeaseRenewalStarvation.sample-1.json"),
         include_str!("../../proofs/tla/generated/traces/MCLeaseRenewalStarvationMarginSpent.json"),
         include_str!("../../proofs/tla/generated/traces/MCLeaseRenewalStarvationUnfenced.json"),
     ] {

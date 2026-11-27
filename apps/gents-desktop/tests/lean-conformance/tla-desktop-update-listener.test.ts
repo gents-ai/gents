@@ -16,7 +16,10 @@ import silent from "../../../../crates/gents/proofs/tla/generated/traces/MCDeskt
 import gap from "../../../../crates/gents/proofs/tla/generated/traces/MCDesktopUpdateListenerRegistrationGap.json";
 import mismatch from "../../../../crates/gents/proofs/tla/generated/traces/MCDesktopUpdateListenerSupersededMismatch.json";
 
-it.each([failure, startup, silent, gap, mismatch])(
+import convergence from "../../../../crates/gents/proofs/tla/generated/traces/MCDesktopUpdateListener.sample-1.json";
+import relisten from "../../../../crates/gents/proofs/tla/generated/traces/MCDesktopUpdateListener.sample-2.json";
+
+it.each([failure, startup, silent, gap, mismatch, convergence, relisten])(
   "replays $config through the desktop observer",
   async (trace) => {
     expect(trace.spec).toBe("DesktopUpdateListener");
@@ -41,6 +44,7 @@ it.each([failure, startup, silent, gap, mismatch])(
     let handler: ((event: { reason?: string }) => Promise<void>) | undefined;
     let registration = deferred();
     let registrations = 0;
+    let notice = false;
     type Read = {
       sessionId: string;
       version: number;
@@ -102,7 +106,12 @@ it.each([failure, startup, silent, gap, mismatch])(
           case "ArriveWithNotice":
             version++;
             if (step.action === "ArriveWithNotice") arrived = true;
-            void handler?.({ reason: "store" });
+            notice ||= !!handler;
+            break;
+          case "Handle":
+            expect(notice).toBe(true);
+            notice = false;
+            void handler!({ reason: "store" });
             break;
           case "ArriveSilently":
             arrived = true;

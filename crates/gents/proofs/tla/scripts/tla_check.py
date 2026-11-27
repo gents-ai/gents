@@ -377,7 +377,8 @@ def select(files, nodes=None, crate_for=crate_of):
         chosen |= {name for name, node in nodes.items()
                    if any(within(path, modeled) for modeled in node.get("paths", []))}
         if path.startswith(tla + "generated/traces/") and path.endswith(".json"):
-            chosen |= by_file.get(Path(path).with_suffix(".cfg").name, set(nodes))
+            config = re.sub(r"\.sample-[1-9][0-9]*$", "", Path(path).stem)
+            chosen |= by_file.get(config + ".cfg", set(nodes))
         elif path.startswith(tla + "generated/"):
             module = Path(path).stem
             chosen |= {name for name, node in nodes.items() if module in node["generated"]}
@@ -788,6 +789,20 @@ def traces(check):
         raise ValueError(f"coverage ledger names missing counterexamples: {sorted(missing)}")
     with ThreadPoolExecutor(max_workers=int(os.getenv("TLA_JOBS", "4"))) as pool:
         outputs = dict(pool.map(generate, configs))
+    import tlc_simulation
+    jobs = [(spec, cfg, sample) for spec, node in nodes.items() for cfg in node["configs"]
+            for sample in tlc_simulation.plans(cfg)]
+    def simulate(job):
+        spec, cfg, (seed, depth, count, offset) = job
+        def samples():
+            return tlc_simulation.generate(tlc, spec, cfg, seed, depth, count, offset)
+        data = samples()
+        if not check and samples() != data:
+            raise ValueError(f"{cfg.name}: seeded simulation changed between runs")
+        return data
+    with ThreadPoolExecutor(max_workers=int(os.getenv("TLA_JOBS", "4"))) as pool:
+        for generated in pool.map(simulate, jobs):
+            outputs.update((directory / name, data) for name, data in generated.items())
     obsolete = set(directory.glob("*.json")) - outputs.keys()
     if check:
         stale = obsolete | {p for p, data in outputs.items() if not p.exists() or p.read_bytes() != data}

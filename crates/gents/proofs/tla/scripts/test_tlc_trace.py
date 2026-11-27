@@ -7,6 +7,17 @@ LOCATION = "line 2, col 1 to line 2, col 9 of module Counter"
 
 
 class TraceValues(unittest.TestCase):
+    def test_sample_graph_keeps_repeated_edges_and_rejects_ambiguity(self):
+        from tlc_simulation import graph_steps
+
+        graph = ('1 [label="counter = 0"];\n2 [label="counter = 1"];\n'
+                 '1 -> 2 [label="Increment"];\n2 -> 1 [label="Clear"];')
+        sequence = [{"counter": i} for i in (0, 1, 0, 1)]
+        steps = graph_steps(graph, sequence, {})
+        self.assertEqual([step["action"] for step in steps], ["Increment", "Clear", "Increment"])
+        with self.assertRaisesRegex(ValueError, "2 possible actions"):
+            graph_steps(graph + '\n1 -> 2 [label="Reset"];', sequence, {})
+
     def test_functions_and_constants_keep_model_values_distinct_from_strings(self):
         bindings = constants('Actors = {w2, w1} Limit = 4 Title = "two  words"')
         self.assertEqual(bindings["Actors"], [{"$model": "w1"}, {"$model": "w2"}])

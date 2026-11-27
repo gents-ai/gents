@@ -141,6 +141,7 @@ async fn replay(trace: Trace) {
 #[tokio::test]
 async fn session_head_observation_traces() {
     for json in [
+        include_str!("../../proofs/tla/generated/traces/MCSessionHeadObservation.sample-1.json"),
         include_str!("../../proofs/tla/generated/traces/MCSessionHeadObservationNoHeadSeed.json"),
         include_str!(
             "../../proofs/tla/generated/traces/MCSessionHeadObservationNoLivePreference.json"

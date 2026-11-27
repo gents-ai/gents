@@ -132,6 +132,7 @@ fn automated_background(
 #[tokio::test]
 async fn live_background_completions_project_as_tool_attributed_activity() {
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundEnvelopeProjection.sample-1.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundEnvelopeProjectionByText.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundEnvelopeProjectionNoInputWait.json"),
     ] {

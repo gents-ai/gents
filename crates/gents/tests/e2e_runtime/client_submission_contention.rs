@@ -76,7 +76,8 @@ const MAP: SpecTraceMap<Writer> = SpecTraceMap {
     action: |step| match step.action.as_str() {
         "AgentPublish" => Action::Environment(Writer::Publish),
         "BindingChange" => Action::Environment(Writer::ChangeBinding),
-        "Compose" => Action::Internal,
+        "Compose" => Action::Begin,
+        "Receive" => Action::Internal,
         "ReserveCommit" | "SubmitCommit" => {
             assert_eq!(step.actor, Some(1.into()), "one authored request");
             Action::Commit
@@ -114,7 +115,7 @@ async fn replay(trace: &Trace) {
             .await
             .unwrap();
     }
-    let replay = MAP
+    let mut replay = MAP
         .drive(
             trace,
             db.graphql_endpoint(),
@@ -183,6 +184,7 @@ async fn replay(trace: &Trace) {
             .await
             .map(|()| None)
     };
+    replay.finish().await;
     let done = result.is_ok();
     let requests = actors
         .fixture
@@ -239,7 +241,17 @@ async fn replay(trace: &Trace) {
         .filter(|s| s.action == "AgentPublish")
         .count();
     let attempts = trace.constants["Attempts"].as_u64().unwrap() as usize;
-    assert_eq!(commits, (writes + 1).min(attempts), "{}", trace.config);
+    let expected_commits = if trace.expect == "holds" {
+        assert!(done);
+        trace
+            .steps
+            .iter()
+            .filter(|s| s.action == "SubmitCommit" || s.action == "ReserveCommit")
+            .count()
+    } else {
+        (writes + 1).min(attempts)
+    };
+    assert_eq!(commits, expected_commits, "{}", trace.config);
     let red = match trace.config.as_str() {
         "MCClientSubmissionContentionShortBudget" => Red::Premise,
         "MCClientSubmissionContentionTwoPublicationsWitness" => Red::Witness,
@@ -266,6 +278,8 @@ async fn replay(trace: &Trace) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replays_client_submission_contention() {
     for json in [
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContention.sample-1.json"),
+        include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContention.sample-2.json"),
         include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionReserveSingleAttempt.json"),
         include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionSingleAttempt.json"),
         include_str!("../../proofs/tla/generated/traces/MCClientSubmissionContentionShortBudget.json"),

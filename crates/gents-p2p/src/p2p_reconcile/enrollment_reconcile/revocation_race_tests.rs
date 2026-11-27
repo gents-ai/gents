@@ -144,12 +144,29 @@ async fn replay(trace: &Trace) {
                 }
             }
             "PeerInstall" => {
-                assert!(revoked);
                 let tick = reconcile_peer_tick(&server_admin, &pairing, &peer)
                     .await
                     .unwrap();
-                stale_install = !tick.ops_applied.is_empty()
-                    || !server_admin.list_replicators().await.unwrap().is_empty();
+                let installed = !server_admin.list_replicators().await.unwrap().is_empty();
+                if revoked {
+                    stale_install |= !tick.ops_applied.is_empty() || installed;
+                } else {
+                    assert!(installed, "enrolled peer installed before revocation");
+                }
+            }
+            "PeerTeardown" => {
+                assert!(revoked);
+                reconcile_peer_tick(&server_admin, &pairing, &peer)
+                    .await
+                    .unwrap();
+                assert!(server_admin.list_replicators().await.unwrap().is_empty());
+            }
+            "Sweep" => {
+                let current = store.load_projection().await.unwrap();
+                reconcile_data_plane(server, admin.did(), &store, &current)
+                    .await
+                    .unwrap();
+                assert_eq!(routes("sweep of revoked route").await, 0);
             }
             action => panic!("unmapped enrollment action {action}"),
         }
@@ -178,6 +195,7 @@ async fn replay(trace: &Trace) {
 #[tokio::test]
 async fn enrollment_route_fence_traces() {
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFence.sample-1.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFenceFilteredRead.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFencePeerTrustsRoute.json"),
     ] {

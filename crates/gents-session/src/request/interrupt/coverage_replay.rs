@@ -143,6 +143,8 @@ async fn queued(trace: &Trace) {
 #[tokio::test]
 async fn interrupt_coverage_traces() {
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCInterruptCoverage.sample-1.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCInterruptCoverage.sample-2.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCInterruptCoverageClaimSkipsMarker.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCInterruptCoverageWakeSkipsMarker.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCInterruptCoverageInterruptReads.json"),

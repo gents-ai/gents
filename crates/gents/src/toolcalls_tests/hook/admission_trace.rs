@@ -313,6 +313,7 @@ async fn replay(trace: Trace) {
 async fn background_admission_contention_traces() {
     let attempts = gents_store::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1;
     for json in [
+        include_str!("../../../proofs/tla/generated/traces/MCBackgroundAdmissionContention.sample-1.json"),
         include_str!("../../../proofs/tla/generated/traces/MCBackgroundAdmissionContentionLeaseLapse.json"),
         include_str!("../../../proofs/tla/generated/traces/MCBackgroundAdmissionContentionRenewalBudget.json"),
         include_str!("../../../proofs/tla/generated/traces/MCBackgroundAdmissionContentionRenewalWitness.json"),

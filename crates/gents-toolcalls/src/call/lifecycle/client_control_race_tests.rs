@@ -449,13 +449,15 @@ async fn replay_stop(actions: &[&str]) -> (ProcessControlOutcome, String) {
     let registry =
         BackgroundExecutionRegistry::default().with_stop_release_observer(release_observed.clone());
     let token = CancellationToken::new();
-    let reservation = registry
-        .reserve(
-            request.tool_call_id.clone(),
-            request.tool_call_doc_id.clone(),
-            token.clone(),
-        )
-        .unwrap();
+    let mut reservation = Some(
+        registry
+            .reserve(
+                request.tool_call_id.clone(),
+                request.tool_call_doc_id.clone(),
+                token.clone(),
+            )
+            .unwrap(),
+    );
     let mut control = tokio::spawn({
         let node_for_control = node.clone();
         let agent = request_owner.actor_did().unwrap();
@@ -500,11 +502,12 @@ async fn replay_stop(actions: &[&str]) -> (ProcessControlOutcome, String) {
                 release_observed.notified().await;
                 tokio::time::resume();
             }
-            "RereadRow" => break,
+            "Release" => drop(reservation.take().unwrap()),
+            "RereadRow" | "Released" => break,
             other => panic!("unmapped stop action {other}"),
         }
     }
-    assert_eq!(actions.last(), Some(&"RereadRow"));
+    assert!(matches!(actions.last(), Some(&"RereadRow" | &"Released")));
     let outcome = control.await.unwrap().unwrap();
     let state = load_as_agent(&request_owner, &request, requester_did.as_deref())
         .await
@@ -522,6 +525,7 @@ async fn replay_stop(actions: &[&str]) -> (ProcessControlOutcome, String) {
 async fn background_stop_release_traces() {
     use gents_lean_vocab::tla::replay::{Red, Trace};
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundStopRelease.sample-1.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundStopReleaseTerminalReread.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundStopReleaseWallBound.json"),
     ] {
