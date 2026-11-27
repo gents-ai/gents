@@ -15,8 +15,6 @@ pub(super) use command::command_run::run_command;
 pub use command::command_run::run_command as run_command_for_test;
 pub use command::command_run::CommandRequest;
 pub use command::command_validation::validate_command_policy;
-#[cfg(test)]
-pub(super) use command::command_validation::validate_read_only_command;
 pub(crate) use command::{
     current_managed_command_credential_snapshot, default_lsp_network_mode,
     effective_command_policy, lsp_server_sandbox, prepare_managed_command,

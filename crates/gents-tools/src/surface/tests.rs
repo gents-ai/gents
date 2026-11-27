@@ -227,45 +227,13 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
-            file_tools: FileToolMode::Off,
-            file_tool_root: None,
             bash: BashMode::ReadOnly,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
             enable_context_budget: false,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ceiling,
         Vec::new(),
@@ -288,45 +256,13 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
-            file_tools: FileToolMode::Off,
-            file_tool_root: None,
             bash: BashMode::ReadOnly,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
             enable_context_budget: false,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ceiling,
         Vec::new(),
@@ -348,45 +284,14 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(stale_root),
             bash: BashMode::ReadOnly,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -402,48 +307,17 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
-            file_tool_root: None,
             bash: BashMode::Unrestricted,
             command_policy: Some(
                 crate::native::CommandExecutionPolicy::write_capable()
                     .with_mode(crate::native::CommandExecutionMode::Unrestricted),
             ),
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -460,45 +334,12 @@ fn selection_cli_tools_require_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
-            file_tools: FileToolMode::Off,
-            file_tool_root: None,
-            bash: BashMode::Off,
-            command_policy: None,
             cli_tool_names: vec!["rg".to_string()],
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -525,45 +366,12 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
-            file_tools: FileToolMode::Off,
-            file_tool_root: None,
-            bash: BashMode::Off,
-            command_policy: None,
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ceiling,
         Vec::new(),
@@ -589,49 +397,14 @@ fn selection_mcp_service_allowlist_is_deduped() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
-            file_tools: FileToolMode::Off,
-            file_tool_root: None,
-            bash: BashMode::Off,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
-            enable_meta_tools: true,
-            enable_goal_tools: true,
-            enable_goal_creation: false,
             allowed_mcp_service_ids: vec![
                 "x-data".to_string(),
                 "x-data".to_string(),
                 "observability-mcp".to_string(),
             ],
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -744,48 +517,17 @@ fn background_tool_allowlist_registers_r6_tools() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
-            file_tool_root: None,
             bash: BashMode::Unrestricted,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec![
                 "bash_unrestricted".to_string(),
                 "bash_unrestricted".to_string(),
             ],
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -803,45 +545,14 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
-            file_tool_root: None,
             bash: BashMode::ReadOnly,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -867,45 +578,14 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
-            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(symlink_path.join("workspace")),
             bash: BashMode::Unrestricted,
-            command_policy: None,
-            cli_tool_names: Vec::new(),
-            command_output_limits: Default::default(),
-            timeouts: Default::default(),
-            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
-            enable_goal_creation: false,
-            allowed_mcp_service_ids: Vec::new(),
-            required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: Vec::new(),
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            application_write_collections: Vec::new(),
-            write_tools: Vec::new(),
-            query_tools: Vec::new(),
-            surface_of_tool: Default::default(),
-            enable_self_config: false,
-            self_config_categories: None,
-            self_config_no_lockout: false,
-            self_config_preview: false,
-            enable_pack_install: false,
-            enable_pack_authority: false,
-            enable_lsp: false,
-            lsp_config: None,
-            plugin_tools: Vec::new(),
-            remote_tools: None,
-            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
-            background_limit: Default::default(),
+            ..Default::default()
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -918,15 +598,8 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     );
 }
 
-#[tokio::test]
-async fn defra_query_tool_gated_by_selection() {
-    let node_db = gents_store::test_support::TestStore::start(
-        "defra-query-tool-gated-by-selection",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
-
+#[test]
+fn defra_query_tool_gated_by_selection() {
     let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
@@ -937,13 +610,7 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(enabled.tool_names().contains(&"query".to_string()));
 
     let disabled = AgentToolSurfaceConfig::from_selection(
@@ -956,13 +623,7 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(!disabled.tool_names().contains(&"query".to_string()));
 }
 
@@ -1104,16 +765,10 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
     );
 }
 
-#[tokio::test]
-async fn plugin_only_bindings_are_captured_for_trigger_execution() {
+#[test]
+fn plugin_only_bindings_are_captured_for_trigger_execution() {
     use gents_documents::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
-    let node_db = gents_store::test_support::TestStore::start(
-        "plugin-only-bindings-are-captured-for-tr",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
     let selected = AgentToolSurfaceConfig::from_selection(
         "evidence",
         ResolvedToolSelection {
@@ -1146,13 +801,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert_eq!(
         selected.source_fill_fields(),
         ["book_path".to_string(), "page_command".to_string()]
@@ -1537,37 +1186,20 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
     );
 }
 
-#[tokio::test]
-async fn session_history_tool_follows_selection() {
-    let node_db = gents_store::test_support::TestStore::start(
-        "session-history-tool-follows-selection",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
-
+#[test]
+fn session_history_tool_follows_selection() {
     let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_session_history_tool: false,
             enable_memory_tool: false,
-            enable_schema_tool: false,
-            enable_p2p_tool: false,
-            enable_p2p_mutations: false,
-            enable_context_budget: true,
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(!disabled
         .tool_names()
         .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
@@ -1582,13 +1214,7 @@ async fn session_history_tool_follows_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(enabled
         .tool_names()
         .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
@@ -2326,15 +1952,8 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
         .is_some_and(|names| names.contains(&"call_tool".to_string())));
 }
 
-#[tokio::test]
-async fn agent_config_alias_expands_to_config_scope() {
-    let node_db = gents_store::test_support::TestStore::start(
-        "agent-config-alias-expands-to-config-sco",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
-
+#[test]
+fn agent_config_alias_expands_to_config_scope() {
     let surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
@@ -2346,13 +1965,7 @@ async fn agent_config_alias_expands_to_config_scope() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        node.node_identity_did().unwrap(),
-        &crate::plugin_host::NoPluginHost,
-    )
-    .await
-    .unwrap();
+    .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
 
     assert!(surface.tool_names().contains(&"query".to_string()));
     for allowed in ["Agent", "Tools", "Schedule", "AgentContext"] {

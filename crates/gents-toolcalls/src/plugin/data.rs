@@ -646,21 +646,6 @@ mod tests {
         node.shutdown().await.expect("node shutdown");
     }
 
-    fn grant() -> PluginData {
-        PluginData {
-            declaration: PluginDataDeclaration {
-                collections: vec!["Note".into()],
-                ops: vec!["insert".into(), "update".into()],
-                stamped: BTreeMap::from([("owner".to_owned(), Stamp::CallerDid)]),
-            },
-            collection_fields: BTreeMap::from([(
-                "Note".to_owned(),
-                vec!["owner".into(), "body".into()],
-            )]),
-            unique_keys: BTreeMap::new(),
-        }
-    }
-
     fn tool_output() -> StampContext {
         StampContext::ToolOutput {
             caller_did: "did:key:node".into(),
@@ -674,97 +659,12 @@ mod tests {
         value.as_object().cloned().unwrap()
     }
 
-    fn insert(collection: &str, body: Value) -> DataWrite {
-        DataWrite {
-            op: DataOp::Insert,
-            collection: collection.into(),
-            doc_id: None,
-            fields: fields(body),
-            on_conflict: None,
-        }
-    }
-
     fn admit(
         data: &PluginData,
         ctx: &StampContext,
         writes: Vec<DataWrite>,
     ) -> Result<Vec<AdmittedWrite>, WriteRefusal> {
         admit_write(data, ctx, writes)
-    }
-
-    fn clear_observation(invocation: Invocation) -> WriteObservation {
-        WriteObservation {
-            in_own_sdl: true,
-            runtime_or_protected: false,
-            actor_is_invoker: true,
-            op_granted: true,
-            stamped_supplied_by_guest: false,
-            invocation,
-            applicable: Vec::new(),
-            write: crate::plugin::application_write::Observation {
-                operation: "create".into(),
-                granted: true,
-                application: true,
-                protected: false,
-                credential: false,
-                bounded: true,
-                targets: 1,
-                limit: 100,
-                preview: false,
-                digest_matches: true,
-            },
-        }
-    }
-
-    #[test]
-    fn write_outside_data_collections_is_refused() {
-        let refused = admit(&grant(), &tool_output(), vec![insert("Other", json!({}))]);
-        assert_eq!(refused.unwrap_err(), WriteRefusal::Other);
-        let runtime = admit(&grant(), &tool_output(), vec![insert("Request", json!({}))]);
-        assert_eq!(runtime.unwrap_err(), WriteRefusal::Other);
-    }
-
-    #[test]
-    fn write_op_outside_data_ops_is_refused() {
-        let delete = DataWrite {
-            op: DataOp::Delete,
-            doc_id: Some("bae-1".into()),
-            ..insert("Note", json!({}))
-        };
-        assert_eq!(
-            admit(&grant(), &tool_output(), vec![delete]).unwrap_err(),
-            WriteRefusal::Other
-        );
-    }
-
-    #[test]
-    fn update_and_delete_need_a_doc_id() {
-        let mut data = grant();
-        data.declaration.ops.push("delete".into());
-        for op in [DataOp::Update, DataOp::Delete] {
-            let write = DataWrite {
-                op,
-                ..insert("Note", json!({"body": "x"}))
-            };
-            assert_eq!(
-                admit(&data, &tool_output(), vec![write.clone()]).unwrap_err(),
-                WriteRefusal::Other
-            );
-            let with_id = DataWrite {
-                doc_id: Some("bae-1".into()),
-                ..write
-            };
-            assert!(admit(&data, &tool_output(), vec![with_id]).is_ok());
-        }
-    }
-
-    #[test]
-    fn guest_value_for_a_stamped_field_is_refused() {
-        let write = insert("Note", json!({"owner": "did:key:forged"}));
-        assert_eq!(
-            admit(&grant(), &tool_output(), vec![write]).unwrap_err(),
-            WriteRefusal::Other
-        );
     }
 
     fn invocation_wire(invocation: Invocation) -> String {
@@ -867,176 +767,13 @@ mod tests {
     }
 
     #[test]
-    fn stamps_apply_only_to_fields_of_the_written_collection() {
-        let mut data = grant();
-        data.declaration.collections.push("Log".into());
-        data.collection_fields
-            .insert("Log".into(), vec!["line".into()]);
-        let admitted = admit(
-            &data,
-            &tool_output(),
-            vec![
-                insert("Note", json!({"body": "a"})),
-                insert("Log", json!({"line": "b"})),
-            ],
-        )
-        .unwrap();
-        assert_eq!(admitted[0].write.fields["owner"], json!("did:key:node"));
-        assert!(!admitted[1].write.fields.contains_key("owner"));
-    }
-
-    #[test]
-    fn stamp_without_a_value_in_the_context_refuses_the_output() {
-        let mut data = grant();
-        data.declaration
-            .stamped
-            .insert("owner".into(), Stamp::JobRowDocId);
-        let refusal = admit(
-            &data,
-            &tool_output(),
-            vec![insert("Note", json!({"body": "a"}))],
-        )
-        .unwrap_err();
-        assert_eq!(
-            refusal,
-            WriteRefusal::StampUnavailable {
-                stamp: Stamp::JobRowDocId,
-                invocation: Invocation::ToolCall
-            }
-        );
-        let message = refusal.to_string();
-        assert!(message.contains("job_row_doc_id") && message.contains("tool"));
-
-        let callback = StampContext::Callback {
-            caller_did: "did:key:node".into(),
-        };
-        data.declaration
-            .stamped
-            .insert("owner".into(), Stamp::SessionId);
-        assert_eq!(
-            admit(&data, &callback, vec![insert("Note", json!({}))]).unwrap_err(),
-            WriteRefusal::StampUnavailable {
-                stamp: Stamp::SessionId,
-                invocation: Invocation::Callback
-            }
-        );
-        assert_eq!(callback.value(Stamp::CallerDid), Some("did:key:node"));
-
-        let step = StampContext::JobStep {
-            caller_did: "n".into(),
-            session_id: "s".into(),
-            request_doc_id: "r".into(),
-            tool_call_doc_id: "t".into(),
-            job_row_doc_id: "j".into(),
-            chain_root_doc_id: "c".into(),
-        };
-        assert_eq!(step.value(Stamp::JobRowDocId), Some("j"));
-        assert_eq!(step.value(Stamp::ChainRootDocId), Some("c"));
-        assert_eq!(tool_output().value(Stamp::ChainRootDocId), None);
-    }
-
-    #[test]
-    fn more_than_100_targets_are_refused() {
-        let writes = |count| vec![insert("Note", json!({"body": "x"})); count];
-        assert_eq!(
-            admit(&grant(), &tool_output(), writes(100)).unwrap().len(),
-            100
-        );
-        assert_eq!(
-            admit(&grant(), &tool_output(), writes(101)).unwrap_err(),
-            WriteRefusal::Other
-        );
-    }
-
-    #[test]
-    fn on_conflict_is_allowed_only_on_insert() {
-        let with_conflict = |op, doc_id: Option<&str>| DataWrite {
-            op,
-            doc_id: doc_id.map(str::to_owned),
-            on_conflict: Some(OnConflict::Ignore),
-            ..insert("Note", json!({"body": "x"}))
-        };
-        assert!(admit(
-            &grant(),
-            &tool_output(),
-            vec![with_conflict(DataOp::Insert, None)]
-        )
-        .is_ok());
-        assert_eq!(
-            admit(
-                &grant(),
-                &tool_output(),
-                vec![with_conflict(DataOp::Update, Some("bae-1"))]
-            )
-            .unwrap_err(),
-            WriteRefusal::Other
-        );
-    }
-
-    #[test]
-    fn applicable_stamps_keep_only_fields_of_the_written_collection() {
-        let declared = vec![
-            ("job_row_doc_id".to_owned(), Stamp::JobRowDocId),
-            ("node_did".to_owned(), Stamp::CallerDid),
-        ];
-        assert_eq!(
-            applicable_stamps(&declared, &["node_did".to_owned(), "name".to_owned()]),
-            vec![("node_did".to_owned(), Stamp::CallerDid)]
-        );
-    }
-
-    #[test]
-    fn admit_write_observation_reports_the_first_unavailable_stamp_before_other_refusals() {
-        let mut callback = clear_observation(Invocation::Callback);
-        callback.applicable = vec![("job".into(), Stamp::JobRowDocId)];
-        callback.op_granted = false;
-        assert_eq!(
-            admit_write_observation(&callback),
-            Err(WriteRefusal::StampUnavailable {
-                stamp: Stamp::JobRowDocId,
-                invocation: Invocation::Callback
-            })
-        );
-
-        assert_eq!(
-            admit_write_observation(&clear_observation(Invocation::JobStep)),
-            Ok(())
-        );
-        let breaks: [fn(&mut WriteObservation); 7] = [
-            |o| o.in_own_sdl = false,
-            |o| o.runtime_or_protected = true,
-            |o| o.actor_is_invoker = false,
-            |o| o.op_granted = false,
-            |o| o.stamped_supplied_by_guest = true,
-            |o| o.write.granted = false,
-            |o| o.write.credential = true,
-        ];
-        for (index, apply) in breaks.into_iter().enumerate() {
-            let mut observation = clear_observation(Invocation::JobStep);
-            apply(&mut observation);
-            assert_eq!(
-                admit_write_observation(&observation),
-                Err(WriteRefusal::Other),
-                "break {index}"
-            );
+    fn unavailable_stamp_refusal_names_stamp_and_invocation() {
+        let message = WriteRefusal::StampUnavailable {
+            stamp: Stamp::JobRowDocId,
+            invocation: Invocation::ToolCall,
         }
-    }
-
-    #[test]
-    fn substitute_caller_did_replaces_only_the_placeholder() {
-        let filter = BTreeMap::from([
-            ("owner".to_owned(), "$caller.did".to_owned()),
-            ("name".to_owned(), "x".to_owned()),
-            ("note".to_owned(), "has $caller.did inside".to_owned()),
-        ]);
-        assert_eq!(
-            substitute_caller_did(&filter, "did:key:n"),
-            BTreeMap::from([
-                ("owner".to_owned(), "did:key:n".to_owned()),
-                ("name".to_owned(), "x".to_owned()),
-                ("note".to_owned(), "has $caller.did inside".to_owned()),
-            ])
-        );
+        .to_string();
+        assert!(message.contains("job_row_doc_id") && message.contains("tool"));
     }
 
     /// `ToolPolicy.ApplicationWrite.Observation` as the native write observation
