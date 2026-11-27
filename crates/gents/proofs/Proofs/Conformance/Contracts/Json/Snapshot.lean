@@ -1,5 +1,6 @@
 import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
+import Proofs.Conformance.StoreMigration
 import Proofs.Conformance.Identity.SessionChild
 import Proofs.Conformance.Identity.GenesisReadAccess
 import Proofs.Conformance.StagedPermissionObjects

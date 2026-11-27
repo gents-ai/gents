@@ -10,6 +10,7 @@ pub mod runtime_document_projection;
 pub mod storage_backend;
 pub mod store_compat;
 pub mod store_key;
+pub mod store_migration;
 pub mod tool_permission_projection;
 
 pub use projection_policy::{

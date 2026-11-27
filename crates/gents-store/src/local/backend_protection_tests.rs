@@ -13,6 +13,9 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
     let home = directory.path().to_owned();
     let data = fresh_protected_store(&home).await?;
     assert!(PROVENANCE_MARKER.ends_with("-v3"));
+    let manifest = data.join(super::store_migration::STORE_MANIFEST_FILE);
+    let manifest_bytes = std::fs::read(&manifest)?;
+    std::fs::remove_file(&manifest)?;
     std::fs::rename(
         data.join(PROVENANCE_MARKER),
         data.join(".gents-private-backend-v2"),
@@ -41,8 +44,9 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         "the refused home is byte-identical"
     );
 
-    // A store with this version's marker, and one with no marker, pass to
-    // the lock.
+    // A store with this version's marker and manifest, and one with no marker,
+    // pass to the lock.
+    std::fs::write(&manifest, &manifest_bytes)?;
     std::fs::rename(
         data.join(".gents-private-backend-v2"),
         data.join(PROVENANCE_MARKER),
@@ -174,6 +178,7 @@ async fn a_home_with_an_earlier_or_no_lineage_marker_is_reported_as_older() -> a
     let home = directory.path().to_owned();
     let data = fresh_protected_store(&home).await?;
     let earlier = data.join(".gents-private-backend-v2");
+    std::fs::remove_file(data.join(super::store_migration::STORE_MANIFEST_FILE))?;
     std::fs::rename(data.join(PROVENANCE_MARKER), &earlier)?;
     assert_eq!(
         refused_unchanged(&home).await?,
