@@ -142,7 +142,15 @@
           "kind": "documents",
           "name": "rows",
           "collection": "EscrowTx",
-          "filter": {},
+          "filter": {
+            "txId": {
+              "_in": [
+                "t1",
+                "t2",
+                "t3"
+              ]
+            }
+          },
           "fields": [
             "txId",
             "amount",

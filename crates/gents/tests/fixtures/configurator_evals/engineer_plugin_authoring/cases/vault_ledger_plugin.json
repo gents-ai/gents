@@ -142,7 +142,15 @@
           "kind": "documents",
           "name": "rows",
           "collection": "VaultEntry",
-          "filter": {},
+          "filter": {
+            "entryId": {
+              "_in": [
+                "e1",
+                "e2",
+                "e3"
+              ]
+            }
+          },
           "fields": [
             "entryId",
             "delta",

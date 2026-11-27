@@ -142,7 +142,11 @@
           "kind": "documents",
           "name": "rows",
           "collection": "TurnLog",
-          "filter": {},
+          "filter": {
+            "matchId": {
+              "_eq": "m1"
+            }
+          },
           "fields": [
             "matchId",
             "seq",
