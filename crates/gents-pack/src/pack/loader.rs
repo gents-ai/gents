@@ -383,24 +383,7 @@ pub(super) fn interpolate_values(
     value: &mut Value,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<()> {
-    match value {
-        Value::String(text) => {
-            *text = interpolate::interpolate_with(text, environment)
-                .map_err(|names| interpolate::UnsetVariables { names })?;
-        }
-        Value::Array(values) => {
-            for value in values {
-                interpolate_values(value, environment)?;
-            }
-        }
-        Value::Object(values) => {
-            for value in values.values_mut() {
-                interpolate_values(value, environment)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    substitute::interpolate_values(value, environment)
 }
 
 fn hydrate_sidecar(
@@ -433,6 +416,7 @@ fn hydrate_sidecar(
 
 mod authored_schema;
 pub use authored_schema::{authored_document_schema, authored_pack_config_schema};
+mod substitute;
 
 #[cfg(test)]
 mod tests;

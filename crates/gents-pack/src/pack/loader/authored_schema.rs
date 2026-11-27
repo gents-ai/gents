@@ -23,6 +23,55 @@ const SUBSTITUTION_NOTE: &str =
     "A ${VAR} or ${VAR:-default} substitution, resolved from the environment when the pack loads.";
 const CASE_SIDECAR_NOTE: &str =
     "A ./ path to a pack file that holds one case, read when the pack loads.";
+/// The scalar a field holds, when a substitution written there resolves into
+/// that scalar instead of a string. Set by [`allow_substitutions`], which is
+/// also what widens the field to accept the substitution; the loader reads it
+/// to type the substituted text by its field rather than by its spelling.
+pub(super) const SUBSTITUTION_KIND: &str = "x-gents-substitution-kind";
+
+/// The fields a substitution resolves into as a JSON scalar rather than text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SubstitutionKind {
+    Number,
+    Integer,
+    Boolean,
+}
+
+impl SubstitutionKind {
+    pub(super) fn annotation(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Integer => "integer",
+            Self::Boolean => "boolean",
+        }
+    }
+
+    pub(super) fn from_annotation(text: &str) -> Option<Self> {
+        match text {
+            "number" => Some(Self::Number),
+            "integer" => Some(Self::Integer),
+            "boolean" => Some(Self::Boolean),
+            _ => None,
+        }
+    }
+
+    /// The scalar `text` spells in this field, or `None` when it is not one.
+    pub(super) fn parse(self, text: &str) -> Option<Value> {
+        match self {
+            Self::Number => text
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number),
+            Self::Integer => text.parse::<i64>().ok().map(Value::from),
+            Self::Boolean => match text {
+                "true" => Some(Value::Bool(true)),
+                "false" => Some(Value::Bool(false)),
+                _ => None,
+            },
+        }
+    }
+}
 
 /// `pack_config.json` as authored.
 pub fn authored_pack_config_schema() -> Schema {
@@ -242,7 +291,46 @@ fn allow_substitutions(schema: &mut Map<String, Value>) {
     }
     if constrains_strings(schema) {
         widen_schema(schema, substitution);
+    } else if let Some(kind) = scalar_substitution_kind(schema) {
+        // An integer, number or boolean field reads a substitution as that
+        // scalar; `widen_schema` keeps only annotations, so the kind is set
+        // after it.
+        widen_schema(schema, substitution);
+        schema.insert(SUBSTITUTION_KIND.into(), kind.annotation().into());
     }
+}
+
+/// The scalar a field typed only as one of `integer`, `number` or `boolean`
+/// (plus `null`) holds: a substitution written there resolves into it.
+fn scalar_substitution_kind(schema: &Map<String, Value>) -> Option<SubstitutionKind> {
+    if ["enum", "const", "if", "not"]
+        .iter()
+        .any(|key| schema.contains_key(*key))
+    {
+        return None;
+    }
+    let kinds: Vec<&str> = match schema.get("type") {
+        Some(Value::String(kind)) => vec![kind.as_str()],
+        Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+        _ => return None,
+    };
+    if ["anyOf", "oneOf", "allOf"]
+        .iter()
+        .any(|key| schema.contains_key(*key))
+    {
+        return None;
+    }
+    let mut non_null = kinds.into_iter().filter(|kind| *kind != "null");
+    let kind = non_null.next()?;
+    if non_null.next().is_some() {
+        return None;
+    }
+    Some(match kind {
+        "integer" => SubstitutionKind::Integer,
+        "number" => SubstitutionKind::Number,
+        "boolean" => SubstitutionKind::Boolean,
+        _ => return None,
+    })
 }
 
 fn constrains_strings(schema: &Map<String, Value>) -> bool {
