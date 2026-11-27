@@ -3,7 +3,7 @@ use std::time::Instant;
 use ratatui::layout::Rect;
 
 use super::layers::LayerKind;
-use super::transcript::{elapsed, wrap_lines, Tab};
+use super::transcript::{elapsed, joined_rows, Tab};
 use super::{App, Mode, Pane};
 use crate::keys::{KeyCtx, KeySet};
 use crate::sample::Tone;
@@ -78,8 +78,9 @@ fn prompt_rows(prompt: &Prompt, waiting: usize, keys: String) -> Vec<(String, To
     rows
 }
 
-/// `tab`'s first prompt's rows, with the keys `keys` gives it, wrapped to `width`.
-fn wrapped_prompt<F>(tab: &Tab, width: u16, keys: F) -> Vec<(String, Tone)>
+/// `tab`'s first prompt's rows, with the keys `keys` gives it, wrapped to `width`, each with what
+/// joins it to the row before in a copy.
+fn wrapped_prompt<F>(tab: &Tab, width: u16, keys: F) -> Vec<(String, Tone, &'static str)>
 where
     F: FnOnce(&Prompt) -> String,
 {
@@ -90,8 +91,10 @@ where
     shown
         .into_iter()
         .flat_map(|(text, tone)| {
-            let wrapped = wrap_lines(&text, usize::from(width));
-            wrapped.into_iter().map(move |row| (row, tone))
+            let wrapped = joined_rows(&text, usize::from(width));
+            wrapped
+                .into_iter()
+                .map(move |(row, join)| (row, tone, join))
         })
         .collect()
 }
@@ -102,16 +105,28 @@ fn typed(prompt: &Prompt) -> bool {
 }
 
 impl App {
+    /// What joins each of `conversation_rows` to the row before in a copy.
+    pub fn conversation_joins(&self, width: u16) -> Vec<&'static str> {
+        let mut joins = self.tabs[self.active].row_joins(width);
+        joins.extend(self.first_prompt(width).into_iter().map(|(.., join)| join));
+        joins
+    }
+
+    /// The active tab's first prompt as its conversation shows it.
+    fn first_prompt(&self, width: u16) -> Vec<(String, Tone, &'static str)> {
+        let set = self.keymap.set();
+        let tab = &self.tabs[self.active];
+        wrapped_prompt(tab, width, |prompt| key_row(prompt, set, false))
+    }
+
     /// The active tab's conversation, with its first prompt under it, or `working…` and how long
     /// since the send while a turn it sent runs.
     pub fn conversation_rows(&self, width: u16) -> Vec<(String, Tone)> {
         let tab = &self.tabs[self.active];
         let mut rows = tab.wrapped_rows(width);
         if !tab.prompts.is_empty() {
-            let set = self.keymap.set();
-            rows.extend(wrapped_prompt(tab, width, |prompt| {
-                key_row(prompt, set, false)
-            }));
+            let shown = self.first_prompt(width).into_iter();
+            rows.extend(shown.map(|(row, tone, _)| (row, tone)));
         } else if self.ticking() {
             let spent = self.now.zip(tab.since);
             let spent = spent.map(|(now, since)| elapsed(now.saturating_duration_since(since)));
@@ -141,6 +156,10 @@ impl App {
             .subagent
             .as_ref()
             .map_or_else(Vec::new, |shown| wrapped_prompt(shown, rows.width, keys));
+        let prompt: Vec<(String, Tone)> = prompt
+            .into_iter()
+            .map(|(row, tone, _)| (row, tone))
+            .collect();
         let top = match prompt.len() {
             0 => 0,
             shown => (shown as u16 + 1).min(rows.height),
@@ -357,6 +376,24 @@ mod tests {
             session: "s1".to_string(),
             item: item.to_string(),
         }
+    }
+
+    #[test]
+    fn a_wrapped_prompt_line_copies_whole() {
+        use crate::app::selection::Selection;
+        let long = vec!["word"; 30].join(" ");
+        let mut asked = prompt("p1", Answer::Ack, true);
+        asked.summary = Some(long.clone());
+        let (app, _) = showing(Vim, vec![asked]);
+        let shown = app.tabs[app.active].wrapped_rows(80).len();
+        let rows = app.conversation_rows(80);
+        assert!(rows.len() > shown + 3, "the summary wraps");
+        let all = Selection {
+            anchor: (shown, 0),
+            end: (rows.len() - 1, 200),
+        };
+        let copied = all.text(&rows, &app.conversation_joins(80));
+        assert!(copied.contains(&format!("  {long}\n")), "{copied}");
     }
 
     fn prompt_rows(app: &App) -> Vec<(String, Tone)> {

@@ -375,16 +375,15 @@ pub(super) fn marked_rows(
 }
 
 /// `text`'s lines wrapped in `width` columns, each row with what joins it to the row before.
-fn joined_rows(text: &str, width: usize) -> Vec<(String, &'static str)> {
+pub(super) fn joined_rows(text: &str, width: usize) -> Vec<(String, &'static str)> {
     let lines = text.split('\n');
     let rows = lines.flat_map(|line| marked_rows(line, 0, &Marks::new(), width));
     rows.map(|(row, _, join)| (row, join)).collect()
 }
 
 pub(super) fn wrap_lines(text: &str, width: usize) -> Vec<String> {
-    text.split('\n')
-        .flat_map(|line| wrap(line, width))
-        .collect()
+    let rows = joined_rows(text, width).into_iter();
+    rows.map(|(row, _)| row).collect()
 }
 
 /// Breaks at the last space that fits, dropping the spaces there, and inside a word only when the row holds no

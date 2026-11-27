@@ -228,7 +228,7 @@ impl App {
             let row = &mut rows[at].0;
             row.truncate(row.trim_end_matches(['▸', '▾']).trim_end().len());
         }
-        let text = selection.text(&rows, &self.tabs[self.active].row_joins(width));
+        let text = selection.text(&rows, &self.conversation_joins(width));
         if text.trim().is_empty() {
             self.selection = None;
             return;
