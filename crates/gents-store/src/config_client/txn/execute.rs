@@ -243,7 +243,10 @@ impl ConfigApplyTxn<'_> {
         trusted_schema: &str,
     ) -> Result<Value> {
         if self.has_pack_interpreter() {
-            let schemas = query::parse_sdl(trusted_schema)?;
+            let schemas = super::super::client_signed_agent::parse_signing_sdl(
+                trusted_schema,
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )?;
             if schemas.len() != 1 {
                 return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
             }
@@ -262,7 +265,10 @@ impl ConfigApplyTxn<'_> {
             return self.execute_with_variables(document, variables).await;
         };
         super::super::client_signed_agent::client_signer(endpoint)?;
-        let schemas = query::parse_sdl(trusted_schema)?;
+        let schemas = super::super::client_signed_agent::parse_signing_sdl(
+            trusted_schema,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )?;
         if schemas.len() != 1 {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }
@@ -293,7 +299,10 @@ impl ConfigApplyTxn<'_> {
         trusted_schema: &str,
     ) -> Result<Value> {
         if self.has_pack_interpreter() {
-            let schemas = query::parse_sdl(trusted_schema)?;
+            let schemas = super::super::client_signed_agent::parse_signing_sdl(
+                trusted_schema,
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )?;
             if schemas.len() != 1 {
                 return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
             }
@@ -316,7 +325,10 @@ impl ConfigApplyTxn<'_> {
             return self.execute_with_variables(document, variables).await;
         };
         super::super::client_signed_agent::client_signer(endpoint)?;
-        let schemas = query::parse_sdl(trusted_schema)?;
+        let schemas = super::super::client_signed_agent::parse_signing_sdl(
+            trusted_schema,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )?;
         if schemas.len() != 1 {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }

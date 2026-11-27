@@ -643,7 +643,7 @@ async fn defradb_refuses_a_non_null_id_count_carrier() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("NonNull variant for type ID is not supported"),
+        format!("{error:#}").contains("NonNull fields are not currently supported"),
         "{error:#}"
     );
 }

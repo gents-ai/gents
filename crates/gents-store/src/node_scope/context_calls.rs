@@ -641,7 +641,7 @@ impl ContextCalls for Node {
             .map_err(transaction_error)?
             .commit()
             .await
-            .map_err(transaction_error)
+            .map_err(|error| finish_transaction_error(handle, error))
     }
     async fn discard_transaction(
         &self,
@@ -651,7 +651,19 @@ impl ContextCalls for Node {
             .map_err(transaction_error)?
             .discard()
             .await
-            .map_err(transaction_error)
+            .map_err(|error| finish_transaction_error(handle, error))
+    }
+}
+
+fn finish_transaction_error(
+    handle: &TransactionHandle,
+    error: defra_node::Error,
+) -> query::TransactionError {
+    match error {
+        defra_node::Error::TransactionNotFound => {
+            query::TransactionError::NotFound(handle.as_str().to_owned())
+        }
+        error => transaction_error(error),
     }
 }
 

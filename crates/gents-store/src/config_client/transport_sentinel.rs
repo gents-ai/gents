@@ -130,7 +130,7 @@ fn command<'a>(
         .baseline
         .iter()
         .find(|entry| entry.name == collection)
-        .and_then(|entry| entry.expected_version)
+        .and_then(|entry| entry.expected_collection_id)
         .context("missing canonical transport collection identity")?;
     Ok(vera_delegation::PolicyCommand {
         policy_id: ids.id(BuiltInPolicy::Household),

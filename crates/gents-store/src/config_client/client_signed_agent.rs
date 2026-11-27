@@ -240,6 +240,22 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         .find_map(|(name, schema)| (*name == collection).then_some(*schema))
 }
 
+pub(crate) fn parse_signing_sdl(
+    sdl: &str,
+    ids: &gents_protocol::schemas::HomePolicyIds,
+) -> query::error::Result<Vec<::schema::CollectionVersion>> {
+    if let Ok(schemas) = query::parse_sdl(sdl) {
+        return Ok(schemas);
+    }
+
+    let known_collections =
+        query::parse_sdl(&ids.render(&gents_protocol::schemas::ALL.join("\n")))?
+            .into_iter()
+            .map(|schema| (schema.name.to_string(), schema.collection_id))
+            .collect();
+    query::parse_sdl_with_known_collections(sdl, known_collections)
+}
+
 /// The signing graph uses the version the exact SDL registers in a home whose
 /// built-in policies have `ids`, which is the canonical version: every
 /// collection's fresh store registers its current SDL directly.
@@ -248,7 +264,7 @@ pub(super) fn signing_schema(
     collection: &str,
     ids: &gents_protocol::schemas::HomePolicyIds,
 ) -> Result<::schema::CollectionVersion> {
-    written_signing_schema(&ids.render(sdl), collection)
+    one_signing_schema(parse_signing_sdl(&ids.render(sdl), ids)?, collection)
 }
 
 /// [`signing_schema`] of SDL that names its policies by their IDs, as a
@@ -258,7 +274,16 @@ pub(super) fn written_signing_schema(
     sdl: &str,
     collection: &str,
 ) -> Result<::schema::CollectionVersion> {
-    let mut schemas = query::parse_sdl(sdl)?;
+    one_signing_schema(
+        parse_signing_sdl(sdl, gents_protocol::schemas::HomePolicyIds::node_store())?,
+        collection,
+    )
+}
+
+fn one_signing_schema(
+    mut schemas: Vec<::schema::CollectionVersion>,
+    collection: &str,
+) -> Result<::schema::CollectionVersion> {
     if schemas.len() != 1 || schemas[0].name != collection {
         return Err(ConfigClientError::ClientAgentTransportRequired);
     }
@@ -290,7 +315,7 @@ pub fn configuration_replacement_patch(
 ) -> Result<Value> {
     let schema =
         trusted_create_schema(collection).ok_or(ConfigClientError::ClientAgentTransportRequired)?;
-    let schemas = query::parse_sdl(schema)?;
+    let schemas = parse_signing_sdl(schema, gents_protocol::schemas::HomePolicyIds::node_store())?;
     let schema = schemas
         .first()
         .ok_or(ConfigClientError::ClientAgentTransportRequired)?;
@@ -399,7 +424,10 @@ impl super::ConfigAccess {
         let Self::Graphql(endpoint) = self else {
             return Err(ConfigClientError::ClientAgentSignerRequired);
         };
-        let schemas = query::parse_sdl(trusted_schema)?;
+        let schemas = parse_signing_sdl(
+            trusted_schema,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )?;
         let [schema] = schemas.as_slice() else {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         };

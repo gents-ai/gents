@@ -455,6 +455,7 @@ async fn single_version_unknown_root_is_rejected() {
             name: "PinnedFixture",
             sdl: EXPECTED_SDL,
             expected_version: Some(&expected_root),
+            expected_collection_id: None,
         }],
         ordinary_indexes: &[],
     };
@@ -538,11 +539,13 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
                 name: "PinnedFixture",
                 sdl: EXPECTED_SDL,
                 expected_version: Some(&expected_root),
+                expected_collection_id: None,
             },
             BaselineCollection {
                 name: "AddedFixture",
                 sdl: ADDED_SDL,
                 expected_version: None,
+                expected_collection_id: None,
             },
         ],
         ordinary_indexes: &[],

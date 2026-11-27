@@ -838,6 +838,7 @@ pub async fn write_other_version_client_store(
                 name,
                 sdl,
                 expected_version: None,
+                expected_collection_id: None,
             },
         );
     let catalog = gents_store::schema::catalog::Catalog {

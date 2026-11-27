@@ -163,7 +163,7 @@ pub(super) async fn verify(
             .id(BuiltInPolicy::Household)
             .into(),
         resource: resource.into(),
-        child: entry.expected_version.ok_or_else(refused)?.into(),
+        child: entry.expected_collection_id.ok_or_else(refused)?.into(),
         parent: scope.host_node.clone(),
         device_node: scope.device_node.clone(),
         group: scope.group.clone(),
