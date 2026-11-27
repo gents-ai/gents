@@ -9,9 +9,6 @@ namespace Conformance.Contracts
 
 open SelfConfig SelfConfig.ContractCases
 
-private def scBool (b : Bool) : String :=
-  if b then "true" else "false"
-
 structure FieldTableInput where
   collection : String
   deriving Lean.ToJson
@@ -75,19 +72,6 @@ def policyResourceExposure : Family PolicyResourceExposureInput Bool where
     ["backend", "mcp_service", "automation", "policy"]] : List (List String)).map
       fun categories => { categories }
   model := fun i => policyResourceExposed i.categories
-
-def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
-  "{"
-    ++ "\"field\":" ++ jsonString entry.1 ++ ","
-    ++ "\"action\":"
-      ++ (match entry.2 with
-          | some _ => jsonString "set"
-          | none => jsonString "clear") ++ ","
-    ++ "\"value\":"
-      ++ (match entry.2 with
-          | some v => jsonString v
-          | none => "null")
-  ++ "}"
 
 structure PolicyGrantBoundInput where
   candidatePolicy : Bool

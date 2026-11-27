@@ -205,9 +205,6 @@ def wakeInputClaimedKeys : Family WakeInputWire (List String) where
     .ofCase
   model := WakeInputWire.currentKeys
 
-def jsonNatArray (values : List Nat) : String :=
-  jsonArray (values.map toString)
-
 deriving instance Lean.ToJson for PromptAssemblyItemCase, PromptAssemblyRowCase,
   PromptAssembly.Content.OrderMode, PromptAssemblyAssistantOrderCase
 
@@ -575,18 +572,6 @@ def claudeStream : Family ClaudeStreamInput ClaudeStreamOutput where
         (fun w => ClaudeStreamInput.ofWitness w == i) with
     | some w => claudeStreamOutput w.1 w.2
     | none => { outcome := "unknown", calls := [] }
-
-private def claudeReasoningPartJson {α : Type} (payloadJson : α → String) :
-    CanonicalOutput.ReasoningPart α → String
-  | .text payload signature =>
-      "{\"kind\":\"text\",\"payload\":" ++ payloadJson payload ++
-        ",\"signature\":" ++ jsonOptionalString signature ++ "}"
-  | .redacted payload =>
-      "{\"kind\":\"redacted\",\"payload\":" ++ payloadJson payload ++ "}"
-  | .encrypted payload =>
-      "{\"kind\":\"encrypted\",\"payload\":" ++ payloadJson payload ++ "}"
-  | .summary payload =>
-      "{\"kind\":\"summary\",\"payload\":" ++ payloadJson payload ++ "}"
 
 structure ClaudeReasoningPartWire where
   kind : String

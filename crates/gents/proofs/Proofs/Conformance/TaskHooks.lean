@@ -6,43 +6,6 @@ import Proofs.Conformance.Functions.Session
 namespace Conformance.TaskHooksContracts
 open TaskHooks Conformance.Contracts
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-
-private def phaseString : HookPhase → String
-  | .before => "before"
-  | .afterSuccess => "after_success"
-  | .afterFailure => "after_failure"
-  | HookPhase.finally => "finally"
-
-private def hookJson (h : TaskHook) : String :=
-  "{\"hook_id\":" ++ jsonString h.hookId ++
-    ",\"phase\":" ++ jsonString (phaseString h.phase) ++
-    ",\"command\":" ++ jsonStringArray h.command ++
-    ",\"skip_exit_codes\":" ++ jsonArray (h.skipExitCodes.map toString) ++
-    ",\"timeout_secs\":" ++ (h.timeoutSecs.map toString).getD "null" ++
-    ",\"effective_timeout_secs\":" ++ toString h.effectiveTimeout ++ "}"
-
-private def commandResultJson : CommandResult → String
-  | .exited code => "{\"kind\":\"exited\",\"code\":" ++ toString code ++ "}"
-  | .launchFailed => "{\"kind\":\"launch_failed\"}"
-  | .timedOut => "{\"kind\":\"timed_out\"}"
-  | .interrupted => "{\"kind\":\"interrupted\"}"
-
-private def attemptJson (a : HookAttempt) : String :=
-  "{\"hook_id\":" ++ jsonString a.hookId ++
-    ",\"result\":" ++ commandResultJson a.result ++
-    ",\"succeeded\":" ++ boolJson a.result.succeeded ++ "}"
-
-private def primaryErrorJson : PrimaryError → String
-  | .hook id => "{\"kind\":\"hook\",\"hook_id\":" ++ jsonString id ++ "}"
-  | .agent => "{\"kind\":\"agent\"}"
-
-private def outcomeJson : TaskOutcome → String
-  | .parked => "{\"kind\":\"parked\"}"
-  | .success => "{\"kind\":\"success\"}"
-  | .failure error => "{\"kind\":\"failure\",\"error\":" ++ primaryErrorJson error ++ "}"
-  | .interrupted => "{\"kind\":\"interrupted\"}"
-
 inductive HookInvocation where | hook (hookId : String) | work
   deriving DecidableEq, Repr
 
@@ -52,17 +15,6 @@ def invocationTrace (r : RunResult) : List HookInvocation :=
     ++ r.afterSuccessAttempted.map (fun a => HookInvocation.hook a.hookId)
     ++ r.afterFailureAttempted.map (fun a => HookInvocation.hook a.hookId)
     ++ r.finallyAttempted.map (fun a => HookInvocation.hook a.hookId)
-
-private def invocationJson : HookInvocation → String
-  | .hook hookId => "{\"kind\":\"hook\",\"hook_id\":" ++ jsonString hookId ++ "}"
-  | .work => "{\"kind\":\"work\"}"
-
-private def agentResultString : AgentResult → String
-  | .parked => "parked"
-  | .success => "success"
-  | .failure => "failure"
-  | .cancelled => "cancelled"
-  | .interrupted => "interrupted"
 
 structure AdmissionCase where
   name : String

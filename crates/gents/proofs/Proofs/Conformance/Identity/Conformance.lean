@@ -181,11 +181,6 @@ def ClaimedDid.render : ClaimedDid → String
   | .key name => "key:" ++ name
   | .derived nodeKey creation => "derived:" ++ nodeKey ++ ":" ++ creation
 
-def ClaimedDid.json : ClaimedDid → Json
-  | .key name => Json.mkObj [("key", toJson name)]
-  | .derived nodeKey creation => Json.mkObj [("derived", Json.mkObj
-      [("node_key", toJson nodeKey), ("creation_nonce", toJson creation)])]
-
 def renderedDerivation (nodeKey creation : String) : String :=
   (ClaimedDid.derived nodeKey creation).render
 

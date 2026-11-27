@@ -1,4 +1,4 @@
-import Proofs.Conformance.Contracts.Json.Core
+import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.PackSourceSelection
 

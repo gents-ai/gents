@@ -39,34 +39,6 @@ def pluginJobOpening : Conformance.Family PluginJobOpeningInput PluginJobOpening
   inputs := [.valid, .wrongPin, .failedTransaction].map PluginJobOpeningInput.mk
   model := fun i => ⟨AgentSession.pluginJobOpeningCommits i.name.opening⟩
 
-def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
-  [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
-def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
-  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("agent", toJson r.agent),
-   ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
-   ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB),
-   ("terminalized_at", toJson r.terminalizedAt)]
-private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
-  [("task_id", toJson p.task),
-   ("parent_request_doc_id", toJson p.parentRequestDoc),
-   ("started_by", p.startedBy.map scopeJson |>.getD Json.null),
-   ("opening_request_doc_id", toJson p.openingRequestDoc),
-   ("fork", p.fork.map (fun f => Json.mkObj
-     [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
-     |>.getD Json.null)]
-def documentJson (d : AgentSession.Document) : Json := Json.mkObj
-  [("scope", scopeJson d.scope), ("agent", toJson d.agent),
-   ("created_at", toJson d.createdAt), ("closed_at", toJson d.closedAt),
-   ("stopped_at", toJson d.stoppedAt), ("archived_at", toJson d.archivedAt), ("archive_revision", toJson d.archiveRevision),
-   ("provenance", d.provenance.map provenanceJson |>.getD Json.null),
-   ("tags", toJson d.tags), ("title", d.title.map (fun t => Json.mkObj
-      [("text", toJson t.text), ("source", toJson t.source.toWireName)]) |>.getD Json.null),
-   ("observation", d.observation.map (fun o => Json.mkObj
-      [("activity", toJson o.activity), ("preview", toJson o.preview),
-       ("latest", o.latest.map (fun r => Json.mkObj
-         [("doc_id", toJson r.docId), ("request_id", toJson r.requestId),
-          ("state", toJson r.state.toDefraDB)]) |>.getD Json.null)]) |>.getD Json.null)]
-
 private def roleName : CanonicalOutput.MessageRole → String
   | .system => "system"
   | .user => "user"

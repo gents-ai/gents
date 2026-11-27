@@ -34,39 +34,6 @@ def hydrationCollectionName : CanonicalOutput.Hydration.Collection → String
   | .agentOutputSegment => "AgentOutputSegment"
   | .compactionEntry => "CompactionEntry"
 
-def hydrationDocumentKeyJson (key : CanonicalOutput.Hydration.DocumentKey) : String :=
-  "{" ++ "\"collection\":" ++ jsonString (hydrationCollectionName key.collection) ++ "," ++
-    "\"id\":" ++ toString key.id ++ "}"
-
-def optionalNatJson : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
-def payloadRefJson (reference : CanonicalOutput.PayloadRef) : String :=
-  "{" ++ "\"close_id\":" ++ toString reference.closeId ++ "," ++
-    "\"stream\":" ++ toString reference.stream ++ "}"
-
-def sourceJson : CanonicalOutput.Source → String
-  | .provider scope turn attempt =>
-      "{\"kind\":\"provider\",\"scope\":" ++ toString scope ++
-        ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
-  | .auxiliary kind scope turn attempt =>
-      "{\"kind\":\"auxiliary\",\"auxiliary_kind\":" ++
-        jsonString (match kind with
-          | .compaction => "compaction"
-          | .compactionFallback => "compaction_fallback"
-          | .title => "title"
-          | .accessReview => "access_review") ++
-        ",\"scope\":" ++ toString scope ++
-        ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
-  | .toolEffectArguments call => "{\"kind\":\"tool_effect_arguments\",\"owner\":" ++ toString call ++ "}"
-  | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
-  | .authored key => "{\"kind\":\"authored\",\"owner\":" ++ toString key ++ "}"
-
-def writerJson : CanonicalOutput.Writer → String
-  | .request generation => "{\"kind\":\"request\",\"owner\":" ++ toString generation ++ "}"
-  | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
-
 def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .signature => "signature"
   | .reasoningStop => "reasoning_stop"
@@ -79,33 +46,6 @@ def segmentDeclaration (segment : CanonicalOutput.Segment) :
 
 def accessStateName : CanonicalOutput.Hydration.AccessState → String
   | .authorized => "authorized" | .missing => "missing" | .denied => "denied"
-
-def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : String :=
-  "{" ++ "\"key\":" ++ hydrationDocumentKeyJson access.key ++ "," ++
-    "\"state\":" ++ jsonString (accessStateName access.state) ++ "," ++
-    "\"requester\":" ++ jsonString access.scope.requester ++ "," ++
-    "\"node\":" ++ jsonString access.scope.node ++ "," ++
-    "\"session\":" ++ jsonString access.scope.session ++ "," ++
-    "\"native_session\":" ++ toString access.scope.nativeSession ++ "}"
-
-def hydrationRequestJson (request : FileInventory.Request) : String :=
-  "{" ++ "\"key\":" ++ jsonString request.key ++ "," ++
-    "\"requester\":" ++ jsonString request.requester ++ "," ++
-    "\"node\":" ++ jsonString request.node ++ "," ++
-    "\"session\":" ++ jsonString request.session ++ "," ++
-    "\"native_session\":" ++ toString request.nativeSession ++ "}"
-
-def optionalPayloadRefJson : Option CanonicalOutput.PayloadRef → String
-  | none => "null"
-  | some reference => payloadRefJson reference
-
-def hydrationEffectJson (row : CanonicalOutput.Hydration.EffectRow) : String :=
-  "{" ++ "\"id\":" ++ toString row.id ++ "," ++
-    "\"parent\":" ++ optionalNatJson row.parent ++ "," ++
-    "\"ordinal\":" ++ optionalNatJson row.ordinal ++ "," ++
-    "\"spawned\":" ++ boolString row.spawned ++ "," ++
-    "\"tool_call_id\":" ++ jsonString row.toolCallId ++ "," ++
-    "\"terminal\":" ++ optionalPayloadRefJson row.terminal ++ "}"
 
 deriving instance Lean.ToJson for FileInventory.Request
 deriving instance Lean.ToJson for CanonicalOutput.PayloadRef
@@ -313,11 +253,5 @@ def fileInventoryClosure : Family ClosureCaseInput (Option (List ClosureDocument
     { name, closureInput := .ofModel input }
   model := fun i => ((fileInventoryClosureCases.find? (·.1 == i.name)).map (·.2)).bind
     closureDocuments
-
-def terminalWriteString : FileInventory.TerminalWriteResult → String
-  | .committed => "committed"
-  | .failed => "failed"
-  | .notAttempted => "not_attempted"
-
 
 end Conformance.Contracts

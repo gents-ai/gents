@@ -284,12 +284,10 @@ import Proofs.Conformance.InvocationReply
 import Proofs.Conformance.InterruptedDiagnostic
 import Proofs.Conformance.HookInterrupt
 import Proofs.Conformance.PluginJobDispatch
-import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
 import Proofs.Conformance.Contracts.Json.ClaudePlatform
 import Proofs.Conformance.Contracts.Json.PackInstallation
-import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy

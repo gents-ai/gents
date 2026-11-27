@@ -12,20 +12,6 @@ open FileInventory.Examples
 open Conformance.Contracts
 open Conformance.ContractCases
 
-private def object (fields : List (String × String)) : String :=
-  "{" ++ String.intercalate "," (fields.map fun (key, value) => jsonString key ++ ":" ++ value) ++ "}"
-
-private def optional {α : Type} (encode : α → String) : Option α → String
-  | none => "null"
-  | some value => encode value
-
-private def tagged (kind : String) (fields : List (String × String) := []) : String :=
-  object (("kind", jsonString kind) :: fields)
-
-private def scopeJson (value : FileImages.Scope) : String := object
-  [("requester", jsonString value.requester), ("node", jsonString value.node),
-   ("session", jsonString value.session)]
-
 private def failureName : ImageFailure → String
   | .readFailed => "read_failed"
   | .changedDuringRead => "changed_during_read"
@@ -33,66 +19,11 @@ private def failureName : ImageFailure → String
   | .unsupportedEntry => "unsupported_entry"
   | .mutationIncomplete => "mutation_incomplete"
 
-private def imageJson : CapturedImage → String
-  | .missing => tagged "missing"
-  | .file hash data => tagged "file" [("content_hash", jsonString hash), ("data", jsonString data)]
-  | .unavailable reason => tagged "unavailable" [("reason", jsonString (failureName reason))]
-
-private def imageMetadataJson : ImageMetadata → String
-  | .missing => tagged "missing"
-  | .file hash => tagged "file" [("content_hash", jsonString hash)]
-  | .unavailable reason => tagged "unavailable" [("reason", jsonString (failureName reason))]
-
-private def capturedChangeJson (value : CapturedChange) : String := object
-  [("root", jsonString value.root), ("path", jsonString value.path),
-   ("before", imageJson value.before), ("after", imageJson value.after)]
-
-private def changeJson (value : Change) : String := object
-  [("root", jsonString value.root), ("path", jsonString value.path),
-   ("before", imageMetadataJson value.before), ("after", imageMetadataJson value.after)]
-
-private def observationJson (value : Observation) : String := object
-  [("id", optional toString value.id), ("tool", toString value.tool), ("request", toString value.request),
-   ("scope", scopeJson value.scope), ("changes", jsonArray (value.changes.map capturedChangeJson)),
-   ("verified_unchanged", boolString value.verifiedUnchanged)]
-
-private def projectionJson (value : Projection) : String := object
-  [("id", toString value.id), ("observation", optional toString value.observation),
-   ("tool", toString value.tool), ("request", toString value.request),
-   ("scope", scopeJson value.scope), ("owner", jsonString value.owner),
-   ("changes", jsonArray (value.changes.map changeJson)),
-   ("verified_unchanged", boolString value.verifiedUnchanged)]
-
-private def toolJson (value : Tool) : String := object
-  [("id", toString value.id), ("request", toString value.request), ("scope", scopeJson value.scope),
-   ("agent_did", jsonString value.agentDid),
-   ("accepted", boolString value.accepted), ("state", jsonString value.state.toDefraDB)]
-
 private def boundaryName : ReadBoundary → String
   | .atomicExhaustive => "atomic_exhaustive"
   | .readerBound _ => "reader_bound"
   | .incomplete => "incomplete"
   | .nonAtomic => "non_atomic"
-
-private def actionJson : ToolExecution.ToolCallContext.Action → String
-  | .dispatch => tagged "dispatch"
-  | .spawnFailed failure => tagged "spawn_failed" [("failure", jsonString failure.toDefraDB)]
-  | .complete => tagged "complete"
-  | .fail failure => tagged "fail" [("failure", jsonString failure.toDefraDB)]
-  | .timeout => tagged "timeout"
-  | .background => tagged "background"
-  | .foreground => tagged "foreground"
-  | .cancelBeforeDispatch cause => tagged "cancel_before_dispatch" [("cause", jsonString cause.toDefraDB)]
-  | .cancelDuringRun cause => tagged "cancel_during_run" [("cause", jsonString cause.toDefraDB)]
-
-private def publicationCaseJson (value : PublicationCase) : String := object
-  [("name", jsonString value.name),
-   ("pre", "{" ++ Conformance.NativeExecutionContracts.contextFieldsJson value.pre ++ "}"),
-   ("action", actionJson value.action), ("won", boolString value.won),
-   ("write", jsonString (terminalWriteString value.write)), ("actual", toolJson value.actual),
-   ("observation", observationJson value.observation), ("projection_id", "3001"),
-   ("expected", optional projectionJson
-      (publish value.pre value.action value.won value.write value.actual value.observation 3001))]
 
 private def directSource (visible : Bool) : SourceInput :=
   let current := Examples.source 1
@@ -694,14 +625,6 @@ def terminalChronology : Family OrderComparisonInput ChronologyObservation where
   model := fun i =>
     { entries := ((comparisonSnapshotOf i.name).map (·.entries.length)).getD 0
       expected := orderComparisonOf i.name }
-
-/-- IDs, DIDs and image hashes are the existing models' abstract names. Native
-adapters bind them to actual Defra-created physical IDs, authenticated key
-identities and validated captures through their existing decode owners. Empty
-or malformed native IDs cannot become modeled observations; abstract hash
-labels cannot bypass the capture decoder's byte/hash checks. These are
-executable inputs/outputs, not a production wire-format proposal. -/
-def publicationCasesJson : String := jsonArray (publicationCases.map publicationCaseJson)
 
 deriving instance Lean.ToJson for SessionOwner
 deriving instance Lean.ToJson for RefusalReason
