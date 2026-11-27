@@ -25,6 +25,7 @@ import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
 import Proofs.Shared.RequestEncoding
+import Proofs.Shared.OperationRecovery
 import Proofs.Shared.ToolResultText
 import Proofs.Session.TitleText
 import Proofs.Session.ToolResultThreading

@@ -523,7 +523,15 @@ impl Blocker {
                 resource: "service",
                 verb: "update-status",
             }),
-            _ => Some(NextCall::Verb {
+            Self::PortInUse { .. }
+            | Self::HandStartedNode { .. }
+            | Self::KeychainUnavailable
+            | Self::CannotSetAside { .. }
+            | Self::KeepsExiting { .. }
+            | Self::NoAnswer { .. }
+            | Self::HomeUnreadable { .. }
+            | Self::HomeBusy { .. }
+            | Self::OldNodeStillRunning { .. } => Some(NextCall::Verb {
                 resource: "node",
                 verb: "status",
             }),
