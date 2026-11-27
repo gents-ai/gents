@@ -1,7 +1,7 @@
 type PeerRegistry @policy(id: "$household", resource: "discovery") @branchable {
     peer_id: String @index(unique: true) @immutable
     node_did: String @index @immutable
-    addresses: [String!]!
+    addresses: [String!]
     templates: [String!]
     display_name: String
     status: String

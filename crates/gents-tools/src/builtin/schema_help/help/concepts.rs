@@ -18,7 +18,7 @@ type Note {
   summary: String
 }
 ```
-For arrays, [String!] forbids null elements; [String] permits them. The array representation does not encode outer-list requiredness, so do not rely on [String!]! to require the list itself. Adding a required field to existing data needs an explicit value strategy. Next: help fields arrays or help evolution additive."#,
+For arrays, [String!] forbids null elements; [String] permits them. A required list ([String!]!) is refused: the array representation does not encode outer-list requiredness. Adding a required field to existing data needs an explicit value strategy. Next: help fields arrays or help evolution additive."#,
         ["fields", "arrays"] => r#"Brackets declare an array. Scalar arrays support Boolean, Int, Float, Float32, Float64, String and DateTime; JSON, Blob and ID arrays are unsupported.
 ```graphql
 type Reading {

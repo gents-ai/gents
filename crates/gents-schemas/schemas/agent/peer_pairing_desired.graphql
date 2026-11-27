@@ -2,8 +2,8 @@ type PeerPairingDesired @policy(id: "$household", resource: "pairing_observation
     peer_id: String @index(unique: true)
     node_did: String @index
     actor_did: String @index @immutable
-    collections: [String!]!
-    replicator_addresses: [String!]!
+    collections: [String!]
+    replicator_addresses: [String!]
     profiles: [String!]
     template: String @index
     source: String @index
