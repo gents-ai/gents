@@ -1,0 +1,4 @@
+---- MODULE MCSessionPatchFenceResync ----
+EXTENDS SessionPatchFence
+
+====

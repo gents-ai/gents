@@ -218,7 +218,7 @@ fn node_publications_match_the_lean_model() {
             }
             let incoming = sessions(1, "incoming");
             let accepted = if case.merge {
-                let read_accepted = read_store.accepts_chat_patch_read(&read);
+                let read_accepted = read_store.accepts_chat_patch_read(&read, &incoming);
                 let published = read_store
                     .merge_chat_patch_at_read(&read, incoming)
                     .is_some();
@@ -356,4 +356,115 @@ fn denied_resource_read_invalidates_stale_snapshot_and_allows_fresh_visible_rows
         stores.runtime_connection(NODE),
         Some(RuntimeConnectionStatus::Connected)
     );
+}
+
+/// A patch of session scope 1 (or of scopes 1 and 3, or with a request naming
+/// no scope) is read, the modeled steps happen through the store's own entry
+/// points, and it publishes through the fence.
+#[test]
+fn patch_fence_matches_the_lean_model() {
+    use crate::client_projection::query::{CollectionRoot, PartialRead};
+    use gents_lean_vocab::families::client_data_publication_patch_fence as fence_family;
+    use gents_protocol::session::SessionScope;
+
+    let session = |scope: u64| format!("session-{scope}");
+    let patch = |scopes: Option<&[u64]>| {
+        ClientStore::from_rows(ClientStoreRows {
+            requests: match scopes {
+                Some(scopes) => scopes
+                    .iter()
+                    .map(|scope| AgentRequestRow {
+                        request_id: format!("request-{scope}"),
+                        node_did: Some(NODE.into()),
+                        session_id: Some(session(*scope)),
+                        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                        ..Default::default()
+                    })
+                    .collect(),
+                None => vec![AgentRequestRow {
+                    request_id: "unscoped".into(),
+                    node_did: Some(NODE.into()),
+                    purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                    ..Default::default()
+                }],
+            },
+            ..Default::default()
+        })
+    };
+    let scopes = |named: &[u64]| {
+        named
+            .iter()
+            .map(|scope| SessionScope {
+                node_did: NODE.into(),
+                session_id: session(*scope),
+                requester_did: None,
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    gents_lean_vocab::families::client_data_publication_patch_fence::replay::<String>(|case| {
+        let (_stores, store) = node_store(ClientStore::default());
+        let captured = store.capture_read();
+        for step in &case.steps {
+            let reload = |read: PartialRead| {
+                assert_eq!(
+                    store.publish_partial_at_read(
+                        &store.capture_read(),
+                        read,
+                        ClientStore::default()
+                    ),
+                    PartialPublication::Published,
+                    "{}",
+                    case.name
+                );
+            };
+            let roots = |root| PartialRead {
+                roots: BTreeSet::from([root]),
+                ..Default::default()
+            };
+            match step.step.as_str() {
+                "scope_event" => {
+                    store.observe_scope_event(&scopes(&step.named));
+                }
+                "unscoped_event" => {
+                    store.observe_request_event();
+                }
+                "collection_event" => {
+                    store.observe_collection_event(CollectionRoot::Skills);
+                }
+                "carried_collection_event" => {
+                    store.observe_collection_event(CollectionRoot::Goals);
+                }
+                "provenance_event" => {
+                    store.invalidate_projection(true);
+                }
+                "node_reload" => {
+                    store.replace_snapshot(ClientStore::default());
+                }
+                "scope_reload" => reload(PartialRead {
+                    scopes: scopes(&step.named),
+                    ..Default::default()
+                }),
+                "collection_reload" => reload(roots(CollectionRoot::Skills)),
+                "carried_collection_reload" => reload(roots(CollectionRoot::Goals)),
+                "patch" => {
+                    store.merge_chat_patch(patch(Some(&step.named)));
+                }
+                "unscoped_patch" => {
+                    store.merge_chat_patch(patch(None));
+                }
+                other => panic!("unrecognized modeled patch step {other}"),
+            }
+        }
+        let incoming = patch(case.carried.as_deref());
+        let accepted = store.accepts_chat_patch_read(&captured, &incoming);
+        assert_eq!(
+            store
+                .merge_chat_patch_at_read(&captured, incoming)
+                .is_some(),
+            accepted,
+            "{}",
+            case.name
+        );
+        fence_family::PatchFenceOutput { accepted }
+    });
 }

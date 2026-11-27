@@ -137,16 +137,14 @@ pub(super) fn deliver(
                 .fetch_add(1, Ordering::Relaxed);
         }
         Delivery::ReloadCollection => {
-            store.observe_request_event();
-            store.request_collection_reload(
-                root.context("a collection change names its snapshot root")?,
-            );
+            let root = root.context("a collection change names its snapshot root")?;
+            store.observe_collection_event(root);
+            store.request_collection_reload(root);
         }
         Delivery::ReloadSessionScope => {
-            store.observe_request_event();
-            store.request_session_reload(
-                scopes.context("a session scope change names its session scope")?,
-            );
+            let scopes = scopes.context("a session scope change names its session scope")?;
+            store.observe_scope_event(&scopes);
+            store.request_session_reload(scopes);
         }
         Delivery::Resync => {
             store.observe_request_event();

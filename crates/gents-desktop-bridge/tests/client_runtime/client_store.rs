@@ -321,6 +321,173 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     Ok(())
 }
 
+/// A request event of another session scope, delivered while the selected
+/// session's patch is being read, leaves the patch to publish
+/// (`ClientDataPublication.PatchFence.other_scopes_preserve_patch`). An event
+/// of its own scope rejects it, and the next read publishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_sessions_request_event_does_not_reject_the_selected_patch() -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let node_key = std::sync::Arc::new(
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("hosted-fence"))
+            .await?,
+    );
+    let node_did: &'static str = Box::leak(
+        gents_store::identity::NodeIdentity::did(node_key.as_ref())
+            .to_owned()
+            .into_boxed_str(),
+    );
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientRuntime::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        gents_desktop_bridge::client_test_support::file_journal_options(),
+    )
+    .await?;
+    let store = core.stores().ensure(node_did);
+    let scope = |session: &str| {
+        std::collections::BTreeSet::from([gents_protocol::session::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session.to_owned(),
+            requester_did: Some(node_did.to_owned()),
+        }])
+    };
+    let (other, own) = (scope("session-other"), scope("session-selected"));
+    let other_event = Arc::new(AtomicBool::new(false));
+    let own_event = Arc::new(AtomicBool::new(false));
+    let (served_other, served_own, served_store) = (
+        Arc::clone(&other_event),
+        Arc::clone(&own_event),
+        store.clone(),
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "selected-read"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/selected-read"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            let query = body["query"].as_str().unwrap_or_default();
+            // A request event lands while the selected request is being read.
+            if query.contains(": AgentRequest(") {
+                if served_other.load(Ordering::SeqCst) {
+                    served_store.observe_scope_event(&other);
+                }
+                if served_own.load(Ordering::SeqCst) {
+                    served_store.observe_scope_event(&own);
+                }
+            }
+            let rows = serde_json::json!({
+                "Node": [{
+                    "_docID": "remote-node-doc", "node_did": node_did,
+                    "display_name": "Fence", "enabled": true
+                }],
+                "AgentSession": [{
+                    "_docID": "remote-session-doc", "session_id": "session-selected",
+                    "node_did": node_did, "requester_did": node_did,
+                    "agent_did": "did:test:hosted-fence:default",
+                    "created_at": "2026-07-24T00:00:00Z"
+                }],
+                "AgentRequest": [{
+                    "_docID": "remote-request-doc", "request_id": "request-selected",
+                    "purpose": "normal", "node_did": node_did, "requester_did": node_did,
+                    "agent_did": "did:test:hosted-fence:default",
+                    "session_id": "session-selected", "content": "run it",
+                    "lifecycle_state": "processing"
+                }],
+            });
+            ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::wire_database::answer(&rows, query),
+            )
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(move |request: &wiremock::Request| {
+            ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::local_home_status_now(
+                    node_did,
+                    &|payload| node_key.sign_now(payload).unwrap(),
+                    request.url.query(),
+                ),
+            )
+        })
+        .mount(&server)
+        .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (node_did).to_string(),
+        label: ("Hosted Fence").to_string(),
+        graphql: format!("{}/api/v0/graphql", server.uri()),
+        local_node_home: Some(("/tmp/test-hosted-fence-home").to_string()),
+        access_request: None,
+        access_state: None,
+    })
+    .await?;
+    let read = || {
+        core.refresh_local_request(
+            node_did,
+            "session-selected",
+            Some("request-selected"),
+            None,
+            &[],
+        )
+    };
+
+    // The mock serves no subscription, so the observer's source keeps
+    // reconnecting and each gap rejects a read in flight. A read is retried
+    // past those; under a store-wide fence no retry would publish, since
+    // another session's event lands during every read.
+    let published = || async {
+        for _ in 0..40 {
+            if read().await?.is_some() {
+                return anyhow::Ok(true);
+            }
+        }
+        Ok(false)
+    };
+
+    other_event.store(true, Ordering::SeqCst);
+    assert!(
+        published().await?,
+        "another session's request event must not reject the selected session's patch"
+    );
+    assert_eq!(
+        core.stores().snapshot(node_did).requests.len(),
+        1,
+        "the patch published its request"
+    );
+    assert!(
+        published().await?,
+        "the unchanged patch stays reusable under another session's events"
+    );
+    other_event.store(false, Ordering::SeqCst);
+
+    own_event.store(true, Ordering::SeqCst);
+    assert!(
+        read().await?.is_none(),
+        "a request event of the selected session rejects its patch"
+    );
+    own_event.store(false, Ordering::SeqCst);
+    assert!(published().await?, "a later read publishes");
+
+    Arc::new(core).shutdown().await?;
+    Ok(())
+}
+
 /// A desktop whose client key is the User of a served runtime it routes to
 /// as its co-hosted local runtime; the observer reads only that runtime.
 async fn served_core() -> Result<(tempfile::TempDir, ClientRuntime, ServedRuntimeHome)> {
