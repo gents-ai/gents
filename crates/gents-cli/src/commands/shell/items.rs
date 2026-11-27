@@ -371,8 +371,6 @@ pub(super) fn transcript(
             _ => {}
         }
     }
-    lines.extend(worked_line(turn));
-    lines.extend(compacted.map(compaction));
     // A spawned or background run has no result message: its own output is its result.
     for tool in view.tool_calls.iter().copied() {
         let Some(id) = tool.doc_id.as_deref() else {
@@ -388,6 +386,8 @@ pub(super) fn transcript(
             lines.extend(output(id, &result));
         }
     }
+    lines.extend(worked_line(turn));
+    lines.extend(compacted.map(compaction));
     let next = messages.iter().map(|row| row.message.sequence + 1).max();
     Transcript {
         lines,
@@ -1111,10 +1111,22 @@ mod tests {
         let mut page = Page::default();
         page.text(0, MessageRole::User, "hello");
         page.text(1, MessageRole::Assistant, "hi");
+        let cargo = json!({ "command": "cargo", "args": ["test"] });
+        page.tool(2, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        let source = OutputSource::ToolCall {
+            tool_call_doc_id: "t1".to_string(),
+        };
+        let writer = OutputWriter::ToolExecution {
+            tool_call_doc_id: "t1".to_string(),
+        };
+        let ran = closed(&at(), source, writer, StreamPayload::ToolOutput, "ok");
+        page.segment(ran);
         page.claimed("2026-11-26T12:00:00Z", Some("2026-11-26T12:01:23Z"));
         let read = page.read(&[], &Edits::new());
         let worked = line("  worked for 1m 23s", Tone::Label, "bae-r1/worked");
-        assert_eq!(read.lines.last(), Some(&worked));
+        let output = under("t1", line("ok", Tone::Label, "t1/output"));
+        assert_eq!(read.lines[read.lines.len() - 2..], [output, worked]);
 
         let mut running = Page::default();
         running.text(0, MessageRole::User, "hello");
