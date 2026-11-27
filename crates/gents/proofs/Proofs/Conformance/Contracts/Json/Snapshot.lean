@@ -15,6 +15,7 @@ import Proofs.Conformance.DatastoreProtection
 import Proofs.Conformance.SessionCustody
 import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
+import Proofs.Conformance.MemoryExperience
 import Proofs.Conformance.Recovery.PeriodicRegistry
 import Proofs.Conformance.Recovery.Sweeps
 import Proofs.Conformance.ProcessControlTerminal

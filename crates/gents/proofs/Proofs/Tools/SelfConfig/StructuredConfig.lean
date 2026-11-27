@@ -44,4 +44,29 @@ theorem structured_config_preview_and_apply_round_trip_literal_prompt (s : Store
     commitStore s foreignPatch = (s, false) := by
   simp [commitStore, runStep, step, foreign_patch_refused]
 
+/-- Whether a configuration write records the experience attempt it carries
+(`Tools.Memory.Experience.AttemptRow`). Decision (arXiv 2611.18856: only the
+chosen candidate is recorded): the attempt row is staged in the write's own
+transaction, so it exists exactly when the write commits. A preview never
+enters the write path and a refused write commits nothing, so neither records
+an attempt. -/
+def experienceStaged (c : Call) (validate guard : Doc → Bool) (t : Target) (s : Store)
+    (p : Patch) : Bool :=
+  committed c && (runStep validate guard t s p).2
+
+theorem experience_staged_iff_the_write_commits (c : Call) (validate guard : Doc → Bool)
+    (t : Target) (s : Store) (p : Patch) :
+    experienceStaged c validate guard t s p = true ↔
+      c = .apply ∧ (step validate guard t (s t) p).isSome := by
+  cases c <;> cases h : step validate guard t (s t) p <;>
+    simp [experienceStaged, committed, mutationEntered, runStep, h]
+
+theorem a_preview_stages_no_experience (validate guard : Doc → Bool) (t : Target) (s : Store)
+    (p : Patch) : experienceStaged .preview validate guard t s p = false := rfl
+
+theorem a_refused_write_stages_no_experience (c : Call) (validate guard : Doc → Bool)
+    (t : Target) (s : Store) (p : Patch) (h : step validate guard t (s t) p = none) :
+    experienceStaged c validate guard t s p = false ∧ (runStep validate guard t s p).1 = s := by
+  simp [experienceStaged, runStep, h]
+
 end SelfConfig.StructuredConfig

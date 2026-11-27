@@ -1,0 +1,4 @@
+---- MODULE MCMemoryAliasMergeRewrite ----
+EXTENDS MemoryAliasMerge
+
+====

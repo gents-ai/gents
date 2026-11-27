@@ -100,6 +100,12 @@ def resource : Family ResourceInput (Option String) where
     "CallbackInvocation",
     "CallbackResult",
     "EventGroupState",
+    "AgentMemory",
+    "AgentMemoryProblem",
+    "AgentMemoryAttempt",
+    "AgentMemoryOutcome",
+    "AgentMemoryAlias",
+    "AgentMemoryAliasGuard",
     "TriggerFire",
     "FireOutcome",
     "UnboundCollection"].map fun collection => { collection }
