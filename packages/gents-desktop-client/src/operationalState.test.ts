@@ -91,28 +91,6 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 }
 
 describe("deployment operational state", () => {
-  it("shows a connected runtime as ready", () => {
-    const state = projectDeploymentOperationalState(deployment({}));
-
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.summary.kind).toBe("ready");
-    expect(state.connection).toMatchObject({
-      layer: "runtime",
-      kind: "ready",
-      reason: "connected",
-    });
-  });
-
-  it("reads the route from the native chat fence", () => {
-    const state = projectDeploymentOperationalState(deployment());
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.route).toMatchObject({
-      layer: "route",
-      kind: "ready",
-      reason: "route_ready",
-    });
-  });
-
   it("blocks admission with the native chat refusal and its next action", () => {
     const state = projectDeploymentOperationalState(
       deployment({

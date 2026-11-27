@@ -154,8 +154,6 @@
   "modules": {
     "GenerateHouseholdPolicy": "conformance",
     "GenerateMailboxPolicy": "conformance",
-    "GoalSessionObservationConformance": "conformance",
-    "MailboxAnswerCacheConformance": "conformance",
     "Proofs": "conformance"
   },
   "placements": {

@@ -1,34 +1,19 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   projectRuntimeConnectionStatus,
   runtimeConnectionBlocksAdmission,
 } from "@source-inc/gents-desktop-client";
-
-const run = promisify(execFile);
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 describe("runtime connection admission", () => {
   it("matches the Lean observation owner", async () => {
-    const proofsDir = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../../crates/gents/proofs",
-    );
-    await run("lake", ["build", "Proofs.Conformance.RuntimeConnectionObservation"], {
-      cwd: proofsDir,
-      timeout: 240_000,
-    });
-    const { stdout } = await run(
-      "lake",
-      ["env", "lean", "--run", "Proofs/Conformance/RuntimeConnectionObservation.lean"],
-      { cwd: proofsDir, timeout: 240_000 },
-    );
-    const contract = JSON.parse(stdout) as {
+    const contract = await runLeanGeneratorJson<{
       cases: { status: string; blocksAdmission: boolean }[];
       presentations: { status: string | null; kind: string; reason: string }[];
-    };
+    }>(
+      "Proofs.Conformance.RuntimeConnectionObservation:olean",
+      "Proofs/Conformance/RuntimeConnectionObservation.lean",
+    );
     expect(contract.cases.length).toBeGreaterThan(0);
     for (const row of contract.cases) {
       expect(runtimeConnectionBlocksAdmission(row.status)).toBe(row.blocksAdmission);

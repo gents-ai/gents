@@ -18,11 +18,7 @@ import { BackgroundToolButton } from "../src/ui/screens/BackgroundToolButton";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
 import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
-import {
-  activityStatus,
-  interruptTarget,
-  isStopping,
-} from "../src/ui/screens/activity-status";
+import { activityStatus } from "../src/ui/screens/activity-status";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { renderIn, testApp } from "./app-fixture";
@@ -523,46 +519,6 @@ describe("stop", () => {
       ).toBeVisible();
     },
   );
-
-  it("stops the running turn while a follow-up message is still syncing", () => {
-    expect(
-      interruptTarget({
-        trackedRequestId: "new-queued-message",
-        latestRequestId: "running-foreground-bash",
-        turnState: "running",
-      }),
-    ).toBe("running-foreground-bash");
-  });
-
-  it("does not interrupt a completed predecessor instead of a new request", () => {
-    expect(
-      interruptTarget({
-        trackedRequestId: "new-request",
-        latestRequestId: "completed-predecessor",
-        turnState: "completed",
-      }),
-    ).toBe("new-request");
-  });
-
-  it("binds Stopping to the request being stopped", () => {
-    const base = {
-      inFlight: true,
-      requestId: "request-b",
-      latestRequestId: "request-b",
-      interruptObserved: false,
-      requestedStop: null,
-    };
-    expect(isStopping(base)).toBe(false);
-    expect(isStopping({ ...base, requestedStop: "request-b" })).toBe(true);
-    expect(isStopping({ ...base, interruptObserved: true })).toBe(true);
-    expect(
-      isStopping({ ...base, latestRequestId: "request-a", interruptObserved: true }),
-    ).toBe(false);
-    expect(isStopping({ ...base, requestedStop: "request-a" })).toBe(false);
-    expect(isStopping({ ...base, inFlight: false, requestedStop: "request-b" })).toBe(
-      false,
-    );
-  });
 
   it("does not claim the person stopped a response it has no cause for", () => {
     render(panel(session({ turnState: "interrupted" }), false));

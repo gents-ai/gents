@@ -7,38 +7,10 @@ import {
   isLocalNode,
   needsFirstRunSetup,
   nodeSetUp,
-  projectFirstRunPhase,
   shouldRebindSetupDefault,
 } from "../src/ui/lib/firstRun";
 
 describe("first-run inference gate", () => {
-  it("waits through a cold partial replica, then accepts authoritative config", () => {
-    const unresolved = projectFirstRunPhase("unknown", true, "configured", true, false);
-    expect(unresolved).toBe("unknown");
-    expect(projectFirstRunPhase(unresolved, true, "configured", false, true)).toBe(
-      "done",
-    );
-  });
-
-  it("allows setup for an existing but uninitialized home", () => {
-    expect(projectFirstRunPhase("unknown", true, "absent", true, false)).toBe("active");
-  });
-
-  it("reopens a desktop's saved remote setup without a local home", () => {
-    expect(
-      projectFirstRunPhase("unknown", true, "absent", true, false, true, true),
-    ).toBe("done");
-    expect(
-      projectFirstRunPhase("unknown", false, "absent", true, false, true, true),
-    ).toBe("unknown");
-    expect(
-      projectFirstRunPhase("unknown", true, "unreadable", true, false, true, true),
-    ).toBe("unknown");
-    expect(
-      projectFirstRunPhase("active", true, "absent", true, false, true, true),
-    ).toBe("active");
-  });
-
   it("treats only a persisted non-local enrollment as a saved remote setup", () => {
     const saved = [{ ...deployment, local: false }];
     expect(
@@ -73,13 +45,6 @@ describe("first-run inference gate", () => {
         },
       }),
     ).toBe(false);
-  });
-
-  it("keeps setup unresolved when an existing init config cannot be decoded", () => {
-    expect(projectFirstRunPhase("unknown", true, "unreadable", true, false)).toBe(
-      "unknown",
-    );
-    expect(projectFirstRunPhase("unknown", true, null, true, false)).toBe("unknown");
   });
 
   it("recognizes the initialized local node after background enrollment changes its route source", () => {

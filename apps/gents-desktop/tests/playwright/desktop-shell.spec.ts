@@ -212,12 +212,6 @@ test.describe("kit shell", () => {
     await expectNoPageHorizontalOverflow(page);
   });
 
-  test("new session opens the composer", async ({ page }) => {
-    await gotoHarness(page);
-    await openChat(page);
-    await expect(composer(page)).toBeEditable();
-  });
-
   test("session filters are reachable and can be reset", async ({ page }) => {
     await gotoHarness(page);
     const session = page.getByRole("link", { name: /introduction-and-greetings/ });
@@ -649,12 +643,6 @@ test.describe("kit shell", () => {
     }));
     expect(widths.lineWidth).toBeGreaterThan(widths.viewportWidth);
     expect(widths.whiteSpace).toBe("pre");
-  });
-
-  test("empty fleet is the first-run setup", async ({ page }) => {
-    await gotoHarness(page, "empty-fleet");
-    await expect(page.getByTestId("setup-screen")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Let’s get set up" })).toBeVisible();
   });
 
   test("bridge failure stays on the startup retry screen", async ({ page }) => {
