@@ -1,122 +1,40 @@
-//! Agent memory: a DefraDB collection with a DiskANN vector index and a BM25
-//! full-text index, an in-process multilingual embedder, hybrid retrieval, and
-//! a bounded `memory` tool.
-//!
-//! The collections are part of the runtime baseline under the household
-//! `agent_memory` policy. A memory document's `parent` relationship is its
-//! agent, so ACP grants the agent the owner boundary and memory outlives the
-//! session that wrote it.
-
-use std::sync::Arc;
-
-use base64::Engine as _;
 use chrono::Utc;
-use defra_node::Node as EmbeddedNode;
-use gents_loop::tool::ToolDefinition;
-use gents_loop::tool::ToolDyn;
-use gents_loop::tool::{Tool, ToolCallEnvelope};
-use gents_memory_embed::{EmbedError, StaticEmbedder, DIMENSIONS, MODEL_ID};
+use gents_memory_embed::{DIMENSIONS, MODEL_ID};
 use gents_protocol::message::Message;
-use gents_protocol::tool_names::MEMORY_TOOL_NAME;
-use gents_store::collection::Collection;
-use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 use rapidhash::RapidHashMap;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use serde::Serialize;
+use serde_json::Value;
 
-pub const MEMORY_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_NAME;
+use super::{content_hash, embedder, MemoryStore, MEMORY_COLLECTION};
 
-const DEFAULT_TOP_K: usize = 8;
-const MAX_TOP_K: usize = 50;
-const DEFAULT_INGEST_LIMIT: usize = 100;
-const MAX_INGEST_LIMIT: usize = 500;
+pub(crate) const DEFAULT_TOP_K: usize = 8;
+pub(crate) const MAX_TOP_K: usize = 50;
+pub(crate) const DEFAULT_INGEST_LIMIT: usize = 100;
+pub(crate) const MAX_INGEST_LIMIT: usize = 500;
 const MAX_TEXT_CHARS: usize = 16_000;
 const MAX_EXTRACTED_CHARS: usize = 32_000;
 const CHUNK_CHARS: usize = 2_000;
 const MAX_INJECT_CHARS: usize = 4_000;
 const RRF_K: f64 = 60.0;
 
-const HELP: &str = "Persistent cross-session memory. Actions: help, remember, search, forget, list, ingest. remember stores one text with a kind and optional metadata. search ranks stored memory with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes by memory_key. list returns newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash; stored counts new memory only and next_cursor is null after the last page. Results state the ranking mode; semantic ranking is not claimed when the embedder is unavailable.";
-
-#[derive(Debug)]
-pub struct MemoryToolError(anyhow::Error);
-
-impl std::fmt::Display for MemoryToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
-    }
-}
-
-impl std::error::Error for MemoryToolError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
-
-impl From<anyhow::Error> for MemoryToolError {
-    fn from(error: anyhow::Error) -> Self {
-        Self(error)
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemoryParams {
-    #[serde(default)]
-    pub action: Option<String>,
-    #[serde(default)]
-    pub topic: Option<String>,
-    #[serde(default)]
-    pub text: Option<String>,
-    #[serde(default)]
-    pub texts: Option<Vec<String>>,
-    #[serde(default)]
-    pub query: Option<String>,
-    #[serde(default)]
-    pub kind: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub metadata: Option<Value>,
-    #[serde(default)]
-    pub memory_key: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-    #[serde(default)]
-    pub cursor: Option<String>,
-}
-
-struct MemoryStore<'a> {
-    node: &'a Arc<EmbeddedNode>,
-    node_did: &'a str,
-    actor: identity::Did,
-    agent_did: &'a str,
-    access: &'a ConfigAccess,
-    embedder: &'a StaticEmbedder,
-}
-
 #[derive(Debug, Clone, Serialize)]
-struct SearchHit {
-    doc_id: String,
-    memory_key: String,
-    text: String,
-    kind: String,
-    source: String,
-    created_at: String,
-    score: f64,
+pub(crate) struct SearchHit {
+    pub(crate) doc_id: String,
+    pub(crate) memory_key: String,
+    pub(crate) text: String,
+    pub(crate) kind: String,
+    pub(crate) source: String,
+    pub(crate) created_at: String,
+    pub(crate) score: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    bm25_rank: Option<usize>,
+    pub(crate) bm25_rank: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    dense_rank: Option<usize>,
+    pub(crate) dense_rank: Option<usize>,
 }
 
-struct SearchOutcome {
-    ranking: &'static str,
-    hits: Vec<SearchHit>,
+pub(crate) struct SearchOutcome {
+    pub(crate) ranking: &'static str,
+    pub(crate) hits: Vec<SearchHit>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,34 +47,9 @@ struct RawHit {
     created_at: String,
 }
 
-impl<'a> MemoryStore<'a> {
-    // vertexia: memory queries are escaped GraphQL strings, following
-    // session_history; move to gents_protocol::document_query once this
-    // collection has typed fields.
-    async fn read(&self, query: &str) -> anyhow::Result<Value> {
-        let query = query.to_owned();
-        ConfigAccess::transact_local_readonly(
-            self.node,
-            Some(self.actor.clone()),
-            "tool.memory.read",
-            move |txn| {
-                let query = query.clone();
-                Box::pin(async move { txn.execute(&query).await })
-            },
-        )
-        .await
-        .map_err(anyhow::Error::from)
-    }
-
-    async fn write(&self, mutation: &str) -> anyhow::Result<Value> {
-        self.access
-            .write("tool.memory.write", mutation)
-            .await
-            .map_err(anyhow::Error::from)
-    }
-
+impl MemoryStore<'_> {
     #[allow(clippy::too_many_arguments)]
-    async fn remember(
+    pub(crate) async fn remember(
         &self,
         text: &str,
         kind: &str,
@@ -193,32 +86,27 @@ impl<'a> MemoryStore<'a> {
         let metadata = metadata
             .map(|value| value.to_string())
             .unwrap_or_else(|| "null".to_owned());
-        let request_doc_id = request_doc_id
-            .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-            .unwrap_or_else(|| "null".to_owned());
-        let requester_did = requester_did
-            .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-            .unwrap_or_else(|| "null".to_owned());
-        let vector = vector
-            .iter()
-            .map(|value| value.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
+        let request_doc_id = super::nullable_string(request_doc_id);
+        let requester_did = super::nullable_string(requester_did);
+        let vector = super::vector_literal(&vector);
         let created_at = Utc::now().to_rfc3339();
         let mutation = format!(
             "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", embed_model_id: \"{embed_model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
-            memory_key = escape_graphql_string(&memory_key),
-            node_did = escape_graphql_string(self.node_did),
-            agent_did = escape_graphql_string(self.agent_did),
-            session_id = escape_graphql_string(session_id),
-            session_doc_id = escape_graphql_string(session_doc_id),
-            source = escape_graphql_string(source),
-            kind = escape_graphql_string(kind),
-            text = escape_graphql_string(text),
-            content_hash = escape_graphql_string(&content_hash),
-            embed_model_id = escape_graphql_string(MODEL_ID),
+            memory_key = gents_store::graphql::escape_graphql_string(&memory_key),
+            node_did = gents_store::graphql::escape_graphql_string(self.node_did),
+            agent_did = gents_store::graphql::escape_graphql_string(self.agent_did),
+            session_id = gents_store::graphql::escape_graphql_string(session_id),
+            session_doc_id = gents_store::graphql::escape_graphql_string(session_doc_id),
+            source = gents_store::graphql::escape_graphql_string(source),
+            kind = gents_store::graphql::escape_graphql_string(kind),
+            text = gents_store::graphql::escape_graphql_string(text),
+            content_hash = gents_store::graphql::escape_graphql_string(&content_hash),
+            embed_model_id = gents_store::graphql::escape_graphql_string(MODEL_ID),
         );
-        let doc_id = match self.create_and_link(&mutation).await {
+        let doc_id = match self
+            .create_and_link(MEMORY_COLLECTION, &mutation, "tool.memory.remember")
+            .await
+        {
             Ok(doc_id) => doc_id,
             Err(error) => {
                 if let Some(hit) = self.existing_memory(&content_hash).await? {
@@ -247,8 +135,8 @@ impl<'a> MemoryStore<'a> {
         let existing = self
             .read(&format!(
                 "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{content_hash: {{_eq: \"{}\"}}}}]}}, limit: 1) {{ _docID memory_key text kind source created_at }}}}",
-                escape_graphql_string(self.agent_did),
-                escape_graphql_string(content_hash),
+                gents_store::graphql::escape_graphql_string(self.agent_did),
+                gents_store::graphql::escape_graphql_string(content_hash),
             ))
             .await?;
         Ok(existing
@@ -267,47 +155,7 @@ impl<'a> MemoryStore<'a> {
             }))
     }
 
-    async fn create_and_link(&self, mutation: &str) -> anyhow::Result<String> {
-        let mutation = mutation.to_owned();
-        let collection = MEMORY_COLLECTION.to_owned();
-        let node_did = self.node_did.to_owned();
-        let agent_did = self.agent_did.to_owned();
-        self.access
-            .transact_write("tool.memory.remember", move |txn| {
-                let mutation = mutation.clone();
-                let collection = collection.clone();
-                let node_did = node_did.clone();
-                let agent_did = agent_did.clone();
-                Box::pin(async move {
-                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        Collection::Agent,
-                        &node_did,
-                        &agent_did,
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
-                    let created = txn.execute(&mutation).await?;
-                    let doc_id = created
-                        .pointer("/data/add_AgentMemory/0/_docID")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow::anyhow!("memory write returned no document id"))?
-                        .to_owned();
-                    txn.add_resource_relationship(
-                        &collection,
-                        &doc_id,
-                        "parent",
-                        "agents",
-                        &agent_doc_id,
-                    )
-                    .await?;
-                    Ok::<String, anyhow::Error>(doc_id)
-                })
-            })
-            .await
-    }
-
-    async fn search(&self, query: &str, limit: usize) -> anyhow::Result<SearchOutcome> {
+    pub(crate) async fn search(&self, query: &str, limit: usize) -> anyhow::Result<SearchOutcome> {
         let query = query.trim();
         if query.is_empty() {
             anyhow::bail!("memory search query must not be empty");
@@ -315,11 +163,11 @@ impl<'a> MemoryStore<'a> {
         let limit = limit.clamp(1, MAX_TOP_K);
         let filter = format!(
             "{{agent_did: {{_eq: \"{}\"}}}}",
-            escape_graphql_string(self.agent_did)
+            gents_store::graphql::escape_graphql_string(self.agent_did)
         );
         let bm25_query = format!(
             "{{AgentMemory(filter: {filter}, limit: {limit}, order: [{{_alias: {{_score: DESC}}}}]) {{ _docID memory_key text kind source created_at _score: BM25(query: \"{}\", fields: [\"text\"]) }}}}",
-            escape_graphql_string(query),
+            gents_store::graphql::escape_graphql_string(query),
         );
         let vector = match self.embedder.embed_one(query.to_owned()).await {
             Ok(vector) => Some(vector),
@@ -330,11 +178,7 @@ impl<'a> MemoryStore<'a> {
         };
         let (bm25, dense) = match vector {
             Some(vector) => {
-                let literal = vector
-                    .iter()
-                    .map(|value| value.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let literal = super::vector_literal(&vector);
                 let dense_query = format!(
                     "{{AgentMemory(filter: {filter}, limit: {limit}, order: [{{_alias: {{_score: DESC}}}}]) {{ _docID memory_key text kind source created_at _score: SIMILARITY(embedding: {{vector: [{literal}]}}) }}}}",
                 );
@@ -378,12 +222,12 @@ impl<'a> MemoryStore<'a> {
         })
     }
 
-    async fn list(&self, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+    pub(crate) async fn list(&self, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
         let limit = limit.clamp(1, MAX_TOP_K);
         let value = self
             .read(&format!(
                 "{{AgentMemory(filter: {{agent_did: {{_eq: \"{}\"}}}}, order: [{{created_at: DESC}}], limit: {limit}) {{ _docID memory_key text kind source created_at }}}}",
-                escape_graphql_string(self.agent_did),
+                gents_store::graphql::escape_graphql_string(self.agent_did),
             ))
             .await?;
         Ok(parse_rows(&value)
@@ -402,12 +246,12 @@ impl<'a> MemoryStore<'a> {
             .collect())
     }
 
-    async fn forget(&self, memory_key: &str) -> anyhow::Result<usize> {
+    pub(crate) async fn forget(&self, memory_key: &str) -> anyhow::Result<usize> {
         let value = self
             .write(&format!(
                 "mutation {{ delete_AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{memory_key: {{_eq: \"{}\"}}}}]}}) {{ _docID }} }}",
-                escape_graphql_string(self.agent_did),
-                escape_graphql_string(memory_key),
+                gents_store::graphql::escape_graphql_string(self.agent_did),
+                gents_store::graphql::escape_graphql_string(memory_key),
             ))
             .await?;
         Ok(value
@@ -417,7 +261,7 @@ impl<'a> MemoryStore<'a> {
             .unwrap_or(0))
     }
 
-    async fn ingest(
+    pub(crate) async fn ingest(
         &self,
         session_id: &str,
         session_doc_id: &str,
@@ -428,8 +272,8 @@ impl<'a> MemoryStore<'a> {
         let value = self
             .read(&format!(
                 "{{AgentMessage(filter: {{session_id: {{_eq: \"{}\"}}, node_did: {{_eq: \"{}\"}}}}, order: [{{sequence: ASC}}], limit: {limit}, offset: {offset}) {{ message_key sequence blocks }}}}",
-                escape_graphql_string(session_id),
-                escape_graphql_string(self.node_did),
+                gents_store::graphql::escape_graphql_string(session_id),
+                gents_store::graphql::escape_graphql_string(self.node_did),
             ))
             .await?;
         let rows = value
@@ -468,14 +312,6 @@ impl<'a> MemoryStore<'a> {
         let next = (rows.len() == limit).then_some(offset + rows.len());
         Ok((stored, next))
     }
-}
-
-fn content_hash(agent_did: &str, text: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(agent_did.as_bytes());
-    hasher.update(b"\n");
-    hasher.update(text.as_bytes());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 fn parse_rows(value: &Value) -> Vec<RawHit> {
@@ -638,10 +474,10 @@ fn format_section(outcome: &SearchOutcome) -> String {
 /// Retrieve a bounded memory section for the current prompt, or `None` when
 /// there is no memory or retrieval failed. A failure never fails the request.
 pub async fn inject(
-    node: &Arc<EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     agent_did: &str,
-    access: &ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     prompt: &str,
 ) -> Option<String> {
     if prompt.trim().is_empty() {
@@ -691,234 +527,6 @@ pub fn merge_context(existing: Option<Message>, section: String) -> Message {
         Some(_) => Message::user(section),
         None => Message::user(section),
     }
-}
-
-async fn embedder() -> anyhow::Result<Arc<StaticEmbedder>> {
-    static EMBEDDER: tokio::sync::OnceCell<Arc<StaticEmbedder>> =
-        tokio::sync::OnceCell::const_new();
-    EMBEDDER
-        .get_or_try_init(|| async {
-            StaticEmbedder::load()
-                .await
-                .map(Arc::new)
-                .map_err(|error: EmbedError| anyhow::anyhow!(error))
-        })
-        .await
-        .map(Arc::clone)
-}
-
-pub struct MemoryTool {
-    node: Arc<EmbeddedNode>,
-    node_did: String,
-    agent_did: String,
-    access: ConfigAccess,
-    embedder: Arc<StaticEmbedder>,
-}
-
-impl MemoryTool {
-    fn store(&self) -> anyhow::Result<MemoryStore<'_>> {
-        Ok(MemoryStore {
-            node: &self.node,
-            node_did: &self.node_did,
-            actor: identity::Did::new(&self.agent_did)?,
-            agent_did: &self.agent_did,
-            access: &self.access,
-            embedder: &self.embedder,
-        })
-    }
-
-    async fn session_scope(
-        &self,
-        runtime: Option<&gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext>,
-        requested_session: Option<&str>,
-    ) -> anyhow::Result<(String, String)> {
-        let store = self.store()?;
-        let session_id = requested_session
-            .map(str::to_owned)
-            .or_else(|| runtime.and_then(|runtime| runtime.session_id.clone()))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "memory writes need a session; call from a session request or pass session_id"
-                )
-            })?;
-        let value = store
-            .read(&format!(
-                "{{AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}, limit: 1) {{ _docID session_id }}}}",
-                escape_graphql_string(&session_id),
-            ))
-            .await?;
-        if let Some(doc_id) = value
-            .pointer("/data/AgentSession/0/_docID")
-            .and_then(Value::as_str)
-        {
-            return Ok((session_id, doc_id.to_owned()));
-        }
-        if let Some(request_id) = runtime.and_then(|runtime| runtime.request_id.as_deref()) {
-            let value = store
-                .read(&format!(
-                    "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 1) {{ session_doc_id session_id }}}}",
-                    escape_graphql_string(request_id),
-                ))
-                .await?;
-            if let Some(row) = value.pointer("/data/AgentRequest/0") {
-                if let Some(doc_id) = row.get("session_doc_id").and_then(Value::as_str) {
-                    let session = row
-                        .get("session_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&session_id)
-                        .to_owned();
-                    return Ok((session, doc_id.to_owned()));
-                }
-            }
-        }
-        anyhow::bail!("session {session_id} has no readable document")
-    }
-}
-
-impl Tool for MemoryTool {
-    const NAME: &'static str = MEMORY_TOOL_NAME;
-
-    type Error = MemoryToolError;
-    type Args = MemoryParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Store and retrieve persistent cross-session memory. Search ranks with DefraDB BM25 and the DiskANN vector index. Use help for action syntax.".into(),
-            parameters: json!({
-                "type": "object", "additionalProperties": false,
-                "properties": {
-                    "action": {"type": "string", "enum": ["help", "remember", "search", "forget", "list", "ingest"], "description": "Defaults to search when query is set, otherwise list."},
-                    "topic": {"type": "string", "description": "Help topic when action is help."},
-                    "text": {"type": "string", "minLength": 1, "description": "remember: the memory to store."},
-                    "texts": {"type": "array", "items": {"type": "string"}, "description": "remember: several memories to store."},
-                    "query": {"type": "string", "minLength": 1, "description": "search: what to retrieve."},
-                    "kind": {"type": "string", "description": "A label such as fact, rule, preference, message."},
-                    "source": {"type": "string", "description": "Where the memory came from."},
-                    "metadata": {"type": "object", "description": "Optional structured metadata."},
-                    "memory_key": {"type": "string", "minLength": 1, "description": "forget: the memory_key from a search or list result."},
-                    "session_id": {"type": "string", "minLength": 1, "description": "ingest: session to read; defaults to the current session."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "cursor": {"type": "string", "description": "ingest: the next_cursor from the previous page; absent or null means the first page."}
-                }
-            }),
-        }
-    }
-
-    async fn call(
-        &self,
-        args: Self::Args,
-        context: &ToolCallEnvelope,
-    ) -> Result<Self::Output, Self::Error> {
-        let runtime = context.runtime();
-        let runtime = runtime.as_ref();
-        let action = args.action.as_deref().unwrap_or_else(|| {
-            if args.query.is_some() {
-                "search"
-            } else {
-                "list"
-            }
-        });
-        let store = self.store()?;
-        let value = match action {
-            "help" => json!({"help": HELP}),
-            "remember" => {
-                let (session_id, session_doc_id) = self
-                    .session_scope(runtime, args.session_id.as_deref())
-                    .await?;
-                let requester = runtime.and_then(|runtime| runtime.requester_did.as_deref());
-                let request = runtime.and_then(|runtime| runtime.request_id.as_deref());
-                let kind = args.kind.as_deref().unwrap_or("fact");
-                let source = args.source.as_deref().unwrap_or("agent");
-                let mut texts = args.texts.unwrap_or_default();
-                if let Some(text) = args.text {
-                    texts.push(text);
-                }
-                if texts.is_empty() {
-                    return Err(anyhow::anyhow!("remember requires text or texts").into());
-                }
-                let mut stored = Vec::new();
-                for text in texts {
-                    let (hit, _) = store
-                        .remember(
-                            &text,
-                            kind,
-                            source,
-                            &session_id,
-                            &session_doc_id,
-                            request,
-                            requester,
-                            args.metadata.as_ref(),
-                        )
-                        .await?;
-                    stored.push(hit);
-                }
-                json!({"stored": stored})
-            }
-            "search" => {
-                let query = args
-                    .query
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("search requires query"))?;
-                let outcome = store
-                    .search(query, args.limit.unwrap_or(DEFAULT_TOP_K))
-                    .await?;
-                json!({"ranking": outcome.ranking, "hits": outcome.hits})
-            }
-            "forget" => {
-                let key = args
-                    .memory_key
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("forget requires memory_key"))?;
-                json!({"deleted": store.forget(key).await?})
-            }
-            "list" => {
-                json!({"hits": store.list(args.limit.unwrap_or(DEFAULT_TOP_K)).await?})
-            }
-            "ingest" => {
-                let (session_id, session_doc_id) = self
-                    .session_scope(runtime, args.session_id.as_deref())
-                    .await?;
-                let offset = args
-                    .cursor
-                    .as_deref()
-                    .and_then(|cursor| cursor.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let (stored, next) = store
-                    .ingest(
-                        &session_id,
-                        &session_doc_id,
-                        args.limit.unwrap_or(DEFAULT_INGEST_LIMIT),
-                        offset,
-                    )
-                    .await?;
-                json!({"stored": stored, "next_cursor": next})
-            }
-            other => {
-                return Err(anyhow::anyhow!("unsupported memory action {other}; use help").into())
-            }
-        };
-        Ok(serde_json::to_string(&value).map_err(anyhow::Error::from)?)
-    }
-}
-
-pub async fn build_memory_tool(
-    node: Arc<EmbeddedNode>,
-    node_did: String,
-    agent_did: String,
-    agent_identity: &dyn gents_store::identity::NodeIdentity,
-) -> anyhow::Result<Box<dyn ToolDyn>> {
-    let actor = identity::Did::new(&agent_did)?;
-    let access = ConfigAccess::local_managed_agent(node.clone(), actor, agent_identity)?;
-    let embedder = embedder().await?;
-    Ok(Box::new(MemoryTool {
-        node,
-        node_did,
-        agent_did,
-        access,
-        embedder,
-    }))
 }
 
 #[cfg(test)]

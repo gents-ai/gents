@@ -184,6 +184,26 @@ pub(crate) const FENCES: &[(&str, usize, &str)] = &[
         "SingleWriter(the runtime's MCP health checker is the one writer of a service's health state)",
     ),
     (
+        "crates/gents-tools/src/memory/experience_store.rs::ensure_problem_in_txn",
+        1,
+        "UniqueIndex(AgentMemoryProblem(problem_key)): the problem is created only under its unique key, and a twin returns the committed row",
+    ),
+    (
+        "crates/gents-tools/src/memory/experience_write.rs::attempt::transact_write",
+        1,
+        "UniqueIndex(AgentMemoryAttempt(attempt_key)): the ordinal is read inside the transaction and the attempt is created only under its unique key",
+    ),
+    (
+        "crates/gents-tools/src/memory/experience_write.rs::outcome::transact_write",
+        1,
+        "UniqueIndex(AgentMemoryOutcome(outcome_key)): the ordinal is read inside the transaction and the outcome is created only under its unique key",
+    ),
+    (
+        "crates/gents-tools/src/memory/experience_write.rs::merge::transact_write",
+        1,
+        "SingleWriter(AgentMemoryAliasGuard(agent_did)): every admitted merge writes the agent's one guard row, so a concurrent merge conflicts and rebuilds its admission read",
+    ),
+    (
         "crates/gents/src/runtime/agent/session_input_edit.rs::process_command_with_now::transact_idempotent",
         1,
         "UniqueIndex(AgentSessionInputEdit(command_id)): no twin of the command can exist, so the twin scan only reads",
