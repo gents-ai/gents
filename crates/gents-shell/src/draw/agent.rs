@@ -773,6 +773,18 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_in_a_reply_neither_breaks_its_rows_nor_moves_its_styles() {
+        let tab = tab_with(&[("field\t`état` ok", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["fieldétat ok"]);
+        assert_eq!(tab.row_marks(80), [vec![(5..9, code())]]);
+        let long = format!("key:\t{}→ next", "x".repeat(74));
+        let tab = tab_with(&[(long.as_str(), Tone::Reply)]);
+        let first = format!("key:{}→", "x".repeat(74));
+        assert_eq!(rows_at(&tab, 80), [first.as_str(), "next"]);
+        assert_eq!(tab.row_marks(80), [Vec::new(), Vec::new()]);
+    }
+
+    #[test]
     fn only_replies_read_markdown() {
         let tab = tab_with(&[("**hi**", Tone::You), ("**x**", Tone::Plain)]);
         let rows = rows_at(&tab, 80);

@@ -35,7 +35,8 @@ impl Look {
 pub(crate) type Marks = Vec<(Range<usize>, Look)>;
 
 /// A reply as the shell shows it: `source` without the markdown delimiters it recognizes, and
-/// the byte ranges of that text they styled. Every other byte stays as typed.
+/// the byte ranges of that text they styled. Control characters but newlines are cut as well,
+/// since a row never draws them; every other byte stays as typed.
 pub(crate) fn render(source: &str) -> (String, Marks) {
     let mut cuts = Vec::new();
     let mut marks = Vec::new();
@@ -62,6 +63,10 @@ pub(crate) fn render(source: &str) -> (String, Marks) {
             _ => {}
         }
     }
+    let controls = source
+        .char_indices()
+        .filter(|&(_, character)| character != '\n' && character.is_control());
+    cuts.extend(controls.map(|(at, control)| at..at + control.len_utf8()));
     cuts.sort_by_key(|cut| cut.start);
     cuts.dedup_by(|next, kept| {
         if next.start > kept.end {
