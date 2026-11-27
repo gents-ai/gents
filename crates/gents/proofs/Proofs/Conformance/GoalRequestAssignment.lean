@@ -43,9 +43,6 @@ def cases : List Case :=
       observed := [⟨1, 10, 1, some 100⟩, ⟨1, 10, 2, some 100⟩] }
   ]
 
-def referenceJson (reference : Reference) : Json :=
-  Json.mkObj [("goal", toJson reference.goal), ("root", toJson reference.root)]
-
 structure InputCase where
   name : String
   facts : InputFacts
@@ -91,22 +88,6 @@ def messageInputCases : List MessageInputCase :=
   ]
 
 example : messageInputCases.length = 5 := by decide
-
-def assignmentJson (a : Assignment) : Json :=
-  Json.mkObj [("owner", toJson a.owner), ("session", toJson a.session),
-    ("goal", toJson a.goal), ("root", toJson a.root)]
-
-def entryJson (e : Entry) : Json :=
-  Json.mkObj [("doc", toJson e.doc), ("owner", toJson e.owner),
-    ("session", toJson e.session),
-    ("reference", e.reference.map referenceJson |>.getD Json.null),
-    ("signature_valid", toJson e.signatureValid)]
-
-def queueScopeJson : QueueScope → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unresolved entry => Json.mkObj [("kind", toJson "unresolved"), ("entry", toJson entry)]
-  | .referenced goal root => Json.mkObj [("kind", toJson "referenced"),
-      ("goal", toJson goal), ("root", toJson root)]
 
 example : cases.length = 18 := by decide
 
@@ -164,11 +145,6 @@ def historyCases : List HistoryCase :=
       [{first with assignment := ⟨1,10,1,none⟩}, {first with commit := 2, height := 2, parents := [1], assignment := ⟨1,10,2,some 100⟩}],
       entry := ⟨101,1,10,none,true⟩}
   ]
-
-def versionJson (v : Version) : Json :=
-  Json.mkObj [("document", toJson v.document), ("commit", toJson v.commit),
-    ("height", toJson v.height), ("parents", toJson v.parents),
-    ("assignment", assignmentJson v.assignment), ("status", toJson v.status.toDefraDB)]
 
 def historyHandoffReason (observation : HistoryObservation) : Option String :=
   let handoff : Recovery.AssignmentHandoff := match observation with
