@@ -24,6 +24,7 @@ pub enum PublicationStage {
     Commit,
     Parent,
     Executor,
+    Host,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,6 +49,7 @@ pub struct ClientAgentJournal {
     pub commit: PublicationStatus,
     pub parent: PublicationStatus,
     pub executor: PublicationStatus,
+    pub host: PublicationStatus,
     #[serde(skip)]
     pub permit: Option<PublicationStage>,
 }
@@ -69,6 +71,7 @@ impl ClientAgentJournal {
             commit: PublicationStatus::Fresh,
             parent: PublicationStatus::Fresh,
             executor: PublicationStatus::Fresh,
+            host: PublicationStatus::Fresh,
             permit: None,
         }
     }
@@ -78,6 +81,7 @@ impl ClientAgentJournal {
             PublicationStage::Commit => self.commit,
             PublicationStage::Parent => self.parent,
             PublicationStage::Executor => self.executor,
+            PublicationStage::Host => self.host,
         }
     }
 
@@ -86,6 +90,7 @@ impl ClientAgentJournal {
             PublicationStage::Commit => self.commit = status,
             PublicationStage::Parent => self.parent = status,
             PublicationStage::Executor => self.executor = status,
+            PublicationStage::Host => self.host = status,
         }
     }
 
@@ -109,13 +114,27 @@ impl ClientAgentJournal {
                 PublicationStage::Commit => {
                     self.parent == PublicationStatus::Fresh
                         && self.executor == PublicationStatus::Fresh
+                        && self.host == PublicationStatus::Fresh
                 }
                 PublicationStage::Parent => self.commit == PublicationStatus::Succeeded,
                 PublicationStage::Executor => {
                     self.commit == PublicationStatus::Succeeded
                         && self.parent == PublicationStatus::Succeeded
                 }
+                PublicationStage::Host => {
+                    self.commit == PublicationStatus::Succeeded
+                        && self.parent == PublicationStatus::Succeeded
+                        && self.executor == PublicationStatus::Succeeded
+                }
             }
+    }
+
+    /// `Identity.ClientAgentJournal.complete`: every stage, `host` included,
+    /// succeeded.
+    pub fn complete(&self) -> bool {
+        [self.commit, self.parent, self.executor, self.host]
+            .iter()
+            .all(|status| *status == PublicationStatus::Succeeded)
     }
 
     pub fn record_attempt(&mut self, stage: PublicationStage, durable: bool) {
@@ -182,11 +201,7 @@ pub fn recovery_disposition(
     if !binding_matches {
         return RecoveryDisposition::BindingMismatch;
     }
-    if journal.commit == PublicationStatus::Failed
-        || (journal.commit == PublicationStatus::Succeeded
-            && journal.parent == PublicationStatus::Succeeded
-            && journal.executor == PublicationStatus::Succeeded)
-    {
+    if journal.commit == PublicationStatus::Failed || journal.complete() {
         return RecoveryDisposition::Proceed;
     }
     if journal.commit != PublicationStatus::Succeeded {

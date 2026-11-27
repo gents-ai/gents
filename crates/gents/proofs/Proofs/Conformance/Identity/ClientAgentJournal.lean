@@ -74,6 +74,7 @@ structure RecoveryInput where
   commit : Status
   parent : Status
   executor : Status
+  host : Status
   deriving ToJson
 
 @[conformance_family]
@@ -81,11 +82,11 @@ def recovery : Family RecoveryInput RecoveryDisposition where
   inputs := recoveryCases.map fun c =>
     { name := c.name, actorMatches := c.actorMatches, recordPresent := c.recordPresent
       bindingMatches := c.bindingMatches, commit := c.commit, parent := c.parent
-      executor := c.executor }
+      executor := c.executor, host := c.host }
   model := fun i =>
     recoveryDisposition i.actorMatches i.recordPresent i.bindingMatches
       { Identity.ClientAgentJournal.initial with
-        commit := i.commit, parent := i.parent, executor := i.executor }
+        commit := i.commit, parent := i.parent, executor := i.executor, host := i.host }
 
 structure PrivateAccessInput where
   role : String
