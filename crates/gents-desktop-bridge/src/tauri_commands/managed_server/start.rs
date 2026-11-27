@@ -7,8 +7,8 @@ use super::native::{
 use super::native::{install_action, service_action};
 use super::pairing::{pairing_is_ready, pairing_target, start_running_managed_pairing};
 use super::port::{
-    ensure_default_port_identity, matching_external_server, observe_port_readiness,
-    user_status_signer, PortReadiness,
+    matching_external_server, observe_port_readiness, settle_home_port, user_status_signer,
+    PortReadiness,
 };
 use super::preference::{
     load_bound_preference, refuse_renaming_home, save_confirmed_preference, start_authority,
@@ -172,8 +172,7 @@ where
             .await?;
         }
         if gents_service::server_host::initialized_home(&node_home) {
-            ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref())
-                .await?;
+            settle_home_port(&node_home, user_status_signer(state).await.as_ref()).await?;
         }
         gents_server::server_host::ensure_standard_home(
             tauri::async_runtime::handle().inner(),
@@ -201,7 +200,7 @@ where
             },
         )
         .await?;
-        ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref()).await?;
+        settle_home_port(&node_home, user_status_signer(state).await.as_ref()).await?;
         run_native(launchable_native_service(app, state)?, |service| {
             service_action(&service, install_action())
         })

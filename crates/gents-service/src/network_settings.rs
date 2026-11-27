@@ -17,6 +17,9 @@ pub struct NetworkSettings {
     pub http_addr: Option<IpAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_port: Option<u16>,
+    /// Gents picked `http_port` because the port before it was taken; a person did not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub http_port_picked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p2p_bind_addr: Option<IpAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +85,9 @@ impl NetworkSettings {
         if self.http_port == Some(0) {
             bail!("HTTP port 0 is not supported; choose an explicit non-zero port");
         }
+        if self.http_port_picked && self.http_port.is_none() {
+            bail!("http_port_picked is set but no http_port is recorded");
+        }
         Ok(())
     }
 
@@ -94,6 +100,7 @@ impl NetworkSettings {
         Self {
             http_addr: args.http_addr.or(base.http_addr),
             http_port: args.http_port.or(base.http_port),
+            http_port_picked: args.http_port.is_none() && base.http_port_picked,
             p2p_bind_addr: args.p2p_bind_addr.or(base.p2p_bind_addr),
             p2p_port: args.p2p_port.or(base.p2p_port),
             p2p_relay_mode: args.p2p_relay_mode.or(base.p2p_relay_mode),
@@ -239,6 +246,7 @@ mod tests {
         NetworkSettings {
             http_addr: Some("100.64.0.7".parse().unwrap()),
             http_port: Some(9393),
+            http_port_picked: false,
             p2p_bind_addr: Some("0.0.0.0".parse().unwrap()),
             p2p_port: Some(4455),
             p2p_relay_mode: Some(P2pRelayModeArg::Default),

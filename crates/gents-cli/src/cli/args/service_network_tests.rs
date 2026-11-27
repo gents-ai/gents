@@ -52,6 +52,7 @@ fn tailnet_settings() -> NetworkSettings {
     NetworkSettings {
         http_addr: Some("100.64.0.7".parse().unwrap()),
         http_port: Some(9393),
+        http_port_picked: false,
         p2p_bind_addr: Some("0.0.0.0".parse().unwrap()),
         p2p_port: Some(4455),
         p2p_relay_mode: Some(P2pRelayModeArg::Default),

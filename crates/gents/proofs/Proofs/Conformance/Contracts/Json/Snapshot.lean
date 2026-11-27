@@ -414,6 +414,7 @@ import Proofs.Conformance.InstallRepair
 import Proofs.Conformance.RepairBackups
 import Proofs.Conformance.DesktopConnect
 import Proofs.Conformance.OperationRecovery
+import Proofs.Conformance.NodePort
 
 namespace Conformance.Contracts
 

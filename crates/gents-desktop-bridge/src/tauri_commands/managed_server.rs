@@ -38,8 +38,8 @@ use native::{
 use native::{install_action, service_action};
 use pairing::{drain_managed_runtime_pairing, pairing_is_ready, start_running_managed_pairing};
 use port::{
-    ensure_default_port_identity, ensure_native_owns_running_endpoint, matching_external_server,
-    observe_port_readiness, user_status_signer, PortReadiness,
+    ensure_native_owns_running_endpoint, matching_external_server, observe_port_readiness,
+    settle_home_port, user_status_signer, PortReadiness,
 };
 use preference::{load_bound_preference, refuse_renaming_home, save_confirmed_preference};
 use readiness::ensure_selected_restart_compatible;
@@ -607,7 +607,7 @@ where
         if managed_selection {
             return Ok(());
         }
-        ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref())
+        settle_home_port(&node_home, user_status_signer(state).await.as_ref())
             .await
             .map_err(|mut error| {
                 error.message = format!("Your node was stopped; {}", error.message);

@@ -99,18 +99,15 @@ pub(super) async fn observe_port_readiness(
     node_home: &Path,
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
-    let mut config = gents_service::server_host::ServerConfig::standard(node_home.to_path_buf());
-    match gents_service::network_settings::NetworkSettings::read(node_home) {
-        Ok(settings) => {
-            config.http_addr = settings.http_addr.unwrap_or(config.http_addr);
-            config.http_port = settings.http_port.unwrap_or(config.http_port);
-        }
-        Err(error) => tracing::warn!(
-            target: "gents_desktop::managed_server",
-            error = %format!("{error:#}"),
-            "the home's network settings are unreadable; observing the standard port"
-        ),
-    }
+    let config = gents_service::server_host::ServerConfig::for_home(node_home.to_path_buf())
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                error = %format!("{error:#}"),
+                "the home's network settings are unreadable; observing the standard port"
+            );
+            gents_service::server_host::ServerConfig::standard(node_home.to_path_buf())
+        });
     observe_port_readiness_at(&config, user).await
 }
 
@@ -244,24 +241,71 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
     }
 }
 
-pub(super) async fn ensure_default_port_identity(
+/// Where the home listens before its service is installed (Lean
+/// `NodePort.settle`).
+pub(super) async fn settle_home_port(
     node_home: &Path,
     user: Option<&ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
-    match observe_port_readiness(node_home, user).await? {
-        PortReadiness::Foreign(foreign) => Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            foreign.message(),
-        )),
-        PortReadiness::Occupied(port) => Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            occupied_port_message(port),
-        )),
+    let unreadable = |error: String| BridgeError::new(BridgeErrorCode::InvalidArgument, error);
+    let config = gents_service::server_host::ServerConfig::for_home(node_home.to_path_buf())
+        .map_err(|error| unreadable(format!("{error:#}")))?;
+    let port = gents_service::node_port::port_source(node_home)
+        .map_err(|error| unreadable(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
+    let served = gents_service::home_state::has_served(node_home);
+    settle_port_at(&config, port, served, user).await
+}
+
+pub(super) async fn settle_port_at(
+    config: &gents_service::server_host::ServerConfig,
+    port: gents_service::node_port::PortSource,
+    served: bool,
+    user: Option<&ClientSigningCapability>,
+) -> Result<(), BridgeError> {
+    use gents_service::node_port::{move_http_port, settle, PortOccupant, PortSettlement};
+    let (occupant, blocker) = match observe_port_readiness_at(config, user).await? {
+        PortReadiness::NotListening => (PortOccupant::Nobody, None),
         PortReadiness::Ready(_)
         | PortReadiness::StatusUnreadable { .. }
         | PortReadiness::Booting
-        | PortReadiness::Outdated { .. }
-        | PortReadiness::NotListening => Ok(()),
+        | PortReadiness::Outdated { .. } => (PortOccupant::ThisHome, None),
+        PortReadiness::Foreign(foreign) => (
+            if foreign.node_did.is_some() {
+                PortOccupant::AnotherNode
+            } else {
+                PortOccupant::AnotherApp
+            },
+            Some(foreign.message()),
+        ),
+        PortReadiness::Occupied(port) => {
+            (PortOccupant::AnotherApp, Some(occupied_port_message(port)))
+        }
+    };
+    match settle(port, served, occupant) {
+        PortSettlement::Keep => Ok(()),
+        PortSettlement::Move => {
+            let server = config.clone();
+            let port = tokio::task::spawn_blocking(move || move_http_port(&server))
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?
+                .map_err(|error| {
+                    BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+                    )
+                })?;
+            tracing::info!(
+                target: "gents_desktop::managed_server",
+                taken = config.http_port,
+                port,
+                "the port is in use; the new node listens on another port"
+            );
+            Ok(())
+        }
+        PortSettlement::BlockedByNode | PortSettlement::BlockedByApp => Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            blocker.unwrap_or_default(),
+        )),
     }
 }
 

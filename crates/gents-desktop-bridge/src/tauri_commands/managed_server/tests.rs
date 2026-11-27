@@ -15,6 +15,7 @@ use std::time::Duration;
 
 mod authority;
 mod crash_loop;
+mod node_port;
 mod orchestration;
 mod pairing;
 mod readiness;

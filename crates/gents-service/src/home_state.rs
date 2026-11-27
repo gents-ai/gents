@@ -8,11 +8,9 @@ use gents_store::config_client::GraphqlEndpoint;
 use gents_store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
-use gents_store::local::home::INIT_PENDING_FILE_NAME;
+use gents_store::local::home::{INIT_PENDING_FILE_NAME, SERVED_MARKER_FILE_NAME};
 
-use crate::state::{
-    StoredInitConfig, StoredRuntimeState, DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME,
-};
+use crate::state::{StoredInitConfig, StoredRuntimeState, RUNTIME_STATE_FILE_NAME};
 
 pub fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -222,10 +220,21 @@ pub fn load_initialized_home_identity(
 pub fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
     let path = runtime_state_path(home_dir);
     let contents = serde_json::to_vec_pretty(state).context("encoding local runtime state JSON")?;
+    let marker = home_dir.join(SERVED_MARKER_FILE_NAME);
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&marker)
+        .with_context(|| format!("marking the home served {}", marker.display()))?;
     // Replaced, never truncated in place: a server killed mid-write would
     // otherwise leave an empty file every later command fails to decode.
     crate::native_service::atomic_write(&path, &contents)
         .with_context(|| format!("writing runtime state {}", path.display()))
+}
+
+/// Whether a runtime has served this home (Lean `NodePort.settle`'s `served`).
+pub fn has_served(home_dir: &Path) -> bool {
+    home_dir.join(SERVED_MARKER_FILE_NAME).exists() || runtime_state_path(home_dir).exists()
 }
 
 /// A record that does not decode was written by another version's runtime,
@@ -292,9 +301,13 @@ pub async fn resolve_graphql_endpoint(
         home_dir.display()
     );
 
+    let server = crate::server_host::ServerConfig::for_home(home_dir.clone())?;
     home_endpoint_as(
         &home_dir,
-        format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
+        format!(
+            "http://{}/api/v0/graphql",
+            std::net::SocketAddr::new(server.http_addr, server.http_port)
+        ),
         &identity,
     )
     .await
@@ -635,6 +648,25 @@ pub fn display_host(host: IpAddr) -> String {
 #[cfg(test)]
 mod tests {
     use super::endpoint_serves_home;
+
+    #[test]
+    fn a_home_reset_after_serving_still_counts_as_served() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!super::has_served(home.path()));
+        let state = serde_json::from_value(serde_json::json!({
+            "home": home.path(),
+            "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+            "node_name": "node",
+            "node_did": "did:key:node",
+            "default_agent_did": "did:key:agent",
+        }))
+        .unwrap();
+        super::write_runtime_state(home.path(), &state).unwrap();
+
+        assert!(super::clear_runtime_state(home.path()).unwrap());
+
+        assert!(super::has_served(home.path()));
+    }
 
     #[tokio::test]
     async fn cli_and_desktop_keep_distinct_stable_identities() {

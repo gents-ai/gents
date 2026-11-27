@@ -68,6 +68,7 @@ fn terminal_home(home: &Path, desktop: &Path) {
     gents_service::network_settings::NetworkSettings {
         http_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         http_port: Some(free_port()),
+        http_port_picked: false,
         p2p_bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         p2p_port: Some(free_port()),
         p2p_relay_mode: Some(gents_service::args::P2pRelayModeArg::Disabled),

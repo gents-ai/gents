@@ -341,6 +341,9 @@ fn write_remembered_home(
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+/// Written with the first `runtime.json` and kept by `gents reset`, so a home
+/// that has served is never taken for a new one.
+pub const SERVED_MARKER_FILE_NAME: &str = "served";
 pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
 /// Host-local listen addresses for `gents runtime server`; binding precedes opening
 /// the store, so they cannot live in a document.
@@ -402,6 +405,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     SETUP_UNFINISHED_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
+    SERVED_MARKER_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
     CLIENT_CONFIG_FILE_NAME,
     SHELL_CONFIG_FILE_NAME,

@@ -8,6 +8,7 @@ pub mod home_state;
 pub mod lifecycle;
 pub mod native_service;
 pub mod network_settings;
+pub mod node_port;
 pub mod process_resources;
 pub mod repair;
 pub mod runtime_control;

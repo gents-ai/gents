@@ -108,6 +108,17 @@ impl ServerConfig {
         }
     }
 
+    /// The address the home's server listens on, as its network settings say.
+    pub fn for_home(home: PathBuf) -> Result<Self> {
+        let settings = crate::network_settings::NetworkSettings::read(&home)?;
+        let standard = Self::standard(home);
+        Ok(Self {
+            http_addr: settings.http_addr.unwrap_or(standard.http_addr),
+            http_port: settings.http_port.unwrap_or(standard.http_port),
+            home: standard.home,
+        })
+    }
+
     pub fn status_url(&self) -> String {
         format!("http://{}:{}/status", self.http_addr, self.http_port)
     }
