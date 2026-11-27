@@ -51,6 +51,12 @@ pub(super) fn start_disposition(starting: bool) -> StartDisposition {
     }
 }
 
+pub(super) async fn lock_start(state: &DesktopAppState) -> (LifecycleGuard<'_>, StartDisposition) {
+    let lifecycle = state.managed_server_lifecycle.lock().await;
+    let starting = state.managed_server.lock().await.starting;
+    (lifecycle, start_disposition(starting))
+}
+
 pub(super) async fn begin_start_wait(state: &DesktopAppState) -> StartWait {
     let token = StartWait::default();
     let mut managed = state.managed_server.lock().await;

@@ -1,6 +1,7 @@
 ---- MODULE BackgroundEnvelopeProjection ----
 \* lean: TranscriptInputOrigin.classification
 \* crates: gents-session, gents-desktop-bridge
+\* traces: violates
 (***************************************************************************)
 (* A test observing how a session transcript attributes its inputs while    *)
 (* background completions land beside a person's look-alike messages.       *)

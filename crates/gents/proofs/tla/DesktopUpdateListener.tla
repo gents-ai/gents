@@ -1,6 +1,7 @@
 ---- MODULE DesktopUpdateListener ----
 \* lean: none
 \* crates: gents-desktop-bridge
+\* traces: violates
 \* paths: apps/gents-desktop/src/hooks/clientObservation.ts, apps/gents-desktop/src/hooks/projectionController.ts, apps/gents-desktop/src/hooks/sessionReads.ts
 (***************************************************************************)
 (* The last leg of the desktop's event path: the bridge emitter, Tauri     *)

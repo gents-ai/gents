@@ -1,6 +1,7 @@
 ---- MODULE ClientIdentityMetadata ----
 \* lean: none
-\* crates: gents-desktop-core
+\* crates: gents-desktop-core, gents-store
+\* traces: violates
 \* models: ClientIdentityMetadata.decide
 (***************************************************************************)
 (* First-run writers of one home's client identity metadata                *)
@@ -20,6 +21,7 @@
 (* `ClientIdentityMetadata.decide`; this spec adds only the interleaving   *)
 (* of the writers' file operations.                                        *)
 (***************************************************************************)
+\* trace actors: Read, Create, Fill, Clear, Rename, Decide, Crash => pc
 EXTENDS Naturals
 
 CONSTANTS

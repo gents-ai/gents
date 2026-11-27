@@ -1,4 +1,5 @@
 pub mod acp_policies;
+pub mod blocking_steps;
 pub mod bounded_process;
 #[cfg(test)]
 pub(crate) mod doubles;
