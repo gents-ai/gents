@@ -13,5 +13,3 @@ mod agent_creation_native_tests;
 
 mod tests;
 mod text_tests;
-
-mod fixture;

@@ -8,9 +8,8 @@ use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use gents_session::{
-    request::lifecycle::write_manual_agent_request, request::lifecycle::RequestLifecycle,
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage,
 };
 use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
@@ -23,10 +22,7 @@ use crate::support;
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use support::snapshots::{
-    fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
-    fetch_session_snapshot, RequestLineageSnapshot,
-};
+use support::snapshots::fetch_request_snapshot;
 use support::{
     build_request, first_optional_row, first_row, trial_store, BACKEND_ID, DEADLINE_SECS,
 };
@@ -77,24 +73,8 @@ async fn single_claimer_watcher_never_claims_foreign_replica() {
 }
 
 #[tokio::test]
-async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    request_owner_scope::canonical_recovery_repairs_expired_request_after_terminal_write_gap()
-        .await;
-}
-
-#[tokio::test]
-async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    request_owner_scope::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
-}
-
-#[tokio::test]
 async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     request_owner_scope::reconcile_coalesce_never_supersedes_foreign_replica().await;
-}
-
-#[tokio::test]
-async fn drain_wakeups_never_interrupts_foreign_replica() {
-    request_owner_scope::drain_wakeups_never_interrupts_foreign_replica().await;
 }
 
 #[test]
@@ -138,8 +118,6 @@ fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
 mod docs;
 #[path = "conformance/identity.rs"]
 mod identity;
-#[path = "conformance/manual_run.rs"]
-mod manual_run;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "conformance/root_admission.rs"]

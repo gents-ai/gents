@@ -6,7 +6,6 @@
 
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_protocol::operations::agent::{AgentCreateInput, AgentEdit, AgentOperationError};
-use gents_protocol::operations::StringUpdate;
 
 use gents_documents::Agent;
 use gents_store::config_client::ConfigAccess;
@@ -20,11 +19,6 @@ pub use gents_tools::builtin::self_config::agent::{
 };
 
 pub type AgentReceipt = gents_protocol::operations::agent::AgentReceipt<Agent>;
-
-/// Lean `SelfConfig.agentOutcome .preview`: the receipt the commit would
-/// return, or the refusal it would raise with that error's message and next
-/// call.
-pub type AgentPreview = AgentOutcome<AgentReceipt>;
 
 /// Creates or clones an Agent with its Context and Tools in one transaction,
 /// written as whoever `access` signs for. `identity_binding` comes from the
@@ -40,40 +34,6 @@ pub async fn create(
         .await
 }
 
-pub async fn preview_create(
-    access: &ConfigAccess,
-    owner: &str,
-    identity_binding: AgentIdentityBinding,
-    input: &AgentCreateInput,
-    ceiling: &SelfConfigProcessCeiling,
-) -> Result<AgentPreview, AgentOperationError> {
-    let operation = input.operation.kind().as_str();
-    let params = ConfigureAgentParams {
-        action: "preview".to_owned(),
-        operation: Some(operation.to_owned()),
-        identity_binding: Some(identity_binding),
-        display_name: StringUpdate::Set(input.display_name.clone()),
-        description: input.description.clone(),
-        system_prompt: input.system_prompt.clone(),
-        clone_from: input.clone_from.clone(),
-        context_id: input
-            .context_id
-            .clone()
-            .map(StringUpdate::Set)
-            .unwrap_or_default(),
-        root: input.root.clone(),
-        preset: input
-            .preset
-            .clone()
-            .map(StringUpdate::Set)
-            .unwrap_or_default(),
-        profile_id: StringUpdate::Set(input.profile_id.clone()),
-        make_default: input.make_default,
-        ..Default::default()
-    };
-    gents_tools::builtin::self_config::preview_agent(access, owner, &params, ceiling).await
-}
-
 /// Lean `SelfConfig.AgentOperation.edit`: changes the named fields of an
 /// existing Agent. `enabled: Some(false)` is a disable.
 pub async fn edit(
@@ -85,15 +45,6 @@ pub async fn edit(
     commit(access, owner, edit_params("edit", agent_did, edit, false)).await
 }
 
-pub async fn preview_edit(
-    access: &ConfigAccess,
-    owner: &str,
-    agent_did: &str,
-    edit: &AgentEdit,
-) -> Result<AgentPreview, AgentOperationError> {
-    preview(access, owner, edit_params("edit", agent_did, edit, false)).await
-}
-
 /// Lean `SelfConfig.disableFields`: the edit `enabled := false`.
 pub async fn disable(
     access: &ConfigAccess,
@@ -101,19 +52,6 @@ pub async fn disable(
     agent_did: &str,
 ) -> Result<AgentReceipt, AgentOperationError> {
     commit(
-        access,
-        owner,
-        edit_params("disable", agent_did, &AgentEdit::default(), false),
-    )
-    .await
-}
-
-pub async fn preview_disable(
-    access: &ConfigAccess,
-    owner: &str,
-    agent_did: &str,
-) -> Result<AgentPreview, AgentOperationError> {
-    preview(
         access,
         owner,
         edit_params("disable", agent_did, &AgentEdit::default(), false),
@@ -133,15 +71,6 @@ pub async fn choose_default(
     commit(access, owner, default_params(agent_did, enable)).await
 }
 
-pub async fn preview_choose_default(
-    access: &ConfigAccess,
-    owner: &str,
-    agent_did: &str,
-    enable: bool,
-) -> Result<AgentPreview, AgentOperationError> {
-    preview(access, owner, default_params(agent_did, enable)).await
-}
-
 /// Writes a whole Agent document, for front ends that save one: an existing
 /// Agent becomes the edit of its changed writable fields; a new one, with
 /// `identity_binding` for its DID, becomes a create that selects the
@@ -157,24 +86,7 @@ pub async fn put(
     gents_tools::builtin::self_config::apply_agent(
         access,
         owner,
-        &put_params(agent, identity_binding, make_default, false),
-        ceiling,
-    )
-    .await
-}
-
-pub async fn preview_put(
-    access: &ConfigAccess,
-    owner: &str,
-    agent: &Agent,
-    identity_binding: Option<AgentIdentityBinding>,
-    make_default: bool,
-    ceiling: &SelfConfigProcessCeiling,
-) -> Result<AgentPreview, AgentOperationError> {
-    gents_tools::builtin::self_config::preview_agent(
-        access,
-        owner,
-        &put_params(agent, identity_binding, make_default, true),
+        &put_params(agent, identity_binding, make_default),
         ceiling,
     )
     .await
@@ -263,7 +175,7 @@ pub async fn put_in_txn(
         txn,
         owner,
         admission,
-        &put_params(agent, identity_binding, false, false),
+        &put_params(agent, identity_binding, false),
         ceiling,
     )
     .await
@@ -302,11 +214,9 @@ fn put_params(
     agent: &Agent,
     identity_binding: Option<AgentIdentityBinding>,
     make_default: bool,
-    preview: bool,
 ) -> ConfigureAgentParams {
     ConfigureAgentParams {
-        action: if preview { "preview" } else { "put" }.to_owned(),
-        operation: preview.then(|| "put".to_owned()),
+        action: "put".to_owned(),
         identity_binding,
         make_default,
         put: Some(Box::new(agent.clone())),
@@ -322,21 +232,6 @@ async fn commit(
     params: ConfigureAgentParams,
 ) -> Result<AgentReceipt, AgentOperationError> {
     gents_tools::builtin::self_config::apply_agent(
-        access,
-        owner,
-        &params,
-        &SelfConfigProcessCeiling::default(),
-    )
-    .await
-}
-
-async fn preview(
-    access: &ConfigAccess,
-    owner: &str,
-    mut params: ConfigureAgentParams,
-) -> Result<AgentPreview, AgentOperationError> {
-    params.operation = Some(std::mem::replace(&mut params.action, "preview".to_owned()));
-    gents_tools::builtin::self_config::preview_agent(
         access,
         owner,
         &params,

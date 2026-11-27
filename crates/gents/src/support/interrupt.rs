@@ -79,25 +79,6 @@ impl Drop for BootedAgent {
     }
 }
 
-/// Waits for readiness while the runtime task runs; a runtime that exits first
-/// fails the wait with its own error instead of the readiness timeout.
-pub async fn wait_for_runtime_ready_or_exit(
-    node: &EmbeddedNode,
-    node_did: &str,
-    handle: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
-) {
-    tokio::select! {
-        ready = gents::runtime::embedded::wait_for_runtime_ready(node, node_did) => {
-            ready.expect("runtime ready");
-        }
-        exited = &mut *handle => match exited {
-            Ok(Ok(())) => panic!("runtime exited cleanly before readiness"),
-            Ok(Err(error)) => panic!("runtime exited before readiness: {error:#}"),
-            Err(error) => panic!("runtime task failed before readiness: {error}"),
-        },
-    }
-}
-
 /// The production runtime on the test Node's own identity, admitted through
 /// the home's backend protection, before its installed Agents are added with
 /// their identity bindings.
@@ -142,153 +123,6 @@ pub async fn create_runtime_request(
     session_id: &str,
     content: &str,
 ) -> String {
-    create_runtime_request_inner(
-        node,
-        node_did,
-        RuntimeRequestSpec {
-            agent_did,
-            request_id,
-            session_id,
-            valid_until: None,
-            execution_origin: "interactive",
-            caused_by_source_doc_id: None,
-            content,
-            input: Default::default(),
-        },
-    )
-    .await
-}
-
-pub async fn create_runtime_request_with_input(
-    node: &EmbeddedNode,
-    node_did: &str,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    content: &str,
-    input: gents_protocol::request_input::RequestInput,
-) -> String {
-    create_runtime_request_inner(
-        node,
-        node_did,
-        RuntimeRequestSpec {
-            agent_did,
-            request_id,
-            session_id,
-            content,
-            input,
-            valid_until: None,
-            execution_origin: "interactive",
-            caused_by_source_doc_id: None,
-        },
-    )
-    .await
-}
-
-pub async fn create_runtime_request_with_valid_until(
-    node: &EmbeddedNode,
-    node_did: &str,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    valid_until: &str,
-    content: &str,
-) -> String {
-    create_runtime_request_inner(
-        node,
-        node_did,
-        RuntimeRequestSpec {
-            agent_did,
-            request_id,
-            session_id,
-            valid_until: Some(valid_until),
-            execution_origin: "interactive",
-            caused_by_source_doc_id: None,
-            content,
-            input: Default::default(),
-        },
-    )
-    .await
-}
-
-pub async fn create_runtime_request_with_execution_origin(
-    node: &EmbeddedNode,
-    node_did: &str,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    execution_origin: &str,
-    content: &str,
-) -> String {
-    create_runtime_request_inner(
-        node,
-        node_did,
-        RuntimeRequestSpec {
-            agent_did,
-            request_id,
-            session_id,
-            valid_until: None,
-            execution_origin,
-            caused_by_source_doc_id: None,
-            content,
-            input: Default::default(),
-        },
-    )
-    .await
-}
-
-pub async fn create_runtime_request_caused_by_source(
-    node: &EmbeddedNode,
-    node_did: &str,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    caused_by_source_doc_id: &str,
-    content: &str,
-) -> String {
-    create_runtime_request_inner(
-        node,
-        node_did,
-        RuntimeRequestSpec {
-            agent_did,
-            request_id,
-            session_id,
-            valid_until: None,
-            execution_origin: "interactive",
-            caused_by_source_doc_id: Some(caused_by_source_doc_id),
-            content,
-            input: Default::default(),
-        },
-    )
-    .await
-}
-
-struct RuntimeRequestSpec<'a> {
-    agent_did: &'a str,
-    request_id: &'a str,
-    session_id: &'a str,
-    valid_until: Option<&'a str>,
-    execution_origin: &'a str,
-    caused_by_source_doc_id: Option<&'a str>,
-    content: &'a str,
-    input: gents_protocol::request_input::RequestInput,
-}
-
-async fn create_runtime_request_inner(
-    node: &EmbeddedNode,
-    node_did: &str,
-    spec: RuntimeRequestSpec<'_>,
-) -> String {
-    let RuntimeRequestSpec {
-        agent_did,
-        request_id,
-        session_id,
-        valid_until,
-        execution_origin,
-        caused_by_source_doc_id,
-        content,
-        input,
-    } = spec;
     ensure_generated_session(node, node_did, agent_did, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -299,13 +133,10 @@ async fn create_runtime_request_inner(
             node_did, node_did, agent_did, session_id,
         ),
         content,
-        execution_origin,
+        "interactive",
         created_at,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
-    create.input = input;
-    create.valid_until = valid_until.map(str::to_string);
-    create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);
     gents_session::request::admission::sign_agent_request_create_as_registered_target(&mut create)
         .await
         .expect("sign local-self runtime test request");

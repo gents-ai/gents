@@ -1,4 +1,5 @@
-pub mod identity;
+#[cfg(test)]
+pub(crate) mod identity;
 pub mod observers;
 #[cfg(test)]
 pub(crate) mod readiness;
