@@ -191,9 +191,11 @@ impl App {
         self.now = Some(now);
     }
 
-    /// Whether the screen changes with time alone: a turn the active tab follows counts up.
+    /// Whether the screen changes with time alone: a turn the active tab follows counts up
+    /// while it asks nothing.
     pub fn ticking(&self) -> bool {
-        self.tabs[self.active].following && !matches!(self.connection, Connection::Lost(_))
+        let tab = &self.tabs[self.active];
+        tab.following && tab.prompts.is_empty() && !matches!(self.connection, Connection::Lost(_))
     }
 
     /// What the shell should copy to the terminal's clipboard, once.
@@ -450,6 +452,10 @@ mod tests {
         });
         let rows = app.conversation_rows(80);
         assert!(!rows.contains(&working().unwrap()), "{rows:?}");
+        assert!(
+            !app.ticking(),
+            "nothing on screen counts while a prompt waits"
+        );
     }
 
     #[test]
