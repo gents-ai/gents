@@ -3,6 +3,8 @@ use crate::references_of;
 use anyhow::Result;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigApplyTxn;
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 

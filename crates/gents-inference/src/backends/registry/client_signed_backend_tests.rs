@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 type ProbeKey = (bool, bool, bool);
 type DiscoveryKey = (bool, bool, bool, bool);
 
@@ -75,7 +76,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
         gents_protocol::schemas::BACKEND_CREDENTIAL,
     ] {
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
@@ -97,7 +98,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
                 .iter()
                 .any(|collection| collection.graphql_type() == *name)
         {
-            node.add_collection(
+            node.add_collection_as(
                 &context,
                 &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
             )
@@ -155,7 +156,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .context("protected legacy create has no composite CID")?
         .to_owned();
     let (legacy_block, legacy_signature) = node
-        .authorized_signed_block_bytes(&legacy_cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(&legacy_cid, user.did())
         .await?;
     let legacy_block = defra_core::block::Block::from_dag_cbor(&legacy_block)?;
     let legacy_signature = defra_core::block::Signature::from_dag_cbor(&legacy_signature)?;
@@ -218,7 +219,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             .as_str()
             .expect("signed composite");
         let (block, signature) = node
-            .authorized_signed_block_bytes(cid, Some(user.did()))
+            .authorized_signed_block_bytes_by(cid, user.did())
             .await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -299,7 +300,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             .is_empty()
     );
     assert!(node
-        .authorized_signed_block_bytes(&legacy_cid, Some(agent.did()))
+        .authorized_signed_block_bytes_by(&legacy_cid, agent.did())
         .await
         .is_err());
     let agent_did = identity::Did::new(agent.did())?;

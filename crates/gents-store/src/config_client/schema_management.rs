@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 
 use super::{graphql_api_base, ConfigAccess, ConfigClientError};

@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::Value;
 
 /// A node served as a home's runtime serves it, and the signed endpoint of the User who owns its

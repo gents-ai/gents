@@ -10,7 +10,6 @@ use crate::schema::catalog::{baseline, ensure_runtime};
 async fn inventory_metadata_has_its_pinned_fresh_schema() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(TOOL_FILE_INVENTORY),
     )
     .await
@@ -78,7 +77,6 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
             TOOL_FILE_CHANGE_POLICY_RESOURCE
         );
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&sdl.replace(&directive, "")),
         )
@@ -103,7 +101,6 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_REPLY, FILE_INVENTORY_REPLY_NAME};
     let node = common::fresh_node().await;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(FILE_INVENTORY_REPLY),
     )
     .await
@@ -135,12 +132,9 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
     let node = common::fresh_node().await;
     let mut observed = Vec::new();
     for (name, sdl) in [(FILE_INVENTORY_REQUEST_NAME, FILE_INVENTORY_REQUEST)] {
-        node.add_collection(
-            &node.node_context(),
-            &gents_protocol::schemas::HomePolicyIds::node_store().render(sdl),
-        )
-        .await
-        .unwrap();
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(sdl))
+            .await
+            .unwrap();
         let collection = node.get_collection(name).unwrap().unwrap();
         let entry = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
             .iter()
@@ -163,7 +157,6 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_PROGRESS, FILE_INVENTORY_PROGRESS_NAME};
     let node = common::fresh_node().await;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(FILE_INVENTORY_PROGRESS),
     )
     .await
@@ -214,7 +207,6 @@ const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id:
 async fn retired_image_demand_rows_survive_startup() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(
             &RETIRED_IMAGE_DEMAND.replace(
                 "POLICY",

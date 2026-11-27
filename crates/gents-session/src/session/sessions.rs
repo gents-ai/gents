@@ -1248,6 +1248,7 @@ mod relationship_publication_tests {
 
 #[cfg(test)]
 mod invoke_session_isolation_tests {
+    use gents_store::node_scope::ContextCalls as _;
     use std::sync::Arc;
 
     use gents_store::config_client::{ConfigAccess, NodePermission};
@@ -1317,14 +1318,14 @@ mod invoke_session_isolation_tests {
             .await?;
         let policy_id = gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household);
-        node.add_collection(
+        node.add_collection_as(
             &root_context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT)
                 .replace(policy_id, &policy),
         )
         .await?;
-        node.add_collection(
+        node.add_collection_as(
             &root_context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION)

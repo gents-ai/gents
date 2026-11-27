@@ -1,3 +1,5 @@
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -517,19 +519,16 @@ mod native_access_tests {
         )
         .await?;
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE),
         )
         .await?;
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT),
         )
         .await?;
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::OAUTH_CREDENTIAL),
         )

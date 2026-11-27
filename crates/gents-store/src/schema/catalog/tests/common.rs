@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use crypto::Key;

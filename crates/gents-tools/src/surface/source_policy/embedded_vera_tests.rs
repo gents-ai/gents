@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::path::Path;
 use std::sync::Arc;
 

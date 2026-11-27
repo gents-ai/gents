@@ -1,6 +1,7 @@
 use super::*;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 
 fn envelope_rows<'a>(response: &'a Value, name: &str) -> anyhow::Result<&'a [Value]> {
@@ -15,7 +16,7 @@ fn envelope_rows<'a>(response: &'a Value, name: &str) -> anyhow::Result<&'a [Val
 /// MailboxItem carries a collection ACP policy, so its signed block is read as
 /// the actor that owns the row; the node's own caller has no recipient relation.
 async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> anyhow::Result<String> {
-    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
@@ -96,7 +97,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
-    node.add_collection(
+    node.add_collection_as(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
@@ -404,7 +405,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
-    node.add_collection(
+    node.add_collection_as(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),

@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use gents::defra_node::Node as EmbeddedNode;
@@ -2724,7 +2725,7 @@ impl OwnedCaptureFixture {
             .expect("genesis composite CID");
         let (block, signature) = self
             .node
-            .authorized_signed_block_bytes(cid, Some(self.user.did()))
+            .authorized_signed_block_bytes_by(cid, self.user.did())
             .await
             .unwrap();
         let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

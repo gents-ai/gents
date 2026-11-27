@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 

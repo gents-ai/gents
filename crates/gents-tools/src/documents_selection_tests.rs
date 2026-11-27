@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -44,7 +45,6 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         gents_protocol::schemas::TOOLS,
     ] {
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replace(previous_policy, &policy)),
         )
@@ -58,7 +58,6 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             1,
         );
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&skill_schema),
     )
     .await?;

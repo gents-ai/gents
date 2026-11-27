@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -104,9 +105,7 @@ async fn assert_genesis_signer(
         })
         .and_then(|row| row["cid"].as_str())
         .context("service genesis is unavailable")?;
-    let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(signer))
-        .await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, signer).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     assert_eq!(

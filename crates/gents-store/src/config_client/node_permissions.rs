@@ -1,5 +1,6 @@
 use super::{graphql, graphql_api_base, ConfigAccess, ConfigClientError, NodePermission};
 use crate::config_client::WriteRoute;
+use crate::node_scope::ContextCalls as _;
 
 const ADMIN_RELATION: &str = "admin";
 

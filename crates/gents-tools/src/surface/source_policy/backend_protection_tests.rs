@@ -1,5 +1,6 @@
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 
 /// A NAC owner for a fresh test store: never its Node
 /// (`Identity.NodeProvisioning.nacOwner`).
@@ -51,11 +52,8 @@ async fn create_unbound_legacy_store(
     .with_node_identity_did(did.to_owned())
     .build()
     .await?;
-    node.add_collection(
-        &node.node_context(),
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound),
-    )
-    .await?;
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
+        .await?;
     let created = node.execute(r#"mutation { create_InferenceBackend(input:{node_did:"legacy", backend_id:"b", name:"old", provider_kind:"OpenAiCompatible", endpoint:"https://provider.example", auth:{kind:"api_key",key:"legacy-secret"}}) {_docID} }"#).await;
     anyhow::ensure!(
         !created.has_errors(),

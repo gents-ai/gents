@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::collections::VecDeque;
 
 use super::*;
@@ -473,27 +474,23 @@ async fn recovery_fixture(name: &str, pending: bool, attempt: Attempt) -> Recove
     .await
     .unwrap();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await
     .unwrap();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NODE_READINESS),
     )
     .await
     .unwrap();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NODE_RUNTIME),
     )
     .await
     .unwrap();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
@@ -883,7 +880,6 @@ async fn readiness_binding_preflight_matches_model() {
                 .unwrap(),
             "unbound" => node
                 .add_collection(
-                    &node.node_context(),
                     &gents_protocol::schemas::HomePolicyIds::node_store()
                         .render(gents_protocol::schemas::NODE_READINESS)
                         .replace(&policy_binding, ""),
@@ -901,7 +897,6 @@ async fn readiness_binding_preflight_matches_model() {
                 .await
                 .unwrap();
                 node.add_collection(
-                    &node.node_context(),
                     &gents_protocol::schemas::HomePolicyIds::node_store()
                         .render(gents_protocol::schemas::NODE_READINESS)
                         .replace(

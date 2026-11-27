@@ -1,4 +1,6 @@
 #[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
+#[cfg(test)]
 use std::sync::Arc;
 
 use gents_inference::inference_observation::{InferenceKey, InferenceSnapshot};
@@ -233,7 +235,7 @@ resources:
             .unwrap(),
             ActivityRoute::Unavailable
         );
-        node.add_dac_actor_relationship(
+        node.add_dac_actor_relationship_by(
             owner.did(),
             "AgentSession",
             &session_doc,
@@ -251,7 +253,7 @@ resources:
             .unwrap(),
             ActivityRoute::Unavailable
         );
-        node.add_dac_actor_relationship(
+        node.add_dac_actor_relationship_by(
             owner.did(),
             "AgentRequest",
             &request_doc,

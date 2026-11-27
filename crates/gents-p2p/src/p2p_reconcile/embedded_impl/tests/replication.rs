@@ -4,6 +4,7 @@ use super::fixtures::{
 };
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
+use gents_store::node_scope::ContextCalls as _;
 
 async fn document_permission(
     node: &Arc<defra_node::Node>,
@@ -65,13 +66,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             0,
         )
         .await?;
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
+            .await?;
         node.add_collection(
-            &node.node_context(),
-            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
-        )
-        .await?;
-        node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION),
         )
@@ -79,13 +76,11 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     for node in [candidate_node, admin_node] {
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION),
         )
         .await?;
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::PEER_REGISTRY),
         )
@@ -93,7 +88,6 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     admin_node
         .add_collection(
-            &admin_node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE),
         )
@@ -1293,12 +1287,9 @@ async fn selected_push_refuses_app_collections_before_transport() {
     let sender = &sender_test.node;
     let receiver = &receiver_test.node;
     for node in [sender, receiver] {
-        node.add_collection(
-            &node.node_context(),
-            "type PacedDeliveryProbe { value: Int }",
-        )
-        .await
-        .unwrap();
+        node.add_collection("type PacedDeliveryProbe { value: Int }")
+            .await
+            .unwrap();
     }
     let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());

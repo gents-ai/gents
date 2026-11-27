@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use super::*;
@@ -1152,7 +1153,6 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     .await
     .unwrap();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await
@@ -1163,12 +1163,9 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
             r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
             "",
         );
-    node.add_collection(
-        &node.node_context(),
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
-    )
-    .await
-    .unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema))
+        .await
+        .unwrap();
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();

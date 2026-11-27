@@ -1,5 +1,6 @@
 use super::{ConfigAccess, GraphqlEndpoint};
 use crate::identity::NodeIdentity;
+use crate::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -67,7 +68,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 .await?;
         }
     }
-    node.add_collection(
+    node.add_collection_as(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
@@ -102,7 +103,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             schema.contains(&binding),
             "production schema must carry the modeled binding"
         );
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )

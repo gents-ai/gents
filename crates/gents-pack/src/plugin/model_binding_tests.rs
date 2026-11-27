@@ -1,5 +1,6 @@
 use super::*;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 
 #[tokio::test]
 async fn plugin_profile_follows_the_immediate_callers_selection() -> anyhow::Result<()> {
@@ -42,7 +43,6 @@ async fn plugin_profile_follows_the_immediate_callers_selection() -> anyhow::Res
         gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
     ] {
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema.replace(
                 gents_protocol::schemas::BuiltInPolicy::Household.placeholder(),
                 &policy,
@@ -50,7 +50,7 @@ async fn plugin_profile_follows_the_immediate_callers_selection() -> anyhow::Res
         )
         .await?;
     }
-    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type PluginProfileAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}"
     )))
     .await?;

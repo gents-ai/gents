@@ -67,12 +67,9 @@ async fn ping_node(schema: &str, emit_outcome: bool) -> gents_store::test_suppor
     let node = db.node.clone();
     let owner = db.node_identity.did();
     crate::triggers::callback::seed_test_agent(&node, owner).await;
-    node.add_collection(
-        &node.node_context(),
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
-    )
-    .await
-    .unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
+        .await
+        .unwrap();
     crate::triggers::callback::seed_test_configuration(
         &node,
         owner,

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -251,12 +253,9 @@ mod tests {
     #[tokio::test]
     async fn scoped_changes_survive_a_schema_patch_and_ignore_other_collections() {
         let node = EmbeddedNode::builder().build().await.unwrap();
-        node.add_collection(
-            &node.node_context(),
-            "type Watched { value: String } type Unwatched { value: String }",
-        )
-        .await
-        .unwrap();
+        node.add_collection("type Watched { value: String } type Unwatched { value: String }")
+            .await
+            .unwrap();
         assert!(collection_ids(&node, ["Missing"]).is_err());
         let watched = collection_ids(&node, ["Watched"]).unwrap();
         let mut changes = subscribe_collections(&node, ["Watched"]).unwrap();

@@ -1,6 +1,7 @@
 use super::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
+use crate::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[tokio::test]

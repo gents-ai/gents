@@ -310,12 +310,9 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         let (db, _user, user_access, agent_access, binding) =
             oneshot_fixture("oneshot-output").await;
         let node = db.node.clone();
-        node.add_collection(
-            &node.node_context(),
-            "type OneshotOutput { message: String }",
-        )
-        .await
-        .unwrap();
+        node.add_collection("type OneshotOutput { message: String }")
+            .await
+            .unwrap();
         let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-output")
             .with_identity_binding_for_test(binding)
             .build_with_identity_arc_for_test(db.node_identity.clone());

@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use anyhow::{anyhow, Result};
 use gents_protocol::schemas::{
     BuiltInPolicy, HomePolicyIds, AGENT_OWNERSHIP_POLICY, CLIENT_JOURNAL_POLICY, MAILBOX_POLICY,

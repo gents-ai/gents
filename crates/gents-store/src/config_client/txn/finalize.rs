@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::time::Instant;
 
 use super::apply_txn::TxnBackend;

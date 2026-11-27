@@ -3,6 +3,7 @@ use gents_protocol::session::SessionScope;
 use gents_session::file_contents::tests::edit;
 use gents_session::file_contents::{resolve, store, ContentReader};
 use gents_store::config_client::ConfigAccess;
+use gents_store::node_scope::ContextCalls as _;
 
 #[tokio::test]
 async fn observations_in_one_session_have_separate_file_documents_and_read_back_exactly() {
@@ -60,7 +61,7 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
     use gents_store::identity::NodeIdentity;
     admission
         .node
-        .add_dac_actor_relationship(
+        .add_dac_actor_relationship_by(
             &admission.node_did,
             "ToolFileContent",
             &documents[0],

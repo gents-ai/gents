@@ -2,6 +2,7 @@ use anyhow::Result;
 use gents_loop::tool::ToolDyn;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::node_scope::ContextCalls as _;
 use gents_tools::builtin::self_config::*;
 use gents_tools::surface::SelfConfigToolConfig;
 use serde_json::{json, Value};

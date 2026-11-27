@@ -7,7 +7,6 @@ use crate::schema::catalog::{ensure_runtime, SchemaError};
 async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(schemas::INFERENCE_CALL),
     )
     .await
@@ -41,7 +40,6 @@ async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
         .render(schemas::INFERENCE_CALL)
         .replace("prompt_tokens: Int", "prompt_tokens: String");
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&incompatible),
     )
     .await

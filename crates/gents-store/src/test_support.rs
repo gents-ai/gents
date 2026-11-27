@@ -388,8 +388,10 @@ pub const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
 /// private row's block is visible only to an actor its policy admits, so an
 /// anonymous node read of it fails closed.
 pub async fn verified_block_signer_as(node: &defra_node::Node, reader: &str, cid: &str) -> String {
+    let reader_did = identity::Did::new(reader).expect("reader DID");
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(reader))
+        .with_identity(reader_did)
+        .authorized_signed_block_bytes(cid)
         .await
         .unwrap_or_else(|error| panic!("read {cid} as {reader}: {error:#}"));
     let block = defra_core::block::Block::from_dag_cbor(&block).expect("decode signed block");
@@ -460,7 +462,6 @@ pub async fn client_journal_node(
             .await?,
     );
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound_journal_schema()),
     )
     .await?;

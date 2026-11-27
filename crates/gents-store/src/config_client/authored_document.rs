@@ -214,11 +214,8 @@ mod tests {
                 .build()
                 .await?,
         );
-        node.add_collection(
-            &node.node_context(),
-            &gents_protocol::schemas::HomePolicyIds::node_store().render(SDL),
-        )
-        .await?;
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
+            .await?;
         let offline =
             || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
         assert!(matches!(
@@ -277,11 +274,8 @@ mod tests {
                 .build()
                 .await?,
         );
-        node.add_collection(
-            &node.node_context(),
-            &gents_protocol::schemas::HomePolicyIds::node_store().render(SDL),
-        )
-        .await?;
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
+            .await?;
         let local = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
         let routed = local.clone().with_client_signed_writes_through(
             super::super::GraphqlEndpoint::as_principal(&url, user.did())

@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 mod agent_home;
 mod claimed_request;
 #[cfg(test)]
@@ -640,7 +641,7 @@ pub async fn fork_reader_node(
 
 pub async fn assert_block_signer(node: &defra_node::Node, cid: &str, signer: &str) {
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(signer))
+        .authorized_signed_block_bytes_by(cid, signer)
         .await
         .unwrap();
     let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

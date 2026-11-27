@@ -8,6 +8,7 @@ use gents_store::config_client::{ConfigAccess, ConfigClientError, NodePermission
 use gents_store::identity::grant_sets::test_support::*;
 use gents_store::identity::grant_sets::*;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::json;
 
 #[tokio::test]
@@ -44,7 +45,7 @@ async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::R
         .expect("genesis CID");
     let (block, signature) = db
         .node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;

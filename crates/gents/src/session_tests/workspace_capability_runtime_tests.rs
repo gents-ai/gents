@@ -9,6 +9,7 @@ use gents_session::workspace::{
     WorkspaceReaderBinding,
 };
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -73,7 +74,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
                 1,
             )
         };
-        node.add_collection(
+        node.add_collection_as(
             &ctx,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )

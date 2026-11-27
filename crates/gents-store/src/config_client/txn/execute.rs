@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1337,7 +1338,7 @@ pub(super) fn native_relationship_error(error: defra_node::Error) -> ConfigClien
         defra_node::Error::Acp(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) => {
             ConfigClientError::RelationshipNotManaged(Box::new(error))
         }
-        defra_node::Error::TransactionConflict
+        defra_node::Error::TransactionConflict(_)
         | defra_node::Error::Query(query::error::QueryError::TransactionConflict(_)) => {
             retry::transaction_conflict(ConflictSource::TypedError)
         }

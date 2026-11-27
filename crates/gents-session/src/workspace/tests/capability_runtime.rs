@@ -3,6 +3,7 @@ use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, Worksp
 use crate::workspace::{git, git_worktree_caps, Fixture};
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,7 +75,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         gents_protocol::schemas::WORKSPACE_RECEIPT,
         gents_protocol::schemas::REPOSITORY_PLACEMENT,
     ] {
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
@@ -218,12 +219,9 @@ async fn runtime_seal_case(unowned: bool) {
             .await
             .unwrap();
     }
-    node.add_collection(
-        &node.node_context(),
-        "type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }",
-    )
-    .await
-    .unwrap();
+    node.add_collection("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
+        .await
+        .unwrap();
     let node_data = mutate(
         &admin,
         "test.capability.node",
@@ -558,7 +556,7 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         0,
     )
     .await?;
-    node.add_collection(
+    node.add_collection_as(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_REQUEST),

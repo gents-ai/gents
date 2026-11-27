@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::GraphqlEndpoint;
 use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::node_scope::ContextCalls as _;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -218,7 +219,7 @@ async fn native_subscription_uses_caller_and_observes_nonbranchable_deletion() {
     assert_eq!(rows.len(), 2);
     let visible = rows[0]["_docID"].as_str().unwrap();
     let private = rows[1]["_docID"].as_str().unwrap();
-    node.add_dac_actor_relationship(
+    node.add_dac_actor_relationship_by(
         owner.did(),
         "SubscriptionParcel",
         visible,

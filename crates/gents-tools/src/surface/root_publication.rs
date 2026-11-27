@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 
 use gents_documents::read_desired_state_record_in_txn;
@@ -662,13 +664,13 @@ mod tests {
                     .await?;
             }
         }
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE),
         )
         .await?;
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT),
@@ -680,7 +682,7 @@ mod tests {
         let schema = gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::WORKSPACE_ROOT)
             .replacen("type WorkspaceRoot {", &binding, 1);
-        node.add_collection(
+        node.add_collection_as(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )

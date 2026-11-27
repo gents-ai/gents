@@ -405,7 +405,6 @@ pub mod desired_state_fixtures {
                     }
                 }
                 node.add_collection(
-                    &node.node_context(),
                     &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
                 )
                 .await?;

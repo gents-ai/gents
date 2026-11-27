@@ -6,6 +6,7 @@ use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, Req
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
 use gents_store::config_client::NodePermission;
 use gents_store::identity::KeyIdentity;
+use gents_store::node_scope::ContextCalls as _;
 
 /// Native document ACP governs block reads, so the signer is verified from the
 /// block material a reader of that document is authorized to load.
@@ -14,9 +15,7 @@ async fn verified_signer_as(
     cid: &str,
     reader: &str,
 ) -> anyhow::Result<String> {
-    let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(reader))
-        .await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, reader).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)

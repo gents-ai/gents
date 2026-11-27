@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -152,12 +153,9 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
                 1,
             )
         };
-        node.add_collection(
-            &node.node_context(),
-            &gents_protocol::schemas::HomePolicyIds::node_store().render(&bound),
-        )
-        .await
-        .unwrap();
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&bound))
+            .await
+            .unwrap();
     }
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -1247,7 +1245,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
         assert!(!commits.is_empty());
         for commit in commits {
             let (block, signature) = node
-                .authorized_signed_block_bytes(&commit.cid, Some(agent.did()))
+                .authorized_signed_block_bytes_by(&commit.cid, agent.did())
                 .await
                 .unwrap();
             let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

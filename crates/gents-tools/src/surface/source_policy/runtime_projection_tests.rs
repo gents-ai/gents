@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use acp::{Subject, ZanzibarStore};
@@ -43,13 +44,11 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NETWORK),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;

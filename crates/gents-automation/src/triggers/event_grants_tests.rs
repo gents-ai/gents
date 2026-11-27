@@ -4,6 +4,7 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
 use std::sync::Arc;

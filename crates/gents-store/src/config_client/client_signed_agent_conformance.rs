@@ -1,4 +1,5 @@
 use super::client_signed_agent::{create_route, CreateRoute};
+use crate::node_scope::ContextCalls as _;
 
 #[test]
 fn signed_update_uses_one_physical_target_with_additional_scope_predicates() {
@@ -365,7 +366,6 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
@@ -401,7 +401,7 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
     let rows = &response["data"]["add_Agent"];
     let cid = rows[0]["_version"][0]["cid"].as_str().expect("genesis CID");
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(actor.did()))
+        .authorized_signed_block_bytes_by(cid, actor.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -448,7 +448,6 @@ async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
@@ -484,7 +483,7 @@ async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
     let rows = &response["data"]["add_Agent"];
     let cid = rows[0]["_version"][0]["cid"].as_str().expect("genesis CID");
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(actor.did()))
+        .authorized_signed_block_bytes_by(cid, actor.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -536,42 +535,35 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
             .await?;
     }
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_CONTEXT),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TOOLS),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::TASK),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::SCHEDULE),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TRIGGER),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA),
     )
@@ -585,19 +577,16 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     assert_eq!(backend_schema.version_id, approved_schema.version_id);
     assert_eq!(backend_schema.collection_id, approved_schema.collection_id);
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_BINDING),
     )
     .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_MODULE),
     )
@@ -706,7 +695,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
         }).await?;
         let rows = &response["data"][format!("add_{}", collection.graphql_type())];
         let cid = rows[0]["_version"][0]["cid"].as_str().expect("genesis CID");
-        let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor.did())).await?;
+        let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor.did()).await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
         let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
@@ -722,7 +711,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
         }).await?;
         let rows = &response["data"][format!("update_{}", collection.graphql_type())];
         let cid = rows[0]["_version"][0]["cid"].as_str().expect("update CID");
-        let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor.did())).await?;
+        let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor.did()).await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
         let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
@@ -776,7 +765,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
             node.add_dac_actor_relationship_as(&context, "AgentContext", &doc_id, "writer", editor.did()).await?;
             let edited = edit().await?;
             let cid = edited["data"]["update_AgentContext"][0]["_version"][0]["cid"].as_str().unwrap();
-            let (block, signature) = node.authorized_signed_block_bytes(cid, Some(editor.did())).await?;
+            let (block, signature) = node.authorized_signed_block_bytes_by(cid, editor.did()).await?;
             let block = defra_core::block::Block::from_dag_cbor(&block)?;
             let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
             assert_eq!(db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)?, editor.did());

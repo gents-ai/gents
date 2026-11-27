@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -556,7 +557,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
             &policy,
         );
-    node.add_collection(
+    node.add_collection_as(
         &ctx,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&profile_schema),
     )
@@ -568,7 +569,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
             &policy,
         );
-    node.add_collection(
+    node.add_collection_as(
         &ctx,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&backend_schema),
     )
@@ -580,7 +581,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
             &policy,
         );
-    node.add_collection(
+    node.add_collection_as(
         &ctx,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&credential_schema),
     )

@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -115,7 +116,7 @@ async fn register_baseline(
             .collect::<Vec<_>>()
             .join("\n"),
     );
-    node.add_collection(&node.node_context(), &batch)
+    node.add_collection(&batch)
         .await
         .map_err(|source| SchemaError::BaselineRegister {
             collection: missing

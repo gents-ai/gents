@@ -168,7 +168,7 @@ async fn concurrent_mutations_share_the_node_write_path() {
     const WRITES: usize = 32;
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection(&node.node_context(), "type GateWrite { write_id: String }")
+    node.add_collection("type GateWrite { write_id: String }")
         .await
         .unwrap();
     let barrier = Arc::new(tokio::sync::Barrier::new(WRITES));
@@ -207,12 +207,9 @@ async fn concurrent_mutations_share_the_node_write_path() {
 #[tokio::test]
 async fn public_graphql_read_helpers_reject_mutations_before_execution() {
     let node = EmbeddedNode::builder().build().await.unwrap();
-    node.add_collection(
-        &node.node_context(),
-        "type ReadBoundaryFact { value: String }",
-    )
-    .await
-    .unwrap();
+    node.add_collection("type ReadBoundaryFact { value: String }")
+        .await
+        .unwrap();
     let mutation = r#"mutation { create_ReadBoundaryFact(input: {value: "bypass"}) { _docID } }"#;
 
     assert!(
@@ -263,12 +260,9 @@ async fn probe_db() -> ProbeDb {
             .await
             .expect("embedded node"),
     );
-    node.add_collection(
-        &node.node_context(),
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(PROBE_SCHEMA),
-    )
-    .await
-    .expect("add probe schema");
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(PROBE_SCHEMA))
+        .await
+        .expect("add probe schema");
     ProbeDb {
         node,
         _tempdir: tempdir,
@@ -446,7 +440,6 @@ async fn text_crdt_reads_each_revision_at_its_cid() {
     let db = probe_db().await;
     let node = db.node;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
     )
     .await
@@ -523,7 +516,6 @@ async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
     let db = probe_db().await;
     let node = db.node;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
     )
     .await

@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +97,7 @@ fn test_agent_with_identity(
 /// anonymous node read of it fails closed.
 async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) -> String {
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(reader))
+        .authorized_signed_block_bytes_by(cid, reader)
         .await
         .unwrap_or_else(|error| panic!("read {cid} as {reader}: {error:#}"));
     let block = defra_core::block::Block::from_dag_cbor(&block).expect("decode signed block");

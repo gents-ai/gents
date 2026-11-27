@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -177,7 +178,6 @@ pub(super) async fn test_node() -> Arc<EmbeddedNode> {
             .unwrap();
     }
     node.add_collection(
-        &node.node_context(),
         r#"
         type MailboxFixture {
             mailbox_item_key: String @index(unique: true) @immutable
@@ -996,7 +996,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
 /// MailboxItem carries a collection ACP policy, so the block must be read as
 /// the actor that owns the row; the node's own caller cannot read it.
 async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> anyhow::Result<String> {
-    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
@@ -1024,7 +1024,6 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
     )
@@ -1126,7 +1125,6 @@ async fn remote_dismissal_rebuilds_after_a_concurrent_item_write() -> anyhow::Re
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
     )

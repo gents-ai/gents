@@ -276,7 +276,6 @@ mod tests {
     async fn event_source_live_validation_rejects_unknown_filter_fields() {
         let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         node.add_collection(
-            &node.node_context(),
             "type MeterOutcome { terminal_state: String source_handoff_id: String }",
         )
         .await

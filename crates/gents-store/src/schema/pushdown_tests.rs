@@ -2,6 +2,8 @@
 //! This exercises the database directly, not the canonical writer's replay
 //! policy: a duplicate create is an error.
 
+use crate::node_scope::ContextCalls as _;
+
 use anyhow::{ensure, Context, Result};
 use defra_node::{Node as EmbeddedNode, QueryRequest, QueryResponse};
 use gents_protocol::output::rows::{

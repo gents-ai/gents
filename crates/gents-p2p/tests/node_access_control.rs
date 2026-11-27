@@ -184,7 +184,6 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
         let identity = identity.clone();
         Box::pin(async move {
             node.add_collection(
-                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store().render(SCHEMA),
             )
             .await?;

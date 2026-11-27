@@ -1,5 +1,6 @@
 use super::OwnerStagedRoute;
 use crate::config_client::{ConfigAccess, ConfigClientError};
+use crate::node_scope::ContextCalls as _;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},

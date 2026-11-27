@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -184,7 +185,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .and_then(|row| row["cid"].as_str())
         .context("Skill genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -327,7 +328,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .and_then(|row| row["cid"].as_str())
         .context("agent-created Skill genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(&agent_binding.agent_did))
+        .authorized_signed_block_bytes_by(cid, &agent_binding.agent_did)
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -422,7 +423,6 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
     }
     let previous_policy = gents_protocol::schemas::BuiltInPolicy::Household.placeholder();
     node.add_collection(
-        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(&gents_protocol::schemas::AGENT.replace(previous_policy, &policy)),
     )
@@ -435,7 +435,6 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
     ] {
         assert!(schema.contains(previous_policy));
         node.add_collection(
-            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replace(previous_policy, &policy)),
         )

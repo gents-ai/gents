@@ -1,5 +1,6 @@
 use super::{handling, serves_pass, standing, Handling, OwedStanding, Recorded};
 use crate::config_client::user_write::{self, PresentedDelegation};
+use crate::node_scope::ContextCalls as _;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OwedPassError {
