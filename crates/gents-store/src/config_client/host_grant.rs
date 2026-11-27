@@ -57,8 +57,8 @@ pub enum HostGrantError {
     NotVera,
     #[error("the host grant names no individual Node")]
     Target,
-    #[error(transparent)]
-    Policy(#[from] ConfigClientError),
+    #[error("the bundled Agent schema names no access policy")]
+    Policy,
     #[error("the provider did not apply the host grant")]
     Provider(#[source] acp::Error),
 }
@@ -142,9 +142,10 @@ pub(super) async fn submit(
         gents_protocol::schemas::AGENT,
         "Agent",
         home_policy_ids(DocumentAcp::Vera),
-    )?
-    .policy
-    .ok_or(ConfigClientError::ClientConfigurationUpdateInvalid)?;
+    )
+    .ok()
+    .and_then(|schema| schema.policy)
+    .ok_or(HostGrantError::Policy)?;
     let context = defra_core::RequestContext::default()
         .with_request_delegation(account.to_string(), grant.token.clone());
     acp::bound_to_request(&node.document_acp(), &context)
