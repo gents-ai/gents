@@ -10,9 +10,7 @@ use gents_store::identity::{
 };
 use gents_store::local::home::INIT_PENDING_FILE_NAME;
 
-use crate::state::{
-    StoredInitConfig, StoredRuntimeState, DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME,
-};
+use crate::state::{StoredInitConfig, StoredRuntimeState, RUNTIME_STATE_FILE_NAME};
 
 pub fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -292,9 +290,13 @@ pub async fn resolve_graphql_endpoint(
         home_dir.display()
     );
 
+    let server = crate::server_host::ServerConfig::for_home(home_dir.clone())?;
     home_endpoint_as(
         &home_dir,
-        format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
+        format!(
+            "http://{}/api/v0/graphql",
+            std::net::SocketAddr::new(server.http_addr, server.http_port)
+        ),
         &identity,
     )
     .await

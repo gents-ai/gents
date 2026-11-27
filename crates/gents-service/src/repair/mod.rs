@@ -102,7 +102,7 @@ async fn prepare(
     prepare_with_lock(
         &repair_lock_path()?,
         local_service(&choice.home, &current_executable()?)?,
-        &ServerConfig::standard(choice.home.clone()),
+        &ServerConfig::for_home(choice.home.clone())?,
         &RepairRequest {
             choice,
             was_serving: false,
@@ -119,7 +119,7 @@ async fn restore(choice: &HomeChoice, progress: &mut dyn Progress) -> Result<Rep
     prepare_with_lock(
         &repair_lock_path()?,
         local_service(&choice.home, &current_executable()?)?,
-        &ServerConfig::standard(choice.home.clone()),
+        &ServerConfig::for_home(choice.home.clone())?,
         &RepairRequest {
             choice,
             was_serving: true,
@@ -711,7 +711,7 @@ async fn start(
                 |serving| Blocker::ServiceServesAnotherHome {
                     home: home.to_path_buf(),
                     serving,
-                    free_port: free_port_after(server.http_port),
+                    free_port: crate::node_port::free_port_after(server.http_port),
                 },
             )),
             None => RepairOutcome::Answering(graphql),
@@ -752,12 +752,12 @@ async fn start(
     let (running, runs) = match sample {
         Ok(Ok(sample)) => sample,
         Ok(Err(serving)) => {
-            let port = ServerConfig::standard(home.to_path_buf()).http_port;
+            let port = ServerConfig::for_home(home.to_path_buf())?.http_port;
             return Ok(
                 repairs.report(RepairOutcome::Blocked(Blocker::ServiceServesAnotherHome {
                     home: home.to_path_buf(),
                     serving,
-                    free_port: free_port_after(port),
+                    free_port: crate::node_port::free_port_after(port),
                 })),
             );
         }
@@ -765,7 +765,7 @@ async fn start(
     };
     let mut started = false;
     if !running {
-        let server = ServerConfig::standard(home.to_path_buf());
+        let server = ServerConfig::for_home(home.to_path_buf())?;
         let port = server.http_port;
         match observe_port(&server, read_initialized_did(home).await.as_deref()).await {
             PortObservation::NotListening => {
@@ -825,12 +825,6 @@ async fn service_serving_another(home: &Path) -> Option<PathBuf> {
     .flatten()
 }
 
-/// The first loopback port after `taken` that nothing listens on now, for a
-/// node started by hand beside the service's.
-fn free_port_after(taken: u16) -> Option<u16> {
-    (taken.checked_add(1)?..=taken.saturating_add(100))
-        .find(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, *port)).is_ok())
-}
 fn answering_server(home: &Path, graphql: &str) -> Result<ServerConfig> {
     let url = url::Url::parse(graphql).context("parsing the recorded GraphQL endpoint")?;
     let http_addr = match url.host() {
