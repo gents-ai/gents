@@ -383,9 +383,12 @@ fn write_attempt_capture_sees_a_callsite_first_reached_on_an_unsubscribed_thread
 #[tokio::test]
 async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type WriteTelemetryLevelProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type WriteTelemetryLevelProbe { value: String }",
+    )
+    .await
+    .unwrap();
     let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
@@ -463,9 +466,12 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
 #[tokio::test]
 async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type MutationPauseProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type MutationPauseProbe { value: String }",
+    )
+    .await
+    .unwrap();
     let reached = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let completed = Arc::new(AtomicUsize::new(0));
@@ -608,9 +614,12 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
 #[tokio::test]
 async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type ArmedMutationPauseProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type ArmedMutationPauseProbe { value: String }",
+    )
+    .await
+    .unwrap();
     let armed = Arc::new(Notify::new());
     let trigger = Arc::new(Notify::new());
     let reached = Arc::new(Notify::new());
@@ -845,9 +854,12 @@ async fn abandoned_statement_trace(steps: usize) -> Vec<NativeObservation> {
             .await
             .unwrap(),
     );
-    node.add_collection("type NativeCompletionProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type NativeCompletionProbe { value: String }",
+    )
+    .await
+    .unwrap();
 
     let reached = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -978,9 +990,12 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
             .await
             .unwrap(),
     );
-    node.add_collection("type NativeCompletionSwallowProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type NativeCompletionSwallowProbe { value: String }",
+    )
+    .await
+    .unwrap();
 
     let reached = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -1100,9 +1115,12 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
 #[tokio::test]
 async fn stalled_callback_releases_the_embedded_write_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type WriteAfterStall { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type WriteAfterStall { value: String }",
+    )
+    .await
+    .unwrap();
     let entered = Arc::new(Notify::new());
     let entered_for_callback = Arc::clone(&entered);
     let mut stalled = Box::pin(ConfigAccess::transact_local_write(
@@ -1154,9 +1172,12 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
 #[tokio::test]
 async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type NestedWriteProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type NestedWriteProbe { value: String }",
+    )
+    .await
+    .unwrap();
 
     let error = ConfigAccess::transact_local_write(&node, None, "test.outer_transaction", |_| {
         Box::pin(async {
@@ -1637,9 +1658,12 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type OwnedWriteFact { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type OwnedWriteFact { value: String }",
+    )
+    .await
+    .unwrap();
     ConfigAccess::write_local(
         &node,
         "test.seed_embedded_replay",
@@ -1711,6 +1735,7 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
+        &node.node_context(),
         "type HotMutationState { key: String @index(unique: true) @immutable value: Int }",
     )
     .await
@@ -1850,6 +1875,7 @@ resources:
         .await
         .unwrap();
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
     )),
@@ -2624,9 +2650,12 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let node = runtime.block_on(async {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_collection("type RuntimeShutdownProbe { value: String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type RuntimeShutdownProbe { value: String }",
+        )
+        .await
+        .unwrap();
         node
     });
     let txn = runtime.block_on(async {

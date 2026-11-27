@@ -314,6 +314,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
             "delivered_requests",
             &doc,
+            &[],
         )
         .await
         .unwrap();

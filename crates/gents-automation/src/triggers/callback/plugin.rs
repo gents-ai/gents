@@ -533,7 +533,7 @@ mod tests {
         }
         let db = crate::triggers::callback::test_node_builder("callback-plugin").await;
         let node = db.node.clone();
-        node.add_collection(
+        node.add_collection(&node.node_context(),
             "type Job { job_run: String text: String path: String origin: String }
              type Echoed { job_run: String text: String path: String origin: String run_ref: String data_calls: Boolean }
              type PluginNote { body: String }

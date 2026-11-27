@@ -154,9 +154,12 @@ async fn agent_request_on_its_root_keeps_its_rows_and_ensure_is_idempotent() {
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(baseline.sdl))
-        .await
-        .expect("register request baseline");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(baseline.sdl),
+    )
+    .await
+    .expect("register request baseline");
 
     let create = r#"mutation {
         create_AgentRequest(input: {
@@ -286,6 +289,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
             continue;
         }
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store().render(entry.sdl),
         )
         .await
@@ -432,7 +436,10 @@ async fn single_version_unknown_root_is_rejected() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL))
+        .add_collection(
+            &authoring_node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL),
+        )
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -446,9 +453,12 @@ async fn single_version_unknown_root_is_rejected() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(FOREIGN_SDL))
-        .await
-        .expect("register foreign root");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(FOREIGN_SDL),
+    )
+    .await
+    .expect("register foreign root");
     let catalog = Catalog {
         baseline: &[BaselineCollection {
             name: "PinnedFixture",
@@ -484,6 +494,7 @@ async fn fresh_backend_collections_reject_a_foreign_single_root() {
         let body = sdl.trim_end().strip_suffix('}').expect("bundled SDL type");
         let node = fresh_node().await;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&format!("{body}    foreign_field: String\n}}")),
         )
@@ -510,7 +521,10 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL))
+        .add_collection(
+            &authoring_node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL),
+        )
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -524,9 +538,12 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(OLD_SDL))
-        .await
-        .expect("register old root");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(OLD_SDL),
+    )
+    .await
+    .expect("register old root");
     let before = node
         .get_all_collection_versions()
         .await
@@ -611,9 +628,12 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
     let unprotected = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(gents_protocol::schemas::TOOL_FILE_CHANGE)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unprotected))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unprotected),
+    )
+    .await
+    .unwrap();
     let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let before = node
@@ -730,7 +750,7 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
     ensure_runtime(&node).await.unwrap();
     assert!(node.get_collection("NodeMemory").unwrap().is_none());
 
-    node.add_collection("type NodeMemory { marker: String }")
+    node.add_collection(&node.node_context(), "type NodeMemory { marker: String }")
         .await
         .unwrap();
     let created = node
@@ -766,6 +786,7 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
 
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(schemas::AGENT_MESSAGE),
     )
     .await
@@ -823,9 +844,12 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
         .render(schemas::AGENT)
         .replace("type Agent ", "type Agent @branchable ");
     assert_ne!(sdl, schemas::AGENT);
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&sdl))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&sdl),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
     let expected = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
@@ -852,7 +876,9 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
     let branchable = schemas::HomePolicyIds::node_store()
         .render(schemas::AGENT)
         .replace("type Agent ", "type Agent @branchable ");
-    node.add_collection(&branchable).await.unwrap();
+    node.add_collection(&node.node_context(), &branchable)
+        .await
+        .unwrap();
     let error =
         validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
             .await
@@ -871,6 +897,7 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
         schemas::CLIENT_JOURNAL_POLICY_RESOURCE
     );
     node.add_collection(
+        &node.node_context(),
         &schemas::HomePolicyIds::node_store()
             .render(schemas::PENDING_CHAT_SUBMISSION)
             .replace(&directive, ""),
@@ -910,9 +937,12 @@ async fn unbound_client_journal_is_rejected_without_changing_data() {
     let unbound = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::PENDING_CHAT_SUBMISSION)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound),
+    )
+    .await
+    .unwrap();
     let created = node.execute("mutation { create_PendingChatSubmission(input: { request_id: \"retained\", payload: \"data\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let before = node
@@ -942,9 +972,12 @@ async fn unbound_mailbox_is_rejected_without_changing_data() {
     let unbound = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::MAILBOX_ITEM)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound),
+    )
+    .await
+    .unwrap();
     let created = node.execute("mutation { create_MailboxItem(input: { item_key: \"retained\", title: \"data\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ MailboxItem { _docID item_key title } }";
@@ -1018,9 +1051,12 @@ async fn canonical_catalog_pins_for_authoring() {
         )
         .collect::<Vec<_>>();
     for (name, sdl) in &catalog {
-        node.add_collection(&schemas::HomePolicyIds::node_store().render(sdl))
-            .await
-            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
+        node.add_collection(
+            &node.node_context(),
+            &schemas::HomePolicyIds::node_store().render(sdl),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
     }
 
     let mut mismatches = Vec::new();

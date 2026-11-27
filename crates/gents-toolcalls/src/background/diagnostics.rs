@@ -847,16 +847,19 @@ mod tests {
         let node = std::sync::Arc::new(builder.build().await?);
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_REQUEST),
         )
         .await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_MESSAGE),
         )
         .await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_REQUEST_RETRY_BUDGET),
         )

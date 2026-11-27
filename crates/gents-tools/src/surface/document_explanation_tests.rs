@@ -51,6 +51,7 @@ async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence(
         .await
         .unwrap();
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE),
     )

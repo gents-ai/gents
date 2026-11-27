@@ -626,6 +626,7 @@ mod tests {
     async fn native_scalar_filters_match_lean_admission() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_collection(
+            &node.node_context(),
             "type ScalarRecord { text: String count: Int measure: Float64 enabled: Boolean }",
         )
         .await
@@ -699,6 +700,7 @@ mod tests {
                 .unwrap(),
         );
         node.add_collection(
+            &node.node_context(),
             r#"
             type CandidateFinding {
                 run_id: String
@@ -940,6 +942,7 @@ mod tests {
     async fn node_with_many_findings(rows: usize) -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_collection(
+            &node.node_context(),
             "type CandidateFinding { run_id: String finding_id: String title: String }",
         )
         .await

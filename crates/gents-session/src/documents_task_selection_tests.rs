@@ -66,6 +66,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                 .any(|collection| collection.graphql_type() == *name)
         {
             node.add_collection(
+                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&schema.replace(old_policy, &policy)),
             )

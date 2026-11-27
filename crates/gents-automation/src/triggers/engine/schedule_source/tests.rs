@@ -61,15 +61,18 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::SCHEDULE),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TRIGGER),
     )
@@ -89,6 +92,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
                 .any(|collection| collection.graphql_type() == *name)
         {
             node.add_collection(
+                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
             )
             .await?;

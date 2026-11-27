@@ -151,8 +151,11 @@ mod legacy_backend_tests {
                 ),
                 "",
             );
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
-            .await?;
+        node.add_collection(
+            &node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound),
+        )
+        .await?;
         let previous = node
             .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
             .expect("unbound legacy schema");

@@ -23,9 +23,9 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
     let user_did = identity::Did::new(user.did())?;
     let creator_did = identity::Did::new(creator.did())?;
     let sibling_did = identity::Did::new(sibling.did())?;
-    acp.register_doc_object(&user_did, &policy.id, "nodes", "node")
+    acp.register_doc_object(&user_did, &policy.id, "nodes", "node", &[])
         .await?;
-    acp.register_doc_object(&creator_did, &policy.id, "agents", "child")
+    acp.register_doc_object(&creator_did, &policy.id, "agents", "child", &[])
         .await?;
     assert!(
         acp.add_relationship(
@@ -94,13 +94,14 @@ async fn modeled_application_pairing_access_controls_native_overlay() -> anyhow:
     let store = Arc::new(MemoryZanzibarStore::new());
     store.store_policy(&policy).await?;
     let acp = ZanzibarDocumentACP::new(store);
-    acp.register_doc_object(&did("user"), &policy.id, "nodes", "node")
+    acp.register_doc_object(&did("user"), &policy.id, "nodes", "node", &[])
         .await?;
     acp.register_doc_object(
         &did("author"),
         &policy.id,
         "application_pairings",
         "overlay",
+        &[],
     )
     .await?;
     for (relation, actor) in [("administrator", "engineer"), ("runtime_reader", "runtime")] {
@@ -180,7 +181,7 @@ async fn modeled_provider_usage_evidence_reads_follow_the_household_policy() -> 
     store.store_policy(&policy).await?;
     let acp = ZanzibarDocumentACP::new(store);
     let object = |resource: &str, id: &str| acp::Subject::entity_set(resource, id, "");
-    acp.register_doc_object(&did("user"), &policy.id, "nodes", "node")
+    acp.register_doc_object(&did("user"), &policy.id, "nodes", "node", &[])
         .await?;
     assert!(
         acp.add_relationship(
@@ -198,11 +199,11 @@ async fn modeled_provider_usage_evidence_reads_follow_the_household_policy() -> 
         let agent_doc = format!("agent-{agent}");
         let session = format!("session-{agent}");
         let call = format!("call-{agent}");
-        acp.register_doc_object(&did("user"), &policy.id, "agents", &agent_doc)
+        acp.register_doc_object(&did("user"), &policy.id, "agents", &agent_doc, &[])
             .await?;
-        acp.register_doc_object(&did(agent), &policy.id, "sessions", &session)
+        acp.register_doc_object(&did(agent), &policy.id, "sessions", &session, &[])
             .await?;
-        acp.register_doc_object(&did(agent), &policy.id, "children", &call)
+        acp.register_doc_object(&did(agent), &policy.id, "children", &call, &[])
             .await?;
         let relations = [
             (

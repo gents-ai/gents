@@ -96,7 +96,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
-    node.add_collection_as(
+    node.add_collection(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
@@ -404,7 +404,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
-    node.add_collection_as(
+    node.add_collection(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),

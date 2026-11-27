@@ -821,14 +821,18 @@ mod tests {
                 .unwrap();
         }
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::EVENT_GROUP_STATE),
         )
         .await
         .unwrap();
-        node.add_collection("type GroupMember { batch:String expected:Int value:String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type GroupMember { batch:String expected:Int value:String }",
+        )
+        .await
+        .unwrap();
         let (mut binding, mut source) = config(root.did());
         binding.agent_did = agent.did().to_owned();
         source.group.as_mut().unwrap().timeout_secs = Some(3600);

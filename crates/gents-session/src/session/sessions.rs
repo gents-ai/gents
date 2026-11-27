@@ -1317,14 +1317,14 @@ mod invoke_session_isolation_tests {
             .await?;
         let policy_id = gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household);
-        node.add_collection_as(
+        node.add_collection(
             &root_context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT)
                 .replace(policy_id, &policy),
         )
         .await?;
-        node.add_collection_as(
+        node.add_collection(
             &root_context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION)

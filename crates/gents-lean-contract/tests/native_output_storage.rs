@@ -52,6 +52,7 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         gents_schemas::HomePolicyIds::node_store().id(gents_schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
+        &context,
         &gents_schemas::HomePolicyIds::node_store().render(gents_schemas::AGENT_OUTPUT_SEGMENT),
     )
     .await

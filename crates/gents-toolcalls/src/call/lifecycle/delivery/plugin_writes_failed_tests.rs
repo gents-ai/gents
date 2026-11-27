@@ -46,7 +46,7 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
         .unwrap();
     fixture
         .node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+        .add_collection(&fixture.node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type TerminalParcel @policy(id: \"{}\", resource: \"parcels\") {{ status: String }}\n             type TerminalNote {{ body: String }}",
             gents_store::graphql::escape_graphql_string(&policy)
         )))

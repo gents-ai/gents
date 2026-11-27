@@ -141,6 +141,7 @@ async fn fixture() -> (gents_store::test_support::TestStore, WriteTool) {
     .await;
     let node = db.node.clone();
     node.add_collection(
+        &node.node_context(),
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
     .await
@@ -310,6 +311,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
     .await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
     .await
@@ -388,9 +390,12 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
         .await
         .unwrap();
     let schema = format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",gents_store::graphql::escape_graphql_string(&policy));
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
+    )
+    .await
+    .unwrap();
     let owner = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, user.did())
             .with_client_signing_capability(user.client_signing_capability().unwrap())
@@ -513,7 +518,7 @@ mod plugin {
                 .await
                 .unwrap();
         }
-        node.add_collection(
+        node.add_collection(&node.node_context(),
             "type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }
              type Twin { owner: String key: String body: String created_at: String }",

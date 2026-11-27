@@ -104,7 +104,7 @@ async fn node_shutdown_with_an_open_graphql_subscription_completes_within_the_bo
         .build()
         .await
         .unwrap();
-    node.add_collection("type ShutdownProbe { name: String }")
+    node.add_collection(&node.node_context(), "type ShutdownProbe { name: String }")
         .await
         .unwrap();
     let access = gents_store::config_client::ConfigAccess::Graphql(

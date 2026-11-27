@@ -492,6 +492,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let node = acp_node(dir.path()).await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE_DIRECTORY_ENTRY),
         )

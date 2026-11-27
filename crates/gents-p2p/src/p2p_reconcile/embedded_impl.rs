@@ -154,7 +154,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
             .map(|r| RemoteReplicator {
                 id: r.id,
                 collections: r.collections,
-                address: r.address,
+                address: r.addresses.into_iter().next(),
                 filters: Some(r.filters),
             })
             .collect())

@@ -662,13 +662,13 @@ mod tests {
                     .await?;
             }
         }
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE),
         )
         .await?;
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT),
@@ -680,7 +680,7 @@ mod tests {
         let schema = gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::WORKSPACE_ROOT)
             .replacen("type WorkspaceRoot {", &binding, 1);
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )

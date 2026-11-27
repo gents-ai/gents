@@ -365,6 +365,7 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
@@ -447,6 +448,7 @@ async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
@@ -534,35 +536,42 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
             .await?;
     }
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_CONTEXT),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TOOLS),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::TASK),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::SCHEDULE),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::TRIGGER),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA),
     )
@@ -576,16 +585,19 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     assert_eq!(backend_schema.version_id, approved_schema.version_id);
     assert_eq!(backend_schema.collection_id, approved_schema.collection_id);
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_BINDING),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_MODULE),
     )

@@ -7,9 +7,12 @@ use gents_store::test_support::{
 async fn event_source_reads_seed_and_group_as_selected_agent() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
-    node.add_collection("type SelectionProbe { kind: String @index message: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type SelectionProbe { kind: String @index message: String }",
+    )
+    .await
+    .unwrap();
     let response = gents_store::config_client::ConfigAccess::local(node.clone())
         .write("test.event_selection_probe", r#"mutation { create_SelectionProbe(input: {kind: "ready", message: "hello"}) { _docID } }"#)
         .await;
@@ -112,9 +115,12 @@ use events::{EventName, Message, Subscription};
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
-    node.add_collection("type BranchableProbe { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type BranchableProbe { value: String }",
+    )
+    .await
+    .unwrap();
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -216,7 +222,7 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
 async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
-    node.add_collection("type ReadyInput { value: String }")
+    node.add_collection(&node.node_context(), "type ReadyInput { value: String }")
         .await
         .unwrap();
     assert!(!node
@@ -287,7 +293,10 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
             .await
             .unwrap();
         schema_node
-            .add_collection("type DelayedSchemaInput { value: String }")
+            .add_collection(
+                &schema_node.node_context(),
+                "type DelayedSchemaInput { value: String }",
+            )
             .await
             .unwrap();
     });
@@ -350,7 +359,7 @@ async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() 
         .with_runtime_observer(Some(observer.clone()));
 
     source.reconcile_subscriptions(&first).await;
-    node.add_collection("type EventualInput { value: String }")
+    node.add_collection(&node.node_context(), "type EventualInput { value: String }")
         .await
         .unwrap();
     let second = configured_event_snapshot(&node, 2, triggers).await;
@@ -800,9 +809,12 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             payload: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-webhook".to_string(),
@@ -995,6 +1007,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         r#"type GroupMember {
             run_id: String
             expected_total: Int
@@ -1069,6 +1082,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         r#"type DurableGroupMember {
             run_id: String
             value: String
@@ -1167,6 +1181,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         r#"type DeferredCorrelationMember {
             run_id: String @index
             value: String
@@ -1273,6 +1288,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
         let node_db = configured_event_node().await;
         let node = node_db.node.clone();
         node.add_collection(
+            &node.node_context(),
             r#"type MixedCorrelationMember {
             run_id: String @index
             value: String
@@ -1369,6 +1385,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         r#"type SeededMixedCorrelationMember {
             run_id: String @index
             value: String
@@ -1447,6 +1464,7 @@ async fn group_evaluation_matches_the_lean_group_model() {
         let node_db = configured_event_node().await;
         let node = node_db.node.clone();
         node.add_collection(
+            &node.node_context(),
             r#"type QuiescedGroupMember {
                 run_id: String @index
                 value: String
@@ -1561,6 +1579,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
     .await;
     let node = node_db.node.clone();
     node.add_collection(
+        &node.node_context(),
         r#"type RecoveryFingerprintMember {
             run_id: String
             kind: String
@@ -1642,9 +1661,12 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             email: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -1742,9 +1764,12 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
             email: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -1947,9 +1972,12 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
             payload: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -2042,9 +2070,12 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
             payload: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -2173,9 +2204,12 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             payload: String
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger_alpha = resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
@@ -2243,9 +2277,12 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             kind: String @index
         }
     "#;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl))
-        .await
-        .expect("add_collection for WebhookEvent");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(webhook_sdl),
+    )
+    .await
+    .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger_a = resolved_event_trigger_with_filter(
         "trigger-a-lex-first",
@@ -2440,9 +2477,12 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
         assert!(case.input.initial_world.handled.is_empty());
         let db = configured_event_node().await;
         let node = db.node.clone();
-        node.add_collection("type ConvergenceDocument { external_id: String payload: String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type ConvergenceDocument { external_id: String payload: String }",
+        )
+        .await
+        .unwrap();
         let mut physical = RapidHashMap::default();
         for seeded in &case.input.initial_world.persistent_set {
             let name = escape_graphql_string(&seeded.raw);

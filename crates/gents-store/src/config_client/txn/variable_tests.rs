@@ -8,7 +8,7 @@ use super::*;
 #[tokio::test]
 async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
+    node.add_collection(&node.node_context(), "type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
     let payload = json!({"a-b": [], "nested": [{"": {}, "雪": [null, []]}]});
     for (query, input) in [
         (
@@ -69,9 +69,12 @@ async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
 #[tokio::test]
 async fn embedded_transaction_preserves_json_variables_and_rollback() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type TransactionJsonProbe { key: String payload: JSON }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type TransactionJsonProbe { key: String payload: JSON }",
+    )
+    .await
+    .unwrap();
     let variables = json!({"payload": {"a-b": [], "nested": [{"": {}, "雪": [null, []]}]}});
     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
     txn.execute_with_variables("mutation($payload: JSON) { create_TransactionJsonProbe(input: {key: \"rolled-back\", payload: $payload}) {_docID} }", &variables).await.unwrap();
@@ -97,6 +100,7 @@ async fn embedded_transaction_preserves_json_variables_and_rollback() {
 async fn filter_doc_id_and_limit_variables_bind_in_reads_and_writes() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
+        &node.node_context(),
         "type FilterVariableProbe { key: String label: String enabled: Boolean count: Int }",
     )
     .await

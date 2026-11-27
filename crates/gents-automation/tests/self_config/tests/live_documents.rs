@@ -630,7 +630,10 @@ async fn plugin_run_drives_the_rounds_a_tool_call_does() {
     fixture
         .db
         .node
-        .add_collection("type Note { body: String }")
+        .add_collection(
+            &fixture.db.node.node_context(),
+            "type Note { body: String }",
+        )
         .await
         .unwrap();
     gents_store::config_client::ConfigAccess::transact_local_write(

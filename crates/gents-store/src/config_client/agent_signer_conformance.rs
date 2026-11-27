@@ -155,7 +155,7 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
             .await
             .unwrap(),
     );
-    node.add_collection("type SigningFact { value: String }")
+    node.add_collection(&node.node_context(), "type SigningFact { value: String }")
         .await
         .unwrap();
     let actor = identity::Did::new(agent.did()).unwrap();
@@ -455,6 +455,7 @@ async fn direct_relationship_changes_require_actor_signing_capability() {
     let context = defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
     let policy = node.add_dac_policy_as(&context, "name: SigningFactPolicy\nresources:\n  - name: facts\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type SigningFact @policy(id: \"{policy}\", resource: \"facts\") {{ value: String }}"
         )),
@@ -527,7 +528,7 @@ async fn offline_client_writes_travel_signed_through_the_held_loopback_endpoint(
             .await
             .unwrap(),
     );
-    node.add_collection("type SigningFact { value: String }")
+    node.add_collection(&node.node_context(), "type SigningFact { value: String }")
         .await
         .unwrap();
     let endpoint = |identity: &KeyIdentity| {

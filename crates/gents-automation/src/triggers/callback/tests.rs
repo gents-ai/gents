@@ -975,6 +975,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let owner_node_did = db.node_identity.did().to_owned();
     super::seed_test_agent(&node, &owner_node_did).await;
     node.add_collection(
+        &node.node_context(),
         r#"
         type WorkUnit {
             work_unit_id: String

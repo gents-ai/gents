@@ -1011,9 +1011,12 @@ async fn write_tools_register_under_declared_names() {
 
     let (db, runtime) = selected_surface_runtime().await;
     let node = db.node.clone();
-    node.add_collection("type ActionRequest { summary: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type ActionRequest { summary: String }",
+    )
+    .await
+    .unwrap();
 
     let surface = config_for_selected_surface(
         &runtime.node_did,
@@ -1055,7 +1058,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 
     let (db, runtime) = selected_surface_runtime().await;
     let node = db.node.clone();
-    node.add_collection(
+    node.add_collection(&node.node_context(),
         "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
     )
         .await

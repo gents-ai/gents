@@ -106,11 +106,22 @@ pub async fn submit_publisher(
     Ok(())
 }
 
+/// The relationship a sentinel registers its collection with: the Node it
+/// is published under, the `parent` the resource's `collection.create`
+/// follows.
+fn parent_relationship(parent: &str) -> [acp::DerivedRelationship; 1] {
+    [acp::DerivedRelationship {
+        relation: "parent".to_owned(),
+        target_resource: "nodes".to_owned(),
+        target_doc_id: parent.to_owned(),
+    }]
+}
+
 fn command<'a>(
     collection: &str,
-    parent: &'a str,
+    relationships: &'a [acp::DerivedRelationship; 1],
 ) -> anyhow::Result<vera_delegation::PolicyCommand<'a>> {
-    if !is_replicated_protocol_collection(collection) || parent.is_empty() {
+    if !is_replicated_protocol_collection(collection) || relationships[0].target_doc_id.is_empty() {
         bail!("invalid transport sentinel selection");
     }
     let ids = HomePolicyIds::embedded_vera_transport_v2();
@@ -125,10 +136,7 @@ fn command<'a>(
         policy_id: ids.id(BuiltInPolicy::Household),
         resource,
         object_id: child,
-        action: vera_delegation::PolicyAction::RegisterUnderParent {
-            resource: "nodes",
-            object_id: parent,
-        },
+        action: vera_delegation::PolicyAction::register(relationships),
     })
 }
 
@@ -138,7 +146,8 @@ pub fn prepare(
     collection: &str,
     parent: &str,
 ) -> anyhow::Result<Approval> {
-    let operation = command(collection, parent)?;
+    let relationships = parent_relationship(parent);
+    let operation = command(collection, &relationships)?;
     let token =
         delegation::mint_request_bound(account, audience, &operation, VERA_REQUEST_BOUND_LIFETIME)?;
     Ok(Approval {
@@ -157,7 +166,8 @@ pub async fn submit(
     if approval.account != expected_account {
         bail!("sentinel signer differs from the anchored account");
     }
-    let operation = command(&approval.collection, &approval.parent)?;
+    let relationships = parent_relationship(&approval.parent);
+    let operation = command(&approval.collection, &relationships)?;
     let account = identity::Did::new(&approval.account)?;
     let provider = node.document_acp();
     if provider
@@ -168,21 +178,15 @@ pub async fn submit(
     {
         bail!("sentinel parent is not owned by the anchored account");
     }
-    let parent = provider
-        .registration_parent(operation.policy_id, operation.resource, &approval.parent)
-        .await?;
-    if parent.resource != "nodes" || parent.object_id != approval.parent {
-        bail!("sentinel parent does not match the approved command");
-    }
     let context = defra_core::RequestContext::default()
         .with_request_delegation(approval.account, approval.token);
     acp::bound_to_request(&provider, &context)
-        .register_under_parent(
+        .register_doc_object(
             &account,
             operation.policy_id,
             operation.resource,
             operation.object_id,
-            &parent,
+            &relationships,
         )
         .await?;
     Ok(())
@@ -212,15 +216,24 @@ mod tests {
         assert_eq!(request.genesis_id, [0xab; 32]);
         assert_eq!(
             request.digest,
-            vera_delegation::request_digest(&command("PeerRegistry", "node-a").unwrap()).unwrap()
+            vera_delegation::request_digest(
+                &command("PeerRegistry", &parent_relationship("node-a")).unwrap()
+            )
+            .unwrap()
         );
         assert_ne!(
             request.digest,
-            vera_delegation::request_digest(&command("PeerRegistry", "node-b").unwrap()).unwrap()
+            vera_delegation::request_digest(
+                &command("PeerRegistry", &parent_relationship("node-b")).unwrap()
+            )
+            .unwrap()
         );
         assert_ne!(
             request.digest,
-            vera_delegation::request_digest(&command("Network", "node-a").unwrap()).unwrap()
+            vera_delegation::request_digest(
+                &command("Network", &parent_relationship("node-a")).unwrap()
+            )
+            .unwrap()
         );
         assert!(prepare(&account, &audience, "Node", "node-a").is_err());
         let publisher = identity::Did::new(account.did()).unwrap();

@@ -76,7 +76,9 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
             .collect::<Vec<_>>()
             .join("\n");
         assert_ne!(older, sdl);
-        node.add_collection(&older).await.unwrap();
+        node.add_collection(&node.node_context(), &older)
+            .await
+            .unwrap();
         let created = node.execute(create).await;
         assert!(!created.has_errors(), "{created:?}");
         let query = format!("{{{name} {{_docID}}}}");
@@ -105,7 +107,7 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
 async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
     let node = fresh_node().await;
     // Bound to its identity policy, so its lineage is the only refusal reason.
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         r#"type InferenceProfile @policy(id: "{}", resource: "configuration") {{ alien: String }}"#,
         schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::Household)
     )))
@@ -156,6 +158,7 @@ async fn startup_refuses_existing_unbound_provider_collections_before_changes() 
             "{name} must be bound in the catalog"
         );
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replacen(&directive, "", 1)),
         )
@@ -254,6 +257,7 @@ async fn startup_refuses_unbound_transport_collections_before_mutation() {
         assert!(schema.contains(&directive));
         let node = fresh_node().await;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replacen(&directive, "", 1)),
         )

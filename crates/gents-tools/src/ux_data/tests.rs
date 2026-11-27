@@ -87,9 +87,12 @@ impl Fixture {
         use gents_store::identity::NodeIdentity as _;
         let node_did = db.node_identity.did().to_owned();
         let other_node_did = other.did().to_owned();
-        node.add_collection("type BoardTask { title: String lane: String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type BoardTask { title: String lane: String }",
+        )
+        .await
+        .unwrap();
         let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&node_did).unwrap());
         let client_did = identity::Did::new(client.did()).unwrap();
         access

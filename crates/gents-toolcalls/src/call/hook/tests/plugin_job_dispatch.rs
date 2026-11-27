@@ -234,7 +234,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     let identity = db.node_identity.clone();
     let caller =
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &caller_binding).unwrap();
-    node.add_collection("type Plain { body: String }")
+    node.add_collection(&node.node_context(), "type Plain { body: String }")
         .await
         .unwrap();
     let worker_binding = gents_store::identity::provision_agent_identity_authorized(

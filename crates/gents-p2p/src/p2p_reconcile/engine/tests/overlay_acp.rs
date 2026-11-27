@@ -59,8 +59,8 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         0,
     )
     .await?;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE)).await?;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED))
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE)).await?;
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED))
         .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     for actor in [user.did(), agent.did(), sibling.did(), outsider.did()] {

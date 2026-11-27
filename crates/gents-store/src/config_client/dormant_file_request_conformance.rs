@@ -67,7 +67,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 .await?;
         }
     }
-    node.add_collection_as(
+    node.add_collection(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
@@ -102,7 +102,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             schema.contains(&binding),
             "production schema must carry the modeled binding"
         );
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )

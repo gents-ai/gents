@@ -1430,9 +1430,12 @@ mod data_calls {
                 .await
                 .unwrap(),
         );
-        node.add_collection("type Note { owner: String body: String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type Note { owner: String body: String }",
+        )
+        .await
+        .unwrap();
         for (owner, body) in rows {
             ConfigAccess::transact_local_write(&node, None, "data_calls_test", |txn| {
                 let mutation = format!(
@@ -1838,6 +1841,7 @@ mod tool_writes {
         .expect("publish canonical native tool admission");
         let (node, path, mut call) = (admission.node, admission.path, admission.tool);
         node.add_collection(
+            &node.node_context(),
             "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
         )
         .await

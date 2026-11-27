@@ -394,6 +394,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
         .await
         .unwrap();
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_SESSION),
     )
@@ -466,7 +467,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::AGENT_SESSION,
     ] {
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )

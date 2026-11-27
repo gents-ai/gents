@@ -26,6 +26,7 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
     ] {
         let node = common::fresh_node().await;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&without(fields)),
         )
         .await
@@ -82,6 +83,7 @@ async fn a_fresh_store_registers_the_current_backend_sdl_on_the_baseline_root() 
     let direct = common::fresh_node().await;
     direct
         .add_collection(
+            &direct.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(schemas::INFERENCE_BACKEND),
         )

@@ -53,6 +53,7 @@ impl PinFixture {
             gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
         ] {
             node.add_collection(
+                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store().render(collection),
             )
             .await?;

@@ -1128,11 +1128,14 @@ impl ConfigAccess {
                 let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        match context.identity() {
-                            Some(_) => node.add_collection_as(&context, &sdl).await.map(|_| ()),
-                            None => node.add_collection(&sdl).await,
-                        }
-                        .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
+                        let context = match context.identity() {
+                            Some(_) => context,
+                            None => node.node_context(),
+                        };
+                        node.add_collection(&context, &sdl)
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
                     })
                     .await
             }

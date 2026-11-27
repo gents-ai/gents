@@ -13,9 +13,12 @@ use gents_tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let db = configured_event_node().await;
     let node = db.node.clone();
-    node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type ResumedGoalOutput { run_id: String @index summary: String }",
+    )
+    .await
+    .unwrap();
     let identity = fixture_root();
     let agent = fixture_agent(FIXTURE_AGENT_NONCE);
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(

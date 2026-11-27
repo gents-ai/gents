@@ -1302,11 +1302,13 @@ mod tests {
         )
         .await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NODE),
         )
         .await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE),
         )

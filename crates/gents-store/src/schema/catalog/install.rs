@@ -115,7 +115,7 @@ async fn register_baseline(
             .collect::<Vec<_>>()
             .join("\n"),
     );
-    node.add_collection(&batch)
+    node.add_collection(&node.node_context(), &batch)
         .await
         .map_err(|source| SchemaError::BaselineRegister {
             collection: missing

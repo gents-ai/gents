@@ -51,6 +51,7 @@ fn current_sdl(name: &str) -> &'static str {
 async fn goal_controls_bind_agent_ownership_policy() {
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL),
     )
@@ -119,6 +120,7 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         for &name in CLIENT_AUTHORED_COLLECTIONS {
             client
                 .add_collection(
+                    &client.node_context(),
                     &gents_protocol::schemas::HomePolicyIds::node_store().render(current_sdl(name)),
                 )
                 .await
@@ -181,9 +183,12 @@ async fn identity_policy_catalog_matches_applied_schemas() {
             "{name} identity policy directive and startup catalog must agree"
         );
         if let Some((_, resource)) = binding {
-            node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(sdl))
-                .await
-                .expect("apply policy-bound schema");
+            node.add_collection(
+                &node.node_context(),
+                &gents_protocol::schemas::HomePolicyIds::node_store().render(sdl),
+            )
+            .await
+            .expect("apply policy-bound schema");
             let collection = node.get_collection(name).unwrap().expect("collection");
             let policy = collection.policy.expect("native policy binding");
             assert_eq!(
@@ -224,6 +229,7 @@ async fn client_journal_applies_private_policy() {
     };
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(PENDING_CHAT_SUBMISSION),
     )
     .await
@@ -247,9 +253,12 @@ async fn mailbox_applies_recipient_policy() {
         BuiltInPolicy, HomePolicyIds, MAILBOX_ITEM, MAILBOX_ITEM_NAME, MAILBOX_POLICY_RESOURCE,
     };
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM))
-        .await
-        .expect("mailbox schema");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM),
+    )
+    .await
+    .expect("mailbox schema");
     let collection = node.get_collection(MAILBOX_ITEM_NAME).unwrap().unwrap();
     let policy = collection.policy.expect("mailbox policy binding");
     assert_eq!(
@@ -275,9 +284,12 @@ async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
     );
     let unbound = DATA_PLANE_PAIRING_DESIRED.replace(&directive, "");
     assert_ne!(unbound, DATA_PLANE_PAIRING_DESIRED);
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound),
+    )
+    .await
+    .unwrap();
     let created = node.execute(r#"mutation { create_DataPlanePairingDesired(input: {peer_id:"retained", collections:["example"], replicator_addresses:["address"]}) {_docID} }"#).await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ DataPlanePairingDesired {_docID peer_id} }";
@@ -405,9 +417,12 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
             old, sdl,
             "{name}: expected policy directive was not removed"
         );
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&old))
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&old),
+        )
+        .await
+        .unwrap();
         let extra = if [
             ISOLATED_WORKSPACE_NAME,
             WORKSPACE_BINDING_NAME,

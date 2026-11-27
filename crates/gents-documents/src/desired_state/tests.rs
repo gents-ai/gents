@@ -104,13 +104,13 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
                 .await?;
         }
     }
-    node.add_collection_as(
+    node.add_collection(
         &context,
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
     )
     .await?;
-    node.add_collection_as(&context, "type CallbackTestEvent { label: String }")
+    node.add_collection(&context, "type CallbackTestEvent { label: String }")
         .await?;
     let created = owner
         .write(
@@ -1399,7 +1399,7 @@ fn obligation_surface(
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     gents_store::schema::ensure_runtime_schemas(&node).await?;
-    node.add_collection(
+    node.add_collection(&node.node_context(),
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
     .await?;
@@ -1495,7 +1495,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    node.add_collection(
+    node.add_collection(&node.node_context(),
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
     )
     .await?;
@@ -1810,6 +1810,7 @@ async fn schema_obligation_publication_matches_lean() -> Result<()> {
         if !probes.contains_key(&shape) {
             let name = format!("ObligationProbe{}", probes.len());
             node.add_collection(
+                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&sdl(&name, &input.schema)),
             )
@@ -1876,7 +1877,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let (builder, runtime) = gents_store::test_support::keyed_node_builder();
     let node = Arc::new(builder.with_node_acp_enabled().build().await?);
     gents_store::schema::ensure_runtime_schemas(&node).await?;
-    node.add_collection(
+    node.add_collection(&node.node_context(),
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
@@ -2146,7 +2147,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
     node.add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
-    node.add_collection_as(
+    node.add_collection(
         &ctx,
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )

@@ -75,7 +75,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
         gents_protocol::schemas::BACKEND_CREDENTIAL,
     ] {
-        node.add_collection_as(
+        node.add_collection(
             &context,
             &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
@@ -97,7 +97,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
                 .iter()
                 .any(|collection| collection.graphql_type() == *name)
         {
-            node.add_collection_as(
+            node.add_collection(
                 &context,
                 &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
             )

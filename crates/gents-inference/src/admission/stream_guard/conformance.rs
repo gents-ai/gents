@@ -83,9 +83,12 @@ async fn observe_finalization(case: &family::FinalizationInput) -> family::Final
 
 async fn native_gate_held_after_independent_completion() -> bool {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type StreamGateFact { value: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type StreamGateFact { value: String }",
+    )
+    .await
+    .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
     let storage_return = Arc::new(tokio::sync::Notify::new());
     let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(

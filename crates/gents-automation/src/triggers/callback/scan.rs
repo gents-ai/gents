@@ -1036,9 +1036,12 @@ mod grouped_tests {
             let node = db.node.clone();
             let owner = db.node_identity.did();
             crate::triggers::callback::seed_test_agent(&node, owner).await;
-            node.add_collection("type CallbackMember { batch:String value:String }")
-                .await
-                .unwrap();
+            node.add_collection(
+                &node.node_context(),
+                "type CallbackMember { batch:String value:String }",
+            )
+            .await
+            .unwrap();
             for index in 0..input.actual_count {
                 let response = node
                     .execute(&format!(
@@ -1123,9 +1126,12 @@ mod grouped_tests {
         let owner = db.node_identity.did();
         crate::triggers::callback::seed_test_agent(&node, owner).await;
 
-        node.add_collection("type CallbackMember { batch:String value:String hidden:String }")
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            "type CallbackMember { batch:String value:String hidden:String }",
+        )
+        .await
+        .unwrap();
         for value in ["one", "two"] {
             let response=node.execute(&format!("mutation{{create_CallbackMember(input:{{batch:\"batch\",value:\"{value}\",hidden:\"not-selected\"}}){{_docID}}}}" )).await;
             assert!(!response.has_errors(), "{:?}", response.errors);

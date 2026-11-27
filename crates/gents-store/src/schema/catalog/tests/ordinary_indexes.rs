@@ -220,7 +220,10 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
     let catalog = catalog_with_request_index(&indexes);
     let existing = fresh_node().await;
     existing
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_REQUEST))
+        .add_collection(
+            &existing.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_REQUEST),
+        )
         .await
         .expect("register pre-index AgentRequest schema");
     let first_doc = create_request(existing.as_ref(), "request-twin", "session-a", "first").await;
@@ -458,9 +461,12 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
 #[tokio::test]
 async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM))
-        .await
-        .expect("register pre-index MailboxItem schema");
+    node.add_collection(
+        &node.node_context(),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM),
+    )
+    .await
+    .expect("register pre-index MailboxItem schema");
     let before = node
         .get_collection(MAILBOX_ITEM_NAME)
         .expect("load pre-index MailboxItem collection")
@@ -506,6 +512,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
 
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_OUTPUT_SEGMENT),
     )
     .await
@@ -583,6 +590,7 @@ async fn background_completion_recovery_seeks_pending_status_range() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
     )
     .await
@@ -666,6 +674,7 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     use gents_protocol::schemas::{AGENT_MESSAGE, AGENT_MESSAGE_NAME};
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_MESSAGE),
     )
     .await
@@ -714,6 +723,7 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
     )
     .await
@@ -786,6 +796,7 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
     use gents_protocol::schemas::{INFERENCE_CALL, INFERENCE_CALL_NAME};
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(INFERENCE_CALL),
     )
     .await
@@ -859,6 +870,7 @@ async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
     use gents_protocol::schemas::{RENDERED_REQUEST, RENDERED_REQUEST_NAME};
     let node = fresh_node().await;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(RENDERED_REQUEST),
     )
     .await

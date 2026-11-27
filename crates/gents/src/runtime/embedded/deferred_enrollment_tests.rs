@@ -42,10 +42,12 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NODE_READINESS),
     )
@@ -58,8 +60,11 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
         gents_protocol::schemas::PEER_PAIRING_DESIRED,
     ] {
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
-            .await?;
+        node.add_collection(
+            &node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
+        )
+        .await?;
     }
     let access = |actor: &gents_store::identity::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(

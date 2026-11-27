@@ -660,7 +660,7 @@ async fn configured_delete_sources_grant_revoke_and_preserve_independent_permiss
     ] {
         owner.grant_node_permission(&agent, permission).await?;
     }
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type DeleteProjectionProbe @policy(id: \"{}\", resource: \"configuration\") {{ name: String }}",
         gents_protocol::schemas::HomePolicyIds::node_store().id(gents_protocol::schemas::BuiltInPolicy::Household),
     ))).await?;
@@ -1694,6 +1694,7 @@ async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::R
     for case in gents_lean_vocab::families::household_session_tool_access::cases() {
         let (_directory, runtime, node) = projection_node().await?;
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type ToolSessionProbe @policy(id: \"{}\", resource: \"sessions\") {{ name: String }}",
             gents_protocol::schemas::HomePolicyIds::node_store()

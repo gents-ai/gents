@@ -290,7 +290,10 @@ mod tests {
         let client = gents_host::test_support::ClientHome::new().await;
         client
             .node()
-            .add_collection("type UxNote { body: String }")
+            .add_collection(
+                &client.node().node_context(),
+                "type UxNote { body: String }",
+            )
             .await
             .unwrap();
         let access = client.access.clone();

@@ -8,9 +8,12 @@ use super::*;
 #[tokio::test]
 async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type Reports { duty: String @fulltext rank: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type Reports { duty: String @fulltext rank: String }",
+    )
+    .await
+    .unwrap();
     for (duty, rank) in [
         ("Coordinate crew duty rotations", "Captain"),
         ("Inspect engine maintenance", "Commander"),
@@ -607,9 +610,12 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
 #[tokio::test]
 async fn count_is_filtered_total_and_find_is_a_stable_page() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type Ticket { name: String priority: Int status: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type Ticket { name: String priority: Int status: String }",
+    )
+    .await
+    .unwrap();
     for n in 0..73 {
         gents_store::config_client::ConfigAccess::write_local(&node,"seed_query_count",&format!("mutation {{ create_Ticket(input:{{name:\"T{n:03}\",priority:{n},status:\"open\"}}){{_docID}} }}")).await.unwrap();
     }
@@ -672,7 +678,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         )
         .await
         .unwrap();
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         gents_store::graphql::escape_graphql_string(&policy)
     )))
@@ -806,9 +812,12 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
 #[tokio::test]
 async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type PlanTicket { reference: String status: String @index }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type PlanTicket { reference: String status: String @index }",
+    )
+    .await
+    .unwrap();
     gents_store::config_client::ConfigAccess::write_local(
         &node,
         "seed_plan",
@@ -835,9 +844,12 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     assert_eq!(result["mode"], "simple");
     assert!(result["plan"].get("executionSuccess").is_none());
     assert!(result["plan"].to_string().contains("indexName"));
-    node.add_collection("type PlainTicket { reference: String status: String }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type PlainTicket { reference: String status: String }",
+    )
+    .await
+    .unwrap();
     let plain_scope = CollectionScope::restricted(vec!["PlainTicket".into()]);
     let mut plain = args.clone();
     plain.collection = Some("PlainTicket".into());
@@ -957,7 +969,7 @@ async fn find_signer_names_who_wrote_a_document_not_who_it_claims() {
             .await
             .unwrap(),
     );
-    node.add_collection("type Order { login: String }")
+    node.add_collection(&node.node_context(), "type Order { login: String }")
         .await
         .unwrap();
     let write = |who: &std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
@@ -1118,7 +1130,7 @@ async fn relationship_selections_follow_grants_and_acp() {
         )
         .await
         .unwrap();
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+    node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type LinkedRecord @policy(id: \"{}\", resource: \"records\") {{ label: String notes: [RecordNote] }} type RecordNote {{ text: String record: LinkedRecord }}",
         gents_store::graphql::escape_graphql_string(&policy)
     )))
@@ -1254,7 +1266,7 @@ async fn relationship_selections_follow_grants_and_acp() {
 #[tokio::test]
 async fn vector_search_ranks_by_the_fields_index_metric() {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    node.add_collection("type CatalogItem { sku: String coordinates: [Float32!] @index(vector: {dimensions: 3, flat: {metric: EUCLIDEAN}}) }")
+    node.add_collection(&node.node_context(), "type CatalogItem { sku: String coordinates: [Float32!] @index(vector: {dimensions: 3, flat: {metric: EUCLIDEAN}}) }")
         .await
         .unwrap();
     for (sku, coordinates) in [("a", "[0, 0, 0]"), ("b", "[1, 1, 1]"), ("c", "[5, 5, 5]")] {

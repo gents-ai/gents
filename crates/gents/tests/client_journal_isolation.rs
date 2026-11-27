@@ -256,6 +256,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
             gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
             doc_id,
+            &[],
         )
         .await
         .unwrap();

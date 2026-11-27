@@ -460,6 +460,7 @@ pub async fn client_journal_node(
             .await?,
     );
     node.add_collection(
+        &node.node_context(),
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound_journal_schema()),
     )
     .await?;

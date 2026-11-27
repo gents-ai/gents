@@ -152,9 +152,12 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
                 1,
             )
         };
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&bound))
-            .await
-            .unwrap();
+        node.add_collection(
+            &node.node_context(),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&bound),
+        )
+        .await
+        .unwrap();
     }
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await

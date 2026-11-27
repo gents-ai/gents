@@ -75,6 +75,7 @@ fn native_input_admission_matches_lean() {
 async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
+        &node.node_context(),
         r#"
         type ActionRequest {
             drift_sig: String
@@ -159,9 +160,12 @@ async fn writes_one_bounded_doc() {
 #[tokio::test]
 async fn writes_native_measurements_without_string_coercion() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_collection("type HostMeasurement { disk: Int healthy: Boolean }")
-        .await
-        .unwrap();
+    node.add_collection(
+        &node.node_context(),
+        "type HostMeasurement { disk: Int healthy: Boolean }",
+    )
+    .await
+    .unwrap();
     let declaration = WriteToolDecl {
         notification: None,
         tool_name: "record_measurement".into(),
@@ -324,7 +328,7 @@ async fn bounded_writes_follow_the_datastore_write_model() {
     {
         let input = &case.input;
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+        node.add_collection(&node.node_context(), &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type {} {{ drift_sig: String summary: String status: String run_id: String expected_total: String }}",
             input.collection
         )))
@@ -494,6 +498,7 @@ async fn bounded_writes_follow_the_datastore_write_model() {
 async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
+        &node.node_context(),
         "type TypedRecord { count: Int flag: Boolean score: Float64 labels: [String] data: JSON }",
     )
     .await
@@ -559,6 +564,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
+        &node.node_context(),
         r#"
         type CountOwner {
             flag: Boolean
@@ -639,7 +645,10 @@ async fn defradb_refuses_a_non_null_id_count_carrier() {
         .await
         .unwrap();
     let error = node
-        .add_collection("type CountCarrierNonNullId { count: ID! }")
+        .add_collection(
+            &node.node_context(),
+            "type CountCarrierNonNullId { count: ID! }",
+        )
         .await
         .unwrap_err();
     assert!(
@@ -664,6 +673,7 @@ async fn count_carriers_store_as_the_count_carrier_model() {
         let schema = case.input.schema.as_str();
         let collection = format!("CountCarrier{index}");
         node.add_collection(
+            &node.node_context(),
             &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&format!("type {collection} {{ count: {schema} }}")),
         )
@@ -765,6 +775,7 @@ async fn integer_fields_take_count_text_as_the_count_carrier_model() {
         if !tools.contains_key(&schema) {
             let collection = format!("CountText{}", tools.len());
             node.add_collection(
+                &node.node_context(),
                 &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&format!("type {collection} {{ count: {schema} }}")),
             )
