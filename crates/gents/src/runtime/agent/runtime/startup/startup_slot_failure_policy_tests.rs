@@ -38,6 +38,7 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
             .readiness()
             .publish_snapshot(&ActiveRuntimeSnapshot {
                 placement_basis: Default::default(),
+                placement_bodies: Default::default(),
                 generation: 1,
                 node: None,
                 local_did: String::new(),

@@ -20,6 +20,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::agent_identity_watch::{
     AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
 };
+use gents_store::config_client::body_verification::PlacementBodies;
 use gents_store::config_client::placement_fence::PlacementBasis;
 use gents_store::identity::RuntimeNode;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolSurface};
@@ -241,6 +242,9 @@ pub struct ResolvedRuntimeSnapshot {
     pub unavailable_event_triggers: RapidHashSet<String>,
     pub active_tasks: RapidHashMap<String, ResolvedTask>,
     pub placement_basis: PlacementBasis,
+    /// Whether each Agent's body is authorized, as read in the transaction
+    /// that read `placement_basis`. Nothing decides on it yet.
+    pub placement_bodies: PlacementBodies,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -340,6 +344,7 @@ impl ResolvedRuntimeSnapshot {
             unavailable_event_triggers: RapidHashSet::new(),
             active_tasks: RapidHashMap::new(),
             placement_basis: PlacementBasis::default(),
+            placement_bodies: PlacementBodies::new(),
         }
     }
 
@@ -375,6 +380,11 @@ impl ResolvedRuntimeSnapshot {
 
     pub fn with_placement_basis(mut self, placement_basis: PlacementBasis) -> Self {
         self.placement_basis = placement_basis;
+        self
+    }
+
+    pub fn with_placement_bodies(mut self, placement_bodies: PlacementBodies) -> Self {
+        self.placement_bodies = placement_bodies;
         self
     }
 
@@ -481,6 +491,7 @@ impl ResolvedRuntimeSnapshot {
             unavailable_event_triggers: self.unavailable_event_triggers,
             active_tasks: self.active_tasks,
             placement_basis: self.placement_basis,
+            placement_bodies: self.placement_bodies,
             dispatchers,
             agent_executor_capacities,
             agent_executor_queue_capacities,
@@ -523,6 +534,7 @@ pub struct ActiveRuntimeSnapshot {
     pub unavailable_event_triggers: RapidHashSet<String>,
     pub active_tasks: RapidHashMap<String, ResolvedTask>,
     pub placement_basis: PlacementBasis,
+    pub placement_bodies: PlacementBodies,
     pub dispatchers: DispatcherMap,
     pub agent_executor_capacities: RapidHashMap<String, usize>,
     pub agent_executor_queue_capacities: RapidHashMap<String, usize>,

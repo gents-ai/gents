@@ -205,6 +205,7 @@ pub async fn session_command_agent_snapshot(
     let tool_configs = default_tool_configs(&agents);
     let snapshot = gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: Some(runtime_node),
         local_did: db.node_identity.did().into(),

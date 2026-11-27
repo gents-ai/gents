@@ -20,6 +20,7 @@ fn routed_snapshot(
     Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
             placement_basis: Default::default(),
+            placement_bodies: Default::default(),
             generation,
             node: None,
             local_did: String::new(),

@@ -193,6 +193,7 @@ pub(crate) fn test_snapshot(
     ).with_watcher_identity(agent.clone()));
     let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: None,
         local_did: gents_store::test_support::PIN_FIXED_DID.into(),

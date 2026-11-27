@@ -69,6 +69,7 @@ async fn source(
     .with_watcher_identity(agent_identity);
     let snapshot = Arc::new(ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: None,
         local_did: db.node_identity.did().to_owned(),
@@ -723,6 +724,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     .with_watcher_identity(agent.clone());
     let snapshot = Arc::new(ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: None,
         local_did: db.node_identity.did().to_owned(),

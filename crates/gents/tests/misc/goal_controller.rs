@@ -162,6 +162,7 @@ async fn source_for_agent(
     agents.insert(agent_identity.did().to_owned(), Arc::new(agent));
     let snapshot = Arc::new(ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: Some(node),
         local_did: db.node_identity.did().to_owned(),

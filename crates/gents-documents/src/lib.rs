@@ -77,6 +77,7 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
+pub use desired_state::body::placement_bodies;
 pub(crate) use desired_state::plan::document_identity;
 pub use desired_state::plan::{
     stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,

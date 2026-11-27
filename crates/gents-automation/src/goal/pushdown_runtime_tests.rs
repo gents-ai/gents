@@ -374,6 +374,7 @@ impl GoalFixture {
         agents.insert(self.agent_did().to_owned(), Arc::new(agent));
         Arc::new(ActiveRuntimeSnapshot {
             placement_basis: Default::default(),
+            placement_bodies: Default::default(),
             generation: 1,
             node: Some(node),
             local_did: self.did().to_string(),
