@@ -76,6 +76,11 @@ pub(crate) async fn load_document_runtime_view_as(
                     backend_observations: RapidHashMap::new(),
                     unknown_kind_backends,
                     oauth_accounts: gents_inference::auth::credential::NodeOAuthAccounts::default(),
+                    placement_floors:
+                        gents_store::config_client::assignment_receiver::placement_floors(
+                            txn, &owner,
+                        )
+                        .await?,
                 };
                 let visible = |id: &str| !gents_protocol::canonical::is_retired_reserved_id(id);
                 macro_rules! retain_visible {

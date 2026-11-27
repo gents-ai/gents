@@ -2056,3 +2056,5 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         "a same-artifact reinstall that changes the declaration must refresh the slot"
     );
 }
+
+mod placement;

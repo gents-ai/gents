@@ -20,6 +20,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::agent_identity_watch::{
     AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
 };
+use gents_store::config_client::placement_fence::PlacementBasis;
 use gents_store::identity::RuntimeNode;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolSurface};
 
@@ -239,6 +240,7 @@ pub struct ResolvedRuntimeSnapshot {
     pub active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
     pub unavailable_event_triggers: RapidHashSet<String>,
     pub active_tasks: RapidHashMap<String, ResolvedTask>,
+    pub placement_basis: PlacementBasis,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -337,6 +339,7 @@ impl ResolvedRuntimeSnapshot {
             active_event_triggers: RapidHashMap::new(),
             unavailable_event_triggers: RapidHashSet::new(),
             active_tasks: RapidHashMap::new(),
+            placement_basis: PlacementBasis::default(),
         }
     }
 
@@ -367,6 +370,11 @@ impl ResolvedRuntimeSnapshot {
 
     pub fn with_local_did(mut self, local_did: String) -> Self {
         self.local_did = local_did;
+        self
+    }
+
+    pub fn with_placement_basis(mut self, placement_basis: PlacementBasis) -> Self {
+        self.placement_basis = placement_basis;
         self
     }
 
@@ -472,6 +480,7 @@ impl ResolvedRuntimeSnapshot {
             active_event_triggers: self.active_event_triggers,
             unavailable_event_triggers: self.unavailable_event_triggers,
             active_tasks: self.active_tasks,
+            placement_basis: self.placement_basis,
             dispatchers,
             agent_executor_capacities,
             agent_executor_queue_capacities,
@@ -513,6 +522,7 @@ pub struct ActiveRuntimeSnapshot {
     pub active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
     pub unavailable_event_triggers: RapidHashSet<String>,
     pub active_tasks: RapidHashMap<String, ResolvedTask>,
+    pub placement_basis: PlacementBasis,
     pub dispatchers: DispatcherMap,
     pub agent_executor_capacities: RapidHashMap<String, usize>,
     pub agent_executor_queue_capacities: RapidHashMap<String, usize>,

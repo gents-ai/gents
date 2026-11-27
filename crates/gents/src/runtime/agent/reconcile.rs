@@ -19,9 +19,12 @@ use gents_tools::surface::AgentWithTools;
 use gents_tools::surface::ToolSurface;
 
 mod diff;
+mod proposal_outcome;
 mod slot;
 
 use diff::diff_counts;
+use gents_store::config_client::placement_fence::PlacementFence;
+use proposal_outcome::{proposal_outcome, ProposalOutcome};
 pub(crate) use slot::SlotFailurePolicy;
 use slot::{
     spawn_slot_with_layout, spawn_slots, AgentSlot, AgentSlotState, SlotConfig, WorkerLayout,
@@ -63,6 +66,7 @@ pub(super) struct GenerationSupervisor<F> {
     retiring_slots: JoinSet<Result<()>>,
     retired_slot_error: Option<anyhow::Error>,
     observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    placement: Arc<PlacementFence>,
 }
 
 fn slot_join_result(
@@ -196,6 +200,10 @@ where
             executor_capacities,
             executor_queue_capacities,
         ));
+        let placement = Arc::new(PlacementFence::new(
+            &current_snapshot.placement_basis,
+            &current_snapshot.agents.keys().cloned().collect::<Vec<_>>(),
+        ));
 
         Ok(Self {
             current_snapshot,
@@ -208,6 +216,7 @@ where
             retiring_slots: JoinSet::new(),
             retired_slot_error: None,
             observer: None,
+            placement,
         })
     }
 
@@ -221,6 +230,10 @@ where
 
     pub(super) fn current_snapshot(&self) -> Arc<ActiveRuntimeSnapshot> {
         self.current_snapshot.clone()
+    }
+
+    pub(super) fn placement(&self) -> Arc<PlacementFence> {
+        self.placement.clone()
     }
 
     pub(super) async fn run(
@@ -280,17 +293,35 @@ where
         self.runtime_status
             .set_reconcile_phase(ReconcilePhase::Diffing)
             .await;
-        if proposal.configuration_fingerprint() == self.current_snapshot.configuration_fingerprint()
-            && !self.active_slots.values().any(AgentSlot::parked)
-        {
-            tracing::debug!(
-                generation = self.current_snapshot.generation,
-                "runtime reconcile noop: resolved snapshot matches active generation"
-            );
-            self.runtime_status
-                .publish_noop(self.current_snapshot.as_ref())
-                .await;
-            return Ok(());
+        match proposal_outcome(
+            self.placement.admits(&proposal.placement_basis),
+            proposal.configuration_fingerprint()
+                != self.current_snapshot.configuration_fingerprint(),
+            self.active_slots.values().any(AgentSlot::parked),
+        ) {
+            ProposalOutcome::Drop => {
+                tracing::debug!(
+                    generation = self.current_snapshot.generation,
+                    "runtime reconcile dropped a proposal read before a placement floor"
+                );
+                self.placement.request_resolve();
+                self.runtime_status
+                    .publish_noop(self.current_snapshot.as_ref())
+                    .await;
+                return Ok(());
+            }
+            ProposalOutcome::AdvanceBasis => {
+                tracing::debug!(
+                    generation = self.current_snapshot.generation,
+                    "runtime reconcile noop: resolved snapshot matches active generation"
+                );
+                self.placement.advance_basis(&proposal.placement_basis);
+                self.runtime_status
+                    .publish_noop(self.current_snapshot.as_ref())
+                    .await;
+                return Ok(());
+            }
+            ProposalOutcome::Apply => {}
         }
 
         let diff = diff_counts(&self.current_snapshot, &proposal);
@@ -500,6 +531,14 @@ where
             retired_slots.push((agent_did, slot));
         }
 
+        self.placement.publish_generation(
+            &next_snapshot.placement_basis,
+            &runnable_agent_dids,
+            &retired_slots
+                .iter()
+                .map(|(agent_did, slot)| (agent_did.clone(), slot.generation))
+                .collect::<Vec<_>>(),
+        );
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;
         for (agent_did, slot) in retired_slots {
@@ -507,9 +546,11 @@ where
             drop(slot.dispatcher);
             let generation = slot.generation;
             let observer = self.observer.clone();
+            let placement = self.placement.clone();
             self.retiring_slots.spawn(async move {
                 let joined = slot_join_result(slot.handle.await, "retired agent slot failed");
                 tracing::info!(agent_did = %agent_did, generation, "retired agent slot joined");
+                placement.joined(&agent_did, generation);
                 if let Some(observer) = observer {
                     observer.on_retired_slot_joined(&agent_did, generation);
                 }

@@ -2130,6 +2130,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 .unwrap();
             let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
             let snapshot = Arc::new(ActiveRuntimeSnapshot {
+                placement_basis: Default::default(),
                 generation: 1,
                 node: None,
                 local_did: String::new(),
@@ -2338,6 +2339,7 @@ async fn start_owned_title_daemon(
         .unwrap();
     let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
     let snapshot = ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
         generation: 1,
         node: None,
         local_did: String::new(),

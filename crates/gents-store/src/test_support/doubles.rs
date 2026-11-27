@@ -326,4 +326,8 @@ impl AssignmentRuntime for AssignmentTestRuntime {
         self.changed.notify_one();
         Ok(true)
     }
+
+    fn placement_fence(&self) -> Option<&crate::config_client::placement_fence::PlacementFence> {
+        None
+    }
 }

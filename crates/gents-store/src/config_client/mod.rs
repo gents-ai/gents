@@ -29,6 +29,7 @@ mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
 mod device_group;
+pub mod placement_fence;
 pub(crate) use device_group::verified_publisher_node;
 pub(crate) mod transport_replica;
 pub use device_group::DeviceGroupReadError;
