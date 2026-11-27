@@ -666,6 +666,8 @@ pub(super) async fn load_timeline_compactions_for_session(
                 sequence
                 summary
                 messages_compacted
+                compacted_through_sequence
+                source_message_versions
                 original_tokens
                 compacted_tokens
                 created_at

@@ -180,6 +180,7 @@ import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.WorkspaceFire
 import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.CompactionCheckpoint
+import Proofs.Conformance.ImmutableCompaction
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation

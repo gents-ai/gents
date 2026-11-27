@@ -18,6 +18,42 @@ impl StaleCompactionGeneration {
     }
 }
 
+/// The same request retried compaction from a predecessor generation with a
+/// different payload or pinned source-message version set than the immutable
+/// `CompactionEntry` already committed there (Lean
+/// `Compaction.ImmutableEntry.decideWrite`).
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "compaction integrity conflict for session {session_id} key {compaction_key} (request {request_doc_id})"
+)]
+pub struct CompactionIntegrityConflict {
+    session_id: String,
+    compaction_key: String,
+    request_doc_id: String,
+}
+
+impl CompactionIntegrityConflict {
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
+}
+
+/// The cursor does not strictly advance past the prior compaction entry's
+/// cursor (Lean `Compaction.ImmutableEntry.cursor_regression_is_invalid`).
+#[derive(Debug, thiserror::Error)]
+#[error("compaction cursor regression for session {session_id}: cursor {cursor} <= prior {prior}")]
+pub struct CompactionCursorRegression {
+    session_id: String,
+    cursor: u32,
+    prior: u32,
+}
+
+impl CompactionCursorRegression {
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
+}
+
 /// The cursor names no stored message of its session, so provider input
 /// would hide the messages after it that no summary covers (Lean
 /// `Compaction.Cursor.namesStoredMessage`).
@@ -26,6 +62,12 @@ impl StaleCompactionGeneration {
 pub struct CompactionCursorNamesNoMessage {
     session_id: String,
     cursor: u32,
+}
+
+impl CompactionCursorNamesNoMessage {
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
 }
 
 #[derive(Serialize)]
@@ -56,6 +98,11 @@ struct PromptCompactionRow {
     messages_compacted: u32,
     #[serde(default)]
     compacted_through_sequence: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null"
+    )]
+    source_message_versions: Vec<gents_protocol::transcript::TranscriptFactRef>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -70,6 +117,11 @@ pub(super) struct CompactionGenerationRow {
     messages_compacted: u32,
     #[serde(default)]
     compacted_through_sequence: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null"
+    )]
+    source_message_versions: Vec<gents_protocol::transcript::TranscriptFactRef>,
     #[serde(
         default,
         deserialize_with = "gents_documents::deserialize_default_on_null"
@@ -102,6 +154,7 @@ pub(super) trait CompactionProjection {
     fn summary(&self) -> &str;
     fn messages_compacted(&self) -> u32;
     fn cursor(&self) -> Option<u32>;
+    fn source_message_versions(&self) -> &[gents_protocol::transcript::TranscriptFactRef];
 }
 
 impl CompactionProjection for PromptCompactionRow {
@@ -120,6 +173,9 @@ impl CompactionProjection for PromptCompactionRow {
     fn cursor(&self) -> Option<u32> {
         self.compacted_through_sequence
     }
+    fn source_message_versions(&self) -> &[gents_protocol::transcript::TranscriptFactRef] {
+        &self.source_message_versions
+    }
 }
 
 impl CompactionProjection for CompactionGenerationRow {
@@ -137,6 +193,9 @@ impl CompactionProjection for CompactionGenerationRow {
     }
     fn cursor(&self) -> Option<u32> {
         self.compacted_through_sequence
+    }
+    fn source_message_versions(&self) -> &[gents_protocol::transcript::TranscriptFactRef] {
+        &self.source_message_versions
     }
 }
 
@@ -183,8 +242,50 @@ where
             "compaction cursor regression for session {session_id} at sequence {}",
             row.sequence()
         );
+        validate_source_message_versions(
+            session_id,
+            row.sequence(),
+            prior_cursor,
+            cursor,
+            row.source_message_versions(),
+        )?;
         prior_cursor = Some(cursor);
     }
+    Ok(())
+}
+
+fn validate_source_message_versions(
+    session_id: &str,
+    entry_sequence: u32,
+    prior_cursor: Option<u32>,
+    cursor: u32,
+    versions: &[gents_protocol::transcript::TranscriptFactRef],
+) -> Result<()> {
+    if versions.is_empty() {
+        return Ok(());
+    }
+    let mut previous_sequence = None::<i64>;
+    for fact in versions {
+        anyhow::ensure!(
+            !fact.doc_id.trim().is_empty() && !fact.commit_cid.trim().is_empty(),
+            "compaction entry for session {session_id} at sequence {entry_sequence} has blank pinned source version"
+        );
+        anyhow::ensure!(
+            prior_cursor.is_none_or(|prior| fact.sequence > i64::from(prior))
+                && fact.sequence <= i64::from(cursor),
+            "compaction entry for session {session_id} at sequence {entry_sequence} pins out-of-range source message sequence {}",
+            fact.sequence
+        );
+        anyhow::ensure!(
+            previous_sequence.is_none_or(|prev| fact.sequence > prev),
+            "compaction entry for session {session_id} at sequence {entry_sequence} has non-increasing source message versions"
+        );
+        previous_sequence = Some(fact.sequence);
+    }
+    anyhow::ensure!(
+        previous_sequence == Some(i64::from(cursor)),
+        "compaction entry for session {session_id} at sequence {entry_sequence} pinned versions do not end at cursor {cursor}"
+    );
     Ok(())
 }
 
@@ -200,7 +301,8 @@ where
                 row.sequence(),
                 row.summary(),
                 row.messages_compacted(),
-                row.cursor()
+                row.cursor(),
+                row.source_message_versions()
             ])
         })
         .collect::<Vec<_>>();
@@ -251,7 +353,8 @@ pub async fn load_prompt_compaction_state_with_access(
             .field(fields::SEQUENCE)
             .field(fields::SUMMARY)
             .field(fields::MESSAGES_COMPACTED)
-            .field(fields::COMPACTED_THROUGH_SEQUENCE),
+            .field(fields::COMPACTED_THROUGH_SEQUENCE)
+            .field(fields::SOURCE_MESSAGE_VERSIONS),
     )
     .filter(session_scope(node_did, session_id, requester_did))
     .order_by(fields::SEQUENCE, Direction::Asc)
@@ -319,6 +422,7 @@ pub async fn load_compaction_entries(
             .field(fields::FILES_MODIFIED)
             .field(fields::MESSAGES_COMPACTED)
             .field(fields::COMPACTED_THROUGH_SEQUENCE)
+            .field(fields::SOURCE_MESSAGE_VERSIONS)
             .field(fields::ORIGINAL_TOKENS)
             .field(fields::COMPACTED_TOKENS)
             .field(fields::CREATED_AT),
@@ -358,6 +462,7 @@ pub async fn load_compaction_entries(
                 files_modified: files_modified.snapshot(),
                 messages_compacted: row.messages_compacted,
                 compacted_through_sequence: row.compacted_through_sequence,
+                source_message_versions: row.source_message_versions,
                 original_tokens,
                 compacted_tokens,
                 created_at: row.created_at,
@@ -448,8 +553,8 @@ pub(super) async fn save_compaction_entry_with_access(
                         "compaction agent differs from session agent"
                     );
                     use gents_protocol::document_query::{
-                        fields::{agent_message, compaction_entry as fields},
-                        session_scope, Direction, Filter, Query, Selection,
+                        fields::compaction_entry as fields, session_scope, Direction, Query,
+                        Selection,
                     };
                     let query = Query::select(
                         Selection::new()
@@ -458,6 +563,7 @@ pub(super) async fn save_compaction_entry_with_access(
                             .field(fields::SUMMARY)
                             .field(fields::MESSAGES_COMPACTED)
                             .field(fields::COMPACTED_THROUGH_SEQUENCE)
+                            .field(fields::SOURCE_MESSAGE_VERSIONS)
                             .field(fields::FILES_READ)
                             .field(fields::FILES_MODIFIED)
                             .field(fields::NODE_DID)
@@ -482,49 +588,55 @@ pub(super) async fn save_compaction_entry_with_access(
                     validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
                     let actual_generation = compaction_generation(&rows)?;
                     if actual_generation != expected_generation {
-                        if let Some(entry) =
-                            reconcile_exact_redelivery(&rows, input, summary, messages_compacted)?
+                        match reconcile_redelivery_in_txn(
+                            txn,
+                            &rows,
+                            input,
+                            summary,
+                            messages_compacted,
+                        )
+                        .await?
                         {
-                            return Ok(entry);
+                            RedeliveryDecision::Idempotent(entry) => return Ok(entry),
+                            RedeliveryDecision::IntegrityConflict { compaction_key } => {
+                                return Err(CompactionIntegrityConflict {
+                                    session_id: session_id.to_string(),
+                                    compaction_key,
+                                    request_doc_id: request_doc_id.to_string(),
+                                }
+                                .into());
+                            }
+                            RedeliveryDecision::StaleGeneration => {
+                                return Err(StaleCompactionGeneration {
+                                    session_id: session_id.to_string(),
+                                }
+                                .into());
+                            }
                         }
                     }
-                    if actual_generation != expected_generation {
-                        return Err(StaleCompactionGeneration {
-                            session_id: session_id.to_string(),
-                        }
-                        .into());
-                    }
-                    if let Some(cursor) = compacted_through_sequence {
-                        let prior_cursor = rows
-                            .iter()
-                            .rev()
-                            .find_map(|row| row.compacted_through_sequence);
-                        anyhow::ensure!(
-                            prior_cursor.is_none_or(|prior| cursor > prior),
-                            "compaction cursor regression for session {session_id}"
-                        );
-                        let named = txn
-                            .run(
-                                &Query::select(Selection::new().field(agent_message::SEQUENCE))
-                                    .filter(session_scope(node_did, session_id, requester_did))
-                                    .filter(Filter::eq(agent_message::SEQUENCE, cursor))
-                                    .limit(1)
-                                    .render(),
-                            )
-                            .await?;
-                        if named
-                            .pointer("/data/AgentMessage")
-                            .and_then(serde_json::Value::as_array)
-                            .context("compaction cursor query omitted rows")?
-                            .is_empty()
-                        {
-                            return Err(CompactionCursorNamesNoMessage {
+                    let prior_cursor = rows
+                        .iter()
+                        .rev()
+                        .find_map(|row| row.compacted_through_sequence);
+                    if let Some(prior) = prior_cursor {
+                        if input.compacted_through_sequence <= prior {
+                            return Err(CompactionCursorRegression {
                                 session_id: session_id.to_string(),
-                                cursor,
+                                cursor: input.compacted_through_sequence,
+                                prior,
                             }
                             .into());
                         }
                     }
+                    let source_message_versions = load_pinned_source_messages_in_txn(
+                        txn,
+                        node_did,
+                        session_id,
+                        requester_did,
+                        prior_cursor,
+                        input.compacted_through_sequence,
+                    )
+                    .await?;
 
                     let mut cumulative_files_read =
                         cumulative_file_paths(&rows, |row| &row.files_read)?;
@@ -544,6 +656,7 @@ pub(super) async fn save_compaction_entry_with_access(
                         compaction_key(node_did, session_id, requester_did, sequence);
                     let created_at =
                         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                    let source_versions_json = serde_json::to_value(&source_message_versions)?;
                     use gents_protocol::document_query::{Create, Input};
                     let input = Input::new()
                         .set(fields::COMPACTION_KEY, &compaction_key)
@@ -563,6 +676,7 @@ pub(super) async fn save_compaction_entry_with_access(
                             fields::COMPACTED_THROUGH_SEQUENCE,
                             compacted_through_sequence,
                         )
+                        .set(fields::SOURCE_MESSAGE_VERSIONS, source_versions_json)
                         .set(fields::ORIGINAL_TOKENS, original_tokens)
                         .set(fields::COMPACTED_TOKENS, compacted_tokens)
                         .set(fields::CREATED_AT, &created_at);
@@ -590,6 +704,7 @@ pub(super) async fn save_compaction_entry_with_access(
                         files_modified: cumulative_files_modified,
                         messages_compacted,
                         compacted_through_sequence,
+                        source_message_versions,
                         original_tokens,
                         compacted_tokens,
                         created_at,
@@ -694,12 +809,88 @@ fn validate_file_path_projection_chain(
     Ok(())
 }
 
-fn reconcile_exact_redelivery(
+async fn load_pinned_source_messages_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    prior_cursor: Option<u32>,
+    cursor: u32,
+) -> Result<Vec<gents_protocol::transcript::TranscriptFactRef>> {
+    use gents_protocol::document_query::{
+        fields::agent_message, session_scope, Direction, Filter, Query, Selection,
+    };
+    let mut query = Query::select(Selection::owned(
+        "_docID sequence _version { cid height fieldName }",
+    ))
+    .filter(session_scope(node_did, session_id, requester_did))
+    .filter(Filter::le(agent_message::SEQUENCE, cursor))
+    .order_by(agent_message::SEQUENCE, Direction::Asc);
+    if let Some(prior) = prior_cursor {
+        query = query.filter(Filter::gt(agent_message::SEQUENCE, prior));
+    }
+    let response = txn.run(&query.render()).await?;
+    let rows = response
+        .pointer("/data/AgentMessage")
+        .and_then(serde_json::Value::as_array)
+        .context("compaction source message query omitted rows")?;
+    let mut pinned = Vec::with_capacity(rows.len());
+    let mut previous_sequence = None::<i64>;
+    for row in rows {
+        let doc_id = row
+            .get("_docID")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .context("compaction source AgentMessage omitted _docID")?;
+        let sequence = row
+            .get("sequence")
+            .and_then(serde_json::Value::as_i64)
+            .with_context(|| format!("compaction source AgentMessage {doc_id} omitted sequence"))?;
+        anyhow::ensure!(
+            previous_sequence.is_none_or(|prev| sequence > prev),
+            "compaction source AgentMessage {doc_id} has non-increasing sequence {sequence}"
+        );
+        let commit = gents_store::graphql::document_composite_version(
+            row,
+            &format!("compaction source AgentMessage {doc_id}"),
+        )?
+        .with_context(|| {
+            format!("compaction source AgentMessage {doc_id} has no composite commit")
+        })?;
+        anyhow::ensure!(
+            !commit.cid.trim().is_empty(),
+            "compaction source AgentMessage {doc_id} has blank composite commit CID"
+        );
+        pinned.push(gents_protocol::transcript::TranscriptFactRef {
+            doc_id: doc_id.to_owned(),
+            sequence,
+            commit_cid: commit.cid,
+        });
+        previous_sequence = Some(sequence);
+    }
+    if previous_sequence != Some(i64::from(cursor)) {
+        return Err(CompactionCursorNamesNoMessage {
+            session_id: session_id.to_string(),
+            cursor,
+        }
+        .into());
+    }
+    Ok(pinned)
+}
+
+enum RedeliveryDecision {
+    Idempotent(CompactionEntry),
+    IntegrityConflict { compaction_key: String },
+    StaleGeneration,
+}
+
+async fn reconcile_redelivery_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     rows: &[CompactionGenerationRow],
     input: NewExactSessionCompaction<'_>,
     summary: &str,
     messages_compacted: u32,
-) -> Result<Option<CompactionEntry>> {
+) -> Result<RedeliveryDecision> {
     let NewExactSessionCompaction {
         expected_generation,
         session_id,
@@ -717,7 +908,7 @@ fn reconcile_exact_redelivery(
     let Some(predecessor_len) = (0..rows.len()).find(|length| {
         compaction_generation(&rows[..*length]).ok().as_deref() == Some(expected_generation)
     }) else {
-        return Ok(None);
+        return Ok(RedeliveryDecision::StaleGeneration);
     };
     let predecessor = &rows[..predecessor_len];
     let persisted = &rows[predecessor_len];
@@ -734,6 +925,27 @@ fn reconcile_exact_redelivery(
         cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_read)?;
     let persisted_files_modified =
         cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_modified)?;
+    let prior_cursor = predecessor
+        .last()
+        .and_then(|row| row.compacted_through_sequence);
+    let candidate_versions = match load_pinned_source_messages_in_txn(
+        txn,
+        node_did,
+        session_id,
+        requester_did,
+        prior_cursor,
+        input.compacted_through_sequence,
+    )
+    .await
+    {
+        Ok(versions) => Some(versions),
+        Err(error) if CompactionCursorNamesNoMessage::occurs_in(error.as_ref()) => None,
+        Err(error) => return Err(error),
+    };
+    let versions_match = match candidate_versions.as_deref() {
+        Some(versions) => versions == persisted.source_message_versions.as_slice(),
+        None => false,
+    };
     let requester_matches = persisted.requester_did.as_deref() == requester_did;
     let matches = persisted.node_did == node_did
         && requester_matches
@@ -745,23 +957,29 @@ fn reconcile_exact_redelivery(
         && usize::try_from(persisted.original_tokens).ok() == Some(original_tokens)
         && usize::try_from(persisted.compacted_tokens).ok() == Some(compacted_tokens)
         && persisted_files_read == expected_files_read
-        && persisted_files_modified == expected_files_modified;
-    if !matches {
-        return Ok(None);
+        && persisted_files_modified == expected_files_modified
+        && versions_match;
+    if matches {
+        return Ok(RedeliveryDecision::Idempotent(CompactionEntry {
+            session_id: session_id.to_string(),
+            sequence: persisted.sequence,
+            summary: persisted.summary.clone(),
+            files_read: persisted_files_read,
+            files_modified: persisted_files_modified,
+            messages_compacted: persisted.messages_compacted,
+            compacted_through_sequence: persisted.compacted_through_sequence,
+            source_message_versions: persisted.source_message_versions.clone(),
+            original_tokens,
+            compacted_tokens,
+            created_at: persisted.created_at.clone(),
+        }));
     }
-
-    Ok(Some(CompactionEntry {
-        session_id: session_id.to_string(),
-        sequence: persisted.sequence,
-        summary: persisted.summary.clone(),
-        files_read: persisted_files_read,
-        files_modified: persisted_files_modified,
-        messages_compacted: persisted.messages_compacted,
-        compacted_through_sequence: persisted.compacted_through_sequence,
-        original_tokens,
-        compacted_tokens,
-        created_at: persisted.created_at.clone(),
-    }))
+    if persisted.request_doc_id.as_deref() == Some(request_doc_id) {
+        return Ok(RedeliveryDecision::IntegrityConflict {
+            compaction_key: persisted.compaction_key.clone(),
+        });
+    }
+    Ok(RedeliveryDecision::StaleGeneration)
 }
 
 #[cfg(test)]
@@ -779,6 +997,7 @@ mod file_path_tests {
             summary: format!("summary-{sequence}"),
             messages_compacted: 1,
             compacted_through_sequence: Some(sequence * 10),
+            source_message_versions: Vec::new(),
             files_read: files_read.to_owned(),
             files_modified: files_modified.to_owned(),
             node_did: "did:test:files".to_owned(),

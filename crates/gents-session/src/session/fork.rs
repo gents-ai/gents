@@ -14,7 +14,7 @@ use super::history::sequence_message_key;
 use super::output::reader::TxnCanonicalReader;
 use super::sessions::ensure_session_in_txn;
 use gents_protocol::output::rows::{
-    decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
+    decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS_WITH_VERSION,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::session::SessionScope;
@@ -821,7 +821,12 @@ async fn copy_fork_inventory(
     Ok(())
 }
 
-fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Result<Value> {
+fn fork_compaction(
+    origin: &Value,
+    child: &str,
+    params: &ForkParams<'_>,
+    source_versions: &[gents_protocol::transcript::TranscriptFactRef],
+) -> Result<Value> {
     anyhow::ensure!(
         text(origin, "session_id")? == params.source_session_id
             && text(origin, "node_did")? == params.caller_node_did
@@ -839,6 +844,10 @@ fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Resu
     row.insert("requester_did".into(), json!(params.caller_requester_did));
     row.insert("request_id".into(), Value::Null);
     row.insert("request_doc_id".into(), Value::Null);
+    row.insert(
+        "source_message_versions".into(),
+        serde_json::to_value(source_versions)?,
+    );
     row.insert(
         "compaction_key".into(),
         json!(compaction_key(
@@ -932,7 +941,7 @@ async fn fork_in_txn(
                     )),
                 )
                 .plain(
-                    &Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                    &Query::select(Selection::owned(AGENT_MESSAGE_FIELDS_WITH_VERSION))
                         .filter(session_scope(
                             params.caller_node_did,
                             params.source_session_id,
@@ -955,6 +964,7 @@ async fn fork_in_txn(
                             .field(compaction_entry::FILES_MODIFIED)
                             .field(compaction_entry::MESSAGES_COMPACTED)
                             .field(compaction_entry::COMPACTED_THROUGH_SEQUENCE)
+                            .field(compaction_entry::SOURCE_MESSAGE_VERSIONS)
                             .field(compaction_entry::ORIGINAL_TOKENS)
                             .field(compaction_entry::COMPACTED_TOKENS)
                             .field(compaction_entry::CREATED_AT),
@@ -983,10 +993,36 @@ async fn fork_in_txn(
             return Err(ForkError::ForkSourceBusy);
         }
     }
-    let headers = rows(&snapshot, "AgentMessage")?
-        .iter()
-        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
-        .collect::<Result<Vec<_>>>()?;
+    let raw_headers = rows(&snapshot, "AgentMessage")?;
+    let mut source_versions = std::collections::BTreeMap::new();
+    let mut headers = Vec::with_capacity(raw_headers.len());
+    for row in &raw_headers {
+        let mut header_row = row.clone();
+        if let Some(object) = header_row.as_object_mut() {
+            object.remove("_version");
+        }
+        let header = decode_transcript_message_row(&header_row).map_err(anyhow::Error::from)?;
+        let commit = gents_store::graphql::document_composite_version(
+            row,
+            &format!("fork source AgentMessage {}", header.doc_id),
+        )
+        .map_err(anyhow::Error::from)?
+        .with_context(|| {
+            format!(
+                "fork source AgentMessage {} has no composite commit",
+                header.doc_id
+            )
+        })?;
+        source_versions.insert(
+            header.message.sequence,
+            gents_protocol::transcript::TranscriptFactRef {
+                doc_id: header.doc_id.clone(),
+                sequence: i64::from(header.message.sequence),
+                commit_cid: commit.cid,
+            },
+        );
+        headers.push(header);
+    }
     let mut sequences = BTreeSet::new();
     for header in &headers {
         if header.message.session_id != params.source_session_id
@@ -1164,6 +1200,7 @@ async fn fork_in_txn(
 
     let mut copied_compactions = 0u32;
     let mut child_compactions = Vec::new();
+    let mut prior_cursor = None::<u32>;
     for origin in compactions {
         let through = ordinal(&origin, "compacted_through_sequence")?;
         if u64::from(through) < cut {
@@ -1173,7 +1210,29 @@ async fn fork_in_txn(
                 )
                 .into());
             }
-            child_compactions.push(fork_compaction(&origin, child, params)?);
+            let expected_versions = source_versions
+                .iter()
+                .filter(|(&sequence, _)| {
+                    prior_cursor.is_none_or(|prior| sequence > prior) && sequence <= through
+                })
+                .map(|(_, fact)| fact.clone())
+                .collect::<Vec<_>>();
+            if let Some(existing_versions) = origin
+                .get("source_message_versions")
+                .filter(|value| !value.is_null())
+            {
+                let pinned: Vec<gents_protocol::transcript::TranscriptFactRef> =
+                    serde_json::from_value(existing_versions.clone())
+                        .map_err(anyhow::Error::from)?;
+                if !pinned.is_empty() && pinned != expected_versions {
+                    return Err(anyhow::anyhow!(
+                        "fork compaction pinned source_message_versions disagree with source headers"
+                    )
+                    .into());
+                }
+            }
+            child_compactions.push(fork_compaction(&origin, child, params, &expected_versions)?);
+            prior_cursor = Some(through);
         }
     }
     let child_chain = child_compactions
