@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Reply } from "@/screens/Transcript";
@@ -34,6 +34,16 @@ describe("a reply's copy button and time", () => {
     const { rerender } = render(<Reply item={live} />);
     await waitFor(() => expect(screen.getByText(start)).toBeInTheDocument());
 
+    /* the live text is all shown, and reported so, when the longer saved
+       message lands */
+    await act(() => new Promise((settled) => setTimeout(settled, 100)));
+    let drawn = 0;
+    const seen = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node instanceof HTMLElement && /Copy/.test(node.outerHTML)) drawn += 1;
+    });
+    seen.observe(document.body, { childList: true, subtree: true });
     rerender(<Reply item={saved} />);
     expect(screen.queryByText(answer)).not.toBeInTheDocument();
     expect(copy()).not.toBeInTheDocument();
@@ -42,6 +52,10 @@ describe("a reply's copy button and time", () => {
       timeout: 4_000,
     });
     await waitFor(() => expect(copy()).toBeInTheDocument());
+    seen.takeRecords();
+    seen.disconnect();
+    /* drawn once, at the end: never shown and taken away on the way */
+    expect(drawn).toBe(1);
   });
 
   it("show at once for a reply that never streamed", () => {

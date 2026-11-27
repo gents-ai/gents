@@ -24,8 +24,9 @@ export function StreamText({
   text: string;
   /** as Markdown's: the caller says whether this is the model's own reply */
   directives?: boolean;
-  /** told whether every character of `text` is shown, whenever that changes */
-  onRevealed?: (revealed: boolean) => void;
+  /** told the length of `text` once every character of it is shown, and
+      null while some are not */
+  onRevealed?: (length: number | null) => void;
 }) {
   const [enabled] = useState(smoothingOn);
   const [initial] = useState(() =>
@@ -41,7 +42,10 @@ export function StreamText({
   const running = enabled && visible < text.length;
   const report = useRef(onRevealed);
   report.current = onRevealed;
-  useEffect(() => report.current?.(!running), [running]);
+  useEffect(
+    () => report.current?.(running ? null : text.length),
+    [running, text.length],
+  );
 
   useEffect(() => {
     if (!running) return;
