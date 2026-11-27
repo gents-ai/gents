@@ -24,6 +24,35 @@ enum Stop {
     BeforeHostSent,
 }
 
+/// A User-created Agent document with none of its relationships granted.
+async fn created_agent(
+    household: &Household,
+    user: &ConfigAccess,
+) -> anyhow::Result<(gents_protocol::agent_identity::AgentIdentityBinding, String)> {
+    let agent = household.derive_agent()?;
+    let input = serde_json::json!({"input": {
+        "node_did": household.node_did.as_str(), "agent_did": agent.agent_did,
+        "creation_nonce": agent.creation_nonce, "inference_profile_id": "fixture",
+        "enabled": true,
+    }});
+    let agent_doc = user
+        .transact_write("test.host_recovery.agent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let created = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                        input,
+                        gents_protocol::schemas::AGENT,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&created, "Agent")?)
+            })
+        })
+        .await?;
+    Ok((agent, agent_doc))
+}
+
 struct Interrupted {
     household: Household,
     journal: Arc<defra_node::Node>,
@@ -40,30 +69,12 @@ impl Interrupted {
         let user = household.as_user()?;
         let user_did = household.user_did.to_string();
         let node_did = household.node_did.to_string();
-        let agent = household.derive_agent()?;
-        let input = serde_json::json!({"input": {
-            "node_did": node_did, "agent_did": agent.agent_did,
-            "creation_nonce": agent.creation_nonce, "inference_profile_id": "fixture",
-            "enabled": true,
-        }});
-        let agent_doc = user
-            .transact_write("test.host_recovery.agent", |txn| {
-                let input = &input;
-                Box::pin(async move {
-                    let created = txn
-                        .execute_client_signed_create(
-                            "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                            input,
-                            gents_protocol::schemas::AGENT,
-                        )
-                        .await?;
-                    Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&created, "Agent")?)
-                })
-            })
-            .await?;
+        let (agent, agent_doc) = created_agent(&household, &user).await?;
+        let held = household.held_key("user.key").await?;
+        anyhow::ensure!(gents_store::identity::NodeIdentity::did(held.as_ref()) == user_did);
         let journal = Arc::new(
             defra_node::Node::builder()
-                .with_node_identity_did(household.user.did())
+                .with_node_identity_did(&user_did)
                 .build()
                 .await?,
         );
@@ -149,19 +160,19 @@ impl Interrupted {
         .await
     }
 
-    /// The Nodes the Agent's `host` names, once nothing is owed.
-    async fn hosts(&self) -> anyhow::Result<Vec<String>> {
+    /// Whether the Agent's `host` names `node`, once nothing is owed.
+    async fn hosted_by(&self, node: &identity::Did) -> anyhow::Result<bool> {
         self.household
             .settled(&self.household.user_did, "the host grant")
             .await?;
         Ok(self
             .user
-            .list_document_relationships("Agent", &self.agent_doc)
-            .await?
-            .into_iter()
-            .filter(|relationship| relationship.relation == "host")
-            .map(|relationship| relationship.subject)
-            .collect())
+            .observe_actor_relationship("Agent", &self.agent_doc, "host", node)
+            .await?)
+    }
+
+    async fn hosted_here(&self) -> anyhow::Result<bool> {
+        self.hosted_by(&self.household.node_did).await
     }
 
     async fn shutdown(self) -> anyhow::Result<()> {
@@ -173,12 +184,11 @@ impl Interrupted {
 #[tokio::test]
 async fn a_host_grant_never_sent_is_sent_on_recovery() -> anyhow::Result<()> {
     let interrupted = Interrupted::at(Stop::AfterExecutor, false).await?;
-    assert!(interrupted.hosts().await?.is_empty());
+    assert!(!interrupted.hosted_here().await?);
     interrupted.recover().await?;
-    let node = interrupted.household.node_did.to_string();
-    assert_eq!(interrupted.hosts().await?, [node.clone()]);
+    assert!(interrupted.hosted_here().await?);
     interrupted.recover().await?;
-    assert_eq!(interrupted.hosts().await?, [node]);
+    assert!(interrupted.hosted_here().await?);
     interrupted.shutdown().await
 }
 
@@ -186,44 +196,71 @@ async fn a_host_grant_never_sent_is_sent_on_recovery() -> anyhow::Result<()> {
 async fn an_applied_host_grant_resent_under_its_delegation_takes_effect_once() -> anyhow::Result<()>
 {
     let interrupted = Interrupted::at(Stop::AfterHostApplied, false).await?;
-    let node = interrupted.household.node_did.to_string();
-    assert_eq!(interrupted.hosts().await?, [node.clone()]);
+    assert!(interrupted.hosted_here().await?);
     interrupted.recover().await?;
-    assert_eq!(interrupted.hosts().await?, [node]);
+    assert!(interrupted.hosted_here().await?);
+    interrupted.recover().await?;
     interrupted.shutdown().await
 }
 
+/// The premise the resend rests on, through the runtime's host grant route:
+/// the same request-bound delegation sent again applies nothing, even after
+/// the owner withdrew the grant. The runtime holds no key of the User here, as
+/// on a real home, so it sends the User's delegation rather than its own; the
+/// journal tests above hold the User's key in this process for the client's
+/// store, so this one drives the route without it.
 #[tokio::test]
 async fn a_host_grant_withdrawn_before_its_resend_is_not_revived() -> anyhow::Result<()> {
-    let interrupted = Interrupted::at(Stop::AfterHostApplied, false).await?;
-    interrupted
-        .user
-        .delete_actor_relationship(
-            "Agent",
-            &interrupted.agent_doc,
-            "host",
-            &interrupted.household.node_did,
+    let household = Household::open(DocumentAcp::Vera).await?;
+    let user = household.as_user()?;
+    let (_, agent_doc) = created_agent(&household, &user).await?;
+    let node = household.node_did.to_string();
+    let credential = user
+        .host_credential(&agent_doc, &node)
+        .await?
+        .context("a Vera home mints a request-bound host delegation")?;
+    let hosted = || async {
+        household
+            .settled(&household.user_did, "the host grant")
+            .await?;
+        Ok::<_, anyhow::Error>(
+            user.observe_actor_relationship("Agent", &agent_doc, "host", &household.node_did)
+                .await?,
         )
+    };
+    user.grant_host_bound(&agent_doc, &node, &credential)
         .await?;
-    assert!(interrupted.hosts().await?.is_empty());
-    interrupted.recover().await?;
-    assert!(interrupted.hosts().await?.is_empty());
-    interrupted.shutdown().await
+    assert!(hosted().await?);
+    user.grant_host_bound(&agent_doc, &node, &credential)
+        .await?;
+    assert!(hosted().await?);
+    user.delete_actor_relationship("Agent", &agent_doc, "host", &household.node_did)
+        .await?;
+    assert!(!hosted().await?);
+    user.grant_host_bound(&agent_doc, &node, &credential)
+        .await?;
+    assert!(!hosted().await?);
+    household.shutdown().await
+}
+
+async fn reported(interrupted: &Interrupted) -> anyhow::Result<()> {
+    let message = interrupted
+        .recover()
+        .await
+        .expect_err("an Agent placed nowhere is reported")
+        .to_string();
+    assert!(
+        message.contains("is not placed on any device") && message.contains(&interrupted.agent_doc),
+        "{message}"
+    );
+    Ok(())
 }
 
 #[tokio::test]
 async fn a_lapsed_unconfirmed_host_grant_is_reported_and_not_granted() -> anyhow::Result<()> {
     let interrupted = Interrupted::at(Stop::BeforeHostSent, true).await?;
-    let error = interrupted
-        .recover()
-        .await
-        .expect_err("an Agent placed nowhere is reported");
-    let message = error.to_string();
-    assert!(
-        message.contains("is not placed on any device") && message.contains(&interrupted.agent_doc),
-        "{message}"
-    );
-    assert!(interrupted.hosts().await?.is_empty());
+    reported(&interrupted).await?;
+    assert!(!interrupted.hosted_here().await?);
     interrupted.shutdown().await
 }
 
@@ -232,15 +269,14 @@ async fn a_lapsed_host_grant_found_on_this_node_succeeded() -> anyhow::Result<()
     let interrupted = Interrupted::at(Stop::AfterHostApplied, true).await?;
     interrupted.recover().await?;
     interrupted.recover().await?;
-    assert_eq!(
-        interrupted.hosts().await?,
-        [interrupted.household.node_did.to_string()]
-    );
+    assert!(interrupted.hosted_here().await?);
     interrupted.shutdown().await
 }
 
+/// A Vera home lists no relationships, so an Agent its owner placed on
+/// another Node is reported, and this Node is still not granted.
 #[tokio::test]
-async fn a_lapsed_host_grant_the_owner_moved_is_superseded() -> anyhow::Result<()> {
+async fn a_lapsed_host_grant_the_owner_moved_is_not_regranted() -> anyhow::Result<()> {
     let interrupted = Interrupted::at(Stop::BeforeHostSent, true).await?;
     let elsewhere = interrupted.household.held_key("elsewhere.key").await?;
     let elsewhere =
@@ -249,9 +285,9 @@ async fn a_lapsed_host_grant_the_owner_moved_is_superseded() -> anyhow::Result<(
         .user
         .add_actor_relationship("Agent", &interrupted.agent_doc, "host", &elsewhere)
         .await?;
-    interrupted.recover().await?;
-    interrupted.recover().await?;
-    assert_eq!(interrupted.hosts().await?, [elsewhere.to_string()]);
+    reported(&interrupted).await?;
+    assert!(interrupted.hosted_by(&elsewhere).await?);
+    assert!(!interrupted.hosted_here().await?);
     interrupted.shutdown().await
 }
 

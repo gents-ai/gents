@@ -211,7 +211,7 @@ async fn proxy(
                         if count == 0 { return Ok(()); }
                         request.extend_from_slice(&bytes[..count]);
                     }
-                    if headers.lines().next().is_some_and(|line| line.contains("/acp/document/relationship")) {
+                    if headers.lines().next().and_then(|line| line.split_whitespace().nth(1)).is_some_and(|path| path.ends_with("/acp/document/relationship")) {
                         let body: Value = serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
                         let method = headers.split_whitespace().next().unwrap().to_owned();
                         let relation = body["relation"].as_str().unwrap().to_owned();

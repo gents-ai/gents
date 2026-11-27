@@ -127,25 +127,30 @@ async fn resend(
 }
 
 /// What the Agent's `host` relationships show of this publication's Node.
+/// External premise (DefraDB `acp_ops`): a Vera home answers whether one actor
+/// holds a relation but lists no relationships, so on a home whose grant was
+/// retained under a request-bound delegation another Node's `host` reads as
+/// none, and the Agent is reported rather than taken as moved.
 async fn read_host(access: &ConfigAccess, record: &Record) -> Result<HostReading> {
-    let relationships = access
-        .list_document_relationships("Agent", &record.journal.agent_doc)
-        .await?;
+    let doc = &record.journal.agent_doc;
     let node = identity::Did::new(&record.journal.node_did)?;
-    let mut hosts = relationships
-        .iter()
-        .filter(|relationship| relationship.relation == "host")
-        .peekable();
-    if hosts.peek().is_none() {
+    if access
+        .observe_actor_relationship("Agent", doc, "host", &node)
+        .await?
+    {
+        return Ok(HostReading::ThisNode);
+    }
+    if record.host_credential.is_some() {
         return Ok(HostReading::Absent);
     }
-    Ok(
-        if hosts.any(|relationship| {
-            identity::Did::new(&relationship.subject).is_ok_and(|subject| subject == node)
-        }) {
-            HostReading::ThisNode
-        } else {
-            HostReading::OtherNode
-        },
-    )
+    let moved = access
+        .list_document_relationships("Agent", doc)
+        .await?
+        .iter()
+        .any(|relationship| relationship.relation == "host");
+    Ok(if moved {
+        HostReading::OtherNode
+    } else {
+        HostReading::Absent
+    })
 }
