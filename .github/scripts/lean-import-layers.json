@@ -153,6 +153,7 @@
   ],
   "modules": {
     "GenerateHouseholdPolicy": "conformance",
+    "GenerateHouseholdPolicyV2": "conformance",
     "GenerateMailboxPolicy": "conformance",
     "Proofs": "conformance"
   },
