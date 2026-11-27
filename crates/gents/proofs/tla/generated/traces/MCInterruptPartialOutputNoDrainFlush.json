@@ -1,0 +1,208 @@
+{
+  "config": "MCInterruptPartialOutputNoDrainFlush",
+  "constants": {
+    "AtomicHandoff": true,
+    "Chunks": 2,
+    "DrainFlushes": false
+  },
+  "expect": "violates NoReceivedOutputDropped",
+  "spec": "InterruptPartialOutput",
+  "steps": [
+    {
+      "action": "Receive",
+      "actor": null,
+      "after": {
+        "acc": 1,
+        "cause": "none",
+        "drive": "processing",
+        "durable": 0,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 0,
+        "cause": "none",
+        "drive": "select",
+        "durable": 0,
+        "emitted": 0,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Process",
+      "actor": null,
+      "after": {
+        "acc": 1,
+        "cause": "none",
+        "drive": "select",
+        "durable": 1,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 1,
+        "cause": "none",
+        "drive": "processing",
+        "durable": 0,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Receive",
+      "actor": null,
+      "after": {
+        "acc": 2,
+        "cause": "none",
+        "drive": "processing",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 1,
+        "cause": "none",
+        "drive": "select",
+        "durable": 1,
+        "emitted": 1,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Process",
+      "actor": null,
+      "after": {
+        "acc": 2,
+        "cause": "none",
+        "drive": "select",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 2,
+        "cause": "none",
+        "drive": "processing",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "EndOfStream",
+      "actor": null,
+      "after": {
+        "acc": 2,
+        "cause": "eof",
+        "drive": "draining",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 2,
+        "cause": "none",
+        "drive": "select",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Drain",
+      "actor": null,
+      "after": {
+        "acc": 2,
+        "cause": "eof",
+        "drive": "drained",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      },
+      "before": {
+        "acc": 2,
+        "cause": "eof",
+        "drive": "draining",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    },
+    {
+      "action": "Terminalize",
+      "actor": null,
+      "after": {
+        "acc": 2,
+        "cause": "eof",
+        "drive": "drained",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "failed",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 1
+      },
+      "before": {
+        "acc": 2,
+        "cause": "eof",
+        "drive": "drained",
+        "durable": 1,
+        "emitted": 2,
+        "latched": false,
+        "lifecycle": "processing",
+        "observed": false,
+        "slot": 0,
+        "terminalWrites": 0
+      }
+    }
+  ]
+}

@@ -439,6 +439,7 @@ pub struct BootedRuntime {
     node: Arc<defra_node::Node>,
     node_did: String,
     runtime: Option<RunningRuntime>,
+    pub observations: gents_inference::inference_observation::InferenceObservationRegistry,
     signal_shutdown_on_drop: bool,
     retired_slots: mpsc::UnboundedReceiver<(String, u64)>,
 }
@@ -464,7 +465,7 @@ impl BootedRuntime {
             "the booted runtime observes its own snapshot owner"
         );
         options.runtime_snapshot_observer = Some(Arc::new(RetiredSlots(retired_tx)));
-        let (runtime, _agent) = boot_runtime(home, identity, options)
+        let (runtime, agent) = boot_runtime(home, identity, options)
             .await
             .expect("the runtime becomes ready");
         let node_did = runtime.node_did.clone();
@@ -472,6 +473,7 @@ impl BootedRuntime {
             node: home.node.clone(),
             node_did,
             runtime: Some(runtime),
+            observations: agent.inference_observations().clone(),
             signal_shutdown_on_drop: true,
             retired_slots,
         }
