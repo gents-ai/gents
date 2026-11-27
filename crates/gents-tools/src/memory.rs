@@ -2,9 +2,10 @@
 //! full-text index, an in-process multilingual embedder, hybrid retrieval, and
 //! a bounded `memory` tool.
 //!
-//! The collection is installed by the runtime with the household `children`
-//! policy. A memory document's `parent` relationship is its session, so ACP
-//! grants the agent the same boundary it has on the session's other children.
+//! The collections are part of the runtime baseline under the household
+//! `agent_memory` policy. A memory document's `parent` relationship is its
+//! agent, so ACP grants the agent the owner boundary and memory outlives the
+//! session that wrote it.
 
 use std::sync::Arc;
 
@@ -17,15 +18,15 @@ use gents_loop::tool::{Tool, ToolCallEnvelope};
 use gents_memory_embed::{EmbedError, StaticEmbedder, DIMENSIONS, MODEL_ID};
 use gents_protocol::message::Message;
 use gents_protocol::tool_names::MEMORY_TOOL_NAME;
+use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::local::document_acp::node_policy_ids;
 use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const MEMORY_COLLECTION: &str = "AgentMemory";
+pub const MEMORY_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_NAME;
 
 const DEFAULT_TOP_K: usize = 8;
 const MAX_TOP_K: usize = 50;
@@ -36,31 +37,6 @@ const MAX_EXTRACTED_CHARS: usize = 32_000;
 const CHUNK_CHARS: usize = 2_000;
 const MAX_INJECT_CHARS: usize = 4_000;
 const RRF_K: f64 = 60.0;
-
-/// DefraDB SDL for the memory collection. The household policy placeholder is
-/// rendered with the home's policy ids before installation.
-pub const MEMORY_SDL: &str = r#"type AgentMemory
-  @policy(id: "$household", resource: "children")
-  @index(fields: ["agent_did", "content_hash"], unique: true)
-  @index(fields: ["agent_did", "created_at"]) {
-    memory_key: String @index(unique: true)
-    node_did: String @index @immutable
-    agent_did: String @index @immutable
-    session_id: String @index @immutable
-    session_doc_id: String @index @immutable
-    request_doc_id: String
-    requester_did: String
-    creator_did: String @immutable
-    source: String @index
-    kind: String @index
-    text: String @fulltext
-    embedding: [Float32!] @index(vector: {dimensions: 256, diskann: {R: 64, lBuild: 100, lSearch: 100, alphaPercent: 120, sampleBytes: 134217728, residentCodes: true}})
-    content_hash: String @index
-    model_id: String
-    created_at: DateTime @index(direction: DESC)
-    last_used_at: DateTime
-    metadata: JSON
-}"#;
 
 const HELP: &str = "Persistent cross-session memory. Actions: help, remember, search, forget, list, ingest. remember stores one text with a kind and optional metadata. search ranks stored memory with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes by memory_key. list returns newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash; stored counts new memory only and next_cursor is null after the last page. Results state the ranking mode; semantic ranking is not claimed when the embedder is unavailable.";
 
@@ -154,24 +130,6 @@ struct RawHit {
 }
 
 impl<'a> MemoryStore<'a> {
-    fn install_access(&self) -> anyhow::Result<ConfigAccess> {
-        let did = identity::Did::new(self.node_did)?;
-        Ok(ConfigAccess::local_as(self.node.clone(), did))
-    }
-
-    async fn ensure_collection(&self) -> anyhow::Result<()> {
-        let install = self.install_access()?;
-        if install
-            .collection_version(MEMORY_COLLECTION)
-            .await?
-            .is_none()
-        {
-            let sdl = node_policy_ids(self.node.as_ref()).render(MEMORY_SDL);
-            install.add_collection(&sdl).await?;
-        }
-        Ok(())
-    }
-
     // vertexia: memory queries are escaped GraphQL strings, following
     // session_history; move to gents_protocol::document_query once this
     // collection has typed fields.
@@ -216,7 +174,6 @@ impl<'a> MemoryStore<'a> {
         if text.chars().count() > MAX_TEXT_CHARS {
             anyhow::bail!("memory text exceeds {MAX_TEXT_CHARS} characters");
         }
-        self.ensure_collection().await?;
         let content_hash = content_hash(self.agent_did, text);
         if let Some(hit) = self.existing_memory(&content_hash).await? {
             return Ok((hit, false));
@@ -249,7 +206,7 @@ impl<'a> MemoryStore<'a> {
             .join(",");
         let created_at = Utc::now().to_rfc3339();
         let mutation = format!(
-            "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", model_id: \"{model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
+            "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", embed_model_id: \"{embed_model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
             memory_key = escape_graphql_string(&memory_key),
             node_did = escape_graphql_string(self.node_did),
             agent_did = escape_graphql_string(self.agent_did),
@@ -259,9 +216,9 @@ impl<'a> MemoryStore<'a> {
             kind = escape_graphql_string(kind),
             text = escape_graphql_string(text),
             content_hash = escape_graphql_string(&content_hash),
-            model_id = escape_graphql_string(MODEL_ID),
+            embed_model_id = escape_graphql_string(MODEL_ID),
         );
-        let doc_id = match self.create_and_link(&mutation, session_doc_id).await {
+        let doc_id = match self.create_and_link(&mutation).await {
             Ok(doc_id) => doc_id,
             Err(error) => {
                 if let Some(hit) = self.existing_memory(&content_hash).await? {
@@ -310,20 +267,26 @@ impl<'a> MemoryStore<'a> {
             }))
     }
 
-    async fn create_and_link(
-        &self,
-        mutation: &str,
-        session_doc_id: &str,
-    ) -> anyhow::Result<String> {
+    async fn create_and_link(&self, mutation: &str) -> anyhow::Result<String> {
         let mutation = mutation.to_owned();
         let collection = MEMORY_COLLECTION.to_owned();
-        let parent = session_doc_id.to_owned();
+        let node_did = self.node_did.to_owned();
+        let agent_did = self.agent_did.to_owned();
         self.access
             .transact_write("tool.memory.remember", move |txn| {
                 let mutation = mutation.clone();
                 let collection = collection.clone();
-                let parent = parent.clone();
+                let node_did = node_did.clone();
+                let agent_did = agent_did.clone();
                 Box::pin(async move {
+                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Agent,
+                        &node_did,
+                        &agent_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
                     let created = txn.execute(&mutation).await?;
                     let doc_id = created
                         .pointer("/data/add_AgentMemory/0/_docID")
@@ -334,8 +297,8 @@ impl<'a> MemoryStore<'a> {
                         &collection,
                         &doc_id,
                         "parent",
-                        "sessions",
-                        &parent,
+                        "agents",
+                        &agent_doc_id,
                     )
                     .await?;
                     Ok::<String, anyhow::Error>(doc_id)
@@ -349,7 +312,6 @@ impl<'a> MemoryStore<'a> {
         if query.is_empty() {
             anyhow::bail!("memory search query must not be empty");
         }
-        self.ensure_collection().await?;
         let limit = limit.clamp(1, MAX_TOP_K);
         let filter = format!(
             "{{agent_did: {{_eq: \"{}\"}}}}",
@@ -417,7 +379,6 @@ impl<'a> MemoryStore<'a> {
     }
 
     async fn list(&self, limit: usize) -> anyhow::Result<Vec<SearchHit>> {
-        self.ensure_collection().await?;
         let limit = limit.clamp(1, MAX_TOP_K);
         let value = self
             .read(&format!(
@@ -442,7 +403,6 @@ impl<'a> MemoryStore<'a> {
     }
 
     async fn forget(&self, memory_key: &str) -> anyhow::Result<usize> {
-        self.ensure_collection().await?;
         let value = self
             .write(&format!(
                 "mutation {{ delete_AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{memory_key: {{_eq: \"{}\"}}}}]}}) {{ _docID }} }}",
@@ -464,7 +424,6 @@ impl<'a> MemoryStore<'a> {
         limit: usize,
         offset: usize,
     ) -> anyhow::Result<(usize, Option<usize>)> {
-        self.ensure_collection().await?;
         let limit = limit.clamp(1, MAX_INGEST_LIMIT);
         let value = self
             .read(&format!(

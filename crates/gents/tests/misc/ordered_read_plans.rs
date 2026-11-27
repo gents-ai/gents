@@ -701,12 +701,6 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
     gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store()
-            .render(gents_tools::memory::MEMORY_SDL),
-    )
-    .await
-    .unwrap();
     let unsafe_query = r#"query @explain { AgentRequest(filter: {request_id: {_eq: "probe"}, content: {_eq: "probe"}}, order: {request_id: ASC}, limit: 1) {_docID} }"#;
     let unsafe_plan = gents_store::graphql::graphql_with_transaction_retry(
         &node,
