@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedNoCapClear ----
+EXTENDS AccountPool
+====

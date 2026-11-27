@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedAlwaysAdvanceCursor ----
+EXTENDS AccountPool
+====

@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedIgnoreExhausted ----
+EXTENDS AccountPool
+====
