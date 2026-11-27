@@ -249,6 +249,56 @@ impl FixtureNode {
     }
 }
 
+async fn apply_desired_documents(
+    access: &ConfigAccess,
+    label: &'static str,
+    documents: impl IntoIterator<Item = (Collection, Value)>,
+) {
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    access
+        .transact_write(label, |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+}
+
+async fn submit_signed_client_fixture_request(
+    user: &KeyIdentity,
+    user_access: &ConfigAccess,
+    mut create: AgentRequestCreate,
+    session_doc_id: &str,
+    agent_doc_id: &str,
+) {
+    create.session_doc_id = Some(session_doc_id.to_owned());
+    create.agent_doc_id = Some(agent_doc_id.to_owned());
+    gents_session::request::admission::sign_agent_request_create(user, &mut create)
+        .await
+        .unwrap();
+    gents_session::request::lifecycle::submit_client_request(user_access, &create)
+        .await
+        .unwrap();
+}
+
 async fn provision_fixture_agent(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
@@ -300,30 +350,18 @@ async fn provision_fixture_agent(
     let tools = format!("{}:tools", binding.agent_did);
     let profile = format!("{}:inference", binding.agent_did);
     let backend = format!("{}:backend", binding.agent_did);
-    let documents = [
-        (Collection::Agent, json!({"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"display_name":"contract-behavior","context_id":context,"inference_profile_id":profile})),
-        (Collection::AgentContext, json!({"node_did":identity.did(),"context_id":context,"tools_id":tools})),
-        (Collection::Tools, json!({"node_did":identity.did(),"tools_id":tools})),
-        (Collection::InferenceProfile, json!({"node_did":identity.did(),"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
-        (Collection::InferenceBackend, json!({"node_did":identity.did(),"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
-        collection, add: value.clone(), update: value,
-    }).collect();
-    let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    user_access
-        .transact_write("test.goal_fixture.agent", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    apply_desired_documents(
+        user_access,
+        "test.goal_fixture.agent",
+        [
+            (Collection::Agent, json!({"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"display_name":"contract-behavior","context_id":context,"inference_profile_id":profile})),
+            (Collection::AgentContext, json!({"node_did":identity.did(),"context_id":context,"tools_id":tools})),
+            (Collection::Tools, json!({"node_did":identity.did(),"tools_id":tools})),
+            (Collection::InferenceProfile, json!({"node_did":identity.did(),"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
+            (Collection::InferenceBackend, json!({"node_did":identity.did(),"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+        ],
+    )
+    .await;
     gents_inference::backends::registry::set_backend_probe_status_as(
         &admin,
         identity.did(),
@@ -487,7 +525,7 @@ impl Fixture {
         .await
         .unwrap();
         if let Some(request_id) = earlier {
-            let mut request = AgentRequestCreate::base(
+            let request = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
                 RequestScope::new(identity.did(), user.did(), &binding.agent_did, &session),
@@ -496,17 +534,14 @@ impl Fixture {
                 "2010-01-01T00:00:00Z",
                 AgentRequestAdmissionRecord::client(user.did()),
             );
-            request.session_doc_id = Some(session_doc_id.clone());
-            request.agent_doc_id = Some(agent_doc_id.clone());
-            gents_session::request::admission::sign_agent_request_create(
+            submit_signed_client_fixture_request(
                 user.as_ref(),
-                &mut request,
+                &user_access,
+                request,
+                &session_doc_id,
+                &agent_doc_id,
             )
-            .await
-            .unwrap();
-            gents_session::request::lifecycle::submit_client_request(&user_access, &request)
-                .await
-                .unwrap();
+            .await;
         }
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -517,17 +552,17 @@ impl Fixture {
             "2020-01-01T00:00:00Z",
             AgentRequestAdmissionRecord::client(user.did()),
         );
-        create.session_doc_id = Some(session_doc_id.clone());
-        create.agent_doc_id = Some(agent_doc_id.clone());
         create.caused_by_correlation = Some("graph-correlation".into());
         create.caused_by_source_doc_id = Some("source".into());
         create.caused_by_trigger_context = Some(r#"{"contract":"context"}"#.into());
-        gents_session::request::admission::sign_agent_request_create(user.as_ref(), &mut create)
-            .await
-            .unwrap();
-        gents_session::request::lifecycle::submit_client_request(&user_access, &create)
-            .await
-            .unwrap();
+        submit_signed_client_fixture_request(
+            user.as_ref(),
+            &user_access,
+            create,
+            &session_doc_id,
+            &agent_doc_id,
+        )
+        .await;
         if terminal_parent {
             use gents_protocol::document_query::{
                 fields::agent_request as fields, Filter, Input, Selection, Update,
@@ -741,7 +776,7 @@ impl Fixture {
         use gents_protocol::document_query::{
             fields::agent_request as fields, Filter, Input, Selection, Update,
         };
-        let mut create = AgentRequestCreate::base(
+        let create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             id,
             RequestScope::new(
@@ -755,18 +790,15 @@ impl Fixture {
             date,
             AgentRequestAdmissionRecord::client(self.user.did()),
         );
-        create.session_doc_id = Some(self.session_doc_id.clone());
-        create.agent_doc_id = Some(self.agent_doc_id.clone());
-        gents_session::request::admission::sign_agent_request_create(
-            self.user.as_ref(),
-            &mut create,
-        )
-        .await
-        .unwrap();
         let access = self.user_access();
-        gents_session::request::lifecycle::submit_client_request(&access, &create)
-            .await
-            .unwrap();
+        submit_signed_client_fixture_request(
+            self.user.as_ref(),
+            &access,
+            create,
+            &self.session_doc_id,
+            &self.agent_doc_id,
+        )
+        .await;
         let update = Update::matching(
             Filter::eq(fields::REQUEST_ID, id),
             Input::new().set(fields::LIFECYCLE_STATE, state),
@@ -835,34 +867,15 @@ impl Fixture {
             .unwrap()
             .unwrap();
         agent["inference_profile_id"] = PROFILE.into();
-        let plan = DesiredStateApplyPlan::new(vec![
-            DesiredStateApplyDocument {
-                collection: Collection::InferenceProfile,
-                add: profile.clone(),
-                update: profile,
-            },
-            DesiredStateApplyDocument {
-                collection: Collection::Agent,
-                add: agent.clone(),
-                update: agent,
-            },
-        ])
-        .unwrap();
-        access
-            .transact_write("test.claude_accounts.profile", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                    .map(|_| ())
-                })
-            })
-            .await
-            .unwrap();
+        apply_desired_documents(
+            &access,
+            "test.claude_accounts.profile",
+            [
+                (Collection::InferenceProfile, profile),
+                (Collection::Agent, agent),
+            ],
+        )
+        .await;
         ClaudeAccounts {
             access,
             a,
@@ -874,46 +887,25 @@ impl Fixture {
 
     pub async fn compacts_on(&self, access: &ConfigAccess, backend: &str) {
         let did = self.identity.did();
-        let documents = [
-            (
-                Collection::InferenceProfile,
-                json!({"node_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
-            ),
-            (
-                Collection::Compaction,
-                json!({"node_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
-            ),
-            (
-                Collection::AgentContext,
-                json!({"node_did": did, "context_id": format!("{}:context", self.parent.agent_did), "tools_id": format!("{}:tools", self.parent.agent_did), "compaction_id": "compaction-c"}),
-            ),
-        ];
-        let plan = DesiredStateApplyPlan::new(
-            documents
-                .into_iter()
-                .map(|(collection, value)| DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                })
-                .collect(),
+        apply_desired_documents(
+            access,
+            "test.compacts_on",
+            [
+                (
+                    Collection::InferenceProfile,
+                    json!({"node_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
+                ),
+                (
+                    Collection::Compaction,
+                    json!({"node_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
+                ),
+                (
+                    Collection::AgentContext,
+                    json!({"node_did": did, "context_id": format!("{}:context", self.parent.agent_did), "tools_id": format!("{}:tools", self.parent.agent_did), "compaction_id": "compaction-c"}),
+                ),
+            ],
         )
-        .unwrap();
-        access
-            .transact_write("test.compacts_on", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                    .map(|_| ())
-                })
-            })
-            .await
-            .unwrap();
+        .await;
     }
 
     pub async fn current_goal(&self) -> GoalDocument {
@@ -1184,8 +1176,8 @@ impl Fixture {
             .first()
             .map(|r| match r.request_id.as_str() {
                 id if id == self.parent.request_id => 10,
-                "later-request" => 30,
-                "older-active" | "claimed-later-request" => 40,
+                id if id.starts_with("later-request") => 30,
+                id if id.starts_with("older-active") || id == "claimed-later-request" => 40,
                 id if id.starts_with("goal-cont-") => 20,
                 id => panic!("unknown request {id}"),
             })
