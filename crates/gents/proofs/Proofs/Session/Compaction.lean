@@ -8,5 +8,6 @@ import Proofs.Session.Compaction.Properties
 import Proofs.Session.Compaction.Summarize
 import Proofs.Session.Compaction.Executable
 import Proofs.Session.Compaction.DurableReduction
+import Proofs.Session.Compaction.ImmutableEntry
 import Proofs.Session.Compaction.ReductionEngine
 import Proofs.Session.Compaction.Rolling

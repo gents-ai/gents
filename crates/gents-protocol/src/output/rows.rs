@@ -12,6 +12,11 @@ request_doc_id source ordinal writer runs close created_at _docID";
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
 
+pub const AGENT_MESSAGE_FIELDS_WITH_VERSION: &str =
+    "message_key session_id node_did requester_did \
+request_doc_id publication outcome sequence role native_id blocks created_at _docID \
+_version { cid height fieldName }";
+
 #[derive(Debug, thiserror::Error)]
 pub enum CanonicalRowError {
     #[error("{collection} row omitted _docID")]

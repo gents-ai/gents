@@ -24,7 +24,8 @@ use super::{
         load_request_in_txn, load_source_in_txn, retained_partial_blocks,
         validate_closed_source_extent, validate_source_physical_identities,
     },
-    PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
+    MessageKeyConflict, PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection,
+    ProviderPartialCandidate,
 };
 
 pub async fn close_provider_attempt_with_signer(
@@ -437,29 +438,37 @@ async fn partial_header_in_txn(
         .filter(|row| row.message.message_key == message_key)
         .collect::<Vec<_>>();
     if let [existing] = matching.as_slice() {
-        anyhow::ensure!(
-            existing.message.request_doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
-                && existing.message.publication
-                    == (MessagePublication::RequestRecovery {
-                        execution_generation: generation.to_owned(),
-                    })
-                && existing.message.outcome == OutputOutcome::Partial
-                && existing.message.role == MessageRole::Assistant
-                && existing.message.native_id.is_none()
-                && existing.message.native_request_id.is_none()
-                && existing
-                    .message
-                    .blocks
-                    .iter()
-                    .all(|block| partial_recovery_block_matches_close(block, &closing.doc_id)),
-            "partial publication replay changed its exact header"
-        );
+        let header_matches = existing.message.request_doc_id.as_deref()
+            == Some(prepared.request_doc_id.as_str())
+            && existing.message.publication
+                == (MessagePublication::RequestRecovery {
+                    execution_generation: generation.to_owned(),
+                })
+            && existing.message.outcome == OutputOutcome::Partial
+            && existing.message.role == MessageRole::Assistant
+            && existing.message.native_id.is_none()
+            && existing.message.native_request_id.is_none()
+            && existing
+                .message
+                .blocks
+                .iter()
+                .all(|block| partial_recovery_block_matches_close(block, &closing.doc_id));
+        if !header_matches {
+            return Err(MessageKeyConflict::new(
+                &message_key,
+                "partial publication replay changed its exact header",
+            )
+            .into());
+        }
         if let Some(factory) = header_factory {
             let proposed = factory(&closing.doc_id)?;
-            anyhow::ensure!(
-                proposed == existing.message,
-                "partial publication replay changed its header candidate"
-            );
+            if proposed != existing.message {
+                return Err(MessageKeyConflict::new(
+                    &message_key,
+                    "partial publication replay changed its header candidate",
+                )
+                .into());
+            }
         }
         crate::session::load_canonical_message_in_txn(
             txn,
@@ -470,10 +479,13 @@ async fn partial_header_in_txn(
         .await?;
         return Ok(Some(existing.doc_id.clone()));
     }
-    anyhow::ensure!(
-        matching.is_empty(),
-        "partial publication identity is ambiguous"
-    );
+    if !matching.is_empty() {
+        return Err(MessageKeyConflict::new(
+            &message_key,
+            "partial publication identity is ambiguous",
+        )
+        .into());
+    }
     if replay {
         let Some(SourceClose::Closed { segments, .. }) = closing.segment.close.as_ref() else {
             anyhow::bail!("partial replay has no Partial closure")

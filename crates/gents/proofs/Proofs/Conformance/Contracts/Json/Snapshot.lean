@@ -28,6 +28,7 @@ import Proofs.Conformance.DatastoreUpsert
 import Proofs.Conformance.DocumentSigner
 import Proofs.Conformance.Identity.RuntimeActorAuthority
 import Proofs.Conformance.StoreMigration
+import Proofs.Conformance.ImmutableCompaction
 
 namespace Conformance.Contracts
 

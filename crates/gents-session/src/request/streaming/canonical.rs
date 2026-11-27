@@ -84,6 +84,30 @@ pub enum ProviderReplayRejection {
     AwaitModeChanged,
 }
 
+/// A retry or duplicate publication attempted to bind an already-committed
+/// `AgentMessage.message_key` to a different source, generation, scope, or
+/// payload, or encountered duplicate twin rows under one key (Lean
+/// `CanonicalOutput.MessageKeyRetry.decideMessageWrite`).
+#[derive(Debug, thiserror::Error)]
+#[error("message key integrity conflict for {message_key}: {reason}")]
+pub struct MessageKeyConflict {
+    pub message_key: String,
+    pub reason: String,
+}
+
+impl MessageKeyConflict {
+    pub fn new(message_key: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            message_key: message_key.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderAppendRejection {
     #[error("cannot append to a closed provider source")]

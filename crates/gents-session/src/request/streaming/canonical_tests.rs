@@ -2036,3 +2036,168 @@ async fn provider_flush_preserves_output_and_replay_identity() {
     node.shutdown().await.expect("shut down test node");
     drop(path);
 }
+
+#[tokio::test]
+async fn generated_message_key_retry_decisions_match_lean_owner() {
+    use gents_lean_vocab::families::immutable_compaction_message_key_retry as family;
+    use gents_protocol::output::rows::{
+        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource,
+        PayloadPresentation, PayloadRef, PresentedPayload, TranscriptMessage,
+    };
+
+    gents_lean_vocab::snapshot().await;
+    let cases = family::cases();
+    assert!(!cases.is_empty());
+
+    let message_for = |payload_id: u64| {
+        gents_protocol::message::Message::assistant(format!("canonical-payload-{payload_id}"))
+    };
+    let source_for = |source_id: u64| OutputSource::ProviderTurn {
+        scope: "inference.1".parse().unwrap(),
+        turn_index: u32::try_from(source_id).unwrap(),
+        attempt: 0,
+    };
+
+    for case in cases {
+        let name = case.input.name.clone();
+        let (node, path, lifecycle, _writer) = fixture(&format!("msg-key-retry-{name}")).await;
+        let access = fixture_access(&node, &lifecycle);
+        let key = format!("provider:conformance:{name}");
+
+        let publish = |source_id: u64, payload_id: u64| {
+            let node = node.clone();
+            let lifecycle = &lifecycle;
+            let key = key.clone();
+            async move {
+                let message = message_for(payload_id);
+                let (mut segment, encoded) = provider_segment_for_message(
+                    lifecycle,
+                    &message,
+                    chrono::Utc::now().to_rfc3339(),
+                );
+                segment.source = source_for(source_id);
+                super::canonical::publish_provider_turn_with_signer(
+                    &node,
+                    lifecycle.actor_did().unwrap(),
+                    lifecycle.managed_agent_signer(),
+                    lifecycle.execution_generation().unwrap(),
+                    super::canonical::ProviderPublicationPlan {
+                        final_flush: Some(segment),
+                        message_key: key,
+                        encoded,
+                        expected: Arc::new(message),
+                        tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
+                        background_calls: Vec::new(),
+                        consumes_folded: None,
+                    },
+                )
+                .await
+            }
+        };
+
+        let mut seeded_docs = Vec::new();
+        for (index, existing) in case.input.existing.iter().enumerate() {
+            if index == 0 {
+                let published = publish(existing.source_id, existing.payload_digest)
+                    .await
+                    .expect("first seed publication must succeed");
+                seeded_docs.push(published.message_doc_id);
+            } else {
+                let request = lifecycle.request();
+                let duplicate = TranscriptMessage {
+                    native_request_id: None,
+                    message_key: key.clone(),
+                    session_id: request.session_id.clone(),
+                    node_did: request.node_did.clone(),
+                    requester_did: request.requester_did.clone(),
+                    request_doc_id: Some(request.doc_id.clone()),
+                    publication: MessagePublication::RequestExecution {
+                        execution_generation: lifecycle.execution_generation().unwrap().to_owned(),
+                    },
+                    outcome: OutputOutcome::Complete,
+                    sequence: u32::try_from(index + 1).unwrap(),
+                    role: MessageRole::Assistant,
+                    native_id: None,
+                    blocks: vec![MessageBlock::Text {
+                        text: PresentedPayload {
+                            output: PayloadRef {
+                                close_doc_id: seeded_docs[0].clone(),
+                                stream: 0,
+                            },
+                            presentation: PayloadPresentation::Full,
+                        },
+                    }],
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                let vars = transcript_message_create_variables(&duplicate).unwrap();
+                let resp = fixture_insert_child(
+                    &access,
+                    &lifecycle,
+                    CREATE_AGENT_MESSAGE_MUTATION,
+                    &vars,
+                    "AgentMessage",
+                )
+                .await;
+                let doc = gents_store::graphql::created_doc_id(&resp, "AgentMessage").unwrap();
+                seeded_docs.push(doc);
+            }
+        }
+
+        let before_rows = fixture_query(
+            &access,
+            &format!(
+                r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(&key),
+            ),
+        )
+        .await;
+        let before_count = before_rows.data.as_ref().unwrap()["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len();
+
+        let result = publish(
+            case.input.candidate.source_id,
+            case.input.candidate.payload_digest,
+        )
+        .await;
+
+        let after_rows = fixture_query(
+            &access,
+            &format!(
+                r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(&key),
+            ),
+        )
+        .await;
+        let after_count = after_rows.data.as_ref().unwrap()["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len();
+
+        let outcome = match result {
+            Ok(published) => {
+                if after_count > before_count {
+                    "create"
+                } else {
+                    assert_eq!(published.message_doc_id, seeded_docs[0]);
+                    "idempotent_replay"
+                }
+            }
+            Err(error) if super::canonical::MessageKeyConflict::occurs_in(error.as_ref()) => {
+                assert_eq!(after_count, before_count);
+                "integrity_conflict"
+            }
+            Err(error) => panic!("{name}: unexpected message-key retry error: {error:#}"),
+        };
+        case.check(family::MessageKeyRetryOutput {
+            outcome: outcome.to_owned(),
+        });
+
+        node.shutdown().await.expect("shut down test node");
+        drop(path);
+    }
+}
