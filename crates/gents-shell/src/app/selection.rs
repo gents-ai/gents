@@ -34,16 +34,18 @@ impl Selection {
     }
 }
 
-/// The graphemes of `text` that start at display columns `from..to`.
+/// The graphemes of `text` with a cell in display columns `from..to`, so a wide one the
+/// highlight covers half of is kept whole.
 pub(crate) fn columns(text: &str, from: u16, to: u16) -> String {
-    let mut at = 0;
+    let mut at: u16 = 0;
     let mut kept = String::new();
     for grapheme in Span::raw(text).styled_graphemes(Style::new()) {
-        if (from..to).contains(&at) {
+        let width = Span::raw(grapheme.symbol).width();
+        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        if at < to && at.saturating_add(width.max(1)) > from {
             kept.push_str(grapheme.symbol);
         }
-        let width = Span::raw(grapheme.symbol).width();
-        at = at.saturating_add(u16::try_from(width).unwrap_or(u16::MAX));
+        at = at.saturating_add(width);
     }
     kept
 }
@@ -55,6 +57,11 @@ mod tests {
     #[test]
     fn columns_slice_by_display_width() {
         assert_eq!(columns("a日本b", 1, 3), "日");
+        assert_eq!(
+            columns("日本x", 1, 3),
+            "日本",
+            "a cut through a wide grapheme keeps it"
+        );
         assert_eq!(columns("abc", 1, 99), "bc");
         assert_eq!(columns("abc", 5, 9), "");
     }

@@ -222,7 +222,12 @@ impl App {
             self.selection = None;
             return;
         }
-        let rows = self.conversation_rows(self.conversation_area(panes.agent).width);
+        let width = self.conversation_area(panes.agent).width;
+        let mut rows = self.conversation_rows(width);
+        for at in self.tabs[self.active].mark_rows(width) {
+            let row = &mut rows[at].0;
+            row.truncate(row.trim_end_matches(['▸', '▾']).trim_end().len());
+        }
         let text = selection.text(&rows);
         if text.trim().is_empty() {
             self.selection = None;
@@ -646,10 +651,35 @@ mod tests {
     #[test]
     fn a_drag_past_the_conversation_clamps() {
         let mut app = session_app(132, 36);
-        let (start, _) = reply_ends(&app);
-        drag(&mut app, start, (35, start.1));
-        let copied = app.take_clipboard().expect("a selection");
-        assert!(copied.starts_with("Moving them under"), "{copied}");
+        app.tabs[0].lines = numbered(100);
+        app.tabs[0].scroll = 10;
+        let shown = screen(&app);
+        let shows = |n: &usize| find(&shown, &format!("message {n}")).is_some();
+        let first = (10..100).find(shows).expect("the top shown row");
+        let last = (10..99).rev().find(shows).expect("rows hidden below");
+        let messages = |from: usize, to: usize| {
+            let rows = (from..=to).map(|n| format!("message {n}"));
+            rows.collect::<Vec<_>>().join("\n")
+        };
+        let (row, column) = find(&shown, "message 80").expect("a shown row");
+        drag(&mut app, (row, column), (35, 200));
+        assert_eq!(app.take_clipboard(), Some(messages(80, last)));
+        drag(&mut app, (row, column + 9), (0, 0));
+        assert_eq!(app.take_clipboard(), Some(messages(first, 80)));
+    }
+
+    #[test]
+    fn copying_a_command_leaves_out_its_open_mark() {
+        let mut app = session_app(132, 36);
+        command_tab(&mut app);
+        let shown = screen(&app);
+        let command = find(&shown, "✓ run").expect("the command");
+        let (row, column) = find(&shown, "All good.").expect("the reply");
+        drag(&mut app, (row, column + 8), command);
+        assert_eq!(
+            app.take_clipboard().as_deref(),
+            Some("✓ run   cargo check\n\nAll good.")
+        );
     }
 
     #[test]

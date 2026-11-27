@@ -146,6 +146,25 @@ impl Tab {
         opens.then(|| item.clone())
     }
 
+    /// The rows of `wrapped_rows` that end in an open or closed mark: each opener's last.
+    pub(super) fn mark_rows(&self, width: u16) -> Vec<usize> {
+        let rows = self.rows_of_lines(width);
+        let openers = self.openers();
+        let opens = |line: usize| {
+            let item = self.lines[line].item.as_deref();
+            item.is_some_and(|item| openers.contains(item))
+        };
+        let last = |at: usize| rows.get(at + 1).map(|next| next.2) != Some(rows[at].2);
+        let marked = |&at: &usize| rows[at].2.is_some_and(opens) && last(at);
+        (0..rows.len()).filter(marked).collect()
+    }
+
+    /// The items other lines open under.
+    fn openers(&self) -> RapidHashSet<&str> {
+        let unders = self.lines.iter().filter_map(|line| line.under.as_deref());
+        unders.collect()
+    }
+
     /// Opens a closed item and closes an open one.
     pub(super) fn toggle(&mut self, item: String) {
         if !self.open.remove(&item) {
@@ -166,11 +185,7 @@ impl Tab {
             seen.clear();
         }
         seen.truncate(self.lines.len());
-        let openers: RapidHashSet<&str> = self
-            .lines
-            .iter()
-            .filter_map(|line| line.under.as_deref())
-            .collect();
+        let openers = self.openers();
         let mut rows = Vec::new();
         let mut hid = false;
         for (at, line) in self.lines.iter().enumerate() {
