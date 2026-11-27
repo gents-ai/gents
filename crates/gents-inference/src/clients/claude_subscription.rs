@@ -500,6 +500,32 @@ fn pool_exhausted(reset_at: Option<u64>) -> CompletionError {
     CompletionError::ProviderError(limits.annotate(&message))
 }
 
+/// Outcome of re-selecting an account after a provider failure (Lean: `AccountRotation.Reselection`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub(crate) enum Reselection {
+    Exhausted,
+    SameAccount,
+    DifferentAccount,
+}
+
+impl Reselection {
+    fn of_choice(chosen_index: usize, next_index: Option<usize>) -> Self {
+        match next_index {
+            None => Self::Exhausted,
+            Some(next) if next == chosen_index => Self::SameAccount,
+            Some(_) => Self::DifferentAccount,
+        }
+    }
+}
+
+/// Whether a failed `open_rotated` call annotates the error `account-rotated`
+/// (Lean: `AccountRotation.markRotatedOnFailure`).
+pub(crate) fn mark_rotated_on_failure(rejected: bool, reselection: Reselection) -> bool {
+    rejected && reselection == Reselection::DifferentAccount
+}
+
 async fn open_rotated<S>(
     call: &ProviderCall,
     route: &ClaudeRoute,
@@ -546,19 +572,23 @@ where
     .await
     {
         Ok(stream) => Ok(stream),
-        Err(failure) if failure.rejected => {
-            // The rejected response was observed into the pool before this error returned.
-            let next = pool.choose(ids, session, family, now_unix_secs(), policy);
-            Err(match (failure.error, next) {
-                (CompletionError::ProviderError(text), Some(next))
-                    if next.index != choice.index =>
+        Err(failure) => {
+            let reselection = if failure.rejected {
+                // The rejected response was observed into the pool before this error returned.
+                let next = pool.choose(ids, session, family, now_unix_secs(), policy);
+                Reselection::of_choice(choice.index, next.map(|next| next.index))
+            } else {
+                Reselection::Exhausted
+            };
+            Err(match failure.error {
+                CompletionError::ProviderError(text)
+                    if mark_rotated_on_failure(failure.rejected, reselection) =>
                 {
                     CompletionError::ProviderError(mark_account_rotated(&text))
                 }
-                (error, _) => error,
+                error => error,
             })
         }
-        Err(failure) => Err(failure.error),
     }
 }
 
