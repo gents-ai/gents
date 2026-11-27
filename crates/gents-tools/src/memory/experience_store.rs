@@ -4,8 +4,8 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use super::experience::{
-    flags, fold, normalize, resolve, unresolved_count, AttemptRow, Current, FoldedProblem,
-    OutcomeRow, Rows, Score,
+    flags, fold, normalize, resolve, unresolved_count, AttemptRow, Current, Experience,
+    FoldedProblem, OutcomeRow, Rows, Score,
 };
 use super::experience_rows::{
     parse_aliases, parse_attempts, parse_outcomes, parse_problems, string_list, CallerContext,
@@ -14,7 +14,7 @@ use super::experience_rows::{
 use super::{
     content_hash, created_at_millis, link_parent_to_agent, nullable_string, vector_literal,
     MemoryParams, MemoryStore, MAX_ALIAS_ROWS, MAX_ATTEMPTS_PER_PAGE, MAX_OUTCOMES_PER_PAGE,
-    MAX_PAGE, PROBLEM_NEIGHBORS,
+    MAX_PAGE, MAX_RECALL_PROBLEMS, PROBLEM_NEIGHBORS,
 };
 
 const DEFAULT_PAGE: usize = 25;
@@ -69,6 +69,13 @@ fn score_json(score: Option<Score>) -> Value {
         Some(score) => json!({"passed": score.passed, "total": score.total}),
         None => Value::Null,
     }
+}
+
+pub(super) struct RecallPage {
+    pub(super) ranking: &'static str,
+    pub(super) ranks: Vec<String>,
+    pub(super) experience: Experience,
+    pub(super) history_truncated: bool,
 }
 
 pub(super) struct NewProblem<'a> {
@@ -270,7 +277,29 @@ impl MemoryStore<'_> {
     }
 
     async fn nearest_problems(&self, query: &str, exclude: &[String]) -> anyhow::Result<Value> {
-        let limit = PROBLEM_NEIGHBORS + exclude.len();
+        let (ranking, hits) = self
+            .hybrid_problems(query, PROBLEM_NEIGHBORS + exclude.len())
+            .await?;
+        let hits = hits
+            .into_iter()
+            .filter(|hit| !exclude.iter().any(|key| key == &hit.problem_key))
+            .take(PROBLEM_NEIGHBORS)
+            .map(|hit| {
+                json!({
+                    "problem_key": hit.problem_key,
+                    "name": hit.name,
+                    "score": hit.score,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"ranking": ranking, "hits": hits}))
+    }
+
+    async fn hybrid_problems(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<(&'static str, Vec<ProblemHit>)> {
         let filter = format!(
             "{{agent_did: {{_eq: \"{}\"}}}}",
             gents_store::graphql::escape_graphql_string(self.agent_did)
@@ -297,19 +326,66 @@ impl MemoryStore<'_> {
             (true, false) => "dense",
             (true, true) => "none",
         };
-        let hits = fuse_problems(bm25_rows, dense_rows, limit)
-            .into_iter()
-            .filter(|hit| !exclude.iter().any(|key| key == &hit.problem_key))
-            .take(PROBLEM_NEIGHBORS)
-            .map(|hit| {
-                json!({
-                    "problem_key": hit.problem_key,
-                    "name": hit.name,
-                    "score": hit.score,
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({"ranking": ranking, "hits": hits}))
+        Ok((ranking, fuse_problems(bm25_rows, dense_rows, limit)))
+    }
+
+    pub(super) async fn recall_page(
+        &self,
+        query: &str,
+        current: &Current,
+    ) -> anyhow::Result<RecallPage> {
+        let (ranking, hits) = self.hybrid_problems(query, MAX_RECALL_PROBLEMS).await?;
+        if hits.is_empty() {
+            return Ok(RecallPage {
+                ranking,
+                ranks: Vec::new(),
+                experience: Experience {
+                    problems: Vec::new(),
+                    unattached: Vec::new(),
+                },
+                history_truncated: false,
+            });
+        }
+        let aliases = self.aliases().await?;
+        let mut ranks: Vec<String> = Vec::new();
+        let mut keys: Vec<String> = Vec::new();
+        for hit in hits {
+            let canonical = resolve(&aliases, &hit.problem_key);
+            if !ranks.contains(&canonical) {
+                ranks.push(canonical.clone());
+            }
+            keys.extend(citation_keys(&aliases, &canonical));
+        }
+        keys.sort();
+        keys.dedup();
+        let problems = self.problems_by_key(&keys).await?;
+        let mut attempts = self
+            .attempts_for_keys(&keys, MAX_ATTEMPTS_PER_PAGE + 1, 0)
+            .await?;
+        let attempts_truncated = attempts.len() > MAX_ATTEMPTS_PER_PAGE;
+        attempts.truncate(MAX_ATTEMPTS_PER_PAGE);
+        let attempt_keys: Vec<String> = attempts
+            .iter()
+            .map(|attempt| attempt.attempt_key.clone())
+            .collect();
+        let (outcomes, outcomes_truncated) = self
+            .outcomes_for_attempts(&attempt_keys, MAX_OUTCOMES_PER_PAGE)
+            .await?;
+        let experience = fold(
+            current,
+            &Rows {
+                problems: problems.iter().map(ProblemRecord::row).collect(),
+                attempts,
+                outcomes,
+                aliases,
+            },
+        );
+        Ok(RecallPage {
+            ranking,
+            ranks,
+            experience,
+            history_truncated: attempts_truncated || outcomes_truncated,
+        })
     }
 
     pub(super) async fn problem(

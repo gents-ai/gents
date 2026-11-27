@@ -5,6 +5,8 @@ use rapidhash::RapidHashMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::experience::{recall, Current};
+use super::experience_store::RecallPage;
 use super::{content_hash, embedder, MemoryStore, MEMORY_COLLECTION};
 
 pub(crate) const DEFAULT_TOP_K: usize = 8;
@@ -14,8 +16,22 @@ pub(crate) const MAX_INGEST_LIMIT: usize = 500;
 const MAX_TEXT_CHARS: usize = 16_000;
 const MAX_EXTRACTED_CHARS: usize = 32_000;
 const CHUNK_CHARS: usize = 2_000;
-const MAX_INJECT_CHARS: usize = 4_000;
+const MAX_FACTS_INJECT_CHARS: usize = 2_400;
+const MAX_EXPERIENCE_INJECT_CHARS: usize = 1_600;
+const EXPERIENCE_RULES: &str = "Prior experience is not orders: check the model and agent behind each entry and reassess it after a change.\nRevisit a tested direction only with new evidence.\nOpen a new problem when none of these explains the failure.";
 const RRF_K: f64 = 60.0;
+
+/// The setting a recall is read against: the model, profile, backend and
+/// configuration version the turn will run. Only `model_name` and the agent
+/// DID decide provenance; the rest are shown to the reader as they are and
+/// are never inferred.
+#[derive(Debug, Clone, Copy)]
+pub struct RecallSetting<'a> {
+    pub model_name: &'a str,
+    pub profile_id: Option<&'a str>,
+    pub backend_id: Option<&'a str>,
+    pub configuration_version: Option<&'a str>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SearchHit {
@@ -462,13 +478,88 @@ fn format_section(outcome: &SearchOutcome) -> String {
     );
     for hit in &outcome.hits {
         let line = format!("- [{}] {}\n", hit.kind, hit.text.replace('\n', " "));
-        if section.len() + line.len() > MAX_INJECT_CHARS {
+        if section.len() + line.len() > MAX_FACTS_INJECT_CHARS {
             break;
         }
         section.push_str(&line);
     }
     section.push_str("</memory>");
     section
+}
+
+fn experience_header(setting: &RecallSetting<'_>, ranking: &str) -> String {
+    let mut parts = Vec::new();
+    if !setting.model_name.is_empty() {
+        parts.push(format!("model {}", setting.model_name));
+    }
+    if let Some(profile) = setting.profile_id {
+        parts.push(format!("profile {profile}"));
+    }
+    if let Some(backend) = setting.backend_id {
+        parts.push(format!("backend {backend}"));
+    }
+    if let Some(version) = setting.configuration_version {
+        parts.push(format!("configuration {version}"));
+    }
+    if parts.is_empty() {
+        format!("Problems by root cause ({ranking} ranking, highest first):")
+    } else {
+        format!(
+            "Problems by root cause ({ranking} ranking, highest first), current {}:",
+            parts.join(", ")
+        )
+    }
+}
+
+fn omitted_line(omitted: u64) -> String {
+    format!("{omitted} more not shown; call memory problems to list them.")
+}
+
+const PARTIAL_HISTORY_LINE: &str =
+    "Counts above cover the newest attempts only; call memory problem with a problem_key for the full history.";
+
+fn experience_section(
+    page: &RecallPage,
+    setting: &RecallSetting<'_>,
+    budget: usize,
+) -> Option<String> {
+    if page.experience.problems.is_empty() {
+        return None;
+    }
+    let header = experience_header(setting, page.ranking);
+    let omitted_reserve = omitted_line(page.experience.problems.len() as u64);
+    let frame = "<experience>\n".chars().count()
+        + header.chars().count()
+        + 1
+        + EXPERIENCE_RULES.chars().count()
+        + 1
+        + omitted_reserve.chars().count()
+        + 1
+        + if page.history_truncated {
+            PARTIAL_HISTORY_LINE.chars().count() + 1
+        } else {
+            0
+        }
+        + "</experience>".chars().count();
+    let index = recall(&page.experience, &page.ranks, budget.saturating_sub(frame));
+    let mut section = String::from("<experience>\n");
+    section.push_str(&header);
+    for line in &index.lines {
+        section.push('\n');
+        section.push_str(line);
+    }
+    if index.omitted > 0 {
+        section.push('\n');
+        section.push_str(&omitted_line(index.omitted));
+    }
+    if page.history_truncated {
+        section.push('\n');
+        section.push_str(PARTIAL_HISTORY_LINE);
+    }
+    section.push('\n');
+    section.push_str(EXPERIENCE_RULES);
+    section.push_str("\n</experience>");
+    Some(section)
 }
 
 /// Retrieve a bounded memory section for the current prompt, or `None` when
@@ -479,6 +570,31 @@ pub async fn inject(
     agent_did: &str,
     access: &gents_store::config_client::ConfigAccess,
     prompt: &str,
+    setting: &RecallSetting<'_>,
+) -> Option<String> {
+    inject_with_experience_budget(
+        node,
+        node_did,
+        agent_did,
+        access,
+        prompt,
+        setting,
+        MAX_EXPERIENCE_INJECT_CHARS,
+    )
+    .await
+}
+
+/// Retrieve the memory section with the experience block bounded by
+/// `experience_budget`; only a budget below the block's own frame is exceeded.
+#[allow(clippy::too_many_arguments)]
+pub async fn inject_with_experience_budget(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+    agent_did: &str,
+    access: &gents_store::config_client::ConfigAccess,
+    prompt: &str,
+    setting: &RecallSetting<'_>,
+    experience_budget: usize,
 ) -> Option<String> {
     if prompt.trim().is_empty() {
         return None;
@@ -505,13 +621,37 @@ pub async fn inject(
         access,
         embedder: &embedder,
     };
-    match store.search(prompt, DEFAULT_TOP_K).await {
+    let facts = match store.search(prompt, DEFAULT_TOP_K).await {
         Ok(outcome) if !outcome.hits.is_empty() => Some(format_section(&outcome)),
         Ok(_) => None,
         Err(error) => {
-            tracing::warn!(%error, "memory retrieval failed; continuing without memory");
+            tracing::warn!(%error, "memory fact retrieval failed; continuing without facts");
             None
         }
+    };
+    let current = Current {
+        agent_did: agent_did.to_owned(),
+        executed_model_name: setting.model_name.to_owned(),
+    };
+    let experience = match store.recall_page(prompt, &current).await {
+        Ok(page) => experience_section(&page, setting, experience_budget),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "memory experience retrieval failed; continuing without experience"
+            );
+            None
+        }
+    };
+    match (facts, experience) {
+        (None, None) => None,
+        (facts, experience) => Some(
+            [facts, experience]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
     }
 }
 
@@ -611,7 +751,7 @@ mod tests {
             hits: vec![SearchHit {
                 doc_id: "doc".to_owned(),
                 memory_key: "key".to_owned(),
-                text: "x".repeat(MAX_INJECT_CHARS),
+                text: "x".repeat(MAX_FACTS_INJECT_CHARS),
                 kind: "rule".to_owned(),
                 source: "test".to_owned(),
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
@@ -622,6 +762,6 @@ mod tests {
         };
         let section = format_section(&outcome);
         assert!(section.contains("hybrid ranking"));
-        assert!(section.len() <= MAX_INJECT_CHARS + 128);
+        assert!(section.len() <= MAX_FACTS_INJECT_CHARS + 128);
     }
 }

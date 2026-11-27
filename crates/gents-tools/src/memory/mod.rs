@@ -28,7 +28,7 @@ mod experience_write;
 mod facts;
 
 pub use experience::{fold, lands_on, merge_admitted, normalize, recall, resolve, MergeDecision};
-pub use facts::{inject, merge_context};
+pub use facts::{inject, inject_with_experience_budget, merge_context, RecallSetting};
 
 pub const MEMORY_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_NAME;
 
@@ -37,6 +37,7 @@ pub(crate) const MAX_ALIAS_ROWS: usize = 1024;
 pub(crate) const MAX_ATTEMPTS_PER_PAGE: usize = 500;
 pub(crate) const MAX_OUTCOMES_PER_PAGE: usize = 1000;
 pub(crate) const PROBLEM_NEIGHBORS: usize = 3;
+pub(crate) const MAX_RECALL_PROBLEMS: usize = 25;
 
 #[derive(Debug)]
 pub struct MemoryToolError(anyhow::Error);

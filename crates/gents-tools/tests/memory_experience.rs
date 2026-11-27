@@ -9,6 +9,7 @@ use gents_protocol::row::ExecutedInferenceSettings;
 use gents_session::request::lifecycle::ClaimOutcome;
 use gents_session::test_support::{AgentHome, ClaimedRequest, Stage};
 use gents_store::graphql::escape_graphql_string;
+use gents_tools::memory::RecallSetting;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -537,4 +538,182 @@ async fn problems_index_pages_and_states_truncation() {
         assert_eq!(entry["unresolved"], 0);
         assert_eq!(entry["provenance_flags"], json!([]));
     }
+}
+
+async fn record_recall_experience(
+    db: &AgentHome,
+    tool: &dyn ToolDyn,
+) -> (CurrentToolRuntimeContext, Value, Value) {
+    let mut request = ClaimedRequest::client_signed(&db.home, &db.binding)
+        .ids("request-memory-recall", "session-memory-recall")
+        .drive(Stage::Admitted)
+        .await;
+    request
+        .lifecycle
+        .set_executed_inference(ExecutedInferenceSettings {
+            model_name: "recorded-model".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
+            inference_profile_id: None,
+            runtime_generation: None,
+        });
+    assert!(
+        matches!(
+            request
+                .lifecycle
+                .claim_with_identity()
+                .await
+                .expect("claim"),
+            ClaimOutcome::Claimed
+        ),
+        "the request is claimed with its executed setting"
+    );
+    let runtime = runtime_for(db, &request);
+    let mut opened = Vec::new();
+    for (name, what) in [
+        (
+            "the startup read races the migration",
+            "wait for the migration before the first read",
+        ),
+        (
+            "the snapshot skips a committed row",
+            "read the row at the commit the snapshot pins",
+        ),
+    ] {
+        let problem = call(
+            tool,
+            json!({"action": "problem", "name": name}),
+            Some(runtime.clone()),
+        )
+        .await;
+        let attempt = call(
+            tool,
+            json!({
+                "action": "attempt",
+                "problem_key": problem["problem_key"],
+                "what": what,
+                "predicted": ["the failure is gone"]
+            }),
+            Some(runtime.clone()),
+        )
+        .await;
+        let outcome = call(
+            tool,
+            json!({
+                "action": "outcome",
+                "attempt_key": attempt["attempt_key"],
+                "fixed": ["the failure is gone"],
+                "passed": 4,
+                "total": 4
+            }),
+            Some(runtime.clone()),
+        )
+        .await;
+        assert!(outcome["outcome_key"].is_string());
+        opened.push(problem["problem_key"].clone());
+    }
+    let [first, second] = opened.try_into().expect("two problems");
+    (runtime, first, second)
+}
+
+#[tokio::test]
+async fn recall_names_the_current_model_and_states_omissions() {
+    let db = AgentHome::start("memory-recall").await;
+    let tool = memory_tool(&db).await;
+    let (_runtime, first, second) = record_recall_experience(&db, tool.as_ref()).await;
+
+    let setting = RecallSetting {
+        model_name: "current-model",
+        profile_id: Some("current-profile"),
+        backend_id: Some("current-backend"),
+        configuration_version: None,
+    };
+    let prompt =
+        "the startup read race with the migration and the snapshot that skips a committed row";
+    let section = gents_tools::memory::inject(
+        &db.node,
+        db.node_did(),
+        db.agent_did(),
+        &db.agent_access,
+        prompt,
+        &setting,
+    )
+    .await
+    .expect("the experience block is retrieved");
+    assert!(section.contains("<experience>"), "{section}");
+    assert!(
+        !section.contains("<memory>"),
+        "no facts were stored: {section}"
+    );
+    for key in [&first, &second] {
+        let key = key.as_str().expect("problem key");
+        assert!(section.contains(key), "{key} is not in {section}");
+    }
+    assert_eq!(
+        section.matches("from other model").count(),
+        2,
+        "every entry names the model it came from: {section}"
+    );
+    assert!(section.contains("current model current-model"), "{section}");
+    assert!(
+        section.contains("Prior experience is not orders"),
+        "{section}"
+    );
+
+    let truncated = gents_tools::memory::inject_with_experience_budget(
+        &db.node,
+        db.node_did(),
+        db.agent_did(),
+        &db.agent_access,
+        prompt,
+        &setting,
+        1,
+    )
+    .await
+    .expect("the experience block is still retrieved");
+    assert!(
+        truncated.contains("2 more not shown; call memory problems to list them."),
+        "{truncated}"
+    );
+    assert!(
+        !truncated.contains(first.as_str().expect("problem key")),
+        "a one-character budget shows no line: {truncated}"
+    );
+}
+
+#[tokio::test]
+async fn recall_renders_nothing_without_experience_rows() {
+    let db = AgentHome::start("memory-recall-empty").await;
+    let tool = memory_tool(&db).await;
+    let request = ClaimedRequest::client_signed(&db.home, &db.binding)
+        .ids("request-memory-recall-empty", "session-memory-recall-empty")
+        .drive(Stage::Executing)
+        .await;
+    let runtime = runtime_for(&db, &request);
+    let text = "the startup read races the migration";
+    call(
+        tool.as_ref(),
+        json!({"action": "remember", "text": text, "kind": "rule"}),
+        Some(runtime.clone()),
+    )
+    .await;
+
+    let setting = RecallSetting {
+        model_name: "current-model",
+        profile_id: None,
+        backend_id: None,
+        configuration_version: None,
+    };
+    let section = gents_tools::memory::inject(
+        &db.node,
+        db.node_did(),
+        db.agent_did(),
+        &db.agent_access,
+        text,
+        &setting,
+    )
+    .await
+    .expect("the fact is retrieved");
+    assert!(section.contains("<memory>"), "{section}");
+    assert!(!section.contains("<experience>"), "{section}");
 }
