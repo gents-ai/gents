@@ -45,7 +45,7 @@ impl Fixture {
             )),
         )
         .unwrap();
-        let server = fixture_server(FIXTURE_PY.into());
+        let server = fixture_server(fixture_py());
         let config = sample_config(
             root.clone(),
             FileToolMode::ReadWrite,

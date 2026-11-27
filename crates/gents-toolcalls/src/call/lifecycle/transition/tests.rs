@@ -51,25 +51,6 @@ async fn teardown(admission: PublishedAdmission) {
 }
 
 #[tokio::test]
-async fn job_row_has_kind_plugin_job() {
-    let admission = published_job_row("job-kind").await;
-    assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
-    let loaded = ToolCallLifecycle::load_by_doc_id_as(
-        admission.node.clone(),
-        admission.tool.actor().clone(),
-        admission.tool.doc_id().unwrap(),
-        &admission.node_did,
-        "session-job-kind",
-        admission.tool.requester_did(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(loaded.kind(), ToolRowKind::PluginJob);
-    teardown(admission).await;
-}
-
-#[tokio::test]
 async fn orphan_sweep_excludes_job_rows() {
     let admission = published_job_row("job-sweep").await;
     let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
@@ -122,6 +103,18 @@ fn may_foreground_is_false_for_session_message_and_plugin_job() {
 async fn published_admission_with_job_pin_loads_as_plugin_job() {
     let admission = published_job_row("job-pin").await;
     assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
+    let loaded = ToolCallLifecycle::load_by_doc_id_as(
+        admission.node.clone(),
+        admission.tool.actor().clone(),
+        admission.tool.doc_id().unwrap(),
+        &admission.node_did,
+        "session-job-pin",
+        admission.tool.requester_did(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(loaded.kind(), ToolRowKind::PluginJob);
     let response = admission
         .tool
         .access()

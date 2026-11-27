@@ -176,7 +176,7 @@ impl LspTool {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct LspArgs {
     action: String,
     #[serde(default)]
