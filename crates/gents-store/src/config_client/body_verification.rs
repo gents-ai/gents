@@ -1,5 +1,5 @@
 //! Whether the body of a placed Agent, its document and the configuration
-//! it selects, is authorized on this node (gents#4245).
+//! it selects, is authorized on this node.
 //!
 //! Authorization happens when a change is written. External premise
 //! (DefraDB): a node whose document access control is a Vera home holds the

@@ -78,8 +78,8 @@ async fn closure(
 
 /// Whether the body of each of `owner`'s Agents is authorized, by Agent
 /// `_docID`, read in `txn`. `agents` names each Agent's DID and `_docID`. A
-/// registration the provider does not answer counts as not registered: the
-/// body waits.
+/// document that cannot be read counts as absent and a registration the
+/// provider does not answer as not registered: the body waits.
 pub async fn placement_bodies(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -93,7 +93,13 @@ pub async fn placement_bodies(
     for (agent_did, agent_doc) in agents {
         let mut documents = Vec::new();
         if reads_closure {
-            for (collection, document) in closure(txn, owner, agent_did).await? {
+            let closure = closure(txn, owner, agent_did)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(agent_did, %error, "a body document was not read; the body waits");
+                    vec![(Collection::Agent, None)]
+                });
+            for (collection, document) in closure {
                 let Some(document) = document else {
                     documents.push(ClosureDocument {
                         present: false,
