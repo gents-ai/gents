@@ -6,6 +6,7 @@ pub(crate) mod doubles;
 mod executable_script;
 pub mod relationships;
 pub mod snapshot_reader;
+pub mod template_pool;
 mod test_store;
 pub mod wire_database;
 
@@ -175,9 +176,8 @@ pub fn fixture_agent_access(
     .unwrap()
 }
 
-pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
+pub fn test_identity(_name: &str) -> crate::identity::KeyIdentity {
+    crate::identity::KeyIdentity::generate().unwrap()
 }
 
 /// Provisions and resolves a managed Agent identity from `runtime` for
@@ -308,10 +308,7 @@ pub fn keyed_node_builder() -> (
 ) {
     use crate::identity::NodeIdentity as _;
 
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
-            .unwrap();
+    let identity = crate::identity::KeyIdentity::generate().unwrap();
     (
         defra_node::Node::builder().with_node_identity_did(identity.did()),
         std::sync::Arc::new(identity),

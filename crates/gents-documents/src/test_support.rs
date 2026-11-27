@@ -376,6 +376,7 @@ pub mod desired_state_fixtures {
         duplicate_collections: &[Collection],
     ) -> Result<()> {
         gents_store::test_support::acp_policies::install_identity_acp_policies(node).await?;
+        let mut schemas = Vec::new();
         for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
             .iter()
             .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -404,11 +405,13 @@ pub mod desired_state_fixtures {
                         );
                     }
                 }
-                node.add_collection(
-                    &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
-                )
-                .await?;
+                schemas.push(schema);
             }
+        }
+        if !schemas.is_empty() {
+            let batch =
+                gents_protocol::schemas::HomePolicyIds::node_store().render(&schemas.join("\n"));
+            node.add_collection(&batch).await?;
         }
         Ok(())
     }
@@ -584,5 +587,25 @@ mod ensure_test_node_tests {
             .expect("ensure_test_node must not panic under external writer race");
         let external_doc = external_task.await.expect("external writer task");
         assert_eq!(ensure_doc, external_doc);
+    }
+
+    #[tokio::test]
+    async fn template_cloned_signed_homes_keep_distinct_live_identities_across_into_parts() {
+        use gents_store::identity::NodeIdentity as _;
+
+        let first = super::SignedHome::start("signed-iso-a", Extensions::none()).await;
+        let (first_store, first_user, _first_access) = first.into_parts();
+        let second = super::SignedHome::start("signed-iso-b", Extensions::none()).await;
+        assert_ne!(
+            first_store.did(),
+            second.node_did(),
+            "into_parts must retain the template lease until TestStore drops"
+        );
+        assert_ne!(first_user.did(), second.user.did());
+        assert_ne!(first_store.did(), first_user.did());
+        assert_ne!(second.node_did(), second.user.did());
+
+        first_store.node.shutdown().await.unwrap();
+        second.store.node.shutdown().await.unwrap();
     }
 }
