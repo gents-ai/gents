@@ -1289,6 +1289,11 @@ class TlaSelection(unittest.TestCase):
         tla = select("crates/gents/proofs/tla/generated/LeanDecision_TransactionReplay.tla")["contract"]["tla"]
         self.assertEqual(set(tla), importers)
 
+    def test_a_generated_trace_selects_its_spec_and_desktop_conformance(self):
+        contract = select("crates/gents/proofs/tla/generated/traces/MCClientSubmissionContentionNoPayload.json")["contract"]
+        self.assertEqual(contract["tla"], ["ClientSubmissionContention"])
+        self.assertTrue(contract["ts_lean"])
+
     def test_a_config_selects_its_spec_and_the_runner_selects_every_spec(self):
         self.assertEqual(select("crates/gents/proofs/tla/MCPackUxWatchTransient.cfg")["contract"]["tla"],
                          ["PackUxWatch"])

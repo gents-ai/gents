@@ -246,6 +246,41 @@ fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
     }
 }
 
+pub(crate) fn retain_enabled_syntax(file: &mut syn::File) {
+    use syn::visit_mut::{self, VisitMut};
+
+    struct Enabled;
+
+    impl VisitMut for Enabled {
+        fn visit_item_mut(&mut self, item: &mut syn::Item) {
+            if is_disabled(item_attrs(item)) {
+                *item = syn::Item::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_item_mut(self, item);
+            }
+        }
+
+        fn visit_block_mut(&mut self, block: &mut syn::Block) {
+            block.stmts.retain(|stmt| !is_disabled(stmt_attrs(stmt)));
+            visit_mut::visit_block_mut(self, block);
+        }
+
+        fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
+            if is_disabled(expr_attrs(expr)) {
+                *expr = syn::Expr::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_expr_mut(self, expr);
+            }
+        }
+    }
+
+    if is_disabled(&file.attrs) {
+        file.items.clear();
+    } else {
+        Enabled.visit_file_mut(file);
+    }
+}
+
 fn flatten_use_tree(
     tree: &syn::UseTree,
     prefix: &mut Vec<String>,
@@ -651,6 +686,111 @@ mod tests {
     use std::sync::OnceLock;
 
     use super::*;
+
+    fn ts_trace_imports(source: &str) -> Vec<String> {
+        static IMPORT: OnceLock<regex::Regex> = OnceLock::new();
+        let import = IMPORT.get_or_init(|| regex::Regex::new(
+            r#"(?m)^\s*import\s+(?:[\w$,*\s]+|(?:[\w$]+\s*,\s*)?\{[^}]*\})\s+from\s+(?:"([^"\n]+)"|'([^'\n]+)')"#
+        ).unwrap());
+        import
+            .captures_iter(&strip_ts_comments(source))
+            .map(|capture| {
+                capture
+                    .get(1)
+                    .or_else(|| capture.get(2))
+                    .unwrap()
+                    .as_str()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn trace_imports_count_executable_tests_and_active_statements() {
+        let rust = r#"
+            #[cfg(false)] mod disabled { #[test] fn nested() { include_str!("mod"); } }
+            #[ignore = "manual"] #[test] fn ignored() { include_str!("ignored"); }
+            #[cfg_attr(any(unix, windows), ignore)] #[tokio::test]
+            async fn conditional() { include_str!("conditional"); }
+            #[test] fn active() {
+                #[cfg(false)] let hidden = include_str!("stmt");
+                let value = { #[cfg(false)] { include_str!("expr") } };
+                include_str!("active");
+            }
+            fn helper() { include_str!("helper"); }
+        "#;
+        let includes =
+            |source| crate::module_tree::test_string_includes(syn::parse_file(source).unwrap());
+        assert_eq!(includes(rust), ["active"]);
+        assert!(includes(&format!("#![cfg(false)]\n{rust}")).is_empty());
+        assert_eq!(
+            ts_trace_imports(
+                r#"
+            // import trace from "comment";
+            /* import trace from 'block'; */
+            import {
+                default as trace
+            } /* active */ from 'one.json';
+            import second
+                from "two.json";
+        "#
+            ),
+            ["one.json", "two.json"]
+        );
+    }
+
+    #[test]
+    fn every_generated_trace_has_one_replay_consumer() {
+        let workspace = workspace();
+        let compiled = crate::module_tree::enabled_module_tree(&workspace).compiled;
+        let mut files = Vec::new();
+        for root in SOURCE_ROOTS {
+            source_files(&workspace.join(root), &mut files);
+        }
+        let directory = crate::tla::generated_dir()
+            .join("traces")
+            .canonicalize()
+            .unwrap();
+        let mut sites = BTreeMap::<_, Vec<_>>::new();
+        for path in files {
+            let ts = [".test.ts", ".test.tsx"]
+                .iter()
+                .any(|suffix| path.to_string_lossy().ends_with(suffix));
+            if !ts && !compiled.contains(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path).unwrap();
+            if !source.contains("/generated/traces/") {
+                continue;
+            }
+            let imports = if ts {
+                ts_trace_imports(&source)
+            } else {
+                crate::module_tree::test_string_includes(syn::parse_file(&source).unwrap())
+            };
+            for import in imports.iter().filter(|s| s.contains("/generated/traces/")) {
+                let file = path.parent().unwrap().join(import).canonicalize().unwrap();
+                sites.entry(file).or_default().push(path.clone());
+            }
+        }
+        for entry in directory.read_dir().unwrap() {
+            let file = entry.unwrap().path();
+            if file.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let consumers = sites.remove(&file).unwrap_or_default();
+            assert_eq!(
+                consumers.len(),
+                1,
+                "{} replay consumers: {consumers:?}",
+                file.display()
+            );
+        }
+        assert!(
+            sites.is_empty(),
+            "consumers outside the generated traces: {sites:?}"
+        );
+    }
 
     const PREMISE_PREFIX: &str = "boundary.";
 

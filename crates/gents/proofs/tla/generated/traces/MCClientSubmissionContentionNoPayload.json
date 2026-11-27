@@ -1,0 +1,157 @@
+{
+  "config": "MCClientSubmissionContentionNoPayload",
+  "constants": {
+    "Attempts": 1,
+    "BindingChanges": false,
+    "LostReply": true,
+    "MaxSends": 2,
+    "PayloadLost": true,
+    "Publications": 0,
+    "PublishedBinding": false,
+    "Redrive": true,
+    "Refusals": false,
+    "ReserveRedrive": true,
+    "Reserves": false,
+    "RetryFreshId": false
+  },
+  "expect": "violates FailedOffersRetry",
+  "spec": "ClientSubmissionContention",
+  "steps": [
+    {
+      "action": "Compose",
+      "actor": null,
+      "after": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "open",
+            "tries": 1
+          }
+        ]
+      },
+      "before": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "none",
+        "payload": false,
+        "replies": [],
+        "rows": [],
+        "sends": 0,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": []
+      }
+    },
+    {
+      "action": "Timeout",
+      "actor": null,
+      "after": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "failed",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "open",
+            "tries": 1
+          }
+        ]
+      },
+      "before": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "open",
+            "tries": 1
+          }
+        ]
+      }
+    },
+    {
+      "action": "DropPayload",
+      "actor": null,
+      "after": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "failed",
+        "payload": false,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "open",
+            "tries": 1
+          }
+        ]
+      },
+      "before": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "failed",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "open",
+            "tries": 1
+          }
+        ]
+      }
+    }
+  ]
+}

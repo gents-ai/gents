@@ -376,7 +376,9 @@ def select(files, nodes=None, crate_for=crate_of):
             return sorted(nodes)
         chosen |= {name for name, node in nodes.items()
                    if any(within(path, modeled) for modeled in node.get("paths", []))}
-        if path.startswith(tla + "generated/"):
+        if path.startswith(tla + "generated/traces/") and path.endswith(".json"):
+            chosen |= by_file.get(Path(path).with_suffix(".cfg").name, set(nodes))
+        elif path.startswith(tla + "generated/"):
             module = Path(path).stem
             chosen |= {name for name, node in nodes.items() if module in node["generated"]}
         elif path.startswith(tla) and "/" not in path[len(tla):]:
@@ -542,8 +544,8 @@ class Tlc:
     def __init__(self, java, jar, timeout, heap):
         self.java, self.jar, self.timeout, self.heap = java, jar, timeout, heap
 
-    def run(self, cfg, text=None):
-        """Model-check one config; `text` replaces its contents. Returns (Outcome, seconds)."""
+    def execute(self, cfg, text=None):
+        """Model-check one config and retain its numbered state messages."""
         with tempfile.TemporaryDirectory(prefix="tlc-") as scratch:
             scratch = Path(scratch)
             config = cfg
@@ -556,8 +558,12 @@ class Tlc:
                 done = subprocess.run(command, cwd=TLA, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, timeout=self.timeout)
             except subprocess.TimeoutExpired:
-                return Outcome(f"timeout after {self.timeout}s", None), time.time() - started
-            return parse(done.stdout, done.returncode), time.time() - started
+                return Outcome(f"timeout after {self.timeout}s", None), time.time() - started, ""
+            return parse(done.stdout, done.returncode), time.time() - started, done.stdout
+
+    def run(self, cfg, text=None):
+        outcome, seconds, _ = self.execute(cfg, text)
+        return outcome, seconds
 
     def check(self, cfg):
         """The config's Outcome and seconds; a violated temporal property is named,
@@ -735,6 +741,59 @@ def run(arguments):
     return 1 if failed else 0
 
 
+def trace_bytes(tlc, spec, cfg):
+    import tlc_trace
+
+    outcome, _, output = tlc.execute(cfg)
+    expected = expectation(cfg)
+    if judge(expected, outcome) != "ok":
+        raise ValueError(f"{cfg.name}: expected {expected}, got {outcome}")
+    constants = cfg_sections(cfg.read_text())["CONSTANTS"]
+    bindings = {}
+    for name, equals, raw in zip(*[iter(constants)] * 3, strict=True):
+        if equals != "=" or name in bindings:
+            raise ValueError(f"{cfg.name}: unsupported constant {name} {equals} {raw}")
+        bindings[name] = tlc_trace.value(raw)
+    messages = []
+    for code, kind, body in MESSAGE.findall(output):
+        if kind == "4":
+            if code != "2217":
+                raise ValueError(f"{cfg.name}: unsupported TLC trace message {code}")
+            messages.append(body)
+    trace = dict(spec=spec, config=cfg.stem, expect=expected.verdict, constants=bindings,
+                 steps=tlc_trace.steps(messages))
+    return (json.dumps(trace, indent=2, sort_keys=True) + "\n").encode()
+
+
+def traces(check):
+    nodes = graph()
+    tlc = Tlc(*install(), int(os.getenv("TLA_TIMEOUT", "1800")), os.getenv("TLA_HEAP", "4g"))
+    directory = GENERATED / "traces"
+    def generate(entry):
+        spec, cfg = entry
+        data = trace_bytes(tlc, spec, cfg)
+        if not check and trace_bytes(tlc, spec, cfg) != data:
+            raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
+        return directory / (cfg.stem + ".json"), data
+
+    configs = [(spec, cfg) for spec in ("ClientSubmissionContention", "InterruptLatchContention")
+               for cfg in nodes[spec]["configs"] if expectation(cfg).verdict.startswith("violates ")]
+    with ThreadPoolExecutor(max_workers=int(os.getenv("TLA_JOBS", "4"))) as pool:
+        outputs = dict(pool.map(generate, configs))
+    obsolete = set(directory.glob("*.json")) - outputs.keys()
+    if check:
+        stale = obsolete | {p for p, data in outputs.items() if not p.exists() or p.read_bytes() != data}
+        if stale:
+            raise SystemExit(f"stale TLC traces: {sorted(p.name for p in stale)}; run make tla-traces")
+    else:
+        directory.mkdir(exist_ok=True)
+        for path, data in outputs.items():
+            path.write_bytes(data)
+        for path in obsolete:
+            path.unlink()
+    print(f"tla: {len(outputs)} traces {'checked' if check else 'regenerated twice and compared'}")
+
+
 def snapshot_functions():
     """The conformance snapshot's family keys, from the checked-in schema."""
     schema = json.loads((ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())
@@ -782,6 +841,7 @@ def main():
     chooser = commands.add_parser("select")
     chooser.add_argument("--files", required=True)
     commands.add_parser("check-headers")
+    commands.add_parser("traces").add_argument("--check", action="store_true")
     commands.add_parser("install")
     arguments = parser.parse_args()
     if arguments.command == "run":
@@ -791,6 +851,8 @@ def main():
         print("\n".join(select(files)))
     elif arguments.command == "check-headers":
         sys.exit(check_headers())
+    elif arguments.command == "traces":
+        traces(arguments.check)
     elif arguments.command == "install":
         java, jar = install()
         print(f"java: {java}\ntla2tools: {jar}\njvm: {' '.join(JVM_OPTIONS)}")

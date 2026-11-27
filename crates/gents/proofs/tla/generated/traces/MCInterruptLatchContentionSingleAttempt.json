@@ -1,0 +1,98 @@
+{
+  "config": "MCInterruptLatchContentionSingleAttempt",
+  "constants": {
+    "Attempts": 4,
+    "OtherInterrupt": false,
+    "Redrive": false,
+    "Reread": true,
+    "Writes": 1
+  },
+  "expect": "violates NoConflictLoss",
+  "spec": "InterruptLatchContention",
+  "steps": [
+    {
+      "action": "Open",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 0,
+        "writesLeft": 1
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "idle",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 0,
+        "ver": 0,
+        "writesLeft": 1
+      }
+    },
+    {
+      "action": "Renew",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 1,
+        "writesLeft": 0
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 0,
+        "writesLeft": 1
+      }
+    },
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "conflictLost": true,
+        "latch": "failed",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 1,
+        "writesLeft": 0
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 1,
+        "writesLeft": 0
+      }
+    }
+  ]
+}

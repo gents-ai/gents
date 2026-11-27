@@ -8,4 +8,5 @@ pub mod running_runtime;
 #[cfg(test)]
 pub(crate) mod runtime;
 pub mod subscription;
+pub mod tla_trace;
 pub mod tools;
