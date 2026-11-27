@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -26,6 +22,7 @@ import {
   type SessionLoadState,
   type SessionLoadingStatus,
 } from "../../src/lib/loadingStatus";
+import { runLeanGeneratorJson } from "./leanGenerator";
 
 type Blocker = {
   layer: OperationalStatus["layer"];
@@ -78,7 +75,6 @@ type Cases = {
   traces: { acts: Act[]; obs: Observation[] }[];
 };
 
-const run = promisify(execFile);
 const SELECTED = "session-selected";
 const OTHER = "session-other";
 const NODE = "did:key:node-0";
@@ -318,25 +314,10 @@ async function replay(acts: Act[]): Promise<Observation[]> {
 describe("generated selected-session load status", () => {
   let cases: Cases;
   beforeAll(async () => {
-    const proofsDir = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../../crates/gents/proofs",
+    cases = await runLeanGeneratorJson<Cases>(
+      "Proofs.Conformance.ClientSessionLoad:olean",
+      "Proofs/Conformance/ClientSessionLoad.lean",
     );
-    await run("lake", ["build", "Proofs.Conformance.ClientSessionLoad"], {
-      cwd: proofsDir,
-      timeout: 240_000,
-    });
-    const { stdout } = await run(
-      "lake",
-      ["env", "lean", "--run", "Proofs/Conformance/ClientSessionLoad.lean"],
-      {
-        cwd: proofsDir,
-        encoding: "utf8",
-        timeout: 240_000,
-        maxBuffer: 64 * 1024 * 1024,
-      },
-    );
-    cases = JSON.parse(stdout.trim()) as Cases;
   }, 300_000);
 
   it("drives the production projection, match and re-read budget with every Lean row", () => {

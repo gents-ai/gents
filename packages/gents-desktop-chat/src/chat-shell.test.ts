@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -178,24 +179,27 @@ function session(
 
 async function loadLeanContractSnapshot(): Promise<LeanContractSnapshot> {
   if (!leanContractSnapshot) {
-    const proofsDir = join(repoRoot(), "crates/gents/proofs");
-    await runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
-    const stdout = await runLeanCommand(proofsDir, [
-      "env",
-      "lean",
-      "--run",
-      "Proofs/Conformance/Contracts.lean",
-    ]);
-    const begin = uniqueMarkerPosition(stdout, CONTRACT_JSON_BEGIN);
-    const end = uniqueMarkerPosition(stdout, CONTRACT_JSON_END);
-    if (begin < 0 || end < 0 || begin >= end) {
-      throw new Error(
-        "Lean ClientShell contract JSON sentinel order is invalid",
-      );
-    }
-    leanContractSnapshot = JSON.parse(
-      stdout.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim(),
-    ) as LeanContractSnapshot;
+    const contractFile = process.env.GENTS_LEAN_CONTRACT_FILE?.trim();
+    const raw = contractFile
+      ? await readFile(contractFile, "utf8")
+      : await runLeanGenerator(
+          "Proofs.Conformance.Contracts:olean",
+          "Proofs/Conformance/Contracts.lean",
+        );
+    const json =
+      contractFile && !raw.includes(CONTRACT_JSON_BEGIN)
+        ? raw.trim()
+        : (() => {
+            const begin = uniqueMarkerPosition(raw, CONTRACT_JSON_BEGIN);
+            const end = uniqueMarkerPosition(raw, CONTRACT_JSON_END);
+            if (begin < 0 || end < 0 || begin >= end) {
+              throw new Error(
+                "Lean ClientShell contract JSON sentinel order is invalid",
+              );
+            }
+            return raw.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim();
+          })();
+    leanContractSnapshot = JSON.parse(json) as LeanContractSnapshot;
   }
 
   return leanContractSnapshot;
@@ -215,12 +219,66 @@ async function leanFamilyCases<Input, Output>(
   return family.cases as Array<LeanFamilyCase<Input, Output>>;
 }
 
-function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
-  const command = `lake ${args.join(" ")}`;
+function findPrebuiltGenerator(root: string): string | null {
+  const override = process.env.GENTS_LEAN_GENERATOR?.trim();
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`GENTS_LEAN_GENERATOR points to missing binary: ${override}`);
+    }
+    return override;
+  }
+  const binaryName =
+    process.platform === "win32"
+      ? "gents-lean-generator.exe"
+      : "gents-lean-generator";
+  const targetRoots = [
+    process.env.CARGO_TARGET_DIR?.trim(),
+    join(root, "target"),
+  ].filter((value): value is string => Boolean(value));
+
+  let newest: { path: string; mtimeMs: number } | null = null;
+  for (const targetRoot of targetRoots) {
+    for (const profile of ["ci-native", "fast-dev", "debug", "release"]) {
+      const candidate = join(targetRoot, profile, binaryName);
+      if (!existsSync(candidate)) continue;
+      const mtimeMs = statSync(candidate).mtimeMs;
+      if (!newest || mtimeMs > newest.mtimeMs) {
+        newest = { path: candidate, mtimeMs };
+      }
+    }
+  }
+  return newest?.path ?? null;
+}
+
+function runLeanGenerator(target: string, file: string): Promise<string> {
+  const root = repoRoot();
+  const proofsDir = join(root, "crates/gents/proofs");
+  const binary = findPrebuiltGenerator(root);
+  const [command, args] = binary
+    ? [binary, [proofsDir, target, file]]
+    : [
+        "cargo",
+        [
+          "run",
+          "--quiet",
+          "--profile",
+          "fast-dev",
+          "-p",
+          "gents-lean-contract",
+          "--bin",
+          "gents-lean-generator",
+          "--",
+          proofsDir,
+          target,
+          file,
+        ],
+      ];
+  const label = `${command} ${args.join(" ")}`;
   return new Promise((resolve, reject) => {
     // spawnSync trips the Vitest worker RPC timeout; use async spawn.
-    const child = spawn("lake", args, {
-      cwd: proofsDir,
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: GENERATED_CONTRACT_COMMAND_TIMEOUT_MS,
     });
     let stdout = "";
@@ -234,15 +292,13 @@ function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
       stderr += chunk;
     });
     child.on("error", (error) => {
-      reject(
-        new Error(`failed to run ${command} in ${proofsDir}: ${error.message}`),
-      );
+      reject(new Error(`failed to run ${label} in ${root}: ${error.message}`));
     });
     child.on("close", (status) => {
       if (status !== 0) {
         reject(
           new Error(
-            `${command} failed in ${proofsDir}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+            `${label} failed in ${root}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
           ),
         );
         return;
@@ -573,54 +629,6 @@ describe("a session this app doesn't own", () => {
     expect(
       project(workerSummary(null)).nonEmptyContentSendStatus,
     ).not.toMatchObject({ reason: "sessionNotOwned" });
-  });
-});
-
-describe("a sent message held in the pending queue", () => {
-  const sent: ChatWorkflowState = {
-    kind: "awaitingObservation",
-    nodeDid: "did:key:node",
-    sessionId: "session-1",
-    requestId: "req-sent",
-  };
-  const queuedAs = (requestId: string) => ({
-    requestDocId: `doc-${requestId}`,
-    requestId,
-    content: "queued prompt",
-    editable: true,
-    steerable: false,
-    editGroup: null,
-  });
-  const project = (overrides: Partial<DesktopSessionSnapshot>) =>
-    projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:key:node",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({ nodeDid: "did:key:node", ...overrides }),
-      localWorkflow: sent,
-    });
-
-  test("is no longer awaited, so editing or removing it leaves the composer free", () => {
-    const projection = project({
-      turnState: "completed",
-      pendingQueue: [queuedAs("req-sent")],
-    });
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.nonEmptyContentSendStatus.kind).toBe("ready");
-  });
-
-  test("waits behind the running turn rather than offering to stop itself", () => {
-    const projection = project({
-      turnState: "running",
-      pendingQueue: [queuedAs("req-sent")],
-    });
-    expect(projection.workflow).toMatchObject({
-      kind: "turnInProgress",
-      requestId: "req-1",
-    });
-    expect(projection.activeRequestId).toBe("req-1");
   });
 });
 

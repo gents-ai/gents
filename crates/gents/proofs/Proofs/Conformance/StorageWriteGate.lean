@@ -4,6 +4,8 @@ import Proofs.Conformance.Family
 namespace Conformance.StorageWriteGateContracts
 open StorageWriteGate
 
+deriving instance Lean.ToJson for StorageWriteGate.Event
+
 structure Case where
   name : String
   independentlyScheduled : Bool
@@ -92,5 +94,48 @@ def streamFinalization : Conformance.Family FinalizationInput FinalizationOutput
     { gateHeld := held final
       guardDrops := guardDropCount final
       finalizerFinished := !i.consumerDrops && !held final }
+
+structure LifecycleInput where
+  name : String
+  events : List Event
+  deriving Lean.ToJson
+
+structure LifecycleOutput where
+  initialGateHeld : Bool
+  gateHeldAfterStep : List Bool
+  deriving Lean.ToJson
+
+def lifecycleInitial : State := ⟨.storage, true, false⟩
+
+def evalLifecycleSteps (state : State) : List Event → List Bool
+  | [] => []
+  | event :: rest =>
+      let next := step state event
+      held next :: evalLifecycleSteps next rest
+
+def lifecycleInputs : List LifecycleInput :=
+  [ { name := "storage_return_releases_gate"
+      events := [.storageReturned, .release] }
+  , { name := "elapsed_before_deadline_keeps_gate"
+      events := [.elapsed, .storageReturned, .release] }
+  , { name := "cleanup_return_releases_gate"
+      events := [.deadlineObserved, .cleanupReturned, .release] }
+  , { name := "drop_return_releases_gate"
+      events := [.deadlineObserved, .cleanupDeadlineObserved, .dropReturned, .release] } ]
+
+@[conformance_family]
+def lifecycle : Conformance.Family LifecycleInput LifecycleOutput where
+  inputs := lifecycleInputs
+  model := fun i =>
+    { initialGateHeld := held lifecycleInitial
+      gateHeldAfterStep := evalLifecycleSteps lifecycleInitial i.events }
+
+theorem lifecycle_cleanup_and_drop_hold_until_release :
+    evalLifecycleSteps lifecycleInitial [.deadlineObserved, .cleanupReturned, .release] =
+        [true, true, false] ∧
+      evalLifecycleSteps lifecycleInitial
+          [.deadlineObserved, .cleanupDeadlineObserved, .dropReturned, .release] =
+        [true, true, true, false] := by
+  decide
 
 end Conformance.StorageWriteGateContracts

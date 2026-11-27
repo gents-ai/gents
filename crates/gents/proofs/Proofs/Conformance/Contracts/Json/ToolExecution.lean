@@ -156,11 +156,54 @@ def toolRetryListTools : Family ToolRetryInput ToolExecution.RetryDisposition wh
   inputs := toolRetryInputs .mcpListTools
   model := fun i => ToolExecution.retryDisposition i.operation
 
-/-- The MCP pool's `call_tool` path. -/
+/-- The MCP pool's `call_tool` path without per-tool retry metadata. -/
 @[conformance_family]
 def toolRetryCall : Family ToolRetryInput ToolExecution.RetryDisposition where
   inputs := toolRetryInputs .mcpCall
   model := fun i => ToolExecution.retryDisposition i.operation
+
+deriving instance Lean.ToJson for ToolExecution.McpRetry.HintValue,
+  ToolExecution.McpRetry.RetryMetadata, ToolExecution.McpRetry.CallFailure,
+  ToolExecution.McpRetry.McpCallRetryDecision
+
+attribute [conformance_function] ToolExecution.McpRetry.classifyAnnotations
+
+structure McpCallRetryInput where
+  name : String
+  metadata : ToolExecution.McpRetry.RetryMetadata
+  failure : ToolExecution.McpRetry.CallFailure
+  maxRetries : Nat
+  deriving Lean.ToJson
+
+structure McpCallRetryOutput where
+  firstDecision : ToolExecution.McpRetry.McpCallRetryDecision
+  retriesPerformed : Nat
+  evictedConnection : Bool
+  deriving Lean.ToJson
+
+def mcpCallRetryBudgets : List Nat :=
+  [ 0, 1, 2, 4 ]
+
+def mcpCallRetryInputs : List McpCallRetryInput :=
+  ToolExecution.McpRetry.RetryMetadata.all.flatMap fun metadata =>
+    ToolExecution.McpRetry.CallFailure.all.flatMap fun failure =>
+      mcpCallRetryBudgets.map fun maxRetries =>
+        { name := "mcp_call_retry_" ++ metadata.toContract ++ "_" ++ failure.toContract ++
+            "_budget_" ++ toString maxRetries
+        , metadata := metadata
+        , failure := failure
+        , maxRetries := maxRetries
+        }
+
+/-- Metadata-, failure-, and budget-gated MCP `call_tool` retry execution. -/
+@[conformance_family]
+def mcpCallRetry : Family McpCallRetryInput McpCallRetryOutput where
+  inputs := mcpCallRetryInputs
+  model := fun i =>
+    { firstDecision := ToolExecution.McpRetry.decideMcpCallRetry i.metadata i.failure 0 i.maxRetries
+    , retriesPerformed := ToolExecution.McpRetry.runRetries i.metadata i.failure i.maxRetries
+    , evictedConnection := ToolExecution.McpRetry.evictsConnection i.metadata i.failure i.maxRetries
+    }
 
 structure McpHealthInput where
   name : String

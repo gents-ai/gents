@@ -1,3 +1,7 @@
+//! Unlayered leaf: Claude subscription OAuth login flow and local callback server.
+//!
+//! Delegates protocol details to `gents-claude` and renders pages via `gents-login-ui`.
+
 use rapidhash::RapidHashMap;
 use std::fmt;
 use std::io;

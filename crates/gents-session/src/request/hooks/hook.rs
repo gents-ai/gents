@@ -16,7 +16,7 @@ use super::effect::{DocRef, Effect, Manifest, Row};
 ///
 /// With `core`, the read is the named core read `collection` with these
 /// arguments (Lean `Hooks.Read.core`): core answers it from its own rows, and
-/// its rows are never write targets. Decision 2026-11-11, maintainer-approved.
+/// its rows are never write targets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub collection: String,

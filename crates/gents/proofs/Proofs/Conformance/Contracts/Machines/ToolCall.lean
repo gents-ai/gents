@@ -12,12 +12,6 @@ def toolCallStateNames : List String :=
 def toolCallCancelCauses : List ToolExecution.CancelCause :=
   ToolExecution.CancelCause.all
 
-def toolCallCancelCauseNames : List String :=
-  toolCallCancelCauses.map ToolExecution.CancelCause.toDefraDB
-
-def failureClassNames : List String :=
-  ToolExecution.FailureClass.all.map ToolExecution.FailureClass.toDefraDB
-
 def toolCallCancelActions : List (String × ToolExecution.ToolCallContext.Action) :=
   toolCallCancelCauses.flatMap fun cause =>
     [ ("cancelBeforeDispatch_" ++ cause.toDefraDB, .cancelBeforeDispatch cause)

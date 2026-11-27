@@ -37,6 +37,7 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
         runtime_status
             .readiness()
             .publish_snapshot(&ActiveRuntimeSnapshot {
+                placement_basis: Default::default(),
                 generation: 1,
                 node: None,
                 local_did: String::new(),
@@ -166,12 +167,7 @@ async fn startup_generation_trace_matches_the_lean_model() {
                 gents_lean_vocab::families::startup_readiness_generation_trace::GenerationObservation {
                     generation_one_pending: barrier.is_pending("general", 1).await,
                     generation_two_pending: barrier.is_pending("general", 2).await,
-                    ready: tokio::time::timeout(
-                        std::time::Duration::from_millis(20),
-                        barrier.wait_ready(),
-                    )
-                    .await
-                    .is_ok(),
+                    ready: futures::poll!(std::pin::pin!(barrier.wait_ready())).is_ready(),
                 },
             );
         }

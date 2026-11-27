@@ -1,6 +1,5 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use futures::FutureExt;
@@ -64,7 +63,7 @@ where
                         if running.is_empty() {
                             return Err(anyhow!("all agents failed"));
                         }
-                        wait_for_restart(delay, &mut shutdown).await?;
+                        wait_for_restart(&mut shutdown).await?;
                         spawn_behavior(&mut join_set, &mut running, behavior, shutdown.clone(), runner.clone());
                     }
                     Err(_) => {
@@ -79,7 +78,7 @@ where
                         if running.is_empty() {
                             return Err(anyhow!("all agents failed"));
                         }
-                        wait_for_restart(delay, &mut shutdown).await?;
+                        wait_for_restart(&mut shutdown).await?;
                         spawn_behavior(&mut join_set, &mut running, behavior, shutdown.clone(), runner.clone());
                     }
                 }
@@ -109,9 +108,9 @@ fn spawn_behavior<F, Fut>(
     });
 }
 
-async fn wait_for_restart(delay: Duration, shutdown: &mut watch::Receiver<bool>) -> Result<()> {
+async fn wait_for_restart(shutdown: &mut watch::Receiver<bool>) -> Result<()> {
     tokio::select! {
-        _ = tokio::time::sleep(delay) => Ok(()),
+        _ = tokio::task::yield_now() => Ok(()),
         _ = shutdown.changed() => bail!("shutdown requested"),
     }
 }

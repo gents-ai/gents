@@ -573,7 +573,7 @@ impl MaterializerHandle for ProductionMaterializer {
             .unwrap_or_default();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
-            // The DID scope is load-bearing (#605): the store also holds
+            // The DID scope is load-bearing: the store also holds
             // other agents' requests for the same trigger id. Rows are
             // fetched (not existence-checked) because a claimed/processing
             // row past its persisted deadline must not gate; expiry is

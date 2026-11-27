@@ -91,6 +91,7 @@ async fn bounded_publication_case(change: PublicationChange) {
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {
@@ -223,6 +224,7 @@ async fn a_watcher_whose_home_is_replaced_stops_without_writing_into_it() {
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {
@@ -307,6 +309,7 @@ async fn a_store_created_after_the_watcher_started_never_stops_it() {
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {
@@ -400,6 +403,7 @@ async fn a_store_held_through_startup_starts_degraded_and_recovers_on_release() 
             proposals_tx: proposal_tx,
             runtime_status,
             health_events_rx: mpsc::channel::<()>(1).1,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {
@@ -474,6 +478,7 @@ async fn a_recovery_request_sends_an_unchanged_configuration() {
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
             health_events_rx: health_rx,
+            placement_resolves: tokio::sync::watch::channel(0).1,
             shutdown: shutdown_rx,
         },
         ControlWatcherTiming {

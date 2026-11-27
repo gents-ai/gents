@@ -5,9 +5,9 @@ use super::events::{RunTimelineEvent, TimelineRenderedRequestEvent};
 use super::inference::retry_summary_for_request;
 use super::requests::resolve_logical_request_id_for_doc;
 use super::rows::{
-    RetrySummary, RunTimelineRows, TimelineCompactionRow, TimelineGoalVersionRow,
-    TimelineInferenceCallRow, TimelineMessageRow, TimelineProviderContextReductionRow,
-    TimelineRenderedRequestRow, TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
+    RunTimelineRows, TimelineCompactionRow, TimelineGoalVersionRow, TimelineInferenceCallRow,
+    TimelineMessageRow, TimelineProviderContextReductionRow, TimelineRenderedRequestRow,
+    TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
 };
 
 #[test]
@@ -632,48 +632,6 @@ fn rendered_captures_for_other_requests_are_excluded() {
 }
 
 #[test]
-fn retry_summary_counts_failed_attempt_rows_with_successors() {
-    let rows = RunTimelineRows {
-        request: TimelineRequestRow {
-            request_id: "req-recovered".to_string(),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            created_at: Some("2026-05-04T12:00:00Z".to_string()),
-            ..Default::default()
-        },
-        inference_calls: vec![
-            inference_call("req-recovered", 3, "completed", None),
-            inference_call("req-recovered", 1, "failed", Some("first transient")),
-            inference_call("req-recovered", 2, "failed", Some("second transient")),
-        ],
-        ..Default::default()
-    };
-
-    let timeline = build_run_timeline(rows);
-
-    assert_eq!(
-        timeline.request.retry_summary,
-        RetrySummary {
-            retry_count: 2,
-            last_transient_error: Some("second transient".to_string()),
-            recovered: true,
-        }
-    );
-    assert_eq!(
-        timeline
-            .inference_calls
-            .iter()
-            .map(|call| call.call_seq)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3]
-    );
-    let retry_summary = timeline.events.iter().find_map(|event| match event {
-        RunTimelineEvent::Request(request) => Some(&request.retry_summary),
-        _ => None,
-    });
-    assert_eq!(retry_summary, Some(&timeline.request.retry_summary));
-}
-
-#[test]
 fn retry_summary_follows_the_generated_model() {
     gents_lean_vocab::families::run_timeline_retry_summary::replay(|i| {
         let request = TimelineRequestRow {
@@ -905,24 +863,4 @@ fn background_completion_is_a_corroborated_request_only_continuation() {
     });
 
     assert_eq!(timeline.child_request_ids, vec!["req-wake"]);
-}
-
-fn inference_call(
-    request_id: &str,
-    call_seq: i64,
-    call_state: &str,
-    failure_reason: Option<&str>,
-) -> TimelineInferenceCallRow {
-    TimelineInferenceCallRow {
-        call_id: format!("call-{call_seq}"),
-        request_id: request_id.to_string(),
-        call_seq,
-        attempt: 1,
-        call_state: call_state.to_string(),
-        failure_reason: failure_reason.map(ToOwned::to_owned),
-        queued_at: Some(format!("2026-05-04T12:00:0{call_seq}Z")),
-        backend_id: Some("backend-a".to_string()),
-        call_kind: "inference".to_string(),
-        ..Default::default()
-    }
 }

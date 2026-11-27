@@ -37,7 +37,7 @@ def native(row):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gents", default="gents")
-    parser.add_argument("--endpoint", default="http://workstation-1:8000/v1")
+    parser.add_argument("--endpoint", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model")
     parser.add_argument("--output", type=Path)
     parser.add_argument(

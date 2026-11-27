@@ -5,7 +5,7 @@ use gents_session::workspace::artifact_test_fixture;
 use gents_session::workspace::overlay::overlay_tests::artifact_alternate_owner;
 
 #[cfg(target_os = "macos")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
     use crate::native::CommandConstraints;
     use crate::runtime_context::ToolWorkspaceScope;
@@ -16,135 +16,150 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
 
+    use futures::StreamExt;
     use gents_lean_vocab::families::contracts_artifact_admission::ArtifactAdmissionOutput;
-    for case in gents_lean_vocab::families::contracts_artifact_admission::cases() {
-        let name = case.input.name.as_str();
-        let binding = &serde_json::to_value(&case.input.binding).expect("binding encodes");
-        let mode = CommandExecutionMode::parse(&case.input.mode).unwrap();
-        let fx = artifact_test_fixture(&[]).await;
-        if name == "unsupported_platform" {
-            let error =
-                gents_session::workspace::overlay::resolve_request_workspace_overlay_on_host(
+    let cases = gents_lean_vocab::families::contracts_artifact_admission::cases();
+    let shared_fx = std::sync::Arc::new(artifact_test_fixture(&[]).await);
+    futures::stream::iter(cases)
+        .map(|case| {
+            let shared_fx = std::sync::Arc::clone(&shared_fx);
+            tokio::spawn(async move {
+                let name = case.input.name.as_str();
+                let binding = &serde_json::to_value(&case.input.binding).expect("binding encodes");
+                let mode = CommandExecutionMode::parse(&case.input.mode).unwrap();
+                let owned_fx = if name == "unsealed" {
+                    Some(artifact_test_fixture(&[]).await)
+                } else {
+                    None
+                };
+                let fx = owned_fx.as_ref().unwrap_or(shared_fx.as_ref());
+                if name == "unsupported_platform" {
+                    let error =
+                        gents_session::workspace::overlay::resolve_request_workspace_overlay_on_host(
+                            &fx.node,
+                            fx.owner.request(),
+                            fx.owner.execution_generation().unwrap(),
+                            true,
+                            Some(fx._dir.path()),
+                            false,
+                        )
+                        .await
+                        .unwrap_err();
+                    assert!(error.to_string().contains("enforceable artifact sandbox"));
+                    case.check(ArtifactAdmissionOutput {
+                        admitted: false,
+                        bound_mode: None,
+                    });
+                    return;
+                }
+                let alternate = artifact_alternate_owner(fx, name, binding).await;
+                let (request_owner, claim_outcome) = alternate.unwrap();
+                if !matches!(
+                    claim_outcome,
+                    gents_session::request::lifecycle::ClaimOutcome::Claimed
+                ) {
+                    assert_eq!(
+                        name, "wrong_owner",
+                        "unexpected preclaim denial: {claim_outcome:?}"
+                    );
+                }
+                if name == "unsealed" {
+                    execute(&fx.node, r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#).await;
+                }
+                let generation = if name == "stale_incarnation" {
+                    "stale-execution"
+                } else {
+                    request_owner.execution_generation().unwrap_or("")
+                };
+                let resolved = gents_session::workspace::overlay::resolve_request_workspace_overlay(
                     &fx.node,
-                    fx.owner.request(),
-                    fx.owner.execution_generation().unwrap(),
-                    true,
+                    request_owner.request(),
+                    generation,
+                    mode == CommandExecutionMode::ArtifactWrite,
                     Some(fx._dir.path()),
-                    false,
                 )
-                .await
-                .unwrap_err();
-            assert!(error.to_string().contains("enforceable artifact sandbox"));
-            case.check(ArtifactAdmissionOutput {
-                admitted: false,
-                bound_mode: None,
-            });
-            continue;
-        }
-        let alternate = artifact_alternate_owner(&fx, name, binding).await;
-        let (request_owner, claim_outcome) = alternate.unwrap();
-        if !matches!(
-            claim_outcome,
-            gents_session::request::lifecycle::ClaimOutcome::Claimed
-        ) {
-            assert_eq!(
-                name, "wrong_owner",
-                "unexpected preclaim denial: {claim_outcome:?}"
-            );
-        }
-        if name == "unsealed" {
-            execute(&fx.node, r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#).await;
-        }
-        let generation = if name == "stale_incarnation" {
-            "stale-execution"
-        } else {
-            request_owner.execution_generation().unwrap_or("")
-        };
-        let resolved = gents_session::workspace::overlay::resolve_request_workspace_overlay(
-            &fx.node,
-            request_owner.request(),
-            generation,
-            mode == CommandExecutionMode::ArtifactWrite,
-            Some(fx._dir.path()),
-        )
+                .await;
+                if matches!(
+                    name,
+                    "missing_binding"
+                        | "integrate_not_artifact"
+                        | "readwrite_not_artifact"
+                        | "unsealed"
+                        | "wrong_seal"
+                        | "wrong_owner"
+                        | "stale_incarnation"
+                ) {
+                    assert!(
+                        resolved.is_err(),
+                        "{name}: invalid artifact context must stop at resolver, before tools"
+                    );
+                }
+                let overlay = resolved.ok().flatten();
+                let authority = overlay.as_ref().map(|o| o.authority).or_else(|| {
+                    binding["authority"]
+                        .as_str()
+                        .map(|value| WorkspaceAuthority::parse(value).unwrap())
+                });
+                let grant = overlay.as_ref().and_then(|o| o.workspace_artifact.clone());
+                if name == "foreign_root" {
+                    let target = grant
+                        .as_ref()
+                        .expect("valid resolver before root replacement")
+                        .root()
+                        .join("target");
+                    std::fs::remove_dir(&target).unwrap();
+                    std::os::unix::fs::symlink(fx.grant.source_root(), &target).unwrap();
+                }
+                let requested = CommandExecutionPolicy::write_capable().with_mode(mode);
+                let effective = if mode == CommandExecutionMode::ArtifactWrite {
+                    requested
+                } else {
+                    apply_workspace_authority(&requested, authority.expect("ordinary bound case"))
+                };
+                let root = fx.grant.source_root().to_owned();
+                let constraints = CommandConstraints {
+                    allowed_argv_prefixes: vec![vec!["/bin/echo".into()]],
+                    forbidden_argv_prefixes: Vec::new(),
+                    network_mode: CommandNetworkMode::Disabled,
+                    execution_mode: effective.mode,
+                    sandbox: effective.mode,
+                    deny_all_argv: false,
+                    deny_git_metadata_writes: true,
+                };
+                let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+                    &gents_loop::tool::ToolCallEnvelope::default(),
+                    ToolWorkspaceScope {
+                        runtime_home: None,
+                        workspace_cwd: Some(root.clone()),
+                        workspace_root: Some(root.clone()),
+                        workspace_authority: authority,
+                        workspace_artifact: grant,
+                    },
+                    gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                        None,
+                        tokio_util::sync::CancellationToken::new(),
+                    ),
+                );
+                let result = crate::native::prepare_managed_command(
+                    &scope_call,
+                    &root,
+                    "/bin/echo",
+                    &[],
+                    &constraints,
+                )
+                .await;
+                let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());
+                assert_eq!(
+                    std::fs::read_to_string(root.join("README.md")).unwrap(),
+                    "sealed source\n"
+                );
+                case.check(ArtifactAdmissionOutput {
+                    admitted: observed_mode == Some("artifact_write"),
+                    bound_mode: observed_mode.map(str::to_string),
+                });
+            })
+        })
+        .buffer_unordered(6)
+        .for_each(|result| async { result.unwrap() })
         .await;
-        if matches!(
-            name,
-            "missing_binding"
-                | "integrate_not_artifact"
-                | "readwrite_not_artifact"
-                | "unsealed"
-                | "wrong_seal"
-                | "wrong_owner"
-                | "stale_incarnation"
-        ) {
-            assert!(
-                resolved.is_err(),
-                "{name}: invalid artifact context must stop at resolver, before tools"
-            );
-        }
-        let overlay = resolved.ok().flatten();
-        let authority = overlay.as_ref().map(|o| o.authority).or_else(|| {
-            binding["authority"]
-                .as_str()
-                .map(|value| WorkspaceAuthority::parse(value).unwrap())
-        });
-        let grant = overlay.as_ref().and_then(|o| o.workspace_artifact.clone());
-        if name == "foreign_root" {
-            let target = grant
-                .as_ref()
-                .expect("valid resolver before root replacement")
-                .root()
-                .join("target");
-            std::fs::remove_dir(&target).unwrap();
-            std::os::unix::fs::symlink(fx.grant.source_root(), &target).unwrap();
-        }
-        let requested = CommandExecutionPolicy::write_capable().with_mode(mode);
-        let effective = if mode == CommandExecutionMode::ArtifactWrite {
-            requested
-        } else {
-            apply_workspace_authority(&requested, authority.expect("ordinary bound case"))
-        };
-        let root = fx.grant.source_root().to_owned();
-        let constraints = CommandConstraints {
-            allowed_argv_prefixes: vec![vec!["/bin/echo".into()]],
-            forbidden_argv_prefixes: Vec::new(),
-            network_mode: CommandNetworkMode::Disabled,
-            execution_mode: effective.mode,
-            sandbox: effective.mode,
-            deny_all_argv: false,
-            deny_git_metadata_writes: true,
-        };
-        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
-            &gents_loop::tool::ToolCallEnvelope::default(),
-            ToolWorkspaceScope {
-                runtime_home: None,
-                workspace_cwd: Some(root.clone()),
-                workspace_root: Some(root.clone()),
-                workspace_authority: authority,
-                workspace_artifact: grant,
-            },
-            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        let result = crate::native::prepare_managed_command(
-            &scope_call,
-            &root,
-            "/bin/echo",
-            &[],
-            &constraints,
-        )
-        .await;
-        let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());
-        assert_eq!(
-            std::fs::read_to_string(root.join("README.md")).unwrap(),
-            "sealed source\n"
-        );
-        case.check(ArtifactAdmissionOutput {
-            admitted: observed_mode == Some("artifact_write"),
-            bound_mode: observed_mode.map(str::to_string),
-        });
-    }
 }

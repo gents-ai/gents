@@ -1,5 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
   ArrowLeftRight,
@@ -849,7 +849,7 @@ export function AgentEditor({
           onOpenChange={(open) => {
             if (!open) setConfirmUnused(null);
           }}
-          warning={dependentsWarning(deployment, "context", confirmUnused.context_id)}
+          blocked={deleteBlocker(deployment, "context", confirmUnused.context_id)}
           onDelete={() =>
             changeConfig("deleteContextConfig", {
               contextId: confirmUnused.context_id,
@@ -875,7 +875,7 @@ export function AgentEditor({
       {!draftMode && !embedded && (
         <DeleteButton
           label={agent.displayName}
-          warning={dependentsWarning(deployment, "agent", agent.agentDid)}
+          blocked={deleteBlocker(deployment, "agent", agent.agentDid)}
           base={base}
           companion={
             soleContext

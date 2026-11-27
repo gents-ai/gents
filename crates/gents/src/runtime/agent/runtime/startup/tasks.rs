@@ -526,6 +526,8 @@ pub(super) fn spawn_request_tasks(
     let router_runtime_status = runtime_status.clone();
     let router_runtime_snapshot_observer = agent.runtime_snapshot_observer.clone();
     let router_backend_health = agent.backend_health.clone();
+    #[cfg(test)]
+    let router_stopped = agent.router_stopped_probe.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
             super::super::router::run_router(super::super::router::RouterConfig {
@@ -537,6 +539,8 @@ pub(super) fn spawn_request_tasks(
                 runtime_status: router_runtime_status,
                 runtime_snapshot_observer: router_runtime_snapshot_observer,
                 backend_health: router_backend_health,
+                #[cfg(test)]
+                router_stopped,
             })
             .await,
         )
@@ -564,6 +568,7 @@ pub(super) fn spawn_control_watcher(
     reconcile_tx: &mpsc::Sender<ResolvedRuntimeSnapshot>,
     control_tool_runtime: ToolRuntimeContext,
     backend_health_events_rx: mpsc::Receiver<()>,
+    placement_resolves: tokio::sync::watch::Receiver<u64>,
 ) {
     let StartupTasks {
         agent,
@@ -599,6 +604,7 @@ pub(super) fn spawn_control_watcher(
                         proposals_tx: control_tx,
                         runtime_status: control_runtime_status,
                         health_events_rx: backend_health_events_rx,
+                        placement_resolves,
                         shutdown: control_shutdown,
                     },
                 )

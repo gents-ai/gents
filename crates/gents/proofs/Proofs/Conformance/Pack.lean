@@ -42,7 +42,9 @@ end Pack.DependencyClaims
 
 namespace Pack.Resolve
 
-deriving instance ToJson for Origin, Resolution
+deriving instance ToJson for Origin, Resolution, RegistryInput, RegistrySource
+
+attribute [conformance_function] registrySource
 
 end Pack.Resolve
 

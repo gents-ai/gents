@@ -1,3 +1,7 @@
+//! Vocabulary layer: dependency-free DefraDB GraphQL SDL schemas and built-in ACP policy IDs.
+//!
+//! Access policy YAML is generated from `crates/gents/proofs/Proofs/Store/Identity/`.
+
 mod policy_ids;
 pub use policy_ids::{BuiltInPolicy, HomePolicyIds};
 

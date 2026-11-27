@@ -182,11 +182,13 @@ impl Sources {
         match event {
             RuntimeConnectionEvent::TransportFailed => {
                 metrics.transport_failures.fetch_add(1, Ordering::Relaxed);
+                metrics.notify_changed();
             }
             RuntimeConnectionEvent::Renewed => {
                 metrics
                     .subscription_renewals
                     .fetch_add(1, Ordering::Relaxed);
+                metrics.notify_changed();
             }
             _ => {}
         }
@@ -210,6 +212,7 @@ impl Sources {
         );
         if let Some(source) = self.entries.get_mut(node) {
             metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+            metrics.notify_changed();
             source.reconnect_at = Some(now + reconnect_delay(attempt));
             source.abort.abort();
         }

@@ -494,7 +494,7 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
 
 /// A hosted install plans with the installer's values: when the runtime's own
 /// environment holds a different value for an install variable, both sides
-/// still plan the same graph and the install goes through (gents#3857).
+/// still plan the same graph and the install goes through.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hosted_pack_install_ignores_the_runtime_environment() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -691,5 +691,226 @@ async fn a_session_install_grants_its_planned_root_agents_reader_on_the_installe
     assert_eq!(roots.len(), 1, "{receipt}");
     assert_eq!(roots[0]["root"], tool_root, "{receipt}");
     assert!(roots[0]["reader_on"].is_string(), "{receipt}");
+    Ok(())
+}
+
+/// Installing a documents pack that declares an EventSource (and its Trigger)
+/// from the CLI on a fresh running node succeeds through the hosted approver
+/// session, seeding the EventSourceCursor alongside the EventSource and
+/// Trigger.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_pack_install_with_event_source_seeds_cursor_and_succeeds() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("pack-event-src")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "pack-event-src",
+            "--model-name",
+            "pack-event-src",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let slot = format!("worker={}", inference_profile_id_from_init(&init)?);
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+
+    let pack = fixture_pack_dir("documents_fixture");
+    let pack_arg = pack.to_str().context("pack path")?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack_arg,
+            "--inference-slot",
+            &slot,
+            "--graphql",
+            &graphql,
+            "--preview",
+        ],
+    )?;
+    let before = graphql_query(
+        &graphql,
+        "{ PackInstallation { coordinate } EventSource { event_source_id } EventSourceCursor { source_collection } }",
+    )
+    .await?;
+    assert_eq!(
+        before["data"],
+        json!({"PackInstallation": [], "EventSource": [], "EventSourceCursor": []}),
+        "preview must write nothing: {before}"
+    );
+    let receipt = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack_arg,
+            "--inference-slot",
+            &slot,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    let digest = receipt["digest"]
+        .as_str()
+        .with_context(|| format!("install receipt missing digest: {receipt}"))?;
+    let rows = graphql_query(
+        &graphql,
+        "{ PackInstallation { coordinate digest } EventSource { event_source_id source_collection event_kind } Trigger { trigger_id source } EventSourceCursor { owner_did consumer source_collection after } }",
+    )
+    .await?;
+    assert_eq!(
+        rows["data"]["PackInstallation"],
+        json!([{"coordinate": "fixture/documents_fixture", "digest": digest}]),
+        "{rows}"
+    );
+    assert_eq!(
+        rows["data"]["EventSource"],
+        json!([{"event_source_id": "fixture-worker", "source_collection": "FixtureJob", "event_kind": "created"}]),
+        "{rows}"
+    );
+    assert_eq!(
+        rows["data"]["Trigger"],
+        json!([{"trigger_id": "fixture-worker", "source": {"kind": "event", "event_source_id": "fixture-worker"}}]),
+        "{rows}"
+    );
+    let cursors = rows["data"]["EventSourceCursor"]
+        .as_array()
+        .with_context(|| format!("EventSourceCursor rows missing: {rows}"))?;
+    assert_eq!(cursors.len(), 1, "{rows}");
+    assert_eq!(cursors[0]["owner_did"], owner, "{rows}");
+    assert_eq!(cursors[0]["source_collection"], "FixtureJob", "{rows}");
+    assert_eq!(
+        cursors[0]["consumer"],
+        json!({"kind": "trigger", "trigger_id": "fixture-worker"}),
+        "{rows}"
+    );
+    assert_eq!(cursors[0]["after"], "0", "{rows}");
+
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack_arg,
+            "--inference-slot",
+            &slot,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+
+    let direct_pack = temp.path().join("direct-event-source");
+    std::fs::create_dir_all(&direct_pack)?;
+    std::fs::write(direct_pack.join("README.md"), "# direct event source\n")?;
+    std::fs::write(
+        direct_pack.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1,
+            "name": "direct_event_source",
+            "namespace": "fixture",
+            "version": "1.0.0",
+            "description": "Event source without schemas",
+            "authors": ["tests"],
+            "tags": [],
+            "kind": "documents",
+            "config": "pack_config.json",
+            "assets": ["README.md", "pack_config.json"],
+            "schemas": [],
+            "dependencies": [],
+            "inference_slots": [{"name": "worker", "description": "Worker", "agents": ["direct-worker"]}],
+        }))?,
+    )?;
+    std::fs::write(
+        direct_pack.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [{
+                "display_name": "Direct worker",
+                "description": "Handles direct events.",
+                "context_id": "direct-worker-context",
+                "inference_profile_id": "gents:inference-slot:worker",
+                "agent_slot": "direct-worker"
+            }],
+            "contexts": [{
+                "context_id": "direct-worker-context",
+                "display_name": "Direct worker",
+                "system_prompt": "Handle events."
+            }],
+            "tasks": [{
+                "task_id": "direct-worker-task",
+                "display_name": "direct-worker-task",
+                "agent_did": "gents:agent-slot:direct-worker",
+                "prompt_template": "Process event."
+            }],
+            "event_sources": [{
+                "event_source_id": "direct-worker",
+                "display_name": "direct-worker",
+                "source_collection": "FixtureJob",
+                "event_kind": "created"
+            }],
+            "triggers": [{
+                "trigger_id": "direct-worker",
+                "display_name": "direct-worker",
+                "task_id": "direct-worker-task",
+                "source": {"kind": "event", "event_source_id": "direct-worker"},
+                "concurrency": "parallel"
+            }]
+        }))?,
+    )?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            direct_pack.to_str().context("direct pack path")?,
+            "--inference-slot",
+            &slot,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    let rows_after = graphql_query(
+        &graphql,
+        "{ EventSource { event_source_id } EventSourceCursor { consumer source_collection after } }",
+    )
+    .await?;
+    let sources: std::collections::BTreeSet<_> = rows_after["data"]["EventSource"]
+        .as_array()
+        .context("EventSource array")?
+        .iter()
+        .filter_map(|row| row["event_source_id"].as_str())
+        .collect();
+    assert!(
+        sources.contains("fixture-worker") && sources.contains("direct-worker"),
+        "{rows_after}"
+    );
+    let cursors_after = rows_after["data"]["EventSourceCursor"]
+        .as_array()
+        .context("EventSourceCursor array")?;
+    assert_eq!(cursors_after.len(), 2, "{rows_after}");
+    assert!(
+        cursors_after.iter().any(|row| {
+            row["source_collection"] == "FixtureJob"
+                && row["consumer"] == json!({"kind": "trigger", "trigger_id": "direct-worker"})
+        }),
+        "{rows_after}"
+    );
     Ok(())
 }

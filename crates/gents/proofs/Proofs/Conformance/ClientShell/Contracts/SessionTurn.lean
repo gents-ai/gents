@@ -104,34 +104,6 @@ def scenarios : List (String × List Row) :=
         , row 2 100 .active
         , row 3 200 .unclaimed (queuedAfter := some 100) ])]
 
-def stateName : RowState → String
-  | .unclaimed => "unclaimed"
-  | .active    => "active"
-  | .terminal  => "terminal"
-
-def optNat : Option Nat → String
-  | some n => toString n
-  | none   => "null"
-
-def rowJson (r : Row) : String :=
-  "{\"doc\":" ++ toString r.doc ++
-  ",\"request\":" ++ toString r.request ++
-  ",\"requester\":" ++ toString r.requester ++
-  ",\"state\":" ++ jsonString (stateName r.state) ++
-  ",\"folded_into\":" ++ optNat r.foldedInto ++
-  ",\"replaced_by\":" ++ optNat r.replacedBy ++
-  ",\"queued_after\":" ++ optNat r.queuedAfter ++
-  ",\"retry_parent\":" ++ optNat r.retryParent ++
-  ",\"retry_parent_doc\":" ++ optNat r.retryParentDoc ++
-  ",\"completed\":" ++ (if r.completed then "true" else "false") ++
-  ",\"public_input\":" ++ (if r.publicInput then "true" else "false") ++
-  ",\"background_wake\":" ++ (if r.backgroundWake then "true" else "false") ++
-  ",\"authored_input_materialized\":" ++
-    (if r.authoredInputMaterialized then "true" else "false") ++ "}"
-
-def rowsJson (rows : List Row) : String :=
-  "[" ++ String.intercalate "," (rows.map rowJson) ++ "]"
-
 deriving instance Lean.ToJson for RowState, Row
 
 instance : Inhabited Row := ⟨row 0 0 .terminal⟩

@@ -2,7 +2,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { errorWords } from "../../../lib/reasonText";
 import { Notice } from "../../components/Notice";
 import { setEnabled } from "./enabled";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { useState } from "react";
 import { SetupScreen } from "../setup/SetupScreen";
 import { isProviderId, PROVIDER_VISUALS } from "../setup/InferenceSetup";
@@ -244,7 +244,7 @@ export function InferencePanel({
                             nodeDid: deployment.nodeDid,
                           })
                   }
-                  warning={dependentsWarning(deployment, "backend", b.backendId)}
+                  blocked={deleteBlocker(deployment, "backend", b.backendId)}
                 >
                   {providers.some((option) => option.id === provider) && (
                     <DropdownMenuItem onClick={() => setAdding(provider)}>

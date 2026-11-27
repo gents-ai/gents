@@ -1,0 +1,293 @@
+{
+  "case_id": "library-desk-pack",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package and install civic/library 1.0.0 in workspace directory library with CatalogBook(isbn, title, copies: Int), BookHold(isbn, patron), and surface library-desk to list books and place holds. Also save and lint a node Page titled \"Library Desk\" with a books table, empty state, and hold form.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "civic/library"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CatalogBook",
+            "BookHold"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "library/pack_config.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "civic/library",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "library-desk",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"CatalogBook\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"BookHold\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)library[- ]?desk"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(EmptyState|LoadingState)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bisbn\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bpatron\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"library-desk\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "library/pack_config.json",
+                "contains": "library-desk"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CatalogBook { isbn: String title: String copies: Int } type BookHold { isbn: String patron: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Place a hold on ISBN-404 for Priya through the library desk.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Did the hold for ISBN-404 go through?",
+        "max": 1,
+        "until": "holds"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "holds",
+          "collection": "BookHold",
+          "filter": {
+            "isbn": {
+              "_eq": "ISBN-404"
+            }
+          },
+          "fields": [
+            "isbn",
+            "patron"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "holds",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "patron",
+                "matches": "(?i)\\bpriya\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

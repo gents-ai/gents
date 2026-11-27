@@ -1,3 +1,7 @@
+//! Vocabulary layer: the `wasm32-wasip1`-compatible provider turn loop and provider-input shaping.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Shared/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 pub mod account_usage;
 pub mod backend_provider;
 pub mod claude_messages_body;

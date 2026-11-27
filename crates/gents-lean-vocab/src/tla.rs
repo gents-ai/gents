@@ -26,7 +26,8 @@ pub struct FamilyView<'a> {
 }
 
 pub fn tla_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs/tla")
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"))
+        .join("../gents/proofs/tla")
 }
 
 pub fn generated_dir() -> PathBuf {

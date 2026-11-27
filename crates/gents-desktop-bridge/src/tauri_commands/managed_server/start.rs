@@ -185,6 +185,7 @@ where
                 tool_root: authority.tool_root.clone(),
                 store_key_custody: state.policy.store_key_custody,
                 default_packs: true,
+                registry: state.policy.registry.clone(),
             },
         )
         .await?;

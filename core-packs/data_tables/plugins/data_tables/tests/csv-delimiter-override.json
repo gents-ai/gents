@@ -1,28 +1,30 @@
 {
   "bind": "fixtures/formats",
   "expect": {
-    "columns": [
-      {
-        "name": "column_1",
-        "type": "text"
-      }
-    ],
-    "markdown": "| column_1 |\n| --- |\n| id;city;pop |\n| 1;Oslo;709 |\n| 2;Bergen;286 |",
-    "offset": 0,
-    "order": "file",
-    "row_count": 3,
-    "rows": [
-      [
-        "id;city;pop"
+    "response": {
+      "columns": [
+        {
+          "name": "column_1",
+          "type": "text"
+        }
       ],
-      [
-        "1;Oslo;709"
+      "markdown": "| column_1 |\n| --- |\n| id;city;pop |\n| 1;Oslo;709 |\n| 2;Bergen;286 |",
+      "offset": 0,
+      "order": "file",
+      "row_count": 3,
+      "rows": [
+        [
+          "id;city;pop"
+        ],
+        [
+          "1;Oslo;709"
+        ],
+        [
+          "2;Bergen;286"
+        ]
       ],
-      [
-        "2;Bergen;286"
-      ]
-    ],
-    "warnings": []
+      "warnings": []
+    }
   },
   "input": {
     "delimiter": ",",

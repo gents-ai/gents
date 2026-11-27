@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolGreen ----
+EXTENDS AccountPool
+====

@@ -33,7 +33,7 @@
   "stages": [
     {
       "stage_id": "invoice",
-      "prompt": "For each order in orders/, write invoices/ORDER.json (for example invoices/A-100.json) holding {\"order\": ORDER, \"total\": qty times unit_price}. Orders that need operator sign-off are mine to approve, so skip their invoices and put one item in my inbox titled \"Sign-off needed\" whose note is just those order numbers, ascending, separated by a comma and a space. Leave the orders as they are.",
+      "prompt": "For each order in orders/, write invoices/<ORDER>.json with {\"order\": ORDER, \"total\": qty * unit_price}. Skip orders needing operator sign-off; instead flag my inbox once, titled \"Sign-off needed\", with just those order numbers ascending, comma-space separated. Leave orders/ unchanged.",
       "capture": [
         {
           "kind": "documents",

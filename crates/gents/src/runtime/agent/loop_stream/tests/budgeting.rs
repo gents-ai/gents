@@ -88,7 +88,7 @@ fn turn_budgets_follow_the_lean_model() {
 }
 
 /// A staged per-turn reduction writes its row only once the rebuilt request
-/// fits (#3283).
+/// fits.
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
     use gents_store::identity::NodeIdentity as _;

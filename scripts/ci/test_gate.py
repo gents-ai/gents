@@ -152,6 +152,45 @@ class Selection(unittest.TestCase):
             os.environ.pop("CARGO_TARGET_DIR", None)
             self.assertEqual(gate.side_tree_env("live-e2e"), {"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
 
+    def test_lint_variants_combines_live_e2e_and_isolates_side_trees(self):
+        calls = []
+        selection = select(everything=True)
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a", "PROFILE": "ci-native"}), \
+                mock.patch.object(gate, "system_preflight", return_value=True), \
+                mock.patch.object(gate, "sh", lambda cmd, env=None, **_: calls.append((cmd, env)) or True):
+            gate.run_lint_variants(selection)
+        live = [item for item in calls if item[0][:2] == ["cargo", "clippy"]]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(live[0][0], [
+            "cargo", "clippy", "-p", "gents", "-p", "gents-cli", "--tests",
+            "--features", "gents/live-e2e,gents-cli/live-e2e", "--profile", "ci-native", "--", "-D", "warnings",
+        ])
+        self.assertEqual(live[0][1]["CARGO_TARGET_DIR"], "/cache/runner-a/live-e2e")
+        self.assertEqual((live[0][1]["CARGO_INCREMENTAL"], live[0][1]["RUSTC_WRAPPER"]), ("1", ""))
+        [vera] = [item for item in calls if item[0][:2] == ["cargo", "check"]]
+        self.assertEqual(vera[0], [
+            "cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", "--profile", "ci-native",
+        ])
+        self.assertEqual(vera[1]["CARGO_TARGET_DIR"], "/cache/runner-a/vera")
+        self.assertEqual((vera[1]["CARGO_INCREMENTAL"], vera[1]["RUSTC_WRAPPER"]), ("1", ""))
+        [wasm] = [item for item in calls if item[0][:2] == ["cargo", "build"]]
+        self.assertEqual(wasm[0], [
+            "cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", "--profile", "ci-native",
+        ])
+        self.assertEqual(wasm[1]["CARGO_TARGET_DIR"], "/cache/runner-a/wasm32-wasip1")
+        self.assertEqual((wasm[1]["CARGO_INCREMENTAL"], wasm[1]["RUSTC_WRAPPER"]), ("1", ""))
+        # Single-package live-e2e selection checks only that crate.
+        calls.clear()
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a", "PROFILE": ""}), \
+                mock.patch.object(gate, "system_preflight", return_value=True), \
+                mock.patch.object(gate, "sh", lambda cmd, env=None, **_: calls.append((cmd, env)) or True):
+            gate.run_lint_variants(select("crates/gents-cli/src/lib.rs"))
+        [cli_live] = [item for item in calls if item[0][:2] == ["cargo", "clippy"]]
+        self.assertEqual(cli_live[0], [
+            "cargo", "clippy", "-p", "gents-cli", "--tests", "--features", "gents-cli/live-e2e", "--", "-D", "warnings",
+        ])
+        self.assertIn("PROFILE: ci-native", workflow_jobs(CI)["lint-variants"])
+
     def test_the_live_suites_are_linted_only_when_they_or_their_crates_changed(self):
         self.assertEqual(select("crates/gents-store/src/graphql.rs")["live_e2e_lint"], ["gents", "gents-cli"])
         self.assertEqual(select("crates/gents-cli/src/lib.rs")["live_e2e_lint"], ["gents-cli"])
@@ -174,7 +213,15 @@ class Selection(unittest.TestCase):
 
     def test_frontend_changes_run_the_frontend_and_the_consumer_scan(self):
         selection = select("packages/gents-desktop-ui/src/index.ts")
-        self.assertEqual(selection["jobs"], ["contract", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit"])
+        self.assertEqual(selection["jobs"],
+                         ["contract", "ts-browser", "ts-fuzz", "ts-mobile-perf", "ts-packages", "ts-unit"])
+        self.assertEqual([entry["suite"] for entry in selection["desktop_ui"]],
+                         ["unit", "mobile-perf", *(["browser"] * gate.BROWSER_SHARDS)])
+        self.assertFalse(any("perf:mobile" in command for command in gate.TS_JOBS["ts-unit"]))
+        self.assertTrue(any("perf:mobile" in command for command in gate.TS_JOBS["ts-mobile-perf"]))
+        desktop_ui = workflow_jobs(CI)["desktop-ui"]
+        self.assertIn("contains(fromJSON(needs.plan.outputs.jobs), 'ts-mobile-perf')", desktop_ui)
+        self.assertIn("if: matrix.suite != 'unit'", desktop_ui)
 
     def test_build_inputs_and_unknown_paths_select_everything(self):
         for path in ("Cargo.lock", "scripts/ci/gate.py", "third_party/noq/src/lib.rs", "new-top-level/file"):
@@ -1242,6 +1289,11 @@ class TlaSelection(unittest.TestCase):
         tla = select("crates/gents/proofs/tla/generated/LeanDecision_TransactionReplay.tla")["contract"]["tla"]
         self.assertEqual(set(tla), importers)
 
+    def test_a_generated_trace_selects_its_spec_and_desktop_conformance(self):
+        contract = select("crates/gents/proofs/tla/generated/traces/MCClientSubmissionContentionNoPayload.json")["contract"]
+        self.assertEqual(contract["tla"], ["ClientSubmissionContention"])
+        self.assertTrue(contract["ts_lean"])
+
     def test_a_config_selects_its_spec_and_the_runner_selects_every_spec(self):
         self.assertEqual(select("crates/gents/proofs/tla/MCPackUxWatchTransient.cfg")["contract"]["tla"],
                          ["PackUxWatch"])
@@ -1627,8 +1679,8 @@ class ReuseKeys(unittest.TestCase):
 
     SELECTION = select("crates/gents-store/src/lib.rs", "apps/gents-desktop/package.json")
     RUST = {unit for unit in ("lint", "lint-variants", "test:store", "test:session", "test:cli", "test:native")}
-    TS = {"ts-packages", "ts-unit", "ts-fuzz", *(f"ts-browser:{index}/{gate.BROWSER_SHARDS}"
-                                                for index in range(1, gate.BROWSER_SHARDS + 1))}
+    TS = {"ts-packages", "ts-unit", "ts-mobile-perf", "ts-fuzz",
+          *(f"ts-browser:{index}/{gate.BROWSER_SHARDS}" for index in range(1, gate.BROWSER_SHARDS + 1))}
 
     def changed_units(self, *paths):
         before = keys_of(self.SELECTION)
@@ -1760,7 +1812,8 @@ class ReusePlan(unittest.TestCase):
         self.assertNotIn("test:native", {entry["job"] for entry in selection["matrix"]})
         self.assertIn("test:macos-only", {entry["job"] for entry in selection["matrix"]})
         self.assertEqual([entry["unit"] for entry in selection["desktop_ui"]],
-                         [f"ts-browser:{index}/{gate.BROWSER_SHARDS}" for index in range(1, gate.BROWSER_SHARDS + 1)])
+                         ["ts-mobile-perf",
+                          *(f"ts-browser:{index}/{gate.BROWSER_SHARDS}" for index in range(1, gate.BROWSER_SHARDS + 1))])
         self.assertEqual(set(selection["jobs"]) - set(selection["run"]), {"test:native", "ts-unit", "lint"})
         self.assertEqual(gate.reused_jobs(selection), {"test:native", "ts-unit", "lint"})
 
@@ -1824,7 +1877,7 @@ class LatencyArtifactName(unittest.TestCase):
     def test_plan_unit_keys_produce_safe_names(self):
         # Every unit key the plan can emit, including the colon and slash
         # forms that motivated the sanitizer.
-        for unit in ("fmt", "lint", "contract", "ts-unit", "test:store", "test:cli@macos",
+        for unit in ("fmt", "lint", "contract", "ts-unit", "ts-mobile-perf", "test:store", "test:cli@macos",
                      "build:portable", "build:portable:3", "shard:portable:2",
                      "ts-browser:1/3", ' lint ', "ts\"fuzz", "ts<unit>", "ts|fuzz?",
                      "ts*fuzz\\x", "a,b", "a:b:c", "  ", "-"):

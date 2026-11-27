@@ -415,6 +415,7 @@ pub async fn terminalization_with_principal_output(
 
 pub struct ComposedChild {
     pub name: &'static str,
+    pub on_slow: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl ToolDyn for ComposedChild {
@@ -442,10 +443,9 @@ impl ToolDyn for ComposedChild {
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             if self.name == "slow" {
-                tokio::time::sleep(
-                    gents_pack::plugin::PluginBudget::default().wall_clock + Duration::from_secs(1),
-                )
-                .await;
+                if let Some(on_slow) = &self.on_slow {
+                    on_slow();
+                }
                 return Ok("\"slow done\"".into());
             }
             let local =
@@ -892,7 +892,7 @@ pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
         config(4),
     );
     futures::pin_mut!(stream);
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(gents_store::test_support::STALL_CEILING, async {
         while let Some(item) = stream.next().await {
             item.expect("loop succeeds");
         }

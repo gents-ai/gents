@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "pairs",
-      "prompt": "Our berth bookings live one file per berth under berths/. Find every pair of held bookings on the same berth whose hours overlap; back-to-back bookings (one ends the hour the next starts) are fine, and released bookings don't count. Write the pairs to out/berth_conflicts.json as a list of [ref, ref] pairs, refs sorted within each pair and the pairs sorted, and tell me which berths have a conflict.",
+      "prompt": "Find overlapping pairs of held bookings on the same berth in berths/ (one file per berth; ignore released bookings, back-to-back hours are fine). Write sorted [ref, ref] pairs (refs sorted per pair) to out/berth_conflicts.json, leave berths/ untouched, and tell me which berths conflict.",
       "capture": [
         {
           "kind": "file",

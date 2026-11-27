@@ -1,0 +1,154 @@
+{
+  "config": "MCClientSubmissionContentionReserveSingleAttempt",
+  "constants": {
+    "Attempts": 4,
+    "BindingChanges": false,
+    "LostReply": false,
+    "MaxSends": 1,
+    "PayloadLost": false,
+    "Publications": 1,
+    "PublishedBinding": false,
+    "Redrive": true,
+    "Refusals": false,
+    "ReserveRedrive": false,
+    "Reserves": true,
+    "RetryFreshId": false
+  },
+  "expect": "violates NoConflictLoss",
+  "spec": "ClientSubmissionContention",
+  "steps": [
+    {
+      "action": "Compose",
+      "actor": null,
+      "after": {
+        "agentLeft": 1,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "reserving",
+            "tries": 1
+          }
+        ]
+      },
+      "before": {
+        "agentLeft": 1,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "none",
+        "payload": false,
+        "replies": [],
+        "rows": [],
+        "sends": 0,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": []
+      }
+    },
+    {
+      "action": "AgentPublish",
+      "actor": null,
+      "after": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 1,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "reserving",
+            "tries": 1
+          }
+        ]
+      },
+      "before": {
+        "agentLeft": 1,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 0,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "reserving",
+            "tries": 1
+          }
+        ]
+      }
+    },
+    {
+      "action": "ReserveCommit",
+      "actor": 1,
+      "after": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": true,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [
+          {
+            "id": 1,
+            "ok": false
+          }
+        ],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 1,
+        "staleBinding": false,
+        "wire": []
+      },
+      "before": {
+        "agentLeft": 0,
+        "binding": 0,
+        "conflictLost": false,
+        "cur": 1,
+        "msg": "pending",
+        "payload": true,
+        "replies": [],
+        "rows": [],
+        "sends": 1,
+        "sessVer": 1,
+        "staleBinding": false,
+        "wire": [
+          {
+            "bind": 0,
+            "id": 1,
+            "snap": 0,
+            "stage": "reserving",
+            "tries": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "package",
-      "prompt": "Package the parts desk app as depot/parts_desk 2.0.0 under packs/parts_desk and install it here. It needs two collections: PartBin (binCode, partName, onHand as a whole number) and PartRequest (binCode, quantity as a whole number, requestedBy). Give it a datastore surface called parts-desk with two tools: list_bins, listing PartBin records with all three fields, and request_part, which creates a PartRequest and requires all three of its fields. No agents and no records.",
+      "prompt": "Package and install depot/parts_desk 2.0.0 in packs/parts_desk: PartBin(binCode, partName, onHand: Int), PartRequest(binCode, quantity: Int, requestedBy), surface parts-desk with list_bins (all PartBin fields) and request_part (creates PartRequest, all fields required). No agents or records.",
       "capture": [
         {
           "kind": "documents",

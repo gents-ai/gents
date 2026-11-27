@@ -30,114 +30,88 @@
           "job": "CJ-12",
           "closed": "2026-09-30"
         }
+      },
+      {
+        "collection": "DatastoreToolSurface",
+        "document": {
+          "surface_id": "calibration_desk",
+          "node_did": "$trial",
+          "display_name": "Calibration desk",
+          "entries": [
+            {
+              "kind": "query",
+              "tool_name": "list_jobs",
+              "collection": "CalibrationJob",
+              "description": "Open calibration jobs.",
+              "fields": [
+                "job",
+                "instrument",
+                "due"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "collection": "DatastoreToolSurface",
+        "document": {
+          "surface_id": "calibration_archive",
+          "node_did": "$trial",
+          "display_name": "Calibration archive",
+          "entries": [
+            {
+              "kind": "query",
+              "tool_name": "list_archived_jobs",
+              "collection": "CalibrationArchive",
+              "description": "Closed calibration jobs.",
+              "fields": [
+                "job",
+                "closed"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "collection": "Page",
+        "document": {
+          "page_id": "my_calibrations",
+          "node_did": "$trial",
+          "display_name": "My Calibrations",
+          "module": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, EmptyState, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Calibrations({ ctx }) {\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  if (!rows.length) return jsx(Page, { title: 'My Calibrations', children: jsx(EmptyState, { title: 'No jobs', message: 'No calibration jobs to show.' }) })\n  return jsx(Page, { title: 'My Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows, rowKey: 'job' }) })\n}\n\nexport default {\n  id: 'my_calibrations',\n  name: 'My Calibrations',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_calibrations:nav', label: 'My Calibrations', icon: 'gauge', to: { name: 'plugin', pluginId: 'my_calibrations' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Calibrations, { ctx }) },\n    ])\n  },\n}\n",
+          "data": [
+            {
+              "surface": "calibration_archive",
+              "tools": [
+                "list_archived_jobs"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "collection": "Page",
+        "document": {
+          "page_id": "team_calibrations",
+          "node_did": "$trial",
+          "display_name": "Team Calibrations",
+          "module": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction TeamCalibrations({ ctx }) {\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\n  return jsx(Page, { title: 'Team Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows: q.data?.results ?? [], rowKey: 'job' }) })\n}\n\nexport default {\n  id: 'team_calibrations',\n  name: 'Team Calibrations',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_calibrations:nav', label: 'Team Calibrations', icon: 'users', to: { name: 'plugin', pluginId: 'team_calibrations' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamCalibrations, { ctx }) },\n    ])\n  },\n}\n",
+          "data": [
+            {
+              "surface": "calibration_desk",
+              "tools": [
+                "list_jobs"
+              ]
+            }
+          ]
+        }
       }
     ]
   },
   "stages": [
     {
-      "stage_id": "setup",
-      "prompt": "Before my real request, set this up exactly as written with one config call, then reply done. Do not check, lint or change anything else: {\"argv\": [\"batch\"], \"options\": {\"operations\": [{\"argv\": [\"datastore\", \"create\"], \"target_id\": \"calibration_desk\", \"set\": {\"display_name\": \"Calibration desk\", \"entries\": [{\"kind\": \"query\", \"tool_name\": \"list_jobs\", \"collection\": \"CalibrationJob\", \"description\": \"Open calibration jobs.\", \"fields\": [\"job\", \"instrument\", \"due\"]}]}}, {\"argv\": [\"datastore\", \"create\"], \"target_id\": \"calibration_archive\", \"set\": {\"display_name\": \"Calibration archive\", \"entries\": [{\"kind\": \"query\", \"tool_name\": \"list_archived_jobs\", \"collection\": \"CalibrationArchive\", \"description\": \"Closed calibration jobs.\", \"fields\": [\"job\", \"closed\"]}]}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"my_calibrations\", \"set\": {\"display_name\": \"My Calibrations\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, EmptyState, useQuery } from '@gents/ux-sdk'\\nimport { jsx } from 'react/jsx-runtime'\\n\\nfunction Calibrations({ ctx }) {\\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\\n  const rows = q.data?.results ?? []\\n  if (!rows.length) return jsx(Page, { title: 'My Calibrations', children: jsx(EmptyState, { title: 'No jobs', message: 'No calibration jobs to show.' }) })\\n  return jsx(Page, { title: 'My Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows, rowKey: 'job' }) })\\n}\\n\\nexport default {\\n  id: 'my_calibrations',\\n  name: 'My Calibrations',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_calibrations:nav', label: 'My Calibrations', icon: 'gauge', to: { name: 'plugin', pluginId: 'my_calibrations' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Calibrations, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"calibration_archive\", \"tools\": [\"list_archived_jobs\"]}]}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"team_calibrations\", \"set\": {\"display_name\": \"Team Calibrations\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\\nimport { jsx } from 'react/jsx-runtime'\\n\\nfunction TeamCalibrations({ ctx }) {\\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\\n  return jsx(Page, { title: 'Team Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows: q.data?.results ?? [], rowKey: 'job' }) })\\n}\\n\\nexport default {\\n  id: 'team_calibrations',\\n  name: 'Team Calibrations',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_calibrations:nav', label: 'Team Calibrations', icon: 'users', to: { name: 'plugin', pluginId: 'team_calibrations' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamCalibrations, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"calibration_desk\", \"tools\": [\"list_jobs\"]}]}}]}}",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "pages",
-          "collection": "Page",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "page_id",
-            "display_name",
-            "module",
-            "css",
-            "data",
-            "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "surface_id": {
-              "_ne": "engineer-mailbox"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "display_name",
-            "entries",
-            "enabled"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "development",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "rows": [
-              {
-                "capture": "pages",
-                "key": "page_id",
-                "id": "my_calibrations",
-                "expect": [
-                  {
-                    "field": "module",
-                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, EmptyState, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction Calibrations({ ctx }) {\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  if (!rows.length) return jsx(Page, { title: 'My Calibrations', children: jsx(EmptyState, { title: 'No jobs', message: 'No calibration jobs to show.' }) })\n  return jsx(Page, { title: 'My Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows, rowKey: 'job' }) })\n}\n\nexport default {\n  id: 'my_calibrations',\n  name: 'My Calibrations',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'my_calibrations:nav', label: 'My Calibrations', icon: 'gauge', to: { name: 'plugin', pluginId: 'my_calibrations' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Calibrations, { ctx }) },\n    ])\n  },\n}\n"
-                  }
-                ]
-              },
-              {
-                "capture": "pages",
-                "key": "page_id",
-                "id": "team_calibrations",
-                "expect": [
-                  {
-                    "field": "module",
-                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx } from 'react/jsx-runtime'\n\nfunction TeamCalibrations({ ctx }) {\n  const q = useQuery(ctx, 'calibration_desk', 'list_jobs', { pages: 'all' })\n  return jsx(Page, { title: 'Team Calibrations', children: jsx(Table, { columns: ['job', 'instrument', 'due'], rows: q.data?.results ?? [], rowKey: 'job' }) })\n}\n\nexport default {\n  id: 'team_calibrations',\n  name: 'Team Calibrations',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'team_calibrations:nav', label: 'Team Calibrations', icon: 'users', to: { name: 'plugin', pluginId: 'team_calibrations' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(TeamCalibrations, { ctx }) },\n    ])\n  },\n}\n"
-                  }
-                ]
-              }
-            ]
-          },
-          "tier": "development",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "stage_id": "repair",
-      "prompt": "My Calibrations page opens but shows no jobs. The team's page still works. Fix my page so it shows the existing jobs. Keep the layout and access as they are.",
+      "prompt": "My Calibrations page opens but shows no jobs. The team's page still works. Fix my page so it shows the existing jobs. Keep the layout and access as they are, and lint my page when you're done.",
       "capture": [
         {
           "kind": "documents",
@@ -279,6 +253,23 @@
               {
                 "field": "data",
                 "matches": "^\\s*\\{\\s*\"surfaces\"\\s*:\\s*\\[\\s*\\{\\s*\"surface\"\\s*:\\s*\"calibration_desk\"\\s*,\\s*\"tools\"\\s*:\\s*\\[\\s*\"list_jobs\"\\s*\\]\\s*\\}\\s*\\]\\s*\\}\\s*$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "page",
+                "equals": "my_calibrations"
+              },
+              {
+                "field": "admitted",
+                "equals": true
               }
             ]
           },

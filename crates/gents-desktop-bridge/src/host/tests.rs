@@ -214,7 +214,6 @@ fn inventory_image_reads_accept_only_received_coordinates() {
     }
 }
 
-/// Adapted from Ivan's #3264 editor exposure test onto the operator control owner.
 #[test]
 fn process_control_is_advertised_scoped_and_not_cancellable() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({

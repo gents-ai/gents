@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { EventSource } from "@source-inc/gents-desktop-client";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { navigate } from "@/lib/router";
 import {
   ChoiceRow,
@@ -303,11 +303,7 @@ export function EventSourceEditor({
       {!embedded && !draft && (
         <DeleteButton
           label={source.display_name ?? source.event_source_id}
-          warning={dependentsWarning(
-            deployment,
-            "event-source",
-            source.event_source_id,
-          )}
+          blocked={deleteBlocker(deployment, "event-source", source.event_source_id)}
           base={base}
           onDelete={() =>
             changeConfig("deleteEventSourceConfig", {
@@ -378,7 +374,7 @@ export function EventSourcesPanel({
                 nodeDid: deployment.nodeDid,
               })
             }
-            warning={dependentsWarning(deployment, "event-source", s.event_source_id)}
+            blocked={deleteBlocker(deployment, "event-source", s.event_source_id)}
           />
         ),
       }))}

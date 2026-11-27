@@ -381,6 +381,7 @@ fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             service_executable: None,
+            registry: None,
         },
         None,
     )

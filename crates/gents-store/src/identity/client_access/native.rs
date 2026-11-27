@@ -106,10 +106,14 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
                 runtime.identity.private_key_bytes(),
             ))
             .with_node_acp_enabled()
-            .with_http(
+            .with_http({
+                let fence_route = owner_staged.clone();
                 defra_node::HttpConfig::with_listener(listener)?
-                    .with_authenticated_routes(status.merge(owner_staged.router())),
-            )
+                    .with_authenticated_routes(status.merge(owner_staged.router()))
+                    .with_router_transform(Arc::new(move |router| {
+                        fence_route.wrap_relationship_fence(router)
+                    }))
+            })
             .with_embedded_vera(EmbeddedVeraConfig {
                 data_dir: directory.path().join("vera"),
                 deployment: EmbeddedVeraDeployment {

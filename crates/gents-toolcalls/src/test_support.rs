@@ -1,5 +1,7 @@
 pub mod background_completion;
 pub mod doubles;
+#[cfg(all(unix, test))]
+pub(crate) mod held_process;
 pub mod plugin;
 pub mod plugin_job;
 pub mod self_config;

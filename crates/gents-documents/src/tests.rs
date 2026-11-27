@@ -391,16 +391,11 @@ fn write_tools_deserialize_trims_whitespace() {
 }
 
 #[test]
-fn stored_built_ins_with_retired_key_decode() {
-    let stored: BuiltInTools = serde_json::from_value(
-        serde_json::json!({"enable_graph_tools": true, "enable_goal_tools": true}),
-    )
-    .expect("a stored built_ins with the retired key decodes");
-    let written = serde_json::to_value(&stored).unwrap();
-    assert_eq!(written, serde_json::json!({"enable_goal_tools": true}));
-    let without: BuiltInTools =
-        serde_json::from_value(serde_json::json!({"enable_goal_tools": true})).unwrap();
-    assert_eq!(stored, without);
+fn built_ins_reject_the_removed_graph_tools_setting() {
+    assert!(serde_json::from_value::<BuiltInTools>(serde_json::json!({
+        "enable_graph_tools": true
+    }))
+    .is_err());
 }
 
 #[test]

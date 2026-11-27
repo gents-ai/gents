@@ -134,7 +134,7 @@ def unprovisionedEngineer : Identity.Household.State :=
   SelfConfig.initDefaultSelection
     (Identity.Household.commitAgentCreation
       { objects := [⟨"nodes", "node", "user"⟩], relations := [], enrolled := [] }
-      "engineer" "user" "engineer" "node" true) "node" "user"
+      "engineer" "user" "engineer" "node" "runtime" true) "node" "user"
 
 structure EngineerGrantInput where
   provisioned : Bool

@@ -70,12 +70,13 @@ jobs:
           # First run bootstraps the store; later runs dedupe against it, so
           # the two-day lookback never appends a sample twice.
           if ! git ls-remote --exit-code --heads origin ci-latency-data > /dev/null; then
+            orig="$(git rev-parse HEAD)"
             git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
               switch --orphan ci-latency-data
             git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
               commit --allow-empty -m "[ci-omit] init"
             git push -q origin ci-latency-data
-            git switch -
+            git switch --detach "${orig}"
           fi
           git fetch --depth 1 origin ci-latency-data
           seen="$(git show origin/ci-latency-data:latency.jsonl 2> /dev/null \

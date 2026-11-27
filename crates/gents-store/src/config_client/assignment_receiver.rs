@@ -22,11 +22,13 @@ use std::future::Future;
 use std::time::Duration;
 
 use super::{
-    assignments::AssignmentReadError, ConfigAccess, ConfigApplyTxn, ConfigClientError,
-    TransactionFailure,
+    assignments::AssignmentReadError,
+    placement_fence::{PlacementFence, PlacementFloors},
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure,
 };
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const FLOOR_PREFIX: &str = "floor:";
 
 #[derive(Debug, Clone)]
 pub struct AssignmentScope {
@@ -40,6 +42,8 @@ pub struct AssignmentScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignmentState {
     pub position: defra_node::AssignmentPosition,
+    /// The certified revision's block time, in Unix seconds.
+    pub timestamp: u64,
     pub assigned: Vec<String>,
 }
 
@@ -88,6 +92,10 @@ pub trait AssignmentRuntime: Send + Sync {
     async fn stop(&self, id: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn has_verified_body(&self, id: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
     async fn start_if_verified(&self, id: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
+    /// The fence of the supervisor that runs this scope's work, if any. The
+    /// receiver raises it after each floor commit and waits on its barrier
+    /// before committing the applied row.
+    fn placement_fence(&self) -> Option<&PlacementFence>;
 }
 
 impl TransactionFailure for ReceiverError {
@@ -139,16 +147,11 @@ struct Stored {
 
 async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, ReceiverError> {
     let query = format!(
-        "{{ CertifiedAssignmentState(filter: {{scope_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID term height block_hash assigned }} }}",
+        "{{ CertifiedAssignmentState(filter: {{scope_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID term height block_hash timestamp assigned }} }}",
         crate::graphql::escape_graphql_string(key)
     );
     let response = txn.execute_for_decision(&query, &json!({})).await?;
-    let rows = response
-        .pointer("/data/CertifiedAssignmentState")
-        .and_then(Value::as_array)
-        .ok_or(ReceiverError::InvalidState(
-            "state query did not return rows",
-        ))?;
+    let rows = state_rows(&response)?;
     if rows.is_empty() {
         return Ok(None);
     }
@@ -157,6 +160,43 @@ async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, Rec
             "unexpected row count or conflicting revision",
         ));
     };
+    stored(row).map(Some)
+}
+
+/// The floor position of every scope `subject` has accepted, keyed by scope,
+/// as read in `txn`.
+pub async fn placement_floors(
+    txn: &ConfigApplyTxn<'_>,
+    subject: &str,
+) -> Result<PlacementFloors, ReceiverError> {
+    let query = format!(
+        "{{ CertifiedAssignmentState(filter: {{owner_did: {{_eq: \"{}\"}}}}) {{ _docID scope_key term height block_hash timestamp assigned }} }}",
+        crate::graphql::escape_graphql_string(subject)
+    );
+    let response = txn.execute(&query).await?;
+    let mut floors = PlacementFloors::new();
+    for row in state_rows(&response)? {
+        let scope = row
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .ok_or(ReceiverError::InvalidState("invalid field"))?;
+        if let Some(scope) = scope.strip_prefix(FLOOR_PREFIX) {
+            floors.insert(scope.to_owned(), stored(row)?.state.position);
+        }
+    }
+    Ok(floors)
+}
+
+fn state_rows(response: &Value) -> Result<&Vec<Value>, ReceiverError> {
+    response
+        .pointer("/data/CertifiedAssignmentState")
+        .and_then(Value::as_array)
+        .ok_or(ReceiverError::InvalidState(
+            "state query did not return rows",
+        ))
+}
+
+fn stored(row: &Value) -> Result<Stored, ReceiverError> {
     let string = |name: &str| {
         row.get(name)
             .and_then(Value::as_str)
@@ -168,13 +208,16 @@ async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, Rec
     let height = string("height")?
         .parse()
         .map_err(|_| ReceiverError::InvalidState("missing field"))?;
+    let timestamp = string("timestamp")?
+        .parse()
+        .map_err(|_| ReceiverError::InvalidState("missing field"))?;
     let assigned = serde_json::from_value(
         row.get("assigned")
             .cloned()
             .ok_or(ReceiverError::InvalidState("missing field"))?,
     )
     .map_err(|_| ReceiverError::InvalidState("invalid assignments"))?;
-    Ok(Some(Stored {
+    Ok(Stored {
         document: string("_docID")?.to_owned(),
         state: AssignmentState {
             position: defra_node::AssignmentPosition {
@@ -182,9 +225,10 @@ async fn load(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<Option<Stored>, Rec
                 height,
                 block_hash: string("block_hash")?.to_owned(),
             },
+            timestamp,
             assigned,
         },
-    }))
+    })
 }
 
 fn check(previous: &AssignmentState, next: &AssignmentState) -> Result<(), ReceiverError> {
@@ -195,6 +239,7 @@ fn check(previous: &AssignmentState, next: &AssignmentState) -> Result<(), Recei
     }
     if new == old
         && (next.position.block_hash != previous.position.block_hash
+            || next.timestamp != previous.timestamp
             || next.assigned != previous.assigned)
     {
         return Err(ReceiverError::InvalidState(
@@ -222,6 +267,7 @@ async fn persist(
         "term": next.position.term.to_string(),
         "height": next.position.height.to_string(),
         "block_hash": next.position.block_hash,
+        "timestamp": next.timestamp.to_string(),
         "assigned": next.assigned,
     });
     match previous {
@@ -319,25 +365,63 @@ async fn stop_invalid_work(
     runtime: &impl AssignmentRuntime,
     view: &AssignmentState,
     shutdown: &mut Option<&mut tokio::sync::watch::Receiver<bool>>,
-) -> Result<bool, ReceiverError> {
+) -> Result<Option<Vec<String>>, ReceiverError> {
     let Some(active) = interruptible(runtime.active(), shutdown).await else {
-        return Ok(false);
+        return Ok(None);
     };
     let active = active.map_err(ReceiverError::Runtime)?;
-    for id in &active {
-        if !view.assigned.contains(id)
-            || !match interruptible(runtime.has_verified_body(id), shutdown).await {
+    let mut stopped = Vec::new();
+    for id in active {
+        if !view.assigned.contains(&id)
+            || !match interruptible(runtime.has_verified_body(&id), shutdown).await {
                 Some(result) => result.map_err(ReceiverError::Runtime)?,
-                None => return Ok(false),
+                None => return Ok(None),
             }
         {
-            let Some(result) = interruptible(runtime.stop(id), shutdown).await else {
-                return Ok(false);
+            let Some(result) = interruptible(runtime.stop(&id), shutdown).await else {
+                return Ok(None);
             };
             result.map_err(ReceiverError::Runtime)?;
+            stopped.push(id);
         }
     }
-    Ok(true)
+    Ok(Some(stopped))
+}
+
+/// Stops what `view` no longer admits and, behind the supervisor's fence,
+/// waits until no proposal taken afterwards can run the withdrawn work. The
+/// fence is raised before anything is stopped, after `view`'s floor row
+/// committed. False on shutdown.
+async fn stop_owed(
+    runtime: &impl AssignmentRuntime,
+    key: &str,
+    view: &AssignmentState,
+    previous: Option<&AssignmentState>,
+    shutdown: &mut Option<&mut tokio::sync::watch::Receiver<bool>>,
+) -> Result<bool, ReceiverError> {
+    if let Some(fence) = runtime.placement_fence() {
+        fence.raise(key, &view.position);
+    }
+    let Some(mut withdrawn) = stop_invalid_work(runtime, view, shutdown).await? else {
+        return Ok(false);
+    };
+    let Some(fence) = runtime.placement_fence() else {
+        return Ok(true);
+    };
+    withdrawn.extend(
+        previous
+            .into_iter()
+            .flat_map(|previous| &previous.assigned)
+            .filter(|id| !view.assigned.contains(id))
+            .cloned(),
+    );
+    withdrawn.sort();
+    withdrawn.dedup();
+    Ok(
+        interruptible(fence.stopped(key, &view.position, &withdrawn), shutdown)
+            .await
+            .is_some(),
+    )
 }
 
 impl ConfigAccess {
@@ -467,7 +551,7 @@ impl ConfigAccess {
             return Ok(None);
         };
         // Earlier homes have only the applied row. It is their initial read floor.
-        let floor_key = format!("floor:{key}");
+        let floor_key = format!("{FLOOR_PREFIX}{key}");
         let (accepted, applied) = self
             .transact_readonly("assignments.floor", |txn| {
                 let floor_key = &floor_key;
@@ -484,7 +568,7 @@ impl ConfigAccess {
             .filter(|view| Some(*view) != applied.as_ref())
         {
             // An interrupted stop is still owed while the authority is unreachable.
-            if !stop_invalid_work(runtime, pending, &mut shutdown).await? {
+            if !stop_owed(runtime, &key, pending, applied.as_ref(), &mut shutdown).await? {
                 return Ok(None);
             }
         }
@@ -506,6 +590,7 @@ impl ConfigAccess {
         assigned.dedup();
         let next = AssignmentState {
             position: certified.position,
+            timestamp: certified.timestamp,
             assigned,
         };
         if let Some(previous) = &previous {
@@ -516,7 +601,7 @@ impl ConfigAccess {
             Box::pin(persist(txn, &floor_key, &subject, scope, &next))
         })
         .await?;
-        if !stop_invalid_work(runtime, &next, &mut shutdown).await? {
+        if !stop_owed(runtime, &key, &next, previous.as_ref(), &mut shutdown).await? {
             return Ok(None);
         }
         let committed = self
@@ -587,6 +672,7 @@ mod tests {
                 height,
                 block_hash: hash.into(),
             },
+            timestamp: height,
             assigned: assigned.iter().map(|id| (*id).to_owned()).collect(),
         }
     }
@@ -659,6 +745,7 @@ mod tests {
                     height: 0,
                     block_hash: String::new(),
                 },
+                timestamp: 0,
                 assigned: input.state.assigned.clone(),
             };
             state.may_run(&input.id, input.body_verified)
@@ -674,6 +761,7 @@ mod tests {
                     height: input.position.height,
                     block_hash: input.position.hash.clone(),
                 },
+                timestamp: input.position.height,
                 assigned: input.assigned.clone(),
             };
             if let Some(previous) = &input.state.position {
@@ -683,6 +771,7 @@ mod tests {
                         height: previous.height,
                         block_hash: previous.hash.clone(),
                     },
+                    timestamp: previous.height,
                     assigned: input.state.assigned.clone(),
                 };
                 if check(&previous, &next).is_err() {

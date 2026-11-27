@@ -138,6 +138,30 @@ fn has_cfg_false(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+fn has_ignore(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("ignore") {
+            return true;
+        }
+        if attr.path().is_ident("cfg_attr") {
+            let parsed = attr.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            );
+            if let Ok(args) = parsed {
+                return args
+                    .iter()
+                    .skip(1)
+                    .any(|meta| meta.path().is_ident("ignore"));
+            }
+        }
+        false
+    })
+}
+
+fn is_disabled(attrs: &[syn::Attribute]) -> bool {
+    has_cfg_false(attrs) || has_ignore(attrs)
+}
+
 fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     match item {
         syn::Item::Const(item) => &item.attrs,
@@ -219,6 +243,41 @@ fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
         syn::Expr::While(expr) => &expr.attrs,
         syn::Expr::Yield(expr) => &expr.attrs,
         _ => &[],
+    }
+}
+
+pub(crate) fn retain_enabled_syntax(file: &mut syn::File) {
+    use syn::visit_mut::{self, VisitMut};
+
+    struct Enabled;
+
+    impl VisitMut for Enabled {
+        fn visit_item_mut(&mut self, item: &mut syn::Item) {
+            if is_disabled(item_attrs(item)) {
+                *item = syn::Item::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_item_mut(self, item);
+            }
+        }
+
+        fn visit_block_mut(&mut self, block: &mut syn::Block) {
+            block.stmts.retain(|stmt| !is_disabled(stmt_attrs(stmt)));
+            visit_mut::visit_block_mut(self, block);
+        }
+
+        fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
+            if is_disabled(expr_attrs(expr)) {
+                *expr = syn::Expr::Verbatim(Default::default());
+            } else {
+                visit_mut::visit_expr_mut(self, expr);
+            }
+        }
+    }
+
+    if is_disabled(&file.attrs) {
+        file.items.clear();
+    } else {
+        Enabled.visit_file_mut(file);
     }
 }
 
@@ -413,7 +472,7 @@ impl<'a> RustConsumerScanner<'a> {
 
 impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
-        if has_cfg_false(&file.attrs) {
+        if is_disabled(&file.attrs) {
             return;
         }
         self.scopes.push(BTreeMap::new());
@@ -426,21 +485,21 @@ impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     }
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if has_cfg_false(item_attrs(item)) {
+        if is_disabled(item_attrs(item)) {
             return;
         }
         visit::visit_item(self, item);
     }
 
     fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
-        if has_cfg_false(impl_item_attrs(item)) {
+        if is_disabled(impl_item_attrs(item)) {
             return;
         }
         visit::visit_impl_item(self, item);
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if has_cfg_false(&module.attrs) {
+        if is_disabled(&module.attrs) {
             return;
         }
         let Some((_, items)) = &module.content else {
@@ -466,26 +525,26 @@ impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        if has_cfg_false(stmt_attrs(stmt)) {
+        if is_disabled(stmt_attrs(stmt)) {
             return;
         }
         visit::visit_stmt(self, stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast syn::Expr) {
-        if has_cfg_false(expr_attrs(expr)) {
+        if is_disabled(expr_attrs(expr)) {
             return;
         }
         visit::visit_expr(self, expr);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if has_cfg_false(&call.attrs) {
+        if is_disabled(&call.attrs) {
             return;
         }
         self.record_path(&call.func);
         for arg in &call.args {
-            if !has_cfg_false(expr_attrs(arg)) {
+            if !is_disabled(expr_attrs(arg)) {
                 self.record_path(arg);
             }
         }
@@ -628,6 +687,181 @@ mod tests {
 
     use super::*;
 
+    fn ts_trace_imports(source: &str) -> Vec<String> {
+        static IMPORT: OnceLock<regex::Regex> = OnceLock::new();
+        let import = IMPORT.get_or_init(|| regex::Regex::new(
+            r#"(?m)^\s*import\s+(?:[\w$,*\s]+|(?:[\w$]+\s*,\s*)?\{[^}]*\})\s+from\s+(?:"([^"\n]+)"|'([^'\n]+)')"#
+        ).unwrap());
+        import
+            .captures_iter(&strip_ts_comments(source))
+            .map(|capture| {
+                capture
+                    .get(1)
+                    .or_else(|| capture.get(2))
+                    .unwrap()
+                    .as_str()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn trace_imports_count_executable_tests_and_active_statements() {
+        let rust = r#"
+            #[cfg(false)] mod disabled { #[test] fn nested() { include_str!("mod"); } }
+            #[ignore = "manual"] #[test] fn ignored() { include_str!("ignored"); }
+            #[cfg_attr(any(unix, windows), ignore)] #[tokio::test]
+            async fn conditional() { include_str!("conditional"); }
+            #[test] fn active() {
+                #[cfg(false)] let hidden = include_str!("stmt");
+                let value = { #[cfg(false)] { include_str!("expr") } };
+                include_str!("active");
+            }
+            fn helper() { include_str!("helper"); }
+        "#;
+        let includes =
+            |source| crate::module_tree::test_string_includes(syn::parse_file(source).unwrap());
+        assert_eq!(includes(rust), ["active"]);
+        assert!(includes(&format!("#![cfg(false)]\n{rust}")).is_empty());
+        assert_eq!(
+            ts_trace_imports(
+                r#"
+            // import trace from "comment";
+            /* import trace from 'block'; */
+            import {
+                default as trace
+            } /* active */ from 'one.json';
+            import second
+                from "two.json";
+        "#
+            ),
+            ["one.json", "two.json"]
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TraceBoundary {
+        config: String,
+        reason: String,
+        source: String,
+        test: String,
+    }
+
+    fn trace_boundaries(
+        workspace: &Path,
+        compiled: &BTreeSet<std::path::PathBuf>,
+    ) -> BTreeSet<String> {
+        let bytes = fs::read(crate::tla::tla_dir().join("trace-coverage.json")).unwrap();
+        let ledger: Vec<TraceBoundary> = serde_json::from_slice(&bytes).unwrap();
+        let mut names = BTreeSet::new();
+        for entry in ledger {
+            assert!(
+                names.insert(entry.config.clone()),
+                "duplicate boundary {}",
+                entry.config
+            );
+            assert!(
+                !entry.reason.trim().is_empty(),
+                "{} lacks a boundary reason",
+                entry.config
+            );
+            let source = workspace.join(&entry.source);
+            assert!(
+                compiled.contains(&source),
+                "uncompiled boundary evidence {}",
+                entry.source
+            );
+            let mut syntax = syn::parse_file(&fs::read_to_string(source).unwrap()).unwrap();
+            retain_enabled_syntax(&mut syntax);
+            struct Evidence<'a> {
+                name: &'a str,
+                found: bool,
+            }
+            impl<'ast> Visit<'ast> for Evidence<'_> {
+                fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+                    self.found |= function.sig.ident == self.name
+                        && function.attrs.iter().any(|a| {
+                            a.path()
+                                .segments
+                                .last()
+                                .is_some_and(|segment| segment.ident == "test")
+                        });
+                }
+            }
+            let mut evidence = Evidence {
+                name: &entry.test,
+                found: false,
+            };
+            evidence.visit_file(&syntax);
+            assert!(
+                evidence.found,
+                "{} lacks active evidence {}",
+                entry.config, entry.test
+            );
+        }
+        names
+    }
+
+    #[test]
+    fn every_generated_trace_has_one_replay_consumer_or_a_boundary() {
+        let workspace = workspace();
+        let compiled = crate::module_tree::enabled_module_tree(&workspace).compiled;
+        let mut boundaries = trace_boundaries(&workspace, &compiled);
+        let mut files = Vec::new();
+        for root in SOURCE_ROOTS {
+            source_files(&workspace.join(root), &mut files);
+        }
+        let directory = crate::tla::generated_dir()
+            .join("traces")
+            .canonicalize()
+            .unwrap();
+        let mut sites = BTreeMap::<_, Vec<_>>::new();
+        for path in files {
+            let ts = [".test.ts", ".test.tsx"]
+                .iter()
+                .any(|suffix| path.to_string_lossy().ends_with(suffix));
+            if !ts && !compiled.contains(&path) {
+                continue;
+            }
+            let source = fs::read_to_string(&path).unwrap();
+            if !source.contains("/generated/traces/") {
+                continue;
+            }
+            let imports = if ts {
+                ts_trace_imports(&source)
+            } else {
+                crate::module_tree::test_string_includes(syn::parse_file(&source).unwrap())
+            };
+            for import in imports.iter().filter(|s| s.contains("/generated/traces/")) {
+                let file = path.parent().unwrap().join(import).canonicalize().unwrap();
+                sites.entry(file).or_default().push(path.clone());
+            }
+        }
+        for entry in directory.read_dir().unwrap() {
+            let file = entry.unwrap().path();
+            if file.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let consumers = sites.remove(&file).unwrap_or_default();
+            assert_eq!(
+                consumers.len()
+                    + usize::from(boundaries.remove(file.file_stem().unwrap().to_str().unwrap())),
+                1,
+                "{} replay consumers: {consumers:?}",
+                file.display()
+            );
+        }
+        assert!(
+            boundaries.is_empty(),
+            "boundaries without generated traces: {boundaries:?}"
+        );
+        assert!(
+            sites.is_empty(),
+            "consumers outside the generated traces: {sites:?}"
+        );
+    }
+
     const PREMISE_PREFIX: &str = "boundary.";
 
     /// Each name is an emitted family that no native test replays. The list
@@ -713,6 +947,31 @@ mod tests {
             fn live_fn() {
                 #[cfg(false)]
                 gents_lean_vocab::families::baz::cases();
+            }
+        "#;
+        assert!(rust_consumer_counts(source, &keys).is_empty());
+    }
+
+    #[test]
+    fn ignored_test_call_is_not_counted() {
+        let keys = BTreeSet::from(["foo".to_owned(), "bar".to_owned(), "baz".to_owned()]);
+        let source = r#"
+            #[test]
+            #[ignore]
+            fn skipped_bare() {
+                gents_lean_vocab::families::foo::replay(|_| ());
+            }
+
+            #[test]
+            #[ignore = "requires manual setup"]
+            fn skipped_reason() {
+                let _ = gents_lean_vocab::families::bar::cases();
+            }
+
+            #[test]
+            #[cfg_attr(not(feature = "live"), ignore = "live only")]
+            fn skipped_cfg_attr() {
+                let _ = gents_lean_vocab::families::baz::cases();
             }
         "#;
         assert!(rust_consumer_counts(source, &keys).is_empty());

@@ -1,0 +1,282 @@
+{
+  "case_id": "kb-triage-desk",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "articles.json",
+        "contents": "[\n  {\n    \"slug\": \"KB-301\",\n    \"category\": \"electrical\",\n    \"body\": \"When the panel breaker trips under startup load, inspect the starter relay contacts for carbon pitting and measure inrush current across phases.\"\n  },\n  {\n    \"slug\": \"KB-302\",\n    \"category\": \"cooling\",\n    \"body\": \"Radiator overflow during idle cycles usually points to a seized thermostat cartridge or air trapped behind the upper heater core.\"\n  },\n  {\n    \"slug\": \"KB-304\",\n    \"category\": \"hydraulics\",\n    \"body\": \"Sudden hydraulic valve pressure drops under heavy lift are resolved by replacing the worn relief spring inside the main manifold block.\"\n  },\n  {\n    \"slug\": \"KB-305\",\n    \"category\": \"pneumatics\",\n    \"body\": \"Air compressor chatter at cutoff indicates moisture buildup in the unloader check line; drain the receiver tank and reseat the diaphragm.\"\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create KbArticle(slug, category, English fulltext body), import articles.json, and add a Help Scout agent. Build and lint a \"Knowledge Desk\" page with a donut chart by category, summary cards, a search input, and a multiline textarea form to add articles.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "KbArticle"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "articles",
+          "collection": "KbArticle",
+          "filter": {},
+          "fields": [
+            "slug",
+            "category",
+            "body"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%help scout%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type KbArticle { slug: String category: String body: String @fulltext(language:\"english\") }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "articles",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "articles",
+                "key": "slug",
+                "id": "KB-304",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "hydraulics"
+                  },
+                  {
+                    "field": "body",
+                    "contains": "relief spring"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)knowledge[- ]?desk"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bDonutChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTextarea\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcategory\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bbody\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "search",
+      "prompt": "Search KbArticle for \"hydraulic valve pressure\" and tell me the best matching slug and remedy.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "KbArticle"
+              },
+              {
+                "field": "ranking",
+                "equals": "bm25"
+              },
+              {
+                "field": "results",
+                "contains": "KB-304"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)KB-304"
+              },
+              {
+                "matches": "(?i)relief spring"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -77,12 +77,15 @@ when they run.
 
 ## One consumer per family
 
-Exactly one test that runs replays each family against the production
-function, with expectations taken only from the model. A consumer counts only
-in a Rust file some target compiles (reached from a target root through `mod`,
-`#[path]` or `include!`) or in a TypeScript test; a file outside every module
-tree is dead source, and the structure test `every_rust_source_is_compiled`
-refuses a new one.
+Exactly one test that runs replays each family against the real production
+function or real runtime/e2e fixture (`BootedRuntime`, `SignedHome`,
+`ClaimedRequest` — see the root [AGENTS.md](../../../AGENTS.md)), never
+against a test stand-in or a `#[cfg(test)]` production bypass, with
+expectations taken only from the model. A consumer counts only in a Rust file
+some target compiles (reached from a target root through `mod`, `#[path]` or
+`include!`) or in a TypeScript test; a file outside every module tree is dead
+source, and the structure test `every_rust_source_is_compiled` refuses a new
+one.
 
 ```rust
 gents_lean_vocab::families::<key>::replay(|input| production(input));
@@ -130,8 +133,9 @@ consumed family whose test evidences it.
 1. Write or change the owner; no `sorry`.
 2. Mark it `@[conformance_function]` or `@[conformance_family]` and run
    `make lean-regen`.
-3. In the same change, write the test that replays it against the production
-   function.
+3. In the same change, write the test that replays it against the real
+   production function or real e2e fixture (never a test stand-in or
+   `#[cfg(test)]` bypass).
 4. Run the scan.
 
 ## TLA+

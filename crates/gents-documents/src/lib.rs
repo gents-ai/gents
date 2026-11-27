@@ -1,3 +1,7 @@
+//! Documents layer: configuration documents, desired-state reconciliation, and views.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Documents/`; test fixtures live in `src/test_support/` (`test-fixtures`).
+
 mod behavior;
 pub mod callback;
 pub mod callback_plugin_handler;
@@ -26,6 +30,8 @@ mod agent_tool_config;
 pub mod automation;
 pub mod backend_credential;
 pub(crate) mod desired_state;
+#[cfg(test)]
+mod detached_grant_fence_tests;
 pub mod event_consumer;
 pub mod event_source_cursor;
 mod node_document_publication;

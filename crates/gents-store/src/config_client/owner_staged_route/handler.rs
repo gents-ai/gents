@@ -133,6 +133,42 @@ async fn decide(
             "The command signature is invalid or was already used.",
         );
     }
+    let _detached_gate = if command.grant {
+        if let Some(baseline_epoch) =
+            crate::config_client::relationship_fence::parse_detached_epoch(headers)
+        {
+            if let Ok(staged) = crate::config_client::txn::StagedRelation::of(&command.change) {
+                let fence =
+                    crate::config_client::relationship_fence::RelationshipRevocationFence::for_node(
+                        &node,
+                    );
+                let gate = fence.lock_gate().await;
+                let revoked = fence.is_revoked_since(&staged.tuple(), baseline_epoch);
+                if matches!(
+                    crate::config_client::relationship_fence::decide_grant(
+                        crate::config_client::relationship_fence::GrantOrigin::Detached,
+                        true,
+                        revoked,
+                    ),
+                    crate::config_client::relationship_fence::CompletionDecision::SkipRevoked
+                ) {
+                    return Json(serde_json::json!({
+                        "change": command.change,
+                        "grant": command.grant,
+                        "fenced_revoked": true,
+                    }))
+                    .into_response();
+                }
+                Some(gate)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     match access
         .request_verified_client_owner_staged(&command.change, command.grant)
         .await

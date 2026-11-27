@@ -1,31 +1,33 @@
 {
   "bind": "fixtures/formats",
   "expect": {
-    "columns": [
-      {
-        "name": "k",
-        "type": "int64"
-      },
-      {
-        "name": "v",
-        "type": "text"
-      }
-    ],
-    "markdown": "| k | v |\n| --- | --- |\n| 1 | \u00e9 |\n| 2 | \ud83d\ude00 |",
-    "offset": 0,
-    "order": "file",
-    "row_count": 2,
-    "rows": [
-      [
-        1,
-        "\u00e9"
+    "response": {
+      "columns": [
+        {
+          "name": "k",
+          "type": "int64"
+        },
+        {
+          "name": "v",
+          "type": "text"
+        }
       ],
-      [
-        2,
-        "\ud83d\ude00"
-      ]
-    ],
-    "warnings": []
+      "markdown": "| k | v |\n| --- | --- |\n| 1 | é |\n| 2 | 😀 |",
+      "offset": 0,
+      "order": "file",
+      "row_count": 2,
+      "rows": [
+        [
+          1,
+          "é"
+        ],
+        [
+          2,
+          "😀"
+        ]
+      ],
+      "warnings": []
+    }
   },
   "input": {
     "sql": "SELECT * FROM utf16le"

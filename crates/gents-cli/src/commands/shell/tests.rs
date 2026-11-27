@@ -2426,6 +2426,7 @@ pub(super) fn home_serving(
                     store_encryption: None,
                     document_acp: Default::default(),
                     client_identity: None,
+                    registry: None,
                 },
             )
             .unwrap();

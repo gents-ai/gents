@@ -64,7 +64,7 @@ impl TransactionMode {
     const fn max_attempts(self) -> u32 {
         match self {
             Self::ConflictRetry | Self::SignedConflictRebuild => {
-                retry::TRANSACT_CONFLICT_MAX_RETRIES + 1
+                crate::config_client::TRANSACT_CONFLICT_MAX_RETRIES + 1
             }
             Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),
@@ -465,8 +465,12 @@ where
                         let _ = txn.rollback_inner().await;
                         return Err(E::from(error));
                     }
+                    let revocation_commit = txn.begin_revocation_commit().await;
                     match txn.commit_inner().await {
                         Ok(()) => {
+                            if let Some(guard) = revocation_commit {
+                                guard.committed().await;
+                            }
                             txn.disarm_rollback();
                             if let Err(error) = txn.observe_committed().await {
                                 return Err(E::from(

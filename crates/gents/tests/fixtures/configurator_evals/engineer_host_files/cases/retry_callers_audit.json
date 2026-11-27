@@ -89,7 +89,7 @@
   "stages": [
     {
       "stage_id": "audit",
-      "prompt": "In this Rust workspace, which packages call tally_core's retry_forever, under any name it is imported or re-exported as? Don't count the package that defines it, and a mention or re-export that isn't a call doesn't count. Write their Cargo package names (the name in each Cargo.toml, not the directory) to audit/retry_callers.txt, one per line, sorted. Don't change any source.",
+      "prompt": "Which Rust workspace packages call tally_core::retry_forever (under any import or re-export alias)? Exclude the defining package and non-call mentions/re-exports. Write their Cargo.toml package names (not directory names) sorted, one per line, to audit/retry_callers.txt. Don't edit source files.",
       "capture": [
         {
           "kind": "file",

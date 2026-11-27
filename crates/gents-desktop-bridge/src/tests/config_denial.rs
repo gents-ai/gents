@@ -81,6 +81,15 @@ async fn a_denied_config_write_keeps_its_permission_code() {
     .await
     .unwrap_err();
     DenyingRuntime::assert_denied(error);
+    let log = std::fs::read_to_string(crate::logging::desktop_error_log(
+        runtime.core.paths().root(),
+    ))
+    .expect("denied desktop mutation writes desktop-errors.log");
+    assert!(log.contains("delete task failed:"), "unexpected log: {log}");
+    assert!(
+        log.contains("403"),
+        "expected real HTTP status in log: {log}"
+    );
     runtime.shutdown().await;
 }
 

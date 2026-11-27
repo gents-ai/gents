@@ -58,8 +58,8 @@ reqwest = { workspace = true, features = ["stream"] }
 tokio-util = "0.7"
 tempfile = "3"
 kovan-map = "0.2.2"
-afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
+afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "98a39d2f6207477ae5e33268d79cd8d6a463eaa1" }
+afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "98a39d2f6207477ae5e33268d79cd8d6a463eaa1" }
 
 [dev-dependencies]
 gents-fs-runner = { path = "../gents-fs-runner" }

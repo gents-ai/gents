@@ -1,6 +1,7 @@
 use super::{schedule_visibility, ScheduleSource, TriggerSource};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::STALL_CEILING;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -424,7 +425,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     user_access
         .add_resource_relationship("Schedule", &schedule_doc, "parent", "nodes", &node_doc)
         .await?;
-    let intent = tokio::time::timeout(std::time::Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await?
         .ok_or_else(|| anyhow::anyhow!("schedule source stopped"))?;
     assert_eq!(intent.trigger_id.as_deref(), Some("trigger"));

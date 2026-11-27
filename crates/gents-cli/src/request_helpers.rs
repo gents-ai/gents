@@ -279,17 +279,57 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source}\ncaptured report: {report}")]
+struct CommandFailedWithReport {
+    #[source]
+    source: anyhow::Error,
+    report: Value,
+}
+
+pub(crate) trait CaptureReportError: From<anyhow::Error> {
+    fn with_captured_report(self, report: Value) -> Self;
+}
+
+impl CaptureReportError for anyhow::Error {
+    fn with_captured_report(self, report: Value) -> Self {
+        Self::new(CommandFailedWithReport {
+            source: self,
+            report,
+        })
+    }
+}
+
+impl CaptureReportError for gents_pack::pack::PackChangeError {
+    fn with_captured_report(self, report: Value) -> Self {
+        match self {
+            Self::Other(source) => Self::Other(anyhow::Error::new(CommandFailedWithReport {
+                source,
+                report,
+            })),
+            typed => typed,
+        }
+    }
+}
+
 pub(crate) async fn capture_report<F, E>(command: F) -> Result<Value, E>
 where
     F: std::future::Future<Output = Result<(), E>>,
-    E: From<anyhow::Error>,
+    E: CaptureReportError,
 {
     CAPTURED_REPORT
         .scope(std::cell::RefCell::new(None), async move {
-            command.await?;
-            CAPTURED_REPORT
-                .with(|report| report.borrow_mut().take())
-                .ok_or_else(|| anyhow::anyhow!("the command produced no report").into())
+            let outcome = command.await;
+            let captured = CAPTURED_REPORT.with(|report| report.borrow_mut().take());
+            match outcome {
+                Ok(()) => {
+                    captured.ok_or_else(|| anyhow::anyhow!("the command produced no report").into())
+                }
+                Err(error) => Err(match captured {
+                    Some(report) => error.with_captured_report(report),
+                    None => error,
+                }),
+            }
         })
         .await
 }
@@ -387,4 +427,79 @@ pub(crate) async fn goal_request(
         )
     };
     build_signed_reserved_client_request(access, spec, RequestSigner::Identity(&signer)).await
+}
+
+#[cfg(test)]
+mod capture_report_tests {
+    use super::*;
+    use gents_pack::pack::PackChangeError;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn capture_report_preserves_captured_output_on_anyhow_error() {
+        let error = capture_report::<_, anyhow::Error>(async {
+            print_json(&json!({
+                "updated": [],
+                "failed": [{"pack": "gents/demo_pack", "error": "checksum mismatch"}],
+                "current": [],
+            }))?;
+            anyhow::bail!(
+                "updating failed for at least one pack; see \"failed\" in the report above"
+            )
+        })
+        .await
+        .expect_err("command error should propagate");
+
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("updating failed for at least one pack"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("captured report:"), "{rendered}");
+        assert!(rendered.contains("gents/demo_pack"), "{rendered}");
+        assert!(rendered.contains("checksum mismatch"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn capture_report_preserves_pack_change_other_report_and_typed_refusals() {
+        let other = capture_report::<_, PackChangeError>(async {
+            print_json(&json!({
+                "failed": [{"pack": "gents/demo_pack", "error": "registry 503"}],
+            }))?;
+            Err(anyhow::anyhow!("updating failed for at least one pack").into())
+        })
+        .await
+        .expect_err("PackChangeError::Other should propagate");
+        let rendered = format!("{other:#}");
+        assert!(
+            rendered.contains("updating failed for at least one pack"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("registry 503"), "{rendered}");
+
+        let typed = capture_report::<_, PackChangeError>(async {
+            print_json(&json!({"failed": [{"pack": "gents/demo_pack"}]}))?;
+            Err(PackChangeError::Edited {
+                coordinate: "gents/demo_pack".to_owned(),
+                edited: vec!["Tools/demo-tools".to_owned()],
+            })
+        })
+        .await
+        .expect_err("typed PackChangeError must stay typed");
+        assert!(
+            matches!(
+                typed,
+                PackChangeError::Edited { ref coordinate, .. } if coordinate == "gents/demo_pack"
+            ),
+            "{typed:#}"
+        );
+
+        let without_report = capture_report::<_, anyhow::Error>(async {
+            anyhow::bail!("failed before printing any report")
+        })
+        .await
+        .expect_err("error without report should propagate unchanged");
+        let rendered = format!("{without_report:#}");
+        assert_eq!(rendered, "failed before printing any report");
+    }
 }

@@ -129,7 +129,7 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
     let request_id = |n: u64| format!("{n:08}");
     let session_name = |n: u64| format!("retry-session-{n}");
     for case in family::cases() {
-        let i = &case.input;
+        let i: &family::RetryInput<RequestLifecycleState> = &case.input;
         let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("generated-retry-{}", i.name),
             crate::test_support::no_lifecycle_plugins(),
@@ -145,8 +145,15 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
             .expect("a retry case stores its parent")
             .scope;
         let session = session_name(scope.session);
+        let mut ordered_rows = i.rows.clone();
+        ordered_rows.sort_by_key(|row| {
+            (
+                u8::from(!row.state.is_terminal()),
+                row.terminalized_at.unwrap_or(0),
+            )
+        });
         let mut parent_doc = None;
-        for row in &i.rows {
+        for row in &ordered_rows {
             assert!(
                 (row.scope.node, row.scope.session, row.scope.requester)
                     == (scope.node, scope.session, scope.requester)
@@ -156,31 +163,43 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
             );
             let created_at = (base + chrono::TimeDelta::seconds(i64::try_from(row.created_at)?))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let stage = if row.state.is_terminal() {
+                crate::test_support::Stage::Executing
+            } else {
+                match row.state {
+                    RequestLifecycleState::Pending => crate::test_support::Stage::Submitted,
+                    RequestLifecycleState::Claimed => crate::test_support::Stage::Claimed,
+                    RequestLifecycleState::Processing => crate::test_support::Stage::Executing,
+                    other => panic!("unexpected live request state in retry fixture: {other:?}"),
+                }
+            };
             let mut claimed =
                 crate::test_support::ClaimedRequest::client_signed(&signed_home, &binding)
                     .ids(&request_id(row.request_id), &session)
                     .created_at(&created_at)
                     .batch_interval(std::time::Duration::ZERO)
-                    .drive(crate::test_support::Stage::Executing)
+                    .drive(stage)
                     .await;
-            let outcome = [
-                RequestTerminalOutcome::Completed,
-                RequestTerminalOutcome::Failed,
-                RequestTerminalOutcome::Interrupted,
-                RequestTerminalOutcome::Dead,
-                RequestTerminalOutcome::Superseded,
-            ]
-            .into_iter()
-            .find(|outcome| outcome.request_lifecycle_state() == row.state)
-            .expect("the fixture stores terminal rows");
-            claimed
-                .lifecycle
-                .terminalize_owned(
-                    outcome,
-                    gents_protocol::output::TerminalOutput::NoMessage,
-                    None,
-                )
-                .await?;
+            if row.state.is_terminal() {
+                let outcome = [
+                    RequestTerminalOutcome::Completed,
+                    RequestTerminalOutcome::Failed,
+                    RequestTerminalOutcome::Interrupted,
+                    RequestTerminalOutcome::Dead,
+                    RequestTerminalOutcome::Superseded,
+                ]
+                .into_iter()
+                .find(|outcome| outcome.request_lifecycle_state() == row.state)
+                .expect("terminal row matches a terminal outcome");
+                claimed
+                    .lifecycle
+                    .terminalize_owned(
+                        outcome,
+                        gents_protocol::output::TerminalOutput::NoMessage,
+                        None,
+                    )
+                    .await?;
+            }
             if row.doc_id == i.parent_doc {
                 parent_doc = Some(claimed.doc_id);
             }
@@ -276,6 +295,89 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
         };
         case.check(stored);
         db.node.shutdown().await?;
+    }
+    Ok(())
+}
+
+/// Lean `AgentSession.latest` replayed directly against `latest_session_request`
+/// over DefraDB rows, including same-second live/terminalized tie-breaks and
+/// auxiliary (title-audit / access-review) requests.
+#[tokio::test]
+async fn generated_latest_session_request_matches_lean() -> anyhow::Result<()> {
+    use gents_lean_vocab::families::contracts_latest_session_request as family;
+    use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
+    let base = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")?;
+    let seconds =
+        |value: u64| (base + chrono::Duration::seconds(i64::try_from(value).unwrap())).to_rfc3339();
+    let millis = |value: Option<u64>| {
+        value.map(|ms| {
+            (base + chrono::Duration::milliseconds(i64::try_from(ms).unwrap())).to_rfc3339()
+        })
+    };
+    let did = |kind: &str, value: Option<u64>| value.map(|n| format!("did:test:{kind}-{n}"));
+    let request_id = |value: u64| format!("{value:08}");
+    for case in family::cases::<String>() {
+        let node_db = gents_store::test_support::TestStore::start(
+            &format!("latest-session-request-{}", case.input.name),
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let input = case.input.clone();
+        ConfigAccess::transact_local_idempotent(
+            &node,
+            None,
+            IdempotentTransactionRetry::Standard,
+            "test.request.latest_session_request",
+            |txn| {
+                let input = input.clone();
+                Box::pin(async move {
+                    for row in &input.requests {
+                        txn.execute_with_variables(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_id": request_id(row.request_id),
+                                "purpose": row.purpose,
+                                "node_did": did("node", Some(row.scope.node)),
+                                "session_id": format!("session-{}", row.scope.session),
+                                "requester_did": did("requester", row.scope.requester),
+                                "agent_did": format!("agent-{}", row.agent),
+                                "content": "prompt",
+                                "created_at": seconds(row.created_at),
+                                "terminalized_at": millis(row.terminalized_at),
+                                "lifecycle_state": row.state
+                            }}),
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
+        )
+        .await?;
+        let access = ConfigAccess::local(node.clone());
+        assert!(
+            case.input.requester_scoped,
+            "latest_session_request always queries an exact requester scope"
+        );
+        let requester_did = did("requester", case.input.requester).expect("exact requester scope");
+        let selected = super::read::latest_session_request(
+            &access,
+            &did("node", Some(case.input.node)).expect("node scope"),
+            &format!("session-{}", case.input.session),
+            &requester_did,
+        )
+        .await?;
+        let selected = selected.map(|id| {
+            case.input
+                .requests
+                .iter()
+                .find(|row| request_id(row.request_id) == id)
+                .expect("selected request comes from stored rows")
+                .clone()
+        });
+        case.check(family::SelectionOutput { selected });
+        node.shutdown().await?;
     }
     Ok(())
 }

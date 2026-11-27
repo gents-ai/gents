@@ -1,3 +1,7 @@
+//! Unlayered leaf: Unix directory-handle filesystem access beneath a tool root and stdio runner.
+//!
+//! Beneath-root path resolution is modeled in `crates/gents/proofs/Proofs/Tools/`.
+
 use std::io::{Read, Write};
 use std::path::PathBuf;
 

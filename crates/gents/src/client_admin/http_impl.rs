@@ -28,7 +28,6 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    node_identity: Option<gents_store::config_client::GraphqlEndpoint>,
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
@@ -42,14 +41,6 @@ impl HttpRemoteP2pAdmin {
         actor: Arc<PrincipalIdentity>,
     ) -> RemoteP2pAdminResult<Self> {
         Self::new_inner(graphql_url, Some(actor))
-    }
-
-    pub fn with_node_identity(
-        mut self,
-        endpoint: gents_store::config_client::GraphqlEndpoint,
-    ) -> Self {
-        self.node_identity = Some(endpoint);
-        self
     }
 
     pub fn with_local_resolver(mut self, node: Arc<EmbeddedNode>) -> Self {
@@ -84,7 +75,6 @@ impl HttpRemoteP2pAdmin {
             api_base_path,
             client,
             actor,
-            node_identity: None,
             local_resolver: None,
         })
     }
@@ -93,16 +83,13 @@ impl HttpRemoteP2pAdmin {
         format!("{}{}", self.api_base, path)
     }
 
-    /// Send one admin request, signed by the actor and authorized by the
-    /// node identity; a refusal of that credential reads the home's status
-    /// again and is sent once more.
     async fn send(
         &self,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
     ) -> RemoteP2pAdminResult<reqwest::Response> {
-        let mut signed = Vec::new();
+        let mut request = self.client.request(method.clone(), self.url(path));
         if let Some(actor) = self.actor.as_ref() {
             let signed_path = signed_admin_path(&self.api_base_path, path);
             let payload = signing_payload(
@@ -113,39 +100,15 @@ impl HttpRemoteP2pAdmin {
             let signature = actor.sign(&payload).map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!("signing remote admin request: {error:#}"))
             })?;
-            signed = vec![
-                (ACTOR_DID_HEADER, actor.did().to_owned()),
-                (ACTOR_SIGNATURE_HEADER, hex_encode(&signature)),
-                (
-                    ACTOR_SIGNATURE_VERSION_HEADER,
-                    ACTOR_SIGNATURE_VERSION.to_string(),
-                ),
-            ];
+            request = request
+                .header(ACTOR_DID_HEADER, actor.did())
+                .header(ACTOR_SIGNATURE_HEADER, hex_encode(&signature))
+                .header(ACTOR_SIGNATURE_VERSION_HEADER, ACTOR_SIGNATURE_VERSION);
         }
-        let build = || {
-            let mut request = self.client.request(method.clone(), self.url(path));
-            for (name, value) in &signed {
-                request = request.header(*name, value);
-            }
-            match &body {
-                Some(body) => request
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(body.clone()),
-                None => request,
-            }
-        };
-        match self.node_identity.as_ref() {
-            Some(endpoint) => endpoint
-                .send_resolving(|endpoint| endpoint.authorize(build()))
-                .await
-                .map_err(|error| {
-                    RemoteP2pAdminError::LocalError(format!(
-                        "authenticating remote admin request: {error:#}"
-                    ))
-                })?
-                .map_err(map_reqwest_err),
-            None => build().send().await.map_err(map_reqwest_err),
+        if let Some(body) = body {
+            request = request.header(CONTENT_TYPE, "application/json").body(body);
         }
+        request.send().await.map_err(map_reqwest_err)
     }
 
     async fn json_send<T>(

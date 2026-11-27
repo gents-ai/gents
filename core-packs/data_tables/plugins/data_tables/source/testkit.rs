@@ -50,9 +50,30 @@ impl Drop for Dir {
     }
 }
 
-/// Runs one request through the whole plugin and returns its JSON result.
-pub fn run(input: Value) -> Result<Value, String> {
+/// Runs one request through the whole plugin and returns the raw JSON envelope.
+pub fn run_raw(input: Value) -> Result<Value, String> {
     crate::run(&input.to_string()).map(|s| serde_json::from_str(&s).unwrap())
+}
+
+/// Runs one request through the whole plugin, checks the `{"response": {...}}`
+/// envelope, and returns its inner `response` object.
+pub fn run(input: Value) -> Result<Value, String> {
+    run_raw(input).map(|mut v| {
+        let obj = v.as_object_mut().expect("tool result must be an object");
+        assert_eq!(
+            obj.len(),
+            1,
+            "tool result envelope must carry only response: {obj:?}"
+        );
+        let response = obj
+            .remove("response")
+            .expect("tool result must wrap its payload in response");
+        assert!(
+            response.is_object(),
+            "tool result response must be an object: {response}"
+        );
+        response
+    })
 }
 
 /// A query over `dir`.

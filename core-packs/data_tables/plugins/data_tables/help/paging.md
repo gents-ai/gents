@@ -1,4 +1,4 @@
-A result longer than one page carries `next: {"cursor": "..."}`. Call again with the same fields and
+A result longer than one page carries `response.next` (`{"cursor": "..."}`). Call again with the same fields and
 `"cursor": "<that value>"`; the next page starts exactly where this one ended, nothing repeated or skipped,
 and you may change `max_rows`. Repeat until `next` is absent. A cursor is refused, with the reason, when the
 SQL, the options or the files changed. The query runs again for each page, so a very deep page of a large

@@ -1,3 +1,5 @@
+use super::documents::LIFECYCLE_PROVISIONING;
+use super::transition::{transition_workspace_lifecycle, WorkspaceLifecycleState};
 use super::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation,
     MemoryWorkspaceDocuments,
@@ -37,11 +39,20 @@ pub async fn flush_workspace_docs(
                 let response = txn.run(&query).await?;
                 let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace state query omitted rows")?;
                 let [row] = rows.as_slice() else { anyhow::bail!("workspace state unavailable or ambiguous") };
-                let previous = row["lifecycle_state"].as_str().and_then(gents_loop::tool_policy::normalize_workspace_lifecycle_state).context("workspace lifecycle state invalid")?;
-                let desired = gents_loop::tool_policy::normalize_workspace_lifecycle_state(&workspace.lifecycle_state).context("workspace publication state invalid")?;
-                anyhow::ensure!(previous == desired || (previous == "provisioning" && matches!(desired, "ready" | "provisionFailed")), "stale callback workspace publication cannot replace an advanced lifecycle");
-                if previous == desired {
+                let previous = row["lifecycle_state"].as_str().context("workspace lifecycle state missing")?;
+                let previous_state = WorkspaceLifecycleState::parse(previous).context("workspace lifecycle state invalid")?;
+                let desired_state = WorkspaceLifecycleState::parse(&workspace.lifecycle_state).context("workspace publication state invalid")?;
+                if previous_state == desired_state {
                     anyhow::ensure!(row["seal_hash"].as_str() == workspace.seal_hash.as_deref(), "workspace publication seal differs from the retained state");
+                } else {
+                    let next = transition_workspace_lifecycle(previous, desired_state.as_str(), row["seal_hash"].as_str())
+                        .context("stale callback workspace publication cannot replace an advanced lifecycle")?;
+                    anyhow::ensure!(matches!(next, WorkspaceLifecycleState::Ready | WorkspaceLifecycleState::ProvisionFailed), "stale callback workspace publication cannot replace an advanced lifecycle");
+                }
+            } else {
+                let desired_state = WorkspaceLifecycleState::parse(&workspace.lifecycle_state).context("workspace publication state invalid")?;
+                if desired_state != WorkspaceLifecycleState::Provisioning {
+                    transition_workspace_lifecycle(LIFECYCLE_PROVISIONING, desired_state.as_str(), workspace.seal_hash.as_deref())?;
                 }
             }
             let parent = if existing.is_none() {
@@ -241,9 +252,10 @@ pub(super) async fn flush_frozen_workspace(
                 };
                 let state = row["lifecycle_state"]
                     .as_str()
-                    .and_then(gents_loop::tool_policy::normalize_workspace_lifecycle_state)
-                    .context("workspace state invalid")?;
-                if state == "sealed" {
+                    .context("workspace state missing")?;
+                let current =
+                    WorkspaceLifecycleState::parse(state).context("workspace state invalid")?;
+                if current == WorkspaceLifecycleState::Sealed {
                     anyhow::ensure!(
                         row["seal_hash"].as_str() == Some(seal),
                         "existing workspace seal differs"
@@ -251,9 +263,15 @@ pub(super) async fn flush_frozen_workspace(
                     return Ok(());
                 }
                 anyhow::ensure!(
-                    state == "provisioning" && row["seal_hash"].as_str() == Some(seal),
+                    current == WorkspaceLifecycleState::Provisioning
+                        && row["seal_hash"].as_str() == Some(seal),
                     "workspace cannot freeze from state {state} or a different reserved seal"
                 );
+                let next = transition_workspace_lifecycle(
+                    state,
+                    WorkspaceLifecycleState::Sealed.as_str(),
+                    row["seal_hash"].as_str(),
+                )?;
                 let mutation = {
                     use gents_protocol::document_query::{
                         fields::isolated_workspace as fields, Input, Update,
@@ -261,7 +279,7 @@ pub(super) async fn flush_frozen_workspace(
                     Update::doc(
                         &doc,
                         Input::new()
-                            .set(fields::LIFECYCLE_STATE, "sealed")
+                            .set(fields::LIFECYCLE_STATE, next.as_str())
                             .set(fields::SEAL_HASH, seal)
                             .set(fields::BINDING_REVISION, uuid::Uuid::new_v4().to_string()),
                     )

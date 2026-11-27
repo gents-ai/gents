@@ -309,7 +309,7 @@ pub struct SamplingConfig {
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
     pub seed: Option<i64>,
-    /// Sampling knobs the provider takes as extra body params (#649): rig's
+    /// Sampling knobs the provider takes as extra body params: rig's
     /// `CompletionRequest` models only `temperature`, so everything else rides
     /// `additional_params` — see [`SamplingConfig::additional_params`].
     pub min_p: Option<f64>,

@@ -4,7 +4,7 @@ use super::apply_txn::TxnBackend;
 #[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::{
     fail_rollback_for_test, pause_embedded_finalization_for_test,
-    post_commit_receipt_loss_for_test, EmbeddedFinalizationBoundary,
+    post_commit_receipt_loss_for_test, EmbeddedFinalizationBoundary, EmbeddedRollbackDropObserver,
 };
 use super::native::native_operation_abandoned;
 use super::{
@@ -194,11 +194,23 @@ impl ConfigApplyTxn<'_> {
             TxnBackend::Embedded { node, handle, .. } => {
                 match tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, async {
                     #[cfg(any(test, feature = "test-fixtures"))]
+                    let mut drop_observer = EmbeddedRollbackDropObserver::for_test();
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     pause_embedded_finalization_for_test(
                         EmbeddedFinalizationBoundary::BeforeRollback,
                     )
                     .await;
-                    node.discard_transaction(handle).await
+                    let result = node.discard_transaction(handle).await;
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    drop_observer.disarm();
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    if result.is_ok() {
+                        pause_embedded_finalization_for_test(
+                            EmbeddedFinalizationBoundary::AfterRollback,
+                        )
+                        .await;
+                    }
+                    result
                 })
                 .await
                 {
@@ -212,6 +224,11 @@ impl ConfigApplyTxn<'_> {
                         tracing::warn!(
                             "embedded rollback timed out; releasing mutation gate with transaction outcome ambiguous"
                         );
+                        #[cfg(any(test, feature = "test-fixtures"))]
+                        pause_embedded_finalization_for_test(
+                            EmbeddedFinalizationBoundary::BeforeRollbackTimeoutRelease,
+                        )
+                        .await;
                         self.disarm_rollback();
                         return Err(error);
                     }

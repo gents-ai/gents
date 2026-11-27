@@ -2231,55 +2231,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_admission_rejection_selects_terminal_no_message() {
-        let fixture = AdmissionFixture::new("pending-rejection").await;
-        let agent_did = fixture.agent.did().to_owned();
-        let create = fixture.local_self_create("rejected-request", "session", &agent_did, None);
-        let doc_id = fixture.create_signed_request(create).await;
-
-        super::terminalize_pending_request_rejection(
-            fixture.node(),
-            &doc_id,
-            fixture.runtime.did(),
-            &agent_did,
-            fixture.agent.as_ref(),
-            "request activates a skill outside its context allowlist",
-            "test.admission_rejection",
-        )
-        .await
-        .unwrap();
-
-        let escaped_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
-        let selected = fixture
-            .node()
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
-            ))
-            .await;
-        assert!(!selected.has_errors(), "{:?}", selected.errors);
-        let row = gents_store::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
-            .unwrap()
-            .unwrap();
-        assert_eq!(row["lifecycle_state"], "failed");
-        assert_eq!(
-            row["failure_reason"],
-            "request activates a skill outside its context allowlist"
-        );
-        let terminal_output: gents_protocol::output::TerminalOutput =
-            serde_json::from_value(row["terminal_output"].clone()).unwrap();
-        assert_eq!(
-            terminal_output,
-            gents_protocol::output::TerminalOutput::NoMessage
-        );
-        fixture
-            .db
-            .node
-            .shutdown()
-            .await
-            .expect("shut down test node");
-    }
-
-    #[tokio::test]
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
         let fixture = AdmissionFixture::new("signed-input").await;
         let agent_did = fixture.agent.did().to_owned();

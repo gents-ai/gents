@@ -18,10 +18,26 @@ use gents_inference::test_support::scripted_backend::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
     use gents_lean_vocab::families::fold_queue_contracts_queued_turn_rediscovery as family;
-    let case = family::cases::<String, String, String, String, String>()
-        .into_iter()
-        .find(|case| case.input.name == "ordinary_queued_inputs_arrive_during_busy_turn")
-        .unwrap();
+    for case in family::cases::<String, String, String, String, String>() {
+        replay_queued_turn_rediscovery_case(&case).await;
+    }
+}
+
+async fn replay_queued_turn_rediscovery_case(
+    case: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::fold_queue_contracts_queued_turn_rediscovery::FoldInput<
+            String,
+            String,
+            String,
+            String,
+            String,
+        >,
+        Option<
+            gents_lean_vocab::families::fold_queue_contracts_queued_turn_rediscovery::FoldObservation,
+        >,
+    >,
+) {
+    use gents_lean_vocab::families::fold_queue_contracts_queued_turn_rediscovery as family;
     let entries = case
         .input
         .inputs
@@ -243,7 +259,18 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_steers_behind_a_busy_turn_are_answered_by_one_inference() {
     use gents_lean_vocab::families::fold_queue_contracts_steers_behind_busy_turn as family;
-    let case = family::cases::<String>().into_iter().next().unwrap();
+    for case in family::cases::<String>() {
+        replay_steers_behind_busy_turn_case(&case).await;
+    }
+}
+
+async fn replay_steers_behind_busy_turn_case(
+    case: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::fold_queue_contracts_steers_behind_busy_turn::BusyTurnSteeringInput<String>,
+        Option<gents_lean_vocab::families::fold_queue_contracts_steers_behind_busy_turn::BusyTurnSteeringObservation>,
+    >,
+) {
+    use gents_lean_vocab::families::fold_queue_contracts_steers_behind_busy_turn as family;
     let head = case.input.head;
     let steers = case
         .input

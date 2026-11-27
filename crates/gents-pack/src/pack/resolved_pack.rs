@@ -116,7 +116,10 @@ pub async fn resolve_pack_source(
         .collect();
     let options = ResolveOptions {
         home: Some(home),
-        registry_url: crate::pack::registry::resolve_registry_url(registry_override),
+        registry_url: crate::pack::registry::resolve_registry_url_for_home(
+            registry_override,
+            Some(home),
+        ),
         installed: &installed,
     };
     let resolved = resolve_named(spec, &options).await?;
@@ -173,6 +176,45 @@ mod tests {
         assert!(
             message.contains("definitely_not_a_stored_pack"),
             "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_pack_source_uses_the_homes_recorded_registry_when_no_flag_is_passed() {
+        let home = tempfile::tempdir().unwrap();
+        let recorded = "http://127.0.0.1:1";
+        gents_store::local::home::write_init_config(
+            home.path(),
+            &gents_store::local::home::StoredInitConfig::<String, String> {
+                home: home.path().display().to_string(),
+                node_name: "local".into(),
+                node_did: "did:key:local".into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: "readonly".into(),
+                tool_root: None,
+                store_encryption: None,
+                document_acp: Default::default(),
+                client_identity: None,
+                registry: Some(format!("{recorded}/")),
+            },
+        )
+        .unwrap();
+        let error = resolve_pack_source("acme/missing_pack", None, home.path())
+            .await
+            .err()
+            .expect("the unreachable recorded registry must be queried");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(recorded),
+            "expected error to name home's recorded registry {recorded}, got: {message}"
+        );
+        assert!(
+            !message.contains(crate::pack::registry::DEFAULT_REGISTRY_URL),
+            "must not fall back to the public registry: {message}"
         );
     }
 }

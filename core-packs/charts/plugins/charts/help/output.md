@@ -9,11 +9,12 @@
  "parts": [{"type": "image", "data": "<base64>", "mimeType": "image/png"}]}
 ```
 
-The PNG arrives as an image you can look at, at most 1568 pixels on its long
+Every tool call returns its fields inside `response` (the same `{"response": {...}}` envelope `data_tables`
+uses), with the PNG in `parts`. The PNG arrives as an image you can look at, at most 1568 pixels on its long
 side; if a detailed picture would not fit the reply, it is drawn at a smaller
 scale, with a warning. `output: "svg"` returns the SVG text in `response.svg`
 instead, unless it is longer than a reply can carry (then use `save`). Answer
-from what you see and from `alt` and `series`, which carry the exact values:
+from what you see and from `response.alt` and `response.series`, which carry the exact values:
 `alt` says the type, axes and ranges, and each series' highest and lowest
 point. Per type, `series` also holds: `drawn` (marks actually drawn when a
 series was reduced), box statistics (`q1`, `median`, `q3`, whiskers,

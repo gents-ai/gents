@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedDropReject ----
+EXTENDS AccountPool
+====

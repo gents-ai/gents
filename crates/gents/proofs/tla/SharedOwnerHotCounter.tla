@@ -60,6 +60,8 @@
 \* `Native` is one round of raw single-attempt transactions without the owner
 \* (`RoundProgress`); `NativeAbortOnOpenWriter` removes first-committer-wins
 \* from it and a round can end with no commit.
+\* trace actors: ReadLatest, Begin, Park, Wake, Read, Commit, CommitTimeout, Retry => pc
+\* trace actors: MutualAbort => pc{2}
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS

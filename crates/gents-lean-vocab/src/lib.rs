@@ -1,3 +1,7 @@
+//! Vocabulary layer: Lean conformance snapshot decoders, family types, and structure/consumer checks.
+//!
+//! Lean contract emitters and the coverage ledger live in `crates/gents/proofs/Proofs/Conformance/`.
+
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 

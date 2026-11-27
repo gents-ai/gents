@@ -202,6 +202,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+        let fence_route = owner_staged.clone();
         let node = Arc::new(
             defra_node::Node::builder()
                 .enable_signing()
@@ -209,7 +210,10 @@ mod tests {
                 .with_node_acp_owner(user.did().to_owned())
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener)?
-                        .with_extra_routes(owner_staged.router()),
+                        .with_extra_routes(owner_staged.router())
+                        .with_router_transform(Arc::new(move |router| {
+                            fence_route.wrap_relationship_fence(router)
+                        })),
                 )
                 .build()
                 .await?,

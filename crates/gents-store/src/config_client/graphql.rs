@@ -58,8 +58,8 @@ pub(super) async fn auto_commit(
 
 /// Whether `error` is a delegation DefraDB refused for its window, which the
 /// endpoint recovers by minting it again at its home's clock and sending the
-/// request once more (`Identity.HeldAudience.resend`). External premise
-/// (defradb.rs#3006): such a write was refused before anything was written.
+/// request once more (`Identity.HeldAudience.resend`).
+/// External premise: such a write was refused before anything was written.
 async fn recovers_window(
     endpoint: &GraphqlEndpoint,
     error: &ConfigClientError,
@@ -188,7 +188,7 @@ async fn send_query(
 pub(super) async fn txn_begin(
     endpoint: &GraphqlEndpoint,
     read_only: bool,
-) -> Result<(reqwest::Client, String)> {
+) -> Result<(reqwest::Client, String, u64)> {
     let client = http_client().await?.clone();
     let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
     let url = if read_only {
@@ -204,6 +204,12 @@ pub(super) async fn txn_begin(
             source,
         })?;
     let status = response.status();
+    let fence_epoch = response
+        .headers()
+        .get(super::relationship_fence::FENCE_EPOCH_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0);
     let bytes = response
         .bytes()
         .await
@@ -232,7 +238,7 @@ pub(super) async fn txn_begin(
                 .or_else(|| value.as_u64().map(|id| id.to_string()))
         })
         .ok_or(ConfigClientError::TxBeginMissingId)?;
-    Ok((client, id))
+    Ok((client, id, fence_epoch))
 }
 
 pub(super) async fn txn_execute(

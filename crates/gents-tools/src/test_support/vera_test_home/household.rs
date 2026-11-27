@@ -278,18 +278,19 @@ impl Household {
             if done(&owed) || now >= deadline {
                 return Ok(owed);
             }
-            if let Some(handle) = owed
+            let Some(handle) = owed
                 .iter()
                 .find_map(|entry| entry.txn)
                 .and_then(|txn| txn.to_string().parse::<query::TransactionHandle>().ok())
-            {
-                let _ = self
-                    .node
-                    .await_owed_acp_as(&context, &handle, deadline - now)
-                    .await?;
-            } else {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            else {
+                anyhow::bail!(
+                    "owed ACP entries for {actor} have no transaction handle to await: {owed:?}"
+                );
+            };
+            let _ = self
+                .node
+                .await_owed_acp_as(&context, &handle, deadline - now)
+                .await?;
         }
     }
 

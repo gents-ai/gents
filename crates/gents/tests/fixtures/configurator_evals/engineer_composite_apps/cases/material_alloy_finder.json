@@ -1,0 +1,286 @@
+{
+  "case_id": "material-alloy-finder",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "alloys.json",
+        "contents": "[\n  {\n    \"code\": \"AL-10\",\n    \"family\": \"titanium\",\n    \"summary\": \"Lightweight aerospace grade titanium bar resistant to saltwater corrosion.\",\n    \"metrics\": [\n      0.8,\n      0.9,\n      0.2\n    ]\n  },\n  {\n    \"code\": \"AL-20\",\n    \"family\": \"copper\",\n    \"summary\": \"High conductivity oxygen free copper busbar for transformer windings.\",\n    \"metrics\": [\n      0.2,\n      0.4,\n      0.95\n    ]\n  },\n  {\n    \"code\": \"AL-30\",\n    \"family\": \"steel\",\n    \"summary\": \"Hardened chromium molybdenum axle steel forged for heavy load shafts.\",\n    \"metrics\": [\n      0.95,\n      0.2,\n      0.3\n    ]\n  },\n  {\n    \"code\": \"AL-40\",\n    \"family\": \"nickel\",\n    \"summary\": \"Heat resistant nickel superalloy blade engineered for turbine exhaust stages.\",\n    \"metrics\": [\n      0.7,\n      0.7,\n      0.85\n    ]\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Create AlloySample(code, family, English fulltext summary, 3-dim metrics flat Euclidean vector index) and import alloys.json. Build and lint an \"Alloy Finder\" page with KPI stats, a bar chart by family, search input, and an alloys table.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "AlloySample"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "alloys",
+          "collection": "AlloySample",
+          "filter": {},
+          "fields": [
+            "code",
+            "family",
+            "summary",
+            "metrics"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type AlloySample { code: String family: String summary: String @fulltext(language:\"english\") metrics: [Float32!] @index(vector:{dimensions:3,flat:{metric:EUCLIDEAN}}) }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "alloys",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "alloys",
+                "key": "code",
+                "id": "AL-20",
+                "expect": [
+                  {
+                    "field": "family",
+                    "equals": "copper"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)alloy[- ]?finder"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBarChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bTable\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bfamily\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bsummary\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "vector_search",
+      "prompt": "Run a vector similarity search on AlloySample metrics for [0.18, 0.42, 0.92] and tell me the nearest alloy code and family.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "AlloySample"
+              },
+              {
+                "field": "ranking",
+                "equals": "similarity"
+              },
+              {
+                "field": "results",
+                "contains": "AL-20"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)AL-20"
+              },
+              {
+                "matches": "(?i)copper"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "bm25_search",
+      "prompt": "Search AlloySample summary with keyword search for \"turbine exhaust\" and tell me the top alloy code.",
+      "capture": [],
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "AlloySample"
+              },
+              {
+                "field": "ranking",
+                "equals": "bm25"
+              },
+              {
+                "field": "results",
+                "contains": "AL-40"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)AL-40"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

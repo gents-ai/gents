@@ -1,5 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import { dependentsWarning } from "./dependents";
+import { deleteBlocker } from "./dependents";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { newestWins } from "../../../lib/reads";
@@ -693,7 +693,7 @@ export function BackendEditor({
       {!embedded && !removable && (
         <DeleteButton
           label={backend.name ?? backend.backendId}
-          warning={dependentsWarning(deployment, "backend", backend.backendId)}
+          blocked={deleteBlocker(deployment, "backend", backend.backendId)}
           base={base}
           onDelete={() =>
             changeConfig("deleteBackendConfig", {

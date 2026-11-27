@@ -3,8 +3,6 @@ use std::time::Duration;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use gents_loop::error::InferenceError;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RetryPolicy {
@@ -39,16 +37,5 @@ impl RetryPolicy {
 
         let final_ms = (capped as i64 + jitter).max(100) as u64;
         Duration::from_millis(final_ms)
-    }
-
-    pub fn has_retries(&self) -> bool {
-        self.max_retries > 0
-    }
-}
-
-pub fn retries_exhausted(policy: &RetryPolicy, last_error: &InferenceError) -> InferenceError {
-    InferenceError::RetriesExhausted {
-        max_retries: policy.max_retries,
-        last_error: last_error.to_string(),
     }
 }

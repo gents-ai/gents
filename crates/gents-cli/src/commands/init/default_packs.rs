@@ -1318,7 +1318,7 @@ pub(crate) mod tests {
     }
 
     /// A core pack is installed as the Engineer, so what it ships is the
-    /// Engineer's to use and to remove (gents-ai/packs#61): the pack's agent
+    /// Engineer's to use and to remove: the pack's agent
     /// is in its agent list, it targets and wires that agent, and it removes
     /// the pack with everything the pack left.
     #[tokio::test]
@@ -1606,6 +1606,272 @@ pub(crate) mod tests {
         drop(config);
         if let Some(node) = access.local_node() {
             node.shutdown().await.expect("node shutdown");
+        }
+    }
+
+    async fn worker_agent_core_pack_archives() -> Vec<(String, Vec<u8>)> {
+        let workflow = tokio::task::spawn_blocking(|| {
+            crate::commands::plugin::testing::build_plugin_afb(
+                "workflow",
+                b"fn main() { println!(\"{{}}\"); }",
+            )
+        })
+        .await
+        .unwrap();
+        let packs = tempfile::tempdir().unwrap();
+        CorePack::ALL
+            .into_iter()
+            .map(|pack| {
+                let (_, name) =
+                    gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
+                let slot = format!("{name}-worker");
+                let context_id = format!("{slot}-context");
+                let tools_id = format!("${{GENTS_PACK_NODE_DID}}-{slot}");
+                let mut manifest = json!({
+                    "manifest_version": 1,
+                    "name": name,
+                    "namespace": "gents",
+                    "version": "1.0.0",
+                    "description": "A core pack fixture with a worker agent",
+                    "authors": ["tests"],
+                    "tags": [],
+                    "kind": "documents",
+                    "assets": ["README.md", "pack_config.json"],
+                    "dependencies": [],
+                    "config": "pack_config.json",
+                    "inference_slots": [{
+                        "name": "worker",
+                        "description": "The worker.",
+                        "agents": [&slot],
+                    }],
+                });
+                let mut tools = vec![json!({
+                    "tools_id": tools_id,
+                    "display_name": "Read-only files",
+                    "host": {"files": {"mode": "ReadOnly"}},
+                })];
+                let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+                let mut agent_targets = Vec::new();
+                if pack == CorePack::DynamicWorkflows {
+                    manifest["assets"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push("plugins/workflow.afb".into());
+                    manifest["plugins"] = json!([plugin_entry("workflow", json!("None"), true)]);
+                    files.push(("plugins/workflow.afb".to_owned(), workflow.clone()));
+                    tools.push(json!({
+                        "tools_id": "workflow-caller",
+                        "display_name": "Workflow caller",
+                        "agents": {"target_ids": [&slot]},
+                        "integrations": {"plugins": [{
+                            "plugin": "gents/workflow",
+                            "job": {
+                                "agent_targets": [&slot],
+                                "policy": {"dynamic": "check"},
+                            },
+                        }]},
+                    }));
+                    agent_targets.push(json!({
+                        "agent_did": format!("gents:agent-slot:{slot}"),
+                        "name": &slot,
+                        "target_id": &slot,
+                        "target_node_did": "${GENTS_PACK_NODE_DID}",
+                        "description": "A read-only worker.",
+                    }));
+                }
+                let mut config = json!({
+                    "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                    "skills": [{
+                        "skill_id": format!("core-{name}"),
+                        "node_did": "${GENTS_PACK_NODE_DID}",
+                        "name": name,
+                        "description": "A core skill.",
+                        "instructions": "Use it.",
+                    }],
+                    "tools": tools,
+                    "contexts": [{
+                        "context_id": context_id,
+                        "system_prompt": "Work.",
+                        "tools_id": tools_id,
+                    }],
+                    "agents": [{
+                        "agent_slot": slot,
+                        "context_id": context_id,
+                        "display_name": format!("{name} worker"),
+                        "description": "Does one read-only task.",
+                        "inference_profile_id": "gents:inference-slot:worker",
+                    }],
+                });
+                if !agent_targets.is_empty() {
+                    config["agent_targets"] = json!(agent_targets);
+                }
+                files.push((
+                    "pack_config.json".to_owned(),
+                    serde_json::to_vec(&config).unwrap(),
+                ));
+                let dir = packs.path().join(name);
+                let files: Vec<(&str, Vec<u8>)> = files
+                    .iter()
+                    .map(|(path, bytes)| (path.as_str(), bytes.clone()))
+                    .collect();
+                write_pack(&dir, manifest, &files);
+                (pack.coordinate().to_owned(), archive(&dir))
+            })
+            .collect()
+    }
+
+    async fn observe_pack_agent_reasons(
+        home: &Path,
+        workers: &[(CorePack, String)],
+    ) -> Vec<(
+        CorePack,
+        Option<gents_protocol::node_readiness::AgentReadinessUnavailableReason>,
+    )> {
+        let data = gents_service::home_state::default_data_dir(home);
+        let config = crate::read_init_config(home).unwrap().expect("init config");
+        let identity = crate::load_initialized_home_identity(home, &config).unwrap();
+        let owner = identity.did().to_owned();
+        let store_lock = gents_store::local::home::lock_store(home, &data).unwrap();
+        let store_key = gents_store::local::store_key::open_home_store_key(home, &data)
+            .await
+            .unwrap();
+        let protected_backend =
+            gents_store::local::backend_protection::ProtectedBackendStore::open(
+                &data,
+                &store_key,
+                &store_lock,
+            )
+            .await
+            .unwrap()
+            .preflight_with_account(&store_key, &identity, config.document_acp, None)
+            .await
+            .unwrap();
+        let tool_ceiling = crate::commands::tools::configured_ceiling(home).unwrap();
+        let (node, backend_admission) = gents::runtime::node_start::start_node(
+            protected_backend,
+            &store_key,
+            identity.clone(),
+            None,
+            None,
+            tool_ceiling.clone(),
+            home,
+        )
+        .await
+        .unwrap();
+        for backend in gents_inference::backends::registry::list_all_backends(&node)
+            .await
+            .unwrap()
+        {
+            gents_inference::backends::registry::set_backend_probe_status_with_last_probe_as(
+                &gents_store::config_client::ConfigAccess::local(node.clone()),
+                &owner,
+                &backend.backend_id,
+                gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        }
+        let runtime = gents::Gents::from_default_agent_documents(
+            node.clone(),
+            identity,
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(backend_admission),
+                tool_ceiling,
+                plugin_home: Some(home.to_path_buf()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let reasons = workers
+            .iter()
+            .map(|(pack, worker_did)| {
+                let reason = runtime
+                    .unavailable_agents()
+                    .get(worker_did)
+                    .map(|entry| entry.public_reason);
+                if reason.is_none() {
+                    assert!(
+                        runtime
+                            .agents()
+                            .iter()
+                            .any(|agent| agent.agent.agent_did == *worker_did),
+                        "{} worker {worker_did} was neither runnable nor unavailable",
+                        pack.coordinate()
+                    );
+                }
+                (*pack, reason)
+            })
+            .collect();
+        drop(runtime);
+        node.shutdown().await.expect("node shutdown");
+        drop(store_lock);
+        reasons
+    }
+
+    #[tokio::test]
+    async fn core_pack_agent_readiness_reasons_match_the_lean_model() {
+        use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+
+        let archives = worker_agent_core_pack_archives().await;
+        let archives = borrowed(&archives);
+        let home = tempfile::tempdir().unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
+        let installed = initialized["default_packs"]["installed"]
+            .as_array()
+            .expect("installed core packs");
+        assert_eq!(installed.len(), CorePack::ALL.len());
+        let workers: Vec<(CorePack, String)> = CorePack::ALL
+            .into_iter()
+            .map(|pack| {
+                let entry = installed
+                    .iter()
+                    .find(|entry| entry["pack"] == pack.coordinate())
+                    .unwrap_or_else(|| {
+                        panic!("{} not installed: {initialized}", pack.coordinate())
+                    });
+                let worker_did = entry["agents"][0]["agent"]
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        panic!("{} shipped no worker agent: {entry}", pack.coordinate())
+                    })
+                    .to_owned();
+                (pack, worker_did)
+            })
+            .collect();
+
+        let at_init = observe_pack_agent_reasons(home.path(), &workers).await;
+        for case in
+            families::runtime_startup_degraded_init_agent_reason::cases::<CorePack, Reason>()
+        {
+            let (_, reason) = at_init
+                .iter()
+                .find(|(pack, _)| *pack == case.input.core_pack)
+                .expect("observed core pack");
+            case.check(*reason);
+        }
+
+        let enabled = enable(home.path(), &archives, &CorePack::ALL, None)
+            .await
+            .unwrap();
+        assert_eq!(enabled["failed"], json!([]), "{enabled}");
+
+        let after_enable = observe_pack_agent_reasons(home.path(), &workers).await;
+        for case in
+            families::runtime_startup_degraded_enabled_agent_reason::cases::<CorePack, Reason>()
+        {
+            let (_, reason) = after_enable
+                .iter()
+                .find(|(pack, _)| *pack == case.input.core_pack)
+                .expect("observed core pack");
+            case.check(*reason);
         }
     }
 }

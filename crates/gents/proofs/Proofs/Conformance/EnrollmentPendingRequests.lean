@@ -42,9 +42,6 @@ def expected (value : Case) : Bool :=
 example : satisfactionCases.map expected = [true, false, false, false, false, false,
     false, false, false, false, false] := by native_decide
 
-def visibilityExpected (value : Case) : Bool :=
-  activeRequestVisible value.requestFresh value.hasDecision value.currentApproval value.routeApplied
-
 private def boolName (value : Bool) : String := if value then "true" else "false"
 
 def visibilityCases : List Case :=
@@ -58,8 +55,6 @@ def visibilityCases : List Case :=
             currentApproval := current, routeApplied := applied, requestFresh := fresh }
 
 def cases : List Case := satisfactionCases ++ visibilityCases
-
-private def boolJson (value : Bool) : String := if value then "true" else "false"
 
 deriving instance Lean.ToJson for RequestAuthority
 
@@ -110,15 +105,6 @@ structure ListingOutput where
   listed : Bool
   deriving Lean.ToJson
 
-/-- The cases a served desktop reaches with one signed authority: its pending
-request while the route reconnects, after the exact route applies, and after a
-later revision revokes the authorization. The other cases change the requested
-or current authority itself, which the admin's signed decision fixes, so a
-served desktop cannot persist them. -/
-def listingCases : List Case :=
-  cases.filter fun c => c.name ∈ ["route_still_reconnecting",
-    "reconnected_route_satisfies_pending_request", "revoked_or_expired_authorization"]
-
 structure AbsentPeerInput where
   managed : Bool
   initialReady : Bool
@@ -139,16 +125,6 @@ structure RouteCase where
   leaseFresh : Bool := true
   operatorEndpoint : Bool := false
   deriving Lean.ToJson
-
-def routeCases : List RouteCase :=
-  [ { name := "applied_fresh_enrollment" }
-  , { name := "managed_endpoint_without_route", routeApplied := false, operatorEndpoint := true }
-  , { name := "managed_endpoint_with_route", operatorEndpoint := true }
-  , { name := "not_enrollment", enrollment := false, operatorEndpoint := true }
-  , { name := "missing_network", network := false }
-  , { name := "missing_digest", digest := false }
-  , { name := "invalid_sequence", sequenceFresh := false }
-  , { name := "expired_lease", leaseFresh := false, operatorEndpoint := true } ]
 
 structure RouteReadinessOutput where
   ready : Bool

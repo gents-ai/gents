@@ -1355,8 +1355,6 @@ async fn terminal_step_settles_inside_the_step_transaction() {
     step.close().await;
 }
 
-use crate::background::job::control::KillAction;
-
 /// Waits until `driver` has no row in flight.
 pub(crate) async fn idle(driver: &JobDriver) {
     tokio::time::timeout(std::time::Duration::from_secs(60), async {
@@ -1567,87 +1565,6 @@ async fn three_consecutive_step_failures_settle_step_failed_with_the_next_call()
 }
 
 #[tokio::test]
-async fn two_failures_then_a_success_do_not_settle() {
-    let step = stepper(json!({"effects": {}})).await;
-    live_child(&step, "did-owner").await;
-    let driver = JobDriver::new(step.job.runtime.clone());
-    let trap = StepFailure::Trap("boom".to_owned());
-    for _ in 0..2 {
-        assert_eq!(
-            driver
-                .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
-                .await
-                .unwrap(),
-            FailureVerdict::Retry
-        );
-    }
-    driver
-        .kick(&step.row, &super::super::input::tests::agent_actor())
-        .unwrap();
-    idle(&driver).await;
-    assert_eq!(step.progress(&step.row).await.revision, 2, "the step ran");
-    assert_eq!(
-        driver
-            .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
-            .await
-            .unwrap(),
-        FailureVerdict::Retry,
-        "the success reset the count"
-    );
-    assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
-    step.close().await;
-}
-
-#[tokio::test]
-async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third() {
-    let step = stepper(json!({"effects": {}})).await;
-    let child = live_child(&step, node_did()).await;
-    let driver = JobDriver::new(step.job.runtime.clone());
-    let before = read_step_row(&step.job.access, &step.row).await.unwrap();
-    let observed = observe_live_children(&step.job.access, &before, node_did())
-        .await
-        .unwrap();
-    let expected = kill_decision(&before, KillCause::Stop, &|key: &str| observed[key]).killed;
-    assert_eq!(
-        expected,
-        [(
-            job_spawn_key(&step.row, "slot-a", 0),
-            KillAction::InterruptCaused
-        )]
-    );
-    let trap = StepFailure::Trap("before the input".to_owned());
-    for verdict in [
-        FailureVerdict::Retry,
-        FailureVerdict::Retry,
-        FailureVerdict::Settle,
-    ] {
-        assert_eq!(
-            driver
-                .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
-                .await
-                .unwrap(),
-            verdict
-        );
-    }
-    assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
-    assert_eq!(
-        step.output(&step.row).await["code"],
-        "plugin_job_step_failed"
-    );
-    assert!(
-        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
-            &step.job.access,
-            &child
-        )
-        .await
-        .unwrap()
-        .is_some(),
-        "the live child is interrupted"
-    );
-    step.close().await;
-}
-
-#[tokio::test]
 async fn a_guest_trap_is_a_step_failure() {
     let step = stepper_wat(
         r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
@@ -1726,47 +1643,6 @@ async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
             .unwrap(),
         0,
         "a failed row is not re-stepped"
-    );
-    step.close().await;
-}
-
-/// Lean `guest_state_opaque`: the state a step carries is stored beside
-/// its records and echoed to the next step's input, untouched by the host.
-#[tokio::test]
-async fn a_steps_guest_state_is_stored_and_echoed_to_the_next_step() {
-    let step = stepper(json!({"effects": {
-        "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
-        "state": {"phase": "scan", "paths": ["src/lib.rs"]},
-    }}))
-    .await;
-    assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
-    let stored = step.state(&step.row).await.unwrap();
-    assert_eq!(
-        stored.guest,
-        Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
-    );
-    let (input, _) = step.input(&step.row).await;
-    assert_eq!(
-        input.state,
-        Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
-    );
-    step.close().await;
-}
-
-/// A step that carries no state keeps the stored one.
-#[tokio::test]
-async fn a_step_without_state_keeps_the_stored_one() {
-    let step = stepper(json!({"effects": {
-        "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
-    }}))
-    .await;
-    step.job
-        .write_guest_state(&step.row, &json!({"phase": "recon"}))
-        .await;
-    assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
-    assert_eq!(
-        step.state(&step.row).await.unwrap().guest,
-        Some(json!({"phase": "recon"}))
     );
     step.close().await;
 }

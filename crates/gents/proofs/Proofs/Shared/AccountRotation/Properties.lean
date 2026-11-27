@@ -149,16 +149,19 @@ theorem select_eligible {policy : Policy} {now : Time} {family : Family}
 theorem tier?_overage_requires_policy {policy : Policy} {now : Time} {family : Family}
     {account : Account} (h : tier? policy now family account = some .overage) :
     policy.allowOverage = true := by
-  unfold tier? at h
+  unfold tier? tierOfStatus at h
   split at h
   · cases h
-  · split at h
-    · split at h
+  · cases hst : liveLimitStatus now family account with
+    | clear => simp [hst] at h
+    | warned => simp [hst] at h
+    | rejected =>
+      simp only [hst] at h
+      split at h
       · rename_i hp
         simp only [Bool.and_eq_true] at hp
         exact hp.1
       · cases h
-    · split at h <;> cases h
 
 /-- Paid extra usage is drawn only when the operator enabled it. -/
 theorem select_no_overage_unless_allowed {policy : Policy} {now : Time} {family : Family}
@@ -257,7 +260,7 @@ theorem reject_blocked (policy : Policy) (now resetAt : Time) (family : Family)
   have : now < max account.blockedUntil (max resetAt (now + 1)) :=
     Nat.lt_of_lt_of_le (Nat.lt_succ_self now)
       (Nat.le_trans (Nat.le_max_right resetAt (now + 1)) (Nat.le_max_right _ _))
-  simp [tier?, reject, this]
+  simp [tier?, tierOfStatus, reject, this]
 
 def eligibleAt (policy : Policy) (now : Time) (family : Family) (pool : List Account)
     (i : Nat) : Prop :=

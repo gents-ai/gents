@@ -399,6 +399,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (row) {
         const box = row.getBoundingClientRect();
         if (box.top < view.bottom) {
+          seenTop = s.scrollTop;
           setMode({
             kind: "read",
             key: row.dataset.rowKey!,
@@ -637,6 +638,11 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     const release = () => {
       lastInputAt = performance.now();
       readerScrolling = true;
+      /* a passive wheel or touch can move scrollTop on the compositor before
+         its handler runs: account for that move before capturing so onScroll
+         never subtracts the same move from the captured offset a second time */
+      const s = el();
+      if (s && Math.abs(s.scrollTop - seenTop) >= 1) onScroll();
       if (mode.kind !== "read") capture();
       scheduleRest();
     };
@@ -757,8 +763,11 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     const onHold = (event: Event) => {
       const key = keyOfEvent(event);
       const s = el();
-      const top = key === null ? null : topOf(key);
-      if (!s || key === null || top === null) return;
+      if (!s || key === null) return;
+      if (Math.abs(s.scrollTop - seenTop) >= 1) onScroll();
+      const top = topOf(key);
+      if (top === null) return;
+      seenTop = s.scrollTop;
       setMode({ kind: "read", key, offset: top - s.scrollTop });
       reconcile();
     };

@@ -79,11 +79,11 @@ pub fn run(raw: &str) -> Res<String> {
         return out;
     }
     let input: Input = serde_json::from_str(raw).map_err(|e| format!("invalid input: {e}"))?;
-    if let Some(topic) = input.help.as_deref() {
-        return serde_json::to_string(&help::answer(topic)?)
-            .map_err(|e| format!("serializing the result: {e}"));
-    }
-    serde_json::to_string(&call(&input).map_err(|e| table::scrub(&e))?)
+    let response = match input.help.as_deref() {
+        Some(topic) => help::answer(topic)?,
+        None => call(&input).map_err(|e| table::scrub(&e))?,
+    };
+    serde_json::to_string(&serde_json::json!({"response": response}))
         .map_err(|e| format!("serializing the result: {e}"))
 }
 
@@ -153,10 +153,12 @@ mod tests {
             &run("{\"tables\": {\"t\": [[1]]}, \"sql\": \"SELECT * FROM t\"}").unwrap(),
         )
         .unwrap();
-        assert_eq!(q["rows"], serde_json::json!([[1]]));
+        assert_eq!(q.as_object().unwrap().len(), 1);
+        assert_eq!(q["response"]["rows"], serde_json::json!([[1]]));
         let t: serde_json::Value =
             serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}}").unwrap()).unwrap();
-        assert_eq!(t["tables"][0]["name"], "t");
+        assert_eq!(t.as_object().unwrap().len(), 1);
+        assert_eq!(t["response"]["tables"][0]["name"], "t");
     }
 
     #[test]

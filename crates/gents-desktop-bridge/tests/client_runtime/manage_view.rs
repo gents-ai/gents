@@ -180,3 +180,304 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     runtime.shutdown().await;
     Ok(())
 }
+
+async fn enroll_desktop_client(
+    core: &ClientRuntime,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
+) -> Result<()> {
+    let node_did = runtime.node_did();
+    assert_ne!(runtime.user().did(), core.node_identity().did());
+    let connection = gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: node_did.into(),
+        label: "Served Runtime".into(),
+        graphql: runtime.graphql().into(),
+        local_node_home: Some(runtime.home_path().to_string_lossy().into_owned()),
+        access_request: None,
+        access_state: None,
+    };
+    let receipt = core.request_runtime_access(connection).await?;
+    let approved = runtime
+        .user_endpoint()
+        .decide_runtime_access(&gents_protocol::client_access::DecideClientAccess {
+            node_did: node_did.into(),
+            request_id: receipt.request_id,
+            decision: gents_protocol::client_access::ClientAccessDecision::Approve,
+        })
+        .await?;
+    assert_eq!(
+        approved.state,
+        gents_protocol::client_access::ClientAccessState::Approved
+    );
+    core.refresh_node(node_did).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enrolled_desktop_saves_agent_with_on_prem_profile() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientRuntime::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        gents_desktop_bridge::client_test_support::file_journal_options(),
+    )
+    .await?;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
+    let node_did = runtime.node_did();
+    enroll_desktop_client(&core, &runtime).await?;
+
+    let owner_agent_binding = runtime.provision_agent().await;
+    runtime
+        .apply_as_user(
+            "test.enrolled.on_prem_seed",
+            vec![
+                (
+                    gents_store::collection::Collection::InferenceBackend,
+                    json!({
+                        "node_did": node_did,
+                        "backend_id": "local-3",
+                        "name": "Local Server",
+                        "provider_kind": "OpenAiCompatible",
+                        "endpoint": "http://127.0.0.1:11434/v1",
+                        "auth": {"kind": "unauthenticated"}
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::InferenceProfile,
+                    json!({
+                        "node_did": node_did,
+                        "profile_id": "profile-local-3",
+                        "display_name": "Local 3",
+                        "backend_id": "local-3",
+                        "model_name": "qwen3"
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::InferenceBackend,
+                    json!({
+                        "node_did": node_did,
+                        "backend_id": "local-keyed",
+                        "name": "Keyed On-Prem",
+                        "provider_kind": "OpenAiCompatible",
+                        "endpoint": "http://127.0.0.1:11436/v1",
+                        "auth": {"kind": "api_key", "key": "secret-on-prem-key"}
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::InferenceProfile,
+                    json!({
+                        "node_did": node_did,
+                        "profile_id": "profile-local-keyed",
+                        "display_name": "Local Keyed",
+                        "backend_id": "local-keyed",
+                        "model_name": "qwen3"
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::Tools,
+                    json!({
+                        "node_did": node_did,
+                        "tools_id": "tools-owner",
+                        "display_name": "Owner Tools",
+                        "host": {"files": {"mode": "ReadOnly"}}
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::AgentContext,
+                    json!({
+                        "node_did": node_did,
+                        "context_id": "ctx-owner",
+                        "display_name": "Owner Context",
+                        "tools_id": "tools-owner"
+                    }),
+                ),
+                (
+                    gents_store::collection::Collection::Agent,
+                    json!({
+                        "node_did": node_did,
+                        "agent_did": owner_agent_binding.agent_did,
+                        "creation_nonce": owner_agent_binding.creation_nonce,
+                        "display_name": "Owner Agent",
+                        "context_id": "ctx-owner",
+                        "inference_profile_id": "profile-local-keyed"
+                    }),
+                ),
+            ],
+        )
+        .await;
+
+    let desktop_backend: InferenceBackend = serde_json::from_value(json!({
+        "node_did": node_did,
+        "backend_id": "local-desktop",
+        "name": "Desktop Local",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:11435/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))?;
+    core.save_backend(&desktop_backend).await?;
+    let desktop_profile: InferenceProfile = serde_json::from_value(json!({
+        "node_did": node_did,
+        "profile_id": "profile-desktop",
+        "display_name": "Desktop Local Profile",
+        "backend_id": "local-desktop",
+        "model_name": "qwen3"
+    }))?;
+    core.save_inference_profile(&desktop_profile).await?;
+
+    let binding_save = core.provision_agent_identity(node_did).await?;
+    let agent_save: Agent = serde_json::from_value(json!({
+        "node_did": node_did,
+        "agent_did": binding_save.agent_did,
+        "creation_nonce": binding_save.creation_nonce,
+        "display_name": "SourceEng",
+        "context_id": "ctx-owner",
+        "inference_profile_id": "profile-local-3"
+    }))?;
+    core.save_agent(&agent_save, None).await?;
+
+    let binding_components = core.provision_agent_identity(node_did).await?;
+    let pack: gents_documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": node_did},
+        "contexts": [{
+            "node_did": node_did,
+            "context_id": "ctx-new-on-prem",
+            "display_name": "On-Prem Context",
+            "tools_id": "tools-owner"
+        }],
+        "agents": [{
+            "node_did": node_did,
+            "agent_did": binding_components.agent_did,
+            "creation_nonce": binding_components.creation_nonce,
+            "display_name": "SourceEng Components",
+            "context_id": "ctx-new-on-prem",
+            "inference_profile_id": "profile-local-3"
+        }]
+    }))?;
+    core.apply_config_components(&pack).await?;
+
+    let binding_patch = core.provision_agent_identity(node_did).await?;
+    let agent_patch: Agent = serde_json::from_value(json!({
+        "node_did": node_did,
+        "agent_did": binding_patch.agent_did,
+        "creation_nonce": binding_patch.creation_nonce,
+        "display_name": "SourceEng Keyed",
+        "context_id": "ctx-owner",
+        "inference_profile_id": "profile-local-keyed"
+    }))?;
+    let ctx_patch = gents_protocol::operations::agent::AgentContextPatch {
+        context_id: "ctx-owner".into(),
+        changes: [(
+            "system_prompt".to_owned(),
+            serde_json::Value::String("On-prem prompt".into()),
+        )]
+        .into_iter()
+        .collect(),
+    };
+    core.save_agent(&agent_patch, Some(&ctx_patch)).await?;
+
+    let edited_owner_agent: Agent = serde_json::from_value(json!({
+        "node_did": node_did,
+        "agent_did": owner_agent_binding.agent_did,
+        "creation_nonce": owner_agent_binding.creation_nonce,
+        "display_name": "Owner Agent",
+        "context_id": "ctx-owner",
+        "inference_profile_id": "profile-local-3"
+    }))?;
+    core.save_agent(&edited_owner_agent, None).await?;
+
+    core.patch_config_components(
+        node_did,
+        &[(
+            gents_documents::patch::SelfConfigTarget::Agent,
+            owner_agent_binding.agent_did.clone(),
+            vec![(
+                "inference_profile_id".to_owned(),
+                Some(serde_json::Value::String("profile-desktop".into())),
+            )],
+        )],
+    )
+    .await?;
+
+    let snapshot = core.stores().snapshot(node_did);
+    for (did, expected_profile) in [
+        (&binding_save.agent_did, "profile-local-3"),
+        (&binding_components.agent_did, "profile-local-3"),
+        (&binding_patch.agent_did, "profile-local-keyed"),
+        (&owner_agent_binding.agent_did, "profile-desktop"),
+    ] {
+        assert!(
+            snapshot
+                .agents
+                .iter()
+                .any(|row| row.agent_did == *did && row.inference_profile_id == expected_profile),
+            "expected agent {did} with profile {expected_profile} in desktop snapshot"
+        );
+    }
+
+    Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_referenced_backend_reports_single_refusal_and_logs_desktop_error() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientRuntime::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        gents_desktop_bridge::client_test_support::file_journal_options(),
+    )
+    .await?;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
+    let node_did = runtime.node_did();
+    enroll_desktop_client(&core, &runtime).await?;
+
+    let backend: InferenceBackend = serde_json::from_value(json!({
+        "node_did": node_did,
+        "backend_id": "local-2",
+        "name": "Local server",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))?;
+    core.save_backend(&backend).await?;
+    let profile: InferenceProfile = serde_json::from_value(json!({
+        "node_did": node_did,
+        "profile_id": "profile-local-2",
+        "display_name": "Local profile",
+        "backend_id": "local-2",
+        "model_name": "qwen3"
+    }))?;
+    core.save_inference_profile(&profile).await?;
+
+    let error = core
+        .delete_inference_backend("local-2", node_did)
+        .await
+        .expect_err("deleting a backend used by a profile must fail");
+    let bridge = gents_store::client_error::BridgeError::classify_transport_error(error);
+    assert!(
+        bridge.message.contains("profile-local-2") && bridge.message.contains("local-2"),
+        "expected dependent profile and backend in message: {}",
+        bridge.message
+    );
+    assert_eq!(
+        bridge.message.matches("profile-local-2").count(),
+        1,
+        "delete refusal must not repeat itself: {}",
+        bridge.message
+    );
+    assert!(
+        !bridge.message.contains("Review the fields and save again"),
+        "delete refusal must not show a save hint: {}",
+        bridge.message
+    );
+
+    let log = std::fs::read_to_string(gents_desktop_bridge::logging::desktop_error_log(
+        tempdir.path(),
+    ))?;
+    assert!(
+        log.contains("delete inference backend failed:") && log.contains("profile-local-2"),
+        "expected desktop-errors.log entry: {log}"
+    );
+
+    Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
+    Ok(())
+}

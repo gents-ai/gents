@@ -765,7 +765,10 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                     operation: Some(operation.as_str()),
                     contends_with_request_siblings: std::sync::atomic::AtomicBool::new(false),
                     client_signed_write_dispatched: std::sync::atomic::AtomicBool::new(false),
+                    relationship_fence_epoch: 0,
+                    relationship_grant_seq: 0,
                     relationship_grants: std::sync::Mutex::new(Vec::new()),
+                    revoked_relationships: std::sync::Mutex::new(Vec::new()),
                     owner_staged_revocations: std::sync::Mutex::new(
                         crate::config_client::txn::OwnerStagedRevocations::Send,
                     ),
@@ -1468,6 +1471,254 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
             gate_held: !released,
         });
         node.shutdown().await.expect("node shutdown");
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WriteGateLifecycleEvent {
+    SiblingWait,
+    Elapsed,
+    RollbackOwnerScheduled,
+    StorageReturned,
+    DeadlineObserved,
+    CleanupReturned,
+    CleanupDeadlineObserved,
+    DropReturned,
+    Release,
+    ConsumerDrop,
+}
+
+fn write_gate_held_by(gate: &super::MutationWriteGate, operation: &str) -> bool {
+    let owned = gate_owns(gate, operation);
+    let permit_taken = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
+    assert_eq!(
+        owned, permit_taken,
+        "gate owner table and semaphore permits must agree for {operation}"
+    );
+    owned
+}
+
+fn boundary_pause() -> super::BoundaryPause {
+    super::BoundaryPause {
+        reached: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    }
+}
+
+async fn wait_for_finalization_boundary<T>(
+    label: &str,
+    reached: &Notify,
+    transaction: &mut tokio::task::JoinHandle<T>,
+) where
+    T: std::fmt::Debug,
+{
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            () = reached.notified() => {}
+            result = transaction => panic!("transaction ended before {label}: {result:?}"),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("transaction did not reach {label}"));
+}
+
+struct LifecyclePauses {
+    before_commit: super::BoundaryPause,
+    after_commit: super::BoundaryPause,
+    before_rollback: super::BoundaryPause,
+    after_rollback: super::BoundaryPause,
+    before_rollback_timeout_release: super::BoundaryPause,
+}
+
+impl LifecyclePauses {
+    fn new() -> Self {
+        Self {
+            before_commit: boundary_pause(),
+            after_commit: boundary_pause(),
+            before_rollback: boundary_pause(),
+            after_rollback: boundary_pause(),
+            before_rollback_timeout_release: boundary_pause(),
+        }
+    }
+
+    fn controller(
+        &self,
+        on_rollback_drop: Arc<dyn Fn() + Send + Sync>,
+    ) -> Arc<super::EmbeddedFinalizationLifecycle> {
+        Arc::new(super::EmbeddedFinalizationLifecycle {
+            before_commit: Some(self.before_commit.clone()),
+            after_commit: Some(self.after_commit.clone()),
+            before_rollback: Some(self.before_rollback.clone()),
+            after_rollback: Some(self.after_rollback.clone()),
+            before_rollback_timeout_release: Some(self.before_rollback_timeout_release.clone()),
+            on_rollback_drop: Some(on_rollback_drop),
+        })
+    }
+}
+
+async fn replay_write_gate_lifecycle_case(
+    name: &str,
+    events: &[WriteGateLifecycleEvent],
+) -> gents_lean_vocab::families::storage_write_gate_contracts_lifecycle::LifecycleOutput {
+    const OPERATION: &str = "test.write_gate_lifecycle";
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection("type WriteGateLifecycleProbe { value: String }")
+        .await
+        .unwrap();
+    let gate = super::mutation_write_gate(&node);
+    let pauses = LifecyclePauses::new();
+    let drop_gate_held = Arc::new(Mutex::new(None::<bool>));
+    let drop_gate = Arc::clone(&gate);
+    let drop_slot = Arc::clone(&drop_gate_held);
+    let controller = pauses.controller(Arc::new(move || {
+        *lock(&drop_slot) = Some(write_gate_held_by(&drop_gate, OPERATION));
+    }));
+
+    let tx_node = Arc::clone(&node);
+    let mut transaction = tokio::spawn(super::EMBEDDED_FINALIZATION_LIFECYCLE.scope(
+        controller,
+        async move {
+            ConfigAccess::transact_local_write(&tx_node, None, OPERATION, |txn| {
+                Box::pin(async move {
+                    txn.execute(
+                        r#"mutation { create_WriteGateLifecycleProbe(input: { value: "step" }) { _docID } }"#,
+                    )
+                    .await?;
+                    Ok::<_, TestError>(())
+                })
+            })
+            .await
+        },
+    ));
+
+    wait_for_finalization_boundary(
+        "before_commit",
+        &pauses.before_commit.reached,
+        &mut transaction,
+    )
+    .await;
+    let initial_gate_held = write_gate_held_by(&gate, OPERATION);
+    let mut active_release: Option<&Notify> = None;
+    let mut expect_timeout = false;
+    let mut gate_held_after_step = Vec::with_capacity(events.len());
+
+    for &event in events {
+        let held = match event {
+            WriteGateLifecycleEvent::Elapsed => {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(1)).await;
+                tokio::task::yield_now().await;
+                tokio::time::resume();
+                assert!(
+                    !transaction.is_finished(),
+                    "{name}: elapsed time alone must not end the storage phase"
+                );
+                write_gate_held_by(&gate, OPERATION)
+            }
+            WriteGateLifecycleEvent::StorageReturned => {
+                pauses.before_commit.release.notify_one();
+                wait_for_finalization_boundary(
+                    "after_commit",
+                    &pauses.after_commit.reached,
+                    &mut transaction,
+                )
+                .await;
+                active_release = Some(&pauses.after_commit.release);
+                write_gate_held_by(&gate, OPERATION)
+            }
+            WriteGateLifecycleEvent::DeadlineObserved => {
+                expect_timeout = true;
+                tokio::time::pause();
+                tokio::time::advance(
+                    super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT + Duration::from_secs(1),
+                )
+                .await;
+                tokio::time::resume();
+                wait_for_finalization_boundary(
+                    "before_rollback",
+                    &pauses.before_rollback.reached,
+                    &mut transaction,
+                )
+                .await;
+                write_gate_held_by(&gate, OPERATION)
+            }
+            WriteGateLifecycleEvent::CleanupReturned => {
+                pauses.before_rollback.release.notify_one();
+                wait_for_finalization_boundary(
+                    "after_rollback",
+                    &pauses.after_rollback.reached,
+                    &mut transaction,
+                )
+                .await;
+                active_release = Some(&pauses.after_rollback.release);
+                write_gate_held_by(&gate, OPERATION)
+            }
+            WriteGateLifecycleEvent::CleanupDeadlineObserved => {
+                tokio::time::pause();
+                tokio::time::advance(
+                    super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT + Duration::from_secs(1),
+                )
+                .await;
+                tokio::time::resume();
+                wait_for_finalization_boundary(
+                    "before_rollback_timeout_release",
+                    &pauses.before_rollback_timeout_release.reached,
+                    &mut transaction,
+                )
+                .await;
+                active_release = Some(&pauses.before_rollback_timeout_release.release);
+                lock(&drop_gate_held)
+                    .expect("cleanup deadline must drop the timed-out cleanup future")
+            }
+            WriteGateLifecycleEvent::DropReturned => {
+                assert!(
+                    lock(&drop_gate_held).is_some(),
+                    "{name}: drop_returned requires cleanup drop observation first"
+                );
+                write_gate_held_by(&gate, OPERATION)
+            }
+            WriteGateLifecycleEvent::Release => {
+                active_release
+                    .take()
+                    .expect("release follows a releasable finalization boundary")
+                    .notify_one();
+                let outcome = tokio::time::timeout(Duration::from_secs(10), &mut transaction)
+                    .await
+                    .unwrap_or_else(|_| panic!("{name}: transaction did not finish after release"))
+                    .expect("transaction task did not panic");
+                if expect_timeout {
+                    let error = outcome.expect_err("timed-out storage commit must fail");
+                    assert!(
+                        crate::config_client::is_transaction_step_unavailable(&error),
+                        "{name}: expected storage timeout failure, got {}",
+                        ErrorChain(error.as_ref())
+                    );
+                } else {
+                    outcome.expect("storage-return commit succeeded");
+                }
+                write_gate_held_by(&gate, OPERATION)
+            }
+            other => panic!("{name}: unexpected lifecycle event {other:?}"),
+        };
+        gate_held_after_step.push(held);
+    }
+
+    node.shutdown().await.expect("node shutdown");
+    gents_lean_vocab::families::storage_write_gate_contracts_lifecycle::LifecycleOutput {
+        initial_gate_held,
+        gate_held_after_step,
+    }
+}
+
+#[tokio::test]
+async fn lean_storage_write_gate_lifecycle_matches_transaction_owner() {
+    use gents_lean_vocab::families::storage_write_gate_contracts_lifecycle as family;
+
+    for case in family::cases::<WriteGateLifecycleEvent>() {
+        let output = replay_write_gate_lifecycle_case(&case.input.name, &case.input.events).await;
+        case.check(output);
     }
 }
 

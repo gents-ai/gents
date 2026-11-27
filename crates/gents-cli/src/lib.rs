@@ -1,3 +1,7 @@
+//! Client adapter layer: command-line interface and operator commands for the Gents runtime.
+//!
+//! Lean models live in `crates/gents/proofs/Proofs/Clients/`; unit test helpers live in `src/test_support.rs`.
+
 use gents_service::home_state::default_data_dir;
 use gents_service::home_state::home_graphql_endpoint;
 use gents_service::home_state::init_config_path;
@@ -726,9 +730,13 @@ async fn resolve_config_access_inner(
     // Owner-staged relationship changes of those writes are decided by this
     // node's own route, as the serving runtime decides them.
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let fence_route = owner_staged.clone();
     let http = Some(
         gents::defra_node::HttpConfig::with_listener(listener)?
-            .with_extra_routes(owner_staged.router()),
+            .with_extra_routes(owner_staged.router())
+            .with_router_transform(std::sync::Arc::new(move |router| {
+                fence_route.wrap_relationship_fence(router)
+            })),
     );
     let (node, _admission) = match plugin_guard {
         Some(guard) => {
@@ -958,6 +966,7 @@ mod tests {
                 ),
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();
@@ -1019,6 +1028,7 @@ mod tests {
                 ),
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();

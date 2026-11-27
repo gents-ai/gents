@@ -64,6 +64,8 @@
 \* client drop the payload of an unconfirmed message, which leaves a failed
 \* message with no Retry; `BindingChanges` lets a published session's binding
 \* change, which commits a request under the binding it no longer has.
+\* trace actors: ReserveCommit, SubmitCommit, Refuse, TransportFail => wire.id
+\* trace actors: LoseReply, Receive => replies.id
 EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay,
         LeanDecision_Identity_Configuration
 
@@ -182,7 +184,8 @@ ASSUME \A rebuild, remain \in BOOLEAN :
 \* transaction when the binding is published, inside it otherwise. A
 \* confirmed abort is rebuilt while attempts remain, and otherwise the send
 \* fails back to the client.
-ReserveCommit(i) ==
+ReserveCommit ==
+  \E i \in 1..Len(wire) :
   LET w == wire[i] IN
   /\ w.stage = "reserving"
   /\ IF w.snap = sessVer
@@ -202,7 +205,8 @@ ReserveCommit(i) ==
 \* its transaction is unchanged, or at once when it read the published
 \* binding before the transaction; a confirmed abort is rebuilt, reading the
 \* session again, while attempts remain.
-SubmitCommit(i) ==
+SubmitCommit ==
+  \E i \in 1..Len(wire) :
   LET w == wire[i] IN
   /\ w.stage = "open"
   /\ IF PublishedBinding \/ w.snap = sessVer
@@ -222,7 +226,8 @@ SubmitCommit(i) ==
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, binding>>
 
 \* The runtime refuses a send of an identity it does not hold.
-Refuse(i) ==
+Refuse ==
+  \E i \in 1..Len(wire) :
   /\ Refusals
   /\ wire[i].id \notin rows
   /\ wire' = Remove(wire, i)
@@ -231,21 +236,24 @@ Refuse(i) ==
   /\ Bound
 
 \* The transport fails before the send reaches the runtime.
-TransportFail(i) ==
+TransportFail ==
+  \E i \in 1..Len(wire) :
   /\ Refusals
   /\ wire' = Remove(wire, i)
   /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
   /\ Bound
 
-LoseReply(j) ==
+LoseReply ==
+  \E j \in 1..Len(replies) :
   /\ LostReply
   /\ replies' = Remove(replies, j)
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, wire, rows, conflictLost>>
   /\ Bound
 
 \* A reply is applied even after the deadline: a committed reply confirms.
-Receive(j) ==
+Receive ==
+  \E j \in 1..Len(replies) :
   LET r == replies[j] IN
   /\ replies' = Remove(replies, j)
   /\ IF r.ok
@@ -294,16 +302,16 @@ DropPayload ==
   /\ UNCHANGED <<sessVer, agentLeft, msg, cur, sends, wire, replies, rows, conflictLost>>
   /\ Bound
 
-Runtime ==
-  \/ \E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i)
-  \/ \E i \in 1..Len(wire) : Refuse(i) \/ TransportFail(i)
-
 Next ==
   \/ AgentPublish
   \/ BindingChange
   \/ Compose
-  \/ Runtime
-  \/ \E j \in 1..Len(replies) : LoseReply(j) \/ Receive(j)
+  \/ ReserveCommit
+  \/ SubmitCommit
+  \/ Refuse
+  \/ TransportFail
+  \/ LoseReply
+  \/ Receive
   \/ Timeout
   \/ Retry
   \/ Discard
@@ -313,8 +321,8 @@ Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ WF_vars(Compose)
-  /\ WF_vars(\E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i))
-  /\ WF_vars(\E j \in 1..Len(replies) : Receive(j))
+  /\ WF_vars(ReserveCommit \/ SubmitCommit)
+  /\ WF_vars(Receive)
   /\ WF_vars(Timeout)
 
 TypeOK ==

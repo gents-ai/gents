@@ -19,14 +19,6 @@ def concurrencyName : ConcurrencyMode → String
   | .queuedSerial => "queued_serial"
   | .latestOnly => "latest_only"
 
-def jsonOptionString : Option String → String := jsonOptionalString
-
-def jsonOptionNat : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
-def keyJson (key : TriggerKey) : String := jsonString key
-
 def schedule (triggerId : String) : ActiveSchedule :=
   { triggerId := triggerId, taskId := "task", enabled := true }
 

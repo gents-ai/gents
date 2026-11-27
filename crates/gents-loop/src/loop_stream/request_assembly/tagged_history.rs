@@ -43,6 +43,46 @@ pub fn select_tagged_assistant_blocks(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum SourceTagError {
+    #[error("canonical provider source was attached to a non-assistant row")]
+    NonAssistantSource,
+    #[error("provider projection reordered or duplicated a source row")]
+    ReorderedOrDuplicatedSourceRow,
+    #[error("provider projection emitted an out-of-range source index")]
+    OutOfRangeSourceIndex,
+    #[error("provider projection changed a source row role")]
+    RoleMismatch,
+    #[error("provider projection misaligned assistant block indices")]
+    MisalignedAssistantBlockIndices,
+    #[error("provider projection reordered associated assistant blocks")]
+    ReorderedAssistantBlocks,
+    #[error("provider projection emitted an out-of-range assistant block index")]
+    OutOfRangeAssistantBlockIndex,
+    #[error("provider projection: invalidReplayAssociation")]
+    InvalidOriginalAssociation,
+}
+
+impl SourceTagError {
+    #[cfg(test)]
+    pub(crate) fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_map_source(error, |cause| cause.downcast_ref::<Self>())
+    }
+}
+
+fn source_tag_error(error: SourceTagError) -> StreamingError {
+    StreamingError::Completion(CompletionError::RequestError(Box::new(error)))
+}
+
+fn same_message_role(left: &Message, right: &Message) -> bool {
+    matches!(
+        (left, right),
+        (Message::User { .. }, Message::User { .. })
+            | (Message::Assistant { .. }, Message::Assistant { .. })
+            | (Message::System { .. }, Message::System { .. })
+    )
+}
+
 pub(super) fn tagged_from_sourced(
     originals: &[TaggedMessage],
     sourced: Vec<crate::compaction::history::SourcedMessage>,
@@ -51,37 +91,55 @@ pub(super) fn tagged_from_sourced(
         .iter()
         .any(|row| row.source.is_some() && !matches!(row.message, Message::Assistant { .. }))
     {
-        return Err(replay_input_error(
-            "canonical provider source was attached to a non-assistant row",
-        ));
+        return Err(source_tag_error(SourceTagError::NonAssistantSource));
     }
     let mut previous_source = None;
     sourced
         .into_iter()
         .map(|item| {
             if previous_source.is_some_and(|previous| item.source_index <= previous) {
-                return Err(replay_input_error(
-                    "provider projection reordered or duplicated a source row",
+                return Err(source_tag_error(
+                    SourceTagError::ReorderedOrDuplicatedSourceRow,
                 ));
             }
             previous_source = Some(item.source_index);
-            let original = originals.get(item.source_index).ok_or_else(|| {
-                replay_input_error("provider projection emitted an out-of-range source index")
-            })?;
+            let original = originals
+                .get(item.source_index)
+                .ok_or_else(|| source_tag_error(SourceTagError::OutOfRangeSourceIndex))?;
             if original.source.is_some() && !matches!(item.message, Message::Assistant { .. }) {
-                return Err(replay_input_error(
-                    "canonical provider source was attached to a non-assistant row",
-                ));
+                return Err(source_tag_error(SourceTagError::NonAssistantSource));
             }
-            if let Message::Assistant { content, .. } = &item.message {
+            if !same_message_role(&original.message, &item.message) {
+                return Err(source_tag_error(SourceTagError::RoleMismatch));
+            }
+            if let (
+                Message::Assistant {
+                    content: original_content,
+                    ..
+                },
+                Message::Assistant { content, .. },
+            ) = (&original.message, &item.message)
+            {
                 if item.block_indices.len() != content.len() {
-                    return Err(replay_input_error(
-                        "provider projection misaligned assistant block indices",
+                    return Err(source_tag_error(
+                        SourceTagError::MisalignedAssistantBlockIndices,
                     ));
+                }
+                if item.block_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
+                    return Err(source_tag_error(SourceTagError::ReorderedAssistantBlocks));
                 }
                 let mut selected = if original.physical_header.is_none()
                     && original.block_indices.is_empty()
                 {
+                    if item
+                        .block_indices
+                        .iter()
+                        .any(|position| *position >= original_content.len())
+                    {
+                        return Err(source_tag_error(
+                            SourceTagError::OutOfRangeAssistantBlockIndex,
+                        ));
+                    }
                     TaggedMessage {
                         message: original.message.clone(),
                         source: original.source.clone(),
@@ -90,19 +148,21 @@ pub(super) fn tagged_from_sourced(
                         stub_receipts: Vec::new(),
                     }
                 } else {
-                    if item.block_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
-                        return Err(replay_input_error(
-                            "provider projection reordered associated assistant blocks",
-                        ));
-                    }
-                    let original_indices = item.block_indices.iter().map(|position| {
-                        original.block_indices.get(*position).copied().ok_or_else(|| {
-                            replay_input_error("provider projection emitted an out-of-range assistant block index")
+                    let original_indices = item
+                        .block_indices
+                        .iter()
+                        .map(|position| {
+                            original
+                                .block_indices
+                                .get(*position)
+                                .copied()
+                                .ok_or_else(|| {
+                                    source_tag_error(SourceTagError::OutOfRangeAssistantBlockIndex)
+                                })
                         })
-                    }).collect::<Result<Vec<_>, _>>()?;
-                    select_tagged_assistant_blocks(original, &original_indices).map_err(|error| {
-                        replay_input_error(format!("provider projection: {error}"))
-                    })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    select_tagged_assistant_blocks(original, &original_indices)
+                        .map_err(|_| source_tag_error(SourceTagError::InvalidOriginalAssociation))?
                 };
                 selected.message = item.message;
                 Ok(selected)

@@ -5,20 +5,23 @@ namespace Conformance.ClientAgentJournal
 
 open Lean Identity.ClientAgentJournal
 
-deriving instance ToJson for Stage, Status, Journal, RecoveryDisposition
+deriving instance ToJson for Stage, Status, Journal, RecoveryDisposition, HostReading
 
 inductive ActionKind where
-  | record | dispatch | finish | restart | saveUnrelated
+  | record | dispatch | finish | resume | observe | restart | saveUnrelated
   deriving ToJson
 
 /-- `stage` is the target of record, dispatch and finish and is ignored by the
-other actions. -/
+other actions; `tokenValid` is read only by resume and `reading` only by
+observe. -/
 structure ActionStep where
   action : ActionKind
   stage : Stage
   durable : Bool
   success : Bool
   confirmedFailure : Bool
+  tokenValid : Bool
+  reading : HostReading
   deriving ToJson
 
 structure Input where
@@ -32,25 +35,27 @@ structure Step where
   after : Journal
   deriving ToJson
 
+private def blank (action : ActionKind) (stage : Stage) : ActionStep :=
+  { action, stage, durable := false, success := false, confirmedFailure := false,
+    tokenValid := false, reading := .absent }
+
 private def stepOf : Action → ActionStep
-  | .record stage durable =>
-    { action := .record, stage, durable, success := false, confirmedFailure := false }
-  | .dispatch stage =>
-    { action := .dispatch, stage, durable := false, success := false, confirmedFailure := false }
+  | .record stage durable => { blank .record stage with durable }
+  | .dispatch stage => blank .dispatch stage
   | .finish stage success confirmedFailure =>
-    { action := .finish, stage, durable := false, success, confirmedFailure }
-  | .restart =>
-    { action := .restart, stage := .commit, durable := false, success := false,
-      confirmedFailure := false }
-  | .saveUnrelated =>
-    { action := .saveUnrelated, stage := .commit, durable := false, success := false,
-      confirmedFailure := false }
+    { blank .finish stage with success, confirmedFailure }
+  | .resume tokenValid => { blank .resume .host with tokenValid }
+  | .observe reading => { blank .observe .host with reading }
+  | .restart => blank .restart .commit
+  | .saveUnrelated => blank .saveUnrelated .commit
 
 private def actionOf (step : ActionStep) : Action :=
   match step.action with
   | .record => .record step.stage step.durable
   | .dispatch => .dispatch step.stage
   | .finish => .finish step.stage step.success step.confirmedFailure
+  | .resume => .resume step.tokenValid
+  | .observe => .observe step.reading
   | .restart => .restart
   | .saveUnrelated => .saveUnrelated
 
@@ -74,6 +79,9 @@ structure RecoveryInput where
   commit : Status
   parent : Status
   executor : Status
+  host : Status
+  tokenValid : Bool
+  reading : HostReading
   deriving ToJson
 
 @[conformance_family]
@@ -81,11 +89,11 @@ def recovery : Family RecoveryInput RecoveryDisposition where
   inputs := recoveryCases.map fun c =>
     { name := c.name, actorMatches := c.actorMatches, recordPresent := c.recordPresent
       bindingMatches := c.bindingMatches, commit := c.commit, parent := c.parent
-      executor := c.executor }
+      executor := c.executor, host := c.host, tokenValid := c.tokenValid, reading := c.reading }
   model := fun i =>
-    recoveryDisposition i.actorMatches i.recordPresent i.bindingMatches
+    recoveryDisposition i.actorMatches i.recordPresent i.bindingMatches i.tokenValid i.reading
       { Identity.ClientAgentJournal.initial with
-        commit := i.commit, parent := i.parent, executor := i.executor }
+        commit := i.commit, parent := i.parent, executor := i.executor, host := i.host }
 
 structure PrivateAccessInput where
   role : String

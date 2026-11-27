@@ -52,11 +52,13 @@ model. For a transition, invariant, access rule or provider input:
    (`crates/gents/proofs/tla/scripts/run-tlc.sh <config>`).
 2. **Conformance.** Mark the owner `@[conformance_function]` (its whole domain
    becomes cases) or `@[conformance_family]` (chosen cases), run
-   `make lean-regen`, and replay it against the production function in exactly
-   one test, written in the same change as the family
+   `make lean-regen`, and replay it against the real production function or
+   real runtime/e2e fixture (`BootedRuntime`, `SignedHome`, `ClaimedRequest`)
+   in exactly one test, written in the same change as the family
    (`every_emitted_family_has_one_consumer_or_a_ledger_entry`; the ledger
    holds only boundaries and a shrinking open list, see
    [the proofs guide](crates/gents/proofs/AGENTS.md)).
+   Never replay against a test stand-in or a `#[cfg(test)]` production bypass.
    Expectations come only from running the model: no fixture constants, no
    Rust mirror of its policy.
 3. **Rust.** Make the owner satisfy the contract.
@@ -91,11 +93,16 @@ with a sleep, retry, larger deadline or looser assertion.
 An intermittent correctness assertion (a lost update, message or stop) is a
 possible product defect until the model says otherwise.
 
-Waits follow events: subscribe to the documents watched (`rows_when` in
-`crates/gents-store/src/test_support.rs`) or await the owner's
-notification, and fail with the last state seen once nothing changes for the
-suite-wide `STALL_CEILING`. Assert the order of events, never a per-test
-wall-clock budget.
+Waits follow events: subscribe to the documents watched (`read_when_changed`,
+`rows_when` in `gents_store::test_support`) or await the owner's notification
+(such as a `HeldCall::entered()`), failing with the last state seen once
+nothing changes for the suite-wide `STALL_CEILING`. When a fixture binds a
+deadline the scenario does not exercise, use `UNREACHED_DEADLINE` or
+`unreached_deadline_at()` (`gents_store::test_support`). Never add `sleep(`
+calls in tests (`test_sleeps_only_shrink`, `TEST_SLEEPS` only shrinks) or
+arbitrary per-test wall-clock budgets like
+`tokio::time::timeout(Duration::from_secs(5), ...)`; assert the order of
+events, never wall-clock latency.
 
 ## Code shape
 
@@ -132,6 +139,9 @@ an exception names its file, its exact count and its reason.
 | Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
 | OAuth credentials are picked through the resolver. | `oauth_credential_picks_go_through_the_resolver` |
 | Test fixtures never reach a production build. | `test_fixtures_stay_dev_only` |
+| Standard fixtures have one definition; `src/` never includes a `tests/` file; test-only implementations of production traits live only in a crate's `src/test_support` module. | `each_fixture_has_one_definition`, `src_includes_no_tests_file`, `production_traits_have_test_implementations_only_in_test_support` |
+| Tests wait on events, not `sleep(` (`TEST_SLEEPS` only shrinks). | `test_sleeps_only_shrink` |
+| Every Rust file under `src/` or `tests/` is compiled by a target (no dead source). | `every_rust_source_is_compiled` |
 | Tests never touch the host's service manager: whatever reaches `gents-service` or spawns `gents` enables its `test-home-guard` from dev-dependencies. | `service_isolation_stays_test_only`, `tests_reaching_the_service_manager_are_isolated` |
 | One integration binary per crate (`tests/integration.rs` with `#[path]` modules); separate binaries only for process-wide state, listed with the reason. | `integration_tests_share_one_binary_per_crate` |
 | Log with `tracing`, never `println!`. | review |
@@ -178,12 +188,37 @@ are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
 ## Tests and CI
 
 - Tests hold the Rust to the models; prefer generated cases to hand-written
-  unit tests. Keep end-to-end tests through real owners, tests pinning text a
-  person or model reads, and tests evidencing a premise about the database,
-  filesystem, processes or a wire format. Never assert how something is done.
+  unit tests. Replay Lean conformance families against real production owners
+  or real e2e fixtures (`BootedRuntime`, `SignedHome`, `ClaimedRequest`),
+  never against a test stand-in or `#[cfg(test)]` production bypass. Keep
+  end-to-end tests through real owners, tests pinning text a person or model
+  reads, and tests evidencing a premise about the database, filesystem,
+  processes or a wire format. Never assert how something is done.
 - End-to-end tests drive live inference and assert behavior (states, documents,
   tool calls), not wording. Never pin temperature 0.
 - A Cargo filter matching nothing exits 0: read the test count.
+
+**Standard fixtures.** Reach for the lowest canonical fixture that covers the
+test instead of hand-rolling stores, homes, identities, requests, scripted
+providers or daemon boots:
+
+| Layer | Fixture | Crate / module | Provides |
+| --- | --- | --- | --- |
+| Store | `TestStore` | `gents_store::test_support` | Embedded DefraDB `ServedHome` on an isolated temp home/lock |
+| Documents | `SignedHome` | `gents_documents::test_support` | Enrolled operator User, published `Node` desired state and actor-scoped `ConfigAccess` over `TestStore` |
+| Inference | `ScriptedBackend`, `HeldCall` | `gents_inference::test_support::scripted_backend` | Deterministic scripted HTTP provider reached by the production backend client (`entered`, `release`, `fail`, `close`) for turn, stream, EOF and interrupt control |
+| Session | `AgentHome`, `ClaimedRequest` (`Stage`) | `gents_session::test_support` | Provisioned default Agent (`AgentHome`) and requests driven through production writers and `claim_with_identity` to `Submitted`, `Admitted`, `Claimed` or `Executing` |
+| Runtime | `AgentRuntimeHome`, `BootedRuntime` | `gents::test_support::running_runtime` | Real `boot_runtime` over a served home bound to an HTTP backend, with readiness/slot observers, `shutdown` and `crash` |
+
+- Never define a duplicate fixture (`each_fixture_has_one_definition` in
+  `write_owner_structure::fixtures`; `FIXTURE_DUPLICATES` is empty).
+- Test-only implementations of production traits live only in a crate's
+  `src/test_support` module
+  (`production_traits_have_test_implementations_only_in_test_support`;
+  `TEST_TRAIT_IMPLEMENTATIONS` is empty), never inline in `tests/` or under
+  `#[cfg(test)]` in production files.
+- Never pull a `tests/` file into `src/` via `#[path]` or `include!`
+  (`src_includes_no_tests_file`; `TESTS_INCLUDED_INTO_SRC` is empty).
 
 **The gate** (`scripts/ci/gate.py`, run by `.github/workflows/ci.yml`) maps a
 change to its crates and their reverse dependents and selects `fmt`, `lint`

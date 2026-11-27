@@ -1,0 +1,182 @@
+{
+  "config": "MCInterruptLatchContentionTwoRenewalsWitness",
+  "constants": {
+    "Attempts": 4,
+    "OtherInterrupt": false,
+    "Redrive": true,
+    "Reread": true,
+    "Writes": 2
+  },
+  "expect": "violates TwoRenewalsSettled",
+  "spec": "InterruptLatchContention",
+  "steps": [
+    {
+      "action": "Open",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 0,
+        "writesLeft": 2
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "idle",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 0,
+        "ver": 0,
+        "writesLeft": 2
+      }
+    },
+    {
+      "action": "Renew",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 1,
+        "writesLeft": 1
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 0,
+        "writesLeft": 2
+      }
+    },
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 1,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 2,
+        "ver": 1,
+        "writesLeft": 1
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 0,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 1,
+        "ver": 1,
+        "writesLeft": 1
+      }
+    },
+    {
+      "action": "Renew",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 1,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 2,
+        "ver": 2,
+        "writesLeft": 0
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 1,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 2,
+        "ver": 1,
+        "writesLeft": 1
+      }
+    },
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 2,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 3,
+        "ver": 2,
+        "writesLeft": 0
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 1,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 2,
+        "ver": 2,
+        "writesLeft": 0
+      }
+    },
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "conflictLost": false,
+        "latch": "done",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 2,
+        "stamp": "user",
+        "stamps": 1,
+        "tries": 3,
+        "ver": 3,
+        "writesLeft": 0
+      },
+      "before": {
+        "conflictLost": false,
+        "latch": "open",
+        "otherLeft": false,
+        "seen": "none",
+        "snap": 2,
+        "stamp": "none",
+        "stamps": 0,
+        "tries": 3,
+        "ver": 2,
+        "writesLeft": 0
+      }
+    }
+  ]
+}
