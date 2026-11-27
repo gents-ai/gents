@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::host_grant::HostCredential;
 use super::{ConfigClientError, ConfigRelationshipGrant};
 
 /// Durable observations for one configuration transaction's Agent grants.
@@ -7,11 +8,16 @@ use super::{ConfigClientError, ConfigRelationshipGrant};
 /// dispatch; an interrupted attempt must remain unknown after restart.
 #[async_trait::async_trait]
 pub trait AgentPublicationObserver: Send + Sync {
+    /// `host_credentials` pairs each `host` grant that will be sent under a
+    /// request-bound delegation with that delegation.
     async fn before_commit(
         &self,
         creator: &str,
         grants: &[ConfigRelationshipGrant],
+        host_credentials: &[(ConfigRelationshipGrant, HostCredential)],
     ) -> Result<(), ConfigClientError>;
+    /// The delegation `grant` is sent under, retained by `before_commit`.
+    async fn host_credential(&self, grant: &ConfigRelationshipGrant) -> Option<HostCredential>;
     async fn committed(&self) -> Result<(), ConfigClientError>;
     async fn commit_failed(&self, definitely_not_committed: bool) -> Result<(), ConfigClientError>;
     async fn before_grant(&self, grant: &ConfigRelationshipGrant) -> Result<(), ConfigClientError>;
@@ -34,6 +40,19 @@ pub enum PublicationStatus {
     Pending,
     Succeeded,
     Failed,
+    /// A `host` grant the owner replaced by placing the Agent on another Node
+    /// before the client learned its own grant's outcome.
+    Superseded,
+}
+
+/// What a read of an Agent's `host` relationships shows
+/// (`Identity.ClientAgentJournal.HostReading`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostReading {
+    ThisNode,
+    OtherNode,
+    Absent,
 }
 
 /// Publication observations bind exact documents and do not confer ACP authority.
@@ -129,12 +148,49 @@ impl ClientAgentJournal {
             }
     }
 
+    /// `Identity.ClientAgentJournal.hostOwed`.
+    pub fn host_owed(&self) -> bool {
+        [self.commit, self.parent, self.executor]
+            .iter()
+            .all(|status| *status == PublicationStatus::Succeeded)
+    }
+
     /// `Identity.ClientAgentJournal.complete`: every stage, `host` included,
     /// succeeded.
     pub fn complete(&self) -> bool {
-        [self.commit, self.parent, self.executor, self.host]
-            .iter()
-            .all(|status| *status == PublicationStatus::Succeeded)
+        self.host_owed() && self.host == PublicationStatus::Succeeded
+    }
+
+    /// `Identity.ClientAgentJournal.settled`.
+    pub fn settled(&self) -> bool {
+        self.complete() || (self.host_owed() && self.host == PublicationStatus::Superseded)
+    }
+
+    /// `Identity.ClientAgentJournal.readsHost`.
+    pub fn reads_host(&self, token_valid: bool) -> bool {
+        self.host_owed() && self.host == PublicationStatus::Pending && !token_valid
+    }
+
+    /// `Identity.ClientAgentJournal.resumeAttempt`.
+    pub fn resume_attempt(&mut self, token_valid: bool) {
+        if token_valid
+            && self.host_owed()
+            && self.permit.is_none()
+            && self.host == PublicationStatus::Pending
+        {
+            self.permit = Some(PublicationStage::Host);
+        }
+    }
+
+    /// `Identity.ClientAgentJournal.observeHost`.
+    pub fn observe_host(&mut self, reading: HostReading) {
+        if self.host_owed() && self.permit.is_none() && self.host == PublicationStatus::Pending {
+            match reading {
+                HostReading::ThisNode => self.host = PublicationStatus::Succeeded,
+                HostReading::OtherNode => self.host = PublicationStatus::Superseded,
+                HostReading::Absent => {}
+            }
+        }
     }
 
     pub fn record_attempt(&mut self, stage: PublicationStage, durable: bool) {
@@ -174,10 +230,10 @@ impl ClientAgentJournal {
     }
 }
 
-/// What a client may do with a retained publication before it publishes again.
-/// A committed publication with an unfinished relationship is never resumed
-/// automatically, because its parent and ownership bindings cannot be verified
-/// atomically.
+/// What a client may do with a retained publication before it publishes again
+/// (`Identity.ClientAgentJournal.recoveryDisposition`). An unfinished `parent`
+/// or `executor` is never resumed automatically; an unfinished `host` is sent,
+/// or settled by reading the Agent's `host` relationships.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryDisposition {
@@ -185,12 +241,18 @@ pub enum RecoveryDisposition {
     BindingMismatch,
     CommitUnknown,
     ExplicitRepair,
+    ResendHost,
+    ObservedHost,
+    SupersededHost,
+    AbsentHost,
 }
 
 pub fn recovery_disposition(
     actor_matches: bool,
     retained: Option<&ClientAgentJournal>,
     binding_matches: bool,
+    token_valid: bool,
+    reading: HostReading,
 ) -> RecoveryDisposition {
     if !actor_matches {
         return RecoveryDisposition::BindingMismatch;
@@ -201,11 +263,21 @@ pub fn recovery_disposition(
     if !binding_matches {
         return RecoveryDisposition::BindingMismatch;
     }
-    if journal.commit == PublicationStatus::Failed || journal.complete() {
+    if journal.commit == PublicationStatus::Failed || journal.settled() {
         return RecoveryDisposition::Proceed;
     }
     if journal.commit != PublicationStatus::Succeeded {
         return RecoveryDisposition::CommitUnknown;
     }
-    RecoveryDisposition::ExplicitRepair
+    if !journal.host_owed() {
+        return RecoveryDisposition::ExplicitRepair;
+    }
+    if journal.reads_host(token_valid) {
+        return match reading {
+            HostReading::ThisNode => RecoveryDisposition::ObservedHost,
+            HostReading::OtherNode => RecoveryDisposition::SupersededHost,
+            HostReading::Absent => RecoveryDisposition::AbsentHost,
+        };
+    }
+    RecoveryDisposition::ResendHost
 }

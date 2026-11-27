@@ -24,6 +24,7 @@ use crate::graphql::escape_graphql_string;
 
 mod enrollment;
 mod handler;
+mod host;
 
 pub(super) const PERMISSION_GRANT_PATH: &str = "/gents/node/permission";
 pub(super) const ADMIN_GRANT_PATH: &str = "/gents/node/administrator";
@@ -133,6 +134,10 @@ impl OwnerStagedRoute {
             .route(
                 &format!("/api/v0{ADMIN_GRANT_PATH}"),
                 axum::routing::post(enrollment::grant_administrator).with_state(self.clone()),
+            )
+            .route(
+                &format!("/api/v0{}", super::host_grant::HOST_GRANT_PATH),
+                axum::routing::post(host::grant_host).with_state(self.clone()),
             )
             .route(
                 OWNER_STAGED_PATH,
