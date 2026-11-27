@@ -692,6 +692,7 @@ mod configuration_readers;
 mod device_group;
 mod enrollment_root;
 mod heartbeats;
+mod host_recovery;
 mod in_txn;
 mod latency;
 mod learned_audience;

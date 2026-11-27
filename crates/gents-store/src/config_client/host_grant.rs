@@ -29,6 +29,16 @@ impl HostCredential {
     pub fn holds_at(&self, now: u64) -> bool {
         now < self.expires_at
     }
+
+    /// This credential as the provider sees it once its lifetime ended.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn lapsed_for_test(self) -> Self {
+        Self {
+            expires_at: 0,
+            ..self
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
