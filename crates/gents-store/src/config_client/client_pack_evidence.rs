@@ -978,4 +978,25 @@ mod tests {
         node.shutdown().await?;
         Ok(())
     }
+
+    #[test]
+    fn unsupported_collection_error_names_the_refused_collection() {
+        let mutation = PackMutation::Create {
+            collection: "AgentSession".into(),
+            input: json!({}),
+        };
+        let error = trusted_schema(
+            &mutation,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )
+        .expect_err("untrusted collection must be refused");
+        assert!(matches!(
+            error,
+            PackEvidenceError::UnsupportedCollection(ref name) if name == "AgentSession"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "pack mutation on AgentSession does not use a trusted configuration schema"
+        );
+    }
 }

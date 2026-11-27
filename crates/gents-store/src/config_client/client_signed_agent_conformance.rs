@@ -232,6 +232,9 @@ fn modeled_configuration_delete_collections_use_trusted_schemas() {
                 "GoalCreationClaim" => {
                     assert_eq!(schema, gents_protocol::schemas::GOAL_CREATION_CLAIM)
                 }
+                "EventSourceCursor" => {
+                    assert_eq!(schema, gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+                }
                 _ => {}
             }
             assert!(super::client_signed_agent::signing_schema(
