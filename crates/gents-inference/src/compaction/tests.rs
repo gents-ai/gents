@@ -82,7 +82,7 @@ fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
         retry_policy: gents_loop::completion_retry::CompletionRetryPolicy::no_retry(),
         provider_idle_timeout: None,
         deadline: None,
-        max_turns: 0,
+        max_turns: 1,
         max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
         repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
