@@ -228,7 +228,7 @@ impl App {
             let row = &mut rows[at].0;
             row.truncate(row.trim_end_matches(['▸', '▾']).trim_end().len());
         }
-        let text = selection.text(&rows);
+        let text = selection.text(&rows, &self.tabs[self.active].row_joins(width));
         if text.trim().is_empty() {
             self.selection = None;
             return;
@@ -638,6 +638,28 @@ mod tests {
         drag(&mut app, start, end);
         assert_eq!(app.take_clipboard().as_deref(), Some(REPLY));
         assert_eq!(app.notice.as_deref(), Some("copied the selection"));
+    }
+
+    #[test]
+    fn a_drag_over_a_wrapped_reply_copies_its_lines_whole() {
+        use crate::app::transcript::ChatLine;
+        use crate::sample::Tone;
+        let mut app = session_app(132, 36);
+        let words: Vec<String> = (0..60).map(|at| format!("word{at}")).collect();
+        let text = format!("{}\nnext line", words.join(" "));
+        app.tabs[0].lines = vec![ChatLine {
+            text: text.clone(),
+            tone: Tone::Reply,
+            item: None,
+            change: None,
+            under: None,
+        }];
+        let shown = screen(&app);
+        let start = find(&shown, "word0").expect("the reply");
+        let (row, column) = find(&shown, "next line").expect("its last line");
+        assert!(row > start.0 + 1, "the first line wraps");
+        drag(&mut app, start, (row, column + 8));
+        assert_eq!(app.take_clipboard().as_deref(), Some(text.as_str()));
     }
 
     #[test]

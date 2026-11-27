@@ -74,7 +74,7 @@ pub struct Tab {
 #[derive(Default)]
 pub(super) struct Wrapped(RefCell<(u16, Vec<WrappedLine>)>);
 
-type WrappedLine = (ChatLine, Vec<(String, Marks)>);
+type WrappedLine = (ChatLine, Vec<(String, Marks, &'static str)>);
 
 /// A copy starts empty, and two tabs never differ by what they have cached.
 impl Clone for Wrapped {
@@ -132,7 +132,14 @@ impl Tab {
     /// How each of `wrapped_rows` styles its text, as display columns of the row.
     pub(crate) fn row_marks(&self, width: u16) -> Vec<Marks> {
         let rows = self.rows_of_lines(width).into_iter();
-        rows.map(|(.., marks)| marks).collect()
+        rows.map(|(.., marks, _)| marks).collect()
+    }
+
+    /// What joins each of `wrapped_rows` to the row before it in a copy: a newline where its line
+    /// breaks, else what the wrap took out there.
+    pub(crate) fn row_joins(&self, width: u16) -> Vec<&'static str> {
+        let rows = self.rows_of_lines(width).into_iter();
+        rows.map(|(.., join)| join).collect()
     }
 
     /// The item whose line shows `row` of `wrapped_rows`, when lines open under it.
@@ -172,11 +179,11 @@ impl Tab {
         }
     }
 
-    /// `wrapped_rows`, each with the index of the line it shows, and its marks; a card's rows have
-    /// neither. A line
+    /// `wrapped_rows`, each with the index of the line it shows, its marks and its join; a card's
+    /// rows have neither line nor marks. A line
     /// under a closed item shows no rows, nor does the blank after it, and a line that others
     /// open under ends in its open or closed mark.
-    fn rows_of_lines(&self, width: u16) -> Vec<(String, Tone, Option<usize>, Marks)> {
+    fn rows_of_lines(&self, width: u16) -> Vec<(String, Tone, Option<usize>, Marks, &'static str)> {
         let mut cards = self.cards(usize::from(width)).into_iter().peekable();
         let mut wrapped = self.wrapped.0.borrow_mut();
         let (wrapped_at, seen) = &mut *wrapped;
@@ -192,7 +199,7 @@ impl Tab {
             while let Some((_, card)) = cards.next_if(|(before, _)| *before == at) {
                 rows.extend(
                     card.into_iter()
-                        .map(|(row, tone)| (row, tone, None, Marks::new())),
+                        .map(|(row, tone)| (row, tone, None, Marks::new(), "\n")),
                 );
             }
             let closed = line
@@ -214,13 +221,13 @@ impl Tab {
             }
             if !hidden {
                 let line_rows = seen[at].1.iter();
-                rows.extend(
-                    line_rows.map(|(row, marks)| (row.clone(), line.tone, Some(at), marks.clone())),
-                );
+                rows.extend(line_rows.map(|(row, marks, join)| {
+                    (row.clone(), line.tone, Some(at), marks.clone(), *join)
+                }));
             }
         }
         let cards = cards.flat_map(|(_, card)| card);
-        rows.extend(cards.map(|(row, tone)| (row, tone, None, Marks::new())));
+        rows.extend(cards.map(|(row, tone)| (row, tone, None, Marks::new(), "\n")));
         rows
     }
 
@@ -281,42 +288,71 @@ impl Tab {
     }
 }
 
-pub(super) fn line_rows(line: &ChatLine, width: usize) -> Vec<(String, Marks)> {
+/// A line's rows, each with its marks and what joins it to the row before in a copy.
+pub(super) fn line_rows(line: &ChatLine, width: usize) -> Vec<(String, Marks, &'static str)> {
     let rows = match line.tone {
         Tone::Reply => return reply_rows(&line.text, width),
         Tone::You => bubble(&line.text, width),
-        _ => wrap_lines(&line.text, width),
+        _ => joined_rows(&line.text, width),
     };
-    rows.into_iter().map(|row| (row, Marks::new())).collect()
+    rows.into_iter()
+        .map(|(row, join)| (row, Marks::new(), join))
+        .collect()
 }
 
-/// A reply's rows as its markdown shows it, each with its marks as display columns of the row.
-fn reply_rows(text: &str, width: usize) -> Vec<(String, Marks)> {
+/// A reply's rows as its markdown shows it.
+fn reply_rows(text: &str, width: usize) -> Vec<(String, Marks, &'static str)> {
     let (shown, marks) = markdown::render(text);
     let mut rows = Vec::new();
     let mut line_start = 0;
     for line in shown.split('\n') {
-        let mut end = 0;
-        for row in wrap(line, width) {
-            let start = end + line[end..].find(row.as_str()).unwrap_or(0);
-            end = start + row.len();
-            let (from, to) = (line_start + start, line_start + end);
-            let cells = |at: usize| Span::raw(&row[..at - from]).width();
-            let marked = marks
-                .iter()
-                .filter(|(range, _)| range.start < to && range.end > from)
-                .map(|(range, look)| {
-                    (
-                        cells(range.start.max(from))..cells(range.end.min(to)),
-                        *look,
-                    )
-                })
-                .collect();
-            rows.push((row, marked));
-        }
+        rows.extend(marked_rows(line, line_start, &marks, width));
         line_start += line.len() + 1;
     }
     rows
+}
+
+/// `line`, at byte `start` of the text `marks` are ranges of, wrapped in `width` columns: each row
+/// with its marks as display columns of the row, and what joins it to the row before in a copy, a
+/// newline for the first, a space where the wrap took spaces out and nothing where it broke a word.
+pub(super) fn marked_rows(
+    line: &str,
+    start: usize,
+    marks: &Marks,
+    width: usize,
+) -> Vec<(String, Marks, &'static str)> {
+    let mut rows = Vec::new();
+    let mut end = 0;
+    for row in wrap(line, width) {
+        let at = end + line[end..].find(row.as_str()).unwrap_or(0);
+        let join = match at {
+            _ if rows.is_empty() => "\n",
+            at if at > end => " ",
+            _ => "",
+        };
+        end = at + row.len();
+        let (from, to) = (start + at, start + end);
+        let cells = |at: usize| Span::raw(&row[..at - from]).width();
+        let marked = marks
+            .iter()
+            .filter(|(range, _)| range.start < to && range.end > from)
+            .map(|(range, look)| {
+                (
+                    cells(range.start.max(from))..cells(range.end.min(to)),
+                    *look,
+                )
+            })
+            .collect();
+        rows.push((row, marked, join));
+    }
+    rows
+}
+
+/// `text`'s lines wrapped in `width` columns, each row with what joins it to the row before.
+fn joined_rows(text: &str, width: usize) -> Vec<(String, &'static str)> {
+    let lines = text.split('\n');
+    let rows = lines.flat_map(|line| marked_rows(line, 0, &Marks::new(), width));
+    rows.map(|(row, _, join)| (row, join)).collect()
 }
 
 pub(super) fn wrap_lines(text: &str, width: usize) -> Vec<String> {
@@ -358,13 +394,16 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
 
 /// Padded on the left so one block of text sits against the right edge, leaving a cell of tint
 /// on each side. Padding in the text keeps search columns right.
-pub(super) fn bubble(text: &str, width: usize) -> Vec<String> {
+pub(super) fn bubble(text: &str, width: usize) -> Vec<(String, &'static str)> {
     let room = (width * 3 / 4).min(width.saturating_sub(2)).max(1);
-    let rows = wrap_lines(text, room);
-    let widest = rows.iter().map(|row| Span::raw(row.as_str()).width()).max();
+    let rows = joined_rows(text, room);
+    let widest = rows
+        .iter()
+        .map(|(row, _)| Span::raw(row.as_str()).width())
+        .max();
     let left = width.saturating_sub(widest.unwrap_or(0) + 1);
-    rows.iter()
-        .map(|row| format!("{:left$}{row}", ""))
+    rows.into_iter()
+        .map(|(row, join)| (format!("{:left$}{row}", ""), join))
         .collect()
 }
 

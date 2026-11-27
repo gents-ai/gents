@@ -19,18 +19,23 @@ impl Selection {
     }
 
     /// What it covers of `rows`, through the end's column, each row without trailing spaces and
-    /// your messages' rows without the padding that sets their bubble right.
-    pub fn text(self, rows: &[(String, Tone)]) -> String {
+    /// your messages' rows without the padding that sets their bubble right. Each row after the
+    /// first follows what `joins` has for it, else a newline.
+    pub fn text(self, rows: &[(String, Tone)], joins: &[&str]) -> String {
         let (start, end) = self.ordered();
         let edges = bubble_edges(rows);
         let shown = rows.iter().enumerate().take(end.0 + 1).skip(start.0);
-        let cut = shown.map(|(at, (row, _))| {
+        let mut text = String::new();
+        for (at, (row, _)) in shown {
+            if at > start.0 {
+                text.push_str(joins.get(at).copied().unwrap_or("\n"));
+            }
             let edge = u16::try_from(edges[at]).unwrap_or(u16::MAX);
             let from = if at == start.0 { start.1 } else { 0 }.max(edge);
             let to = if at == end.0 { end.1 + 1 } else { u16::MAX };
-            columns(row, from, to).trim_end().to_string()
-        });
-        cut.collect::<Vec<_>>().join("\n")
+            text.push_str(columns(row, from, to).trim_end());
+        }
+        text
     }
 }
 
@@ -80,13 +85,32 @@ mod tests {
             anchor: (1, 2),
             end: (0, 4),
         };
-        assert_eq!(down.text(&rows), "two\nthr");
-        assert_eq!(up.text(&rows), down.text(&rows));
+        assert_eq!(down.text(&rows, &[]), "two\nthr");
+        assert_eq!(up.text(&rows, &[]), down.text(&rows, &[]));
         let past = Selection {
             anchor: (0, 0),
             end: (9, 0),
         };
-        assert_eq!(past.text(&rows), "one two\nthree");
+        assert_eq!(past.text(&rows, &[]), "one two\nthree");
+    }
+
+    #[test]
+    fn rows_join_as_their_lines_did() {
+        let rows = [
+            ("one two".to_string(), Tone::Reply),
+            ("three".to_string(), Tone::Reply),
+            ("abc".to_string(), Tone::Reply),
+            ("def".to_string(), Tone::Reply),
+        ];
+        let all = Selection {
+            anchor: (0, 0),
+            end: (3, 9),
+        };
+        assert_eq!(
+            all.text(&rows, &["\n", " ", "\n", ""]),
+            "one two three\nabcdef"
+        );
+        assert_eq!(all.text(&rows, &[]), "one two\nthree\nabc\ndef");
     }
 
     #[test]
@@ -100,6 +124,6 @@ mod tests {
             anchor: (0, 0),
             end: (2, 20),
         };
-        assert_eq!(all.text(&rows), "Group the\n  indented\nunder one.");
+        assert_eq!(all.text(&rows, &[]), "Group the\n  indented\nunder one.");
     }
 }

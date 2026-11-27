@@ -756,6 +756,16 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_row_knows_what_joins_it_to_the_row_before() {
+        let tab = tab_with(&[("aa bb\nabcdefgh", Tone::Plain), ("x yz", Tone::You)]);
+        assert_eq!(rows_at(&tab, 4)[..4], ["aa", "bb", "abcd", "efgh"]);
+        assert_eq!(tab.row_joins(4)[..4], ["\n", " ", "\n", ""]);
+        assert_eq!(tab.row_joins(4).len(), rows_at(&tab, 4).len());
+        let reply = tab_with(&[("**aa** bb", Tone::Reply)]);
+        assert_eq!(reply.row_joins(4), ["\n", " "]);
+    }
+
+    #[test]
     fn a_styled_span_keeps_its_style_across_a_wrap() {
         let tab = tab_with(&[("aaaa **bb cc**", Tone::Reply)]);
         assert_eq!(rows_at(&tab, 7), ["aaaa bb", "cc"]);
