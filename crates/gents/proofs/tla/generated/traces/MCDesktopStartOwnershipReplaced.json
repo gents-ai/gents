@@ -1,0 +1,44 @@
+{
+  "config": "MCDesktopStartOwnershipReplaced",
+  "constants": {
+    "ObservePending": false
+  },
+  "expect": "violates PendingOwnerIsNotCancelled",
+  "spec": "DesktopStartOwnership",
+  "steps": [
+    {
+      "action": "FirstStart",
+      "actor": null,
+      "after": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 1
+      },
+      "before": {
+        "cancelled": [],
+        "owner": 0,
+        "service": "stopped",
+        "starts": 0
+      }
+    },
+    {
+      "action": "RepeatedStart",
+      "actor": null,
+      "after": {
+        "cancelled": [
+          1
+        ],
+        "owner": 2,
+        "service": "booting",
+        "starts": 2
+      },
+      "before": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 1
+      }
+    }
+  ]
+}

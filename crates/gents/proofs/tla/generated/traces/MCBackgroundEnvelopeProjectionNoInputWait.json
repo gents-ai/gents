@@ -1,0 +1,413 @@
+{
+  "config": "MCBackgroundEnvelopeProjectionNoInputWait",
+  "constants": {
+    "ClassifyByText": false,
+    "WaitForInputs": false
+  },
+  "expect": "violates TestPasses",
+  "spec": "BackgroundEnvelopeProjection",
+  "steps": [
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [],
+        "queue": [
+          "R0"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": false,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Finish",
+      "actor": null,
+      "after": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Deliver",
+      "actor": null,
+      "after": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Deliver",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      },
+      "before": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Wake",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": true
+      }
+    },
+    {
+      "action": "Submit",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": true
+      }
+    },
+    {
+      "action": "Submit",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [
+          "PW",
+          "PQ"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": true
+      }
+    },
+    {
+      "action": "Observe",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [
+          "PW",
+          "PQ"
+        ],
+        "rendered": {
+          "N": "background_result",
+          "PQ": "pending",
+          "PW": "pending",
+          "R0": "person",
+          "W": "background_wake"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": true,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0",
+          "W"
+        ],
+        "queue": [
+          "PW",
+          "PQ"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    }
+  ]
+}

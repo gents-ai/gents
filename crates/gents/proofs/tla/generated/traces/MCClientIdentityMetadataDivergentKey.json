@@ -1,0 +1,1042 @@
+{
+  "config": "MCClientIdentityMetadataDivergentKey",
+  "constants": {
+    "CanCrash": false,
+    "RemoveBeforeRename": false,
+    "Reread": true,
+    "SingleWinnerKey": false,
+    "UniqueStaging": true,
+    "Writers": [
+      {
+        "$model": "w1"
+      },
+      {
+        "$model": "w2"
+      }
+    ]
+  },
+  "expect": "violates AgreedInstall",
+  "spec": "ClientIdentityMetadata",
+  "steps": [
+    {
+      "action": "Read",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "create"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Create",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "fill"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "empty"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "create"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Fill",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              {
+                "$model": "w1"
+              }
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "fill"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "empty"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Read",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              {
+                "$model": "w1"
+              }
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              {
+                "$model": "w1"
+              }
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Rename",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              {
+                "$model": "w1"
+              }
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Decide",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Create",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "empty"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Fill",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "rename"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              {
+                "$model": "w2"
+              }
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "empty"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Rename",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": {
+          "$model": "w2"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "decide"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": {
+          "$model": "w1"
+        },
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              true
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "ok"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "rename"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "absent"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              {
+                "$model": "w2"
+              }
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

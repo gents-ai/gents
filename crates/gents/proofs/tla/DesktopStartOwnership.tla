@@ -1,6 +1,7 @@
 ---------------------- MODULE DesktopStartOwnership ----------------------
 \* lean: ServiceLifecycle.startDisposition
 \* crates: gents-desktop-bridge
+\* traces: violates
 EXTENDS Naturals, LeanDecision_ServiceLifecycle
 \* ObservePending reads Lean's disposition for a Start while one is pending;
 \* without it every Start launches, the replaced-owner defect.

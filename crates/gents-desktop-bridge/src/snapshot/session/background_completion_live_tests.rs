@@ -8,6 +8,7 @@ use gents::support::accepted_turn::{
 use gents::support::fixtures::configure_agent_tools_as;
 use gents::support::{managed_agent_fixture, trial_store};
 use gents_inference::test_support::scripted_backend::{StreamChunk, StreamPlan, StreamResponse};
+use gents_lean_vocab::tla::replay::{Red, Trace};
 use gents_observe::client_projection::query::TranscriptWindow;
 use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use gents_store::graphql::escape_graphql_string;
@@ -130,6 +131,15 @@ fn automated_background(
 
 #[tokio::test]
 async fn live_background_completions_project_as_tool_attributed_activity() {
+    for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundEnvelopeProjectionByText.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCBackgroundEnvelopeProjectionNoInputWait.json"),
+    ] {
+        replay(&Trace::load(json, "BackgroundEnvelopeProjection", &[])).await;
+    }
+}
+
+async fn replay(trace: &Trace) {
     let db = trial_store("bridge-background-projection").await;
     let fixture = managed_agent_fixture(&db).await;
     let agent_did = fixture.agent.did().to_owned();
@@ -220,14 +230,110 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
     .expect("build background projection runtime");
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
 
-    for (id, text) in [
+    let entries = [
         ("lookalike-wake", BACKGROUND_COMPLETION_WAKE_PROMPT.to_owned()),
-        (
-            "lookalike-envelope",
-            format!("<tool-completion tool_call_id=\"spawned:quoted\" tool_name=\"bash\" status=\"failed\">\n  <result>{QUOTED_MARKER}</result>\n</tool-completion>"),
-        ),
-    ] {
-        enqueue_managed_accepted_request(&db, &fixture, id, SESSION_ID, &text).await;
+        ("lookalike-envelope", format!("<tool-completion tool_call_id=\"spawned:quoted\" tool_name=\"bash\" status=\"failed\">\n  <result>{QUOTED_MARKER}</result>\n</tool-completion>")),
+    ];
+    let session = escape_graphql_string(SESSION_ID);
+    let query = format!(
+        r#"{{
+        AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}) {{request_doc_id message_key publication}}
+        AgentRequest(filter: {{session_id: {{_eq: "{session}"}}}}) {{
+            _docID request_id lifecycle_state superseded_by_request superseded_by_request_doc_id
+        }}
+    }}"#
+    );
+    let request_matches = |row: &serde_json::Value, name: &str| {
+        let id = row["request_id"].as_str().unwrap();
+        match name {
+            "R0" => id == request_id,
+            "PW" => id == entries[0].0,
+            "PQ" => id == entries[1].0,
+            "W" => id != request_id && entries.iter().all(|(person, _)| *person != id),
+            other => panic!("unmapped request {other}"),
+        }
+    };
+    for step in &trace.steps {
+        match step.action.as_str() {
+            "Submit" => {
+                let index = step.before["submitted"].as_u64().unwrap() as usize;
+                let (id, text) = &entries[index];
+                enqueue_managed_accepted_request(&db, &fixture, id, SESSION_ID, text).await;
+            }
+            "Claim" | "Fold" => {
+                let before = step.before["published"].as_array().unwrap();
+                let name = step.after["published"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|p| !before.contains(p))
+                    .unwrap()
+                    .as_str()
+                    .unwrap();
+                gents_store::test_support::rows_when(
+                    &fixture.access,
+                    "AgentMessage",
+                    &query,
+                    |data| {
+                        data["AgentRequest"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| request_matches(row, name))
+                            .filter_map(|row| {
+                                serde_json::from_value::<gents_protocol::row::AgentRequestRow>(
+                                    row.clone(),
+                                )
+                                .ok()
+                            })
+                            .filter_map(|row| {
+                                gents_session::request::lifecycle::input_message_owner(&row)
+                            })
+                            .any(|(doc, key)| {
+                                data["AgentMessage"].as_array().unwrap().iter().any(|row| {
+                                    row["request_doc_id"] == doc && row["message_key"] == key
+                                })
+                            })
+                    },
+                )
+                .await;
+            }
+            "Deliver" => {
+                let count = step.after["delivered"].as_u64().unwrap() as usize;
+                gents_store::test_support::rows_when(
+                    &fixture.access,
+                    "AgentMessage",
+                    &query,
+                    |data| {
+                        data["AgentMessage"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| row["publication"]["kind"] == "tool_delivery")
+                            .count()
+                            >= count
+                    },
+                )
+                .await;
+            }
+            "Wake" => {
+                gents_store::test_support::rows_when(
+                    &fixture.access,
+                    "AgentRequest",
+                    &query,
+                    |data| {
+                        data["AgentRequest"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|row| request_matches(row, "W"))
+                    },
+                )
+                .await;
+            }
+            "Finish" | "Observe" => {}
+            other => panic!("unmapped envelope action {other}"),
+        }
     }
 
     let submitted = [request_id, "lookalike-wake", "lookalike-envelope"];
@@ -387,15 +493,17 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(
-        user_messages.contains(&BACKGROUND_COMPLETION_WAKE_PROMPT),
-        "a person's byte-identical wake text stays a user message: {user_messages:#?}"
-    );
-    assert!(
-        user_messages
-            .iter()
-            .any(|text| text.contains(QUOTED_MARKER)),
-        "a person quoting a full envelope stays a user message: {user_messages:#?} tip={tip:#?}"
+    trace.check(
+        Red::Defect,
+        &[(
+            "TestPasses",
+            notifications.len() == 2
+                && wake_items > 0
+                && user_messages.contains(&BACKGROUND_COMPLETION_WAKE_PROMPT)
+                && user_messages
+                    .iter()
+                    .any(|text| text.contains(QUOTED_MARKER)),
+        )],
     );
 
     let background_tools = tip
