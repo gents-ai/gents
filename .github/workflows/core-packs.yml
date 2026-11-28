@@ -42,15 +42,14 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request cancels its running build: a warm rerun is
-# cheap. On main a started run finishes and only the newest waiting run is
-# kept. Release callers each keep their own run.
+# Let an active pack build finish and keep only the newest waiting run for
+# each pull request and main. Release callers each keep their own run.
 concurrency:
   group: >-
     core-packs-${{ (github.event_name == 'pull_request' ||
     (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   CARGO_INCREMENTAL: "0"
