@@ -135,11 +135,16 @@ impl ConfigCommandTool {
         let home = store.home().to_owned();
         let schemas = self.plugin_source_data_schemas(&id, &document).await?;
         let prepare_home = home.clone();
+        let has_cases = !document.cases().is_empty();
         let prepared = tokio::task::spawn_blocking(move || {
             source_pack::prepare_plugin_source(&prepare_home, &document, &schemas)
         })
         .await
         .context("the plugin source task did not finish")??;
+        anyhow::ensure!(
+            has_cases,
+            "plugin {coordinate} was not built: plugin build requires at least 1 test case in set.tests (got 0); nothing was installed. Its source document is saved; add at least one {{\"name\": ..., \"input\": ..., \"expect\": ...}} case with [\"plugin\",\"build\",{id:?}] and build again."
+        );
 
         self.execution.enter_mutation();
         let build = crate::native::run_plugin_build(
@@ -171,16 +176,15 @@ impl ConfigCommandTool {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let returned_data_calls = cases["returned_data_calls"].as_bool().unwrap_or(false);
         anyhow::ensure!(
             failures.is_empty(),
-            "plugin {coordinate} compiled, but {} of {} test cases failed; nothing was installed. Its source document is saved.\n{}",
-            failures.len(),
-            passed + failures.len() as u64,
-            failures
-                .iter()
-                .map(|failure| format!("- {failure}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+            "{}",
+            format_case_failure_message(&coordinate, passed, &failures, returned_data_calls)
+        );
+        anyhow::ensure!(
+            passed > 0,
+            "plugin {coordinate} compiled, but 0 test cases ran; nothing was installed. Its source document is saved; add at least 1 test case in set.tests with [\"plugin\",\"build\",{id:?}] and build again."
         );
 
         let open_home = home.clone();
@@ -360,6 +364,29 @@ impl ConfigCommandTool {
     }
 }
 
+fn format_case_failure_message(
+    coordinate: &str,
+    passed: u64,
+    failures: &[String],
+    returned_data_calls: bool,
+) -> String {
+    let lines = failures
+        .iter()
+        .map(|failure| format!("- {failure}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let data_calls_hint = if returned_data_calls {
+        "\nHint: plugin build unit tests are single-round and do not query DefraDB; pass mocked input.data_results to test post-query logic, or assert on data_calls directly."
+    } else {
+        ""
+    };
+    format!(
+        "plugin {coordinate} compiled, but {} of {} test cases failed; nothing was installed. Its source document is saved.\n{lines}{data_calls_hint}",
+        failures.len(),
+        passed + failures.len() as u64,
+    )
+}
+
 /// A test's hold on a rebuild between a pin move and the install.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub struct RebuildTestPause {
@@ -371,3 +398,35 @@ pub struct RebuildTestPause {
 #[cfg(any(test, feature = "test-fixtures"))]
 pub static REBUILD_TEST_PAUSE: std::sync::Mutex<Option<Arc<RebuildTestPause>>> =
     std::sync::Mutex::new(None);
+
+#[cfg(test)]
+mod tests {
+    use super::format_case_failure_message;
+
+    #[test]
+    fn case_failure_appends_single_round_hint_when_data_calls_returned() {
+        let with_data_calls = format_case_failure_message(
+            "node/turn_engine",
+            0,
+            &[
+                r#"01_turn.json: returned {"data_calls":{"requests":[]}} instead of {"ok":true}"#
+                    .into(),
+            ],
+            true,
+        );
+        assert!(
+            with_data_calls.contains("single-round")
+                && with_data_calls.contains("input.data_results")
+                && with_data_calls.contains("assert on data_calls"),
+            "{with_data_calls}"
+        );
+
+        let ordinary = format_case_failure_message(
+            "node/double",
+            0,
+            &[r#"01_two.json: returned {"n":3} instead of {"n":4}"#.into()],
+            false,
+        );
+        assert!(!ordinary.contains("data_results"), "{ordinary}");
+    }
+}

@@ -319,6 +319,85 @@ pub(super) struct ProviderDispatch {
     pub(super) cleanup: Option<crate::session_hook::NativeCleanupCheck>,
 }
 
+const MAX_UNKNOWN_TOOL_SUGGESTIONS: usize = 8;
+const MAX_UNKNOWN_TOOL_AVAILABLE: usize = 20;
+
+fn unknown_tool_message(name: &str, tools: &[Box<dyn ToolDyn>]) -> String {
+    let mut available: Vec<String> = tools
+        .iter()
+        .filter(|tool| !tool.hidden())
+        .map(|tool| tool.name())
+        .collect();
+    available.sort();
+    available.dedup();
+    if available.is_empty() {
+        return format!("error: unknown tool '{name}'; no tools are available in this turn");
+    }
+    let needle = name.to_ascii_lowercase();
+    let mut matches: Vec<&str> = if needle.is_empty() {
+        Vec::new()
+    } else {
+        available
+            .iter()
+            .map(String::as_str)
+            .filter(|tool| {
+                let lower = tool.to_ascii_lowercase();
+                lower.starts_with(&needle)
+                    || lower.contains(&needle)
+                    || (lower.len() >= 2 && needle.contains(&lower))
+            })
+            .collect()
+    };
+    if matches.is_empty() && !needle.is_empty() {
+        let tokens: Vec<&str> = needle
+            .split(['_', '-', '.', '/'])
+            .filter(|token| token.len() >= 3)
+            .collect();
+        if !tokens.is_empty() {
+            matches = available
+                .iter()
+                .map(String::as_str)
+                .filter(|tool| {
+                    let lower = tool.to_ascii_lowercase();
+                    lower
+                        .split(['_', '-', '.', '/'])
+                        .any(|segment| tokens.contains(&segment))
+                })
+                .collect();
+        }
+    }
+    if !matches.is_empty() {
+        let total = matches.len();
+        matches.truncate(MAX_UNKNOWN_TOOL_SUGGESTIONS);
+        let more = total.saturating_sub(matches.len());
+        let suffix = if more > 0 {
+            format!(" (+{more} more)")
+        } else {
+            String::new()
+        };
+        return format!(
+            "error: unknown tool '{name}'; did you mean: {}{suffix}?",
+            matches.join(", ")
+        );
+    }
+    let total = available.len();
+    let shown: Vec<&str> = available
+        .iter()
+        .take(MAX_UNKNOWN_TOOL_AVAILABLE)
+        .map(String::as_str)
+        .collect();
+    let more = total.saturating_sub(shown.len());
+    let suffix = if more > 0 {
+        format!(" (+{more} more)")
+    } else {
+        String::new()
+    };
+    format!(
+        "error: unknown tool '{name}'; available tools: {}{suffix}",
+        shown.join(", ")
+    )
+}
+
 pub(super) async fn dispatch_provider_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -337,7 +416,7 @@ pub(super) async fn dispatch_provider_tool(
             name,
             Err(crate::tool::ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
-                text: format!("error: unknown tool '{name}'"),
+                text: unknown_tool_message(name, tools),
             }),
         );
     };
@@ -779,6 +858,96 @@ mod tests {
         assert!(matches!(outcome, ToolOutcome::Failed { .. }));
         assert!(hook.rejected.load(Ordering::SeqCst));
         assert!(!hook.invoked.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_suggests_matching_or_available_visible_tools() {
+        let tools: Vec<Box<dyn ToolDyn>> = vec![
+            Box::new(AdmissionGate {
+                name: "config",
+                admitted: true,
+            }),
+            Box::new(AdmissionGate {
+                name: "agent_new",
+                admitted: true,
+            }),
+            Box::new(AdmissionGate {
+                name: "agent_message",
+                admitted: true,
+            }),
+            Box::new(AdmissionGate {
+                name: "agent_list",
+                admitted: true,
+            }),
+            Box::new(AdmissionGate {
+                name: "query",
+                admitted: true,
+            }),
+        ];
+        let envelope = ToolCallEnvelope::default();
+
+        // Prefix/substring match suggests the related tools.
+        let outcome = dispatch_tool(&tools, "agent", "{}".into(), None, None, &envelope).await;
+        let ToolOutcome::Failed { class, text, .. } = outcome else {
+            panic!("unknown tool must fail");
+        };
+        assert_eq!(
+            class,
+            crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+        );
+        assert!(text.starts_with("error: unknown tool 'agent'"), "{text}");
+        assert!(
+            text.contains("agent_list, agent_message, agent_new"),
+            "{text}"
+        );
+
+        // Token match suggests tools sharing a segment.
+        let outcome =
+            dispatch_tool(&tools, "agent_create", "{}".into(), None, None, &envelope).await;
+        let ToolOutcome::Failed { text, .. } = outcome else {
+            panic!("unknown tool must fail");
+        };
+        assert!(
+            text.contains("agent_list, agent_message, agent_new"),
+            "{text}"
+        );
+
+        // Unmatched tool lists available tools so the model sees bash is off.
+        let outcome = dispatch_tool(&tools, "bash", "{}".into(), None, None, &envelope).await;
+        let ToolOutcome::Failed { text, .. } = outcome else {
+            panic!("unknown tool must fail");
+        };
+        assert!(text.starts_with("error: unknown tool 'bash'"), "{text}");
+        assert!(
+            text.contains("available tools: agent_list, agent_message, agent_new, config, query"),
+            "{text}"
+        );
+
+        // Hidden tools are never leaked in unknown-tool suggestions.
+        let presented: Vec<Box<dyn ToolDyn>> = crate::tool_policy::presentation::present_tools(
+            vec![
+                Box::new(AdmissionGate {
+                    name: "script",
+                    admitted: true,
+                }),
+                Box::new(ParseOnlyTool),
+            ],
+            &["parse".into()],
+        );
+        let outcome = dispatch_tool(&presented, "pars", "{}".into(), None, None, &envelope).await;
+        let ToolOutcome::Failed { text, .. } = outcome else {
+            panic!("unknown tool must fail");
+        };
+        assert!(!text.contains("parse"), "hidden tool leaked: {text}");
+        assert!(text.contains("available tools: script"), "{text}");
+
+        // Empty tool list reports none available.
+        let empty: Vec<Box<dyn ToolDyn>> = Vec::new();
+        let outcome = dispatch_tool(&empty, "bash", "{}".into(), None, None, &envelope).await;
+        let ToolOutcome::Failed { text, .. } = outcome else {
+            panic!("unknown tool must fail");
+        };
+        assert!(text.contains("no tools are available"), "{text}");
     }
 
     #[tokio::test]

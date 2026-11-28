@@ -194,7 +194,22 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
     )
     .await
     .unwrap_err();
-    assert!(error.contains("snake_case"), "{error}");
+    assert!(
+        error.contains("snake_case") && error.contains(r#"use \"not_snake\""#),
+        "{error}"
+    );
+    if !gents_tools::ux_preview::renderer_available(None) {
+        let preview_err = call(&tools, json!({"argv":["ux","preview","page/notes"]}))
+            .await
+            .unwrap_err();
+        let failure: Value =
+            serde_json::from_str(&preview_err[preview_err.find('{').unwrap()..]).unwrap();
+        assert_eq!(
+            failure["recovery"]["next_call"],
+            json!({"argv": ["page", "lint"], "target_id": "notes"}),
+            "{failure}"
+        );
+    }
 
     let preview = ok(
         &tools,
@@ -218,12 +233,19 @@ async fn page_and_plugin_help_name_the_document_verbs() {
     for expected in [
         "create ID",
         "page lint ID",
-        "ux preview page/ID",
         "module",
         "Topics:",
         "\"page\",\"create\"",
     ] {
         assert!(page.contains(expected), "{expected}: {page}");
+    }
+    if gents_tools::ux_preview::renderer_available(None) {
+        assert!(page.contains("ux preview page/ID"), "{page}");
+    } else {
+        assert!(
+            page.contains("no page renderer") && !page.contains("ux preview"),
+            "headless help page should omit ux preview: {page}"
+        );
     }
     let index = call(&tools, json!({"argv":["help"]})).await.unwrap();
     assert!(
@@ -334,6 +356,35 @@ async fn plugin_build_saves_the_source_and_reports_build_and_case_failures() {
     .await
     .unwrap_err();
     assert!(refused.contains("supported languages"), "{refused}");
+
+    // Empty or null tests must not silently pass 0/0 and install an untested plugin.
+    let no_tests = call(
+        &tools,
+        json!({"argv":["plugin","build"],"target_id":"untested","set":{
+            "language":"js","source":"module.exports = (i) => i;","tests":null
+        }}),
+    )
+    .await
+    .unwrap_err();
+    assert!(no_tests.contains("at least 1 test case"), "{no_tests}");
+    assert!(
+        gents_pack::plugin::store::read_record(home.path(), "node", "untested").is_err(),
+        "an untested plugin installs nothing"
+    );
+
+    // When a unit test fails because the plugin returned data_calls, append the single-round hint.
+    stub("printf '{\"cases\":[{\"plugin\":\"double\",\"passed\":0,\"failures\":[\"01_two.json: returned {\\\\\"data_calls\\\\\":{\\\\\"requests\\\\\":[]}} instead of {\\\\\"n\\\\\":4}\"],\"returned_data_calls\":true}]}'");
+    let data_call_failure = call(
+        &tools,
+        json!({"argv":["plugin","build"],"target_id":"double"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        data_call_failure.contains("single-round")
+            && data_call_failure.contains("input.data_results"),
+        "{data_call_failure}"
+    );
 }
 
 /// A plugin built from a source document has no pack: its `data.collections`
@@ -375,6 +426,7 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
         json!({"argv":["plugin","build"],"target_id":"probe","set":{
             "language":"rust","source":"fn main() {}",
             "data":{"collections":collections,"ops":["query"]},
+            "tests":[{"name":"smoke","input":{}}],
         }})
     };
 
@@ -436,7 +488,7 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         builder.to_str().unwrap(),
     );
     let (_fixture, tools) = fileless_tool_guarded("live-plugin-pins", &home_path, true).await;
-    let build = json!({"argv":["plugin","build"],"target_id":"probe","set":{"language":"rust","source":"fn main() {}"}});
+    let build = json!({"argv":["plugin","build"],"target_id":"probe","set":{"language":"rust","source":"fn main() {}","tests":[{"name":"smoke","input":{}}]}});
 
     write_artifact(br#"{"build":1}"#);
     let first = ok(&tools, build.clone()).await;

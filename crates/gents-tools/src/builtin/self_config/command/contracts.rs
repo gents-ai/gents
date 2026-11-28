@@ -68,7 +68,7 @@ pub fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "source":"string (required); the text of the one entry file, at most 1024 KiB. js/ts: module.exports = (input) => output. Others read JSON on stdin and write JSON on stdout",
                 "input_schema":"object|null; JSON Schema of the input, default {type: object}",
                 "data":"{collections: [string], ops: [query|insert|update|delete], stamped?: object}|null; absent means no data access",
-                "tests":"array<{name?: string, input: any, expect?: any}>|null; each case must succeed, and return expect when given; at most 64",
+                "tests":"array<{name?: string, input: any, expect?: any}>; at least 1 case required for plugin build (at most 64); each case must succeed, and return expect when given. Unit tests are single-round without DefraDB: pass mocked input.data_results to test post-query logic, or expect data_calls directly",
                 "tags":"array<string>; default []"
             }),
         )],

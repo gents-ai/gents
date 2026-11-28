@@ -833,10 +833,22 @@ async fn datastore_help_says_what_fill_means() {
         "fill: correlation uses the request/trigger correlation ID",
         "Omit fill for caller-supplied values",
         "omitted or empty means none",
-        "call the tool in your next turn",
+        "active on your next tool call in this response",
         r#"Caller value: {"name":"correlation"}. Runtime ID: {"name":"request_correlation","fill":"correlation"}"#,
     ] {
         assert!(page.contains(line), "{line}\n{page}");
+    }
+    for argv in [
+        json!(["help", "documents"]),
+        json!(["help", "document"]),
+        json!(["help", "docs"]),
+        json!(["documents", "list"]),
+    ] {
+        let error = refused(&tools, json!({"argv": argv})).await;
+        assert!(
+            error.contains("query") && error.contains("write") && error.contains("schema"),
+            "{argv}: {error}"
+        );
     }
     let shapes = ok(&tools, json!({"argv":["datastore","create","--help"]})).await;
     assert!(
