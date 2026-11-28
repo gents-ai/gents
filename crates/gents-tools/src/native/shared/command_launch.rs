@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use super::super::context::ToolError;
 use super::command_args::read_only_launch_args;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use super::command_credentials;
 use super::command_env::build_shell_env;
 use super::command_host_executable::admit_host_executable;
@@ -16,29 +16,42 @@ use super::command_validation::{executable_name_lookup_key, policy_denial};
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority};
 use crate::native::DenialReason;
 use gents_loop::tool_call_lifecycle::FailureClass;
-use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
 #[cfg(target_os = "macos")]
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
+use gents_session::workspace::sandbox::{
+    host_sandbox_backend, workspace_write_sandbox_enforced, LinuxSandboxConfig, SandboxBackend,
+};
 
 pub(crate) const READ_ONLY_SEATBELT: &str = "macos_seatbelt_read_only";
+pub(crate) const READ_ONLY_LANDLOCK: &str = "linux_landlock_read_only";
+
+pub(crate) fn is_read_only_kernel_sandbox(sandbox: &str) -> bool {
+    matches!(sandbox, READ_ONLY_SEATBELT | READ_ONLY_LANDLOCK)
+}
 
 pub(crate) fn select_sandbox(
     mode: CommandExecutionMode,
-    workspace_write_sandbox_enforced: bool,
+    backend: SandboxBackend,
 ) -> std::result::Result<&'static str, DenialReason> {
-    match mode {
-        CommandExecutionMode::ReadOnly if workspace_write_sandbox_enforced => {
-            Ok(READ_ONLY_SEATBELT)
+    match (mode, backend) {
+        (CommandExecutionMode::ReadOnly, SandboxBackend::MacosSeatbelt) => Ok(READ_ONLY_SEATBELT),
+        (CommandExecutionMode::ReadOnly, SandboxBackend::LinuxLandlock) => Ok(READ_ONLY_LANDLOCK),
+        (CommandExecutionMode::ReadOnly, SandboxBackend::None) => Ok("policy_read_only"),
+        (CommandExecutionMode::Unrestricted, _) => Ok("unsandboxed_unrestricted"),
+        (
+            CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite,
+            SandboxBackend::MacosSeatbelt,
+        ) => Ok("macos_seatbelt"),
+        (
+            CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite,
+            SandboxBackend::LinuxLandlock,
+        ) => Ok("linux_landlock"),
+        (CommandExecutionMode::ArtifactWrite, SandboxBackend::None) => {
+            Err(DenialReason::ArtifactWriteSandboxUnavailable)
         }
-        CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
-        CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
-        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
-            if workspace_write_sandbox_enforced =>
-        {
-            Ok("macos_seatbelt")
+        (CommandExecutionMode::WorkspaceWrite, SandboxBackend::None) => {
+            Err(DenialReason::WorkspaceWriteSandboxUnavailable)
         }
-        CommandExecutionMode::ArtifactWrite => Err(DenialReason::ArtifactWriteSandboxUnavailable),
-        CommandExecutionMode::WorkspaceWrite => Err(DenialReason::WorkspaceWriteSandboxUnavailable),
     }
 }
 
@@ -58,7 +71,7 @@ pub(crate) fn kernel_network(
     }
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SeatbeltWrites {
@@ -66,7 +79,7 @@ pub(crate) enum SeatbeltWrites {
     WritableRoot,
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SeatbeltProcessInfo {
@@ -74,7 +87,7 @@ pub(crate) enum SeatbeltProcessInfo {
     All,
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeatbeltProfile {
     pub(crate) writes: SeatbeltWrites,
@@ -82,7 +95,7 @@ pub(crate) struct SeatbeltProfile {
     pub(crate) process_info: SeatbeltProcessInfo,
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn write_capable_profile(network: bool) -> SeatbeltProfile {
     SeatbeltProfile {
         writes: SeatbeltWrites::WritableRoot,
@@ -91,11 +104,11 @@ fn write_capable_profile(network: bool) -> SeatbeltProfile {
     }
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub(crate) fn seatbelt_profile(sandbox: &str, network: bool) -> Option<SeatbeltProfile> {
     match sandbox {
-        "macos_seatbelt" => Some(write_capable_profile(network)),
-        READ_ONLY_SEATBELT => Some(SeatbeltProfile {
+        "macos_seatbelt" | "linux_landlock" => Some(write_capable_profile(network)),
+        READ_ONLY_SEATBELT | READ_ONLY_LANDLOCK => Some(SeatbeltProfile {
             writes: SeatbeltWrites::Nothing,
             network,
             process_info: SeatbeltProcessInfo::All,
@@ -115,7 +128,7 @@ struct ReadOnlyLaunch {
     program: String,
     args: Vec<String>,
     sandbox: &'static str,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     network: bool,
 }
 
@@ -129,10 +142,10 @@ fn read_only_launch(
         .ok()
         .map(|path| path.to_string_lossy().into_owned());
     let program = resolved.as_deref().unwrap_or(command);
-    let sandbox = select_sandbox(policy.mode, workspace_write_sandbox_enforced())
+    let sandbox = select_sandbox(policy.mode, host_sandbox_backend())
         .map_err(|reason| policy_denial(policy, reason))?;
     let key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_owned());
-    let contained = sandbox == READ_ONLY_SEATBELT;
+    let contained = is_read_only_kernel_sandbox(sandbox);
     Ok(ReadOnlyLaunch {
         program: if contained { command } else { program }.to_owned(),
         args: read_only_launch_args(contained, &key, args),
@@ -155,9 +168,10 @@ pub(super) struct CommandLaunch {
     pub(super) args: Vec<String>,
     pub(super) environment: RapidHashMap<String, String>,
     pub(super) sandbox: &'static str,
+    pub(super) linux_sandbox: Option<LinuxSandboxConfig>,
     pub(super) writable_root: Option<PathBuf>,
     pub(super) protection: Option<gents_pack::plugin::allowed::CommandProtection>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) credentials: Option<command_credentials::CredentialProtection>,
 }
 
@@ -166,11 +180,11 @@ impl CommandLaunch {
         if let Some(protection) = &self.protection {
             protection.revalidate()?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(credentials) = &self.credentials {
             credentials.revalidate(call).await?;
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let _ = call;
         Ok(())
     }
@@ -253,7 +267,7 @@ pub(super) async fn prepare_command_launch(
     })
     .transpose()
     .map_err(command_guard_error)?;
-    let (program, argv, sandbox) = match &protection {
+    let (program, argv, sandbox, mut linux_sandbox) = match &protection {
         Some(protection) => {
             protected_command_for_policy(writable_root, command, args, policy, protection)
                 .map_err(command_guard_error)?
@@ -274,15 +288,31 @@ pub(super) async fn prepare_command_launch(
         } else {
             (argv, None)
         };
+    #[cfg(target_os = "linux")]
+    let credentials =
+        if policy.mode.protects_credentials() && seatbelt_profile(sandbox, false).is_some() {
+            let credentials = command_credentials::capture(call)
+                .await
+                .map_err(command_guard_error)?;
+            if let Some(config) = linux_sandbox.as_mut() {
+                config.denied_paths.extend(credentials.snapshot());
+            }
+            Some(credentials)
+        } else {
+            None
+        };
+    #[cfg(not(target_os = "linux"))]
+    let _ = &mut linux_sandbox;
     Ok(CommandLaunch {
         program,
         args: argv,
         environment,
         sandbox,
+        linux_sandbox,
         writable_root: (policy.mode == CommandExecutionMode::WorkspaceWrite)
             .then(|| writable_root.to_owned()),
         protection,
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         credentials,
     })
 }
@@ -292,13 +322,18 @@ pub(super) fn command_guard_error(error: anyhow::Error) -> ToolError {
     ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
 }
 
+pub(crate) struct PreparedDeclaredCli {
+    pub(crate) argv: Vec<String>,
+    pub(crate) linux_sandbox: Option<LinuxSandboxConfig>,
+}
+
 pub(crate) async fn prepare_declared_cli_command(
     call: &gents_loop::tool::ToolCallEnvelope,
     cwd: &Path,
     command: &str,
     args: &[String],
     allowed_prefixes: &[Vec<String>],
-) -> std::result::Result<Vec<String>, ToolError> {
+) -> std::result::Result<PreparedDeclaredCli, ToolError> {
     let policy = CommandExecutionPolicy::write_capable()
         .with_mode(CommandExecutionMode::Unrestricted)
         .with_allowed_argv_prefixes(
@@ -332,14 +367,27 @@ pub(crate) async fn prepare_declared_cli_command(
     match protection {
         Some(protection) => {
             protection.revalidate().map_err(command_guard_error)?;
-            let (program, args, _) =
+            let (program, args, _, linux_sandbox) =
                 protected_command_for_policy(cwd, command, args, &policy, &protection)
                     .map_err(command_guard_error)?;
-            Ok(std::iter::once(program).chain(args).collect())
+            Ok(PreparedDeclaredCli {
+                argv: std::iter::once(program).chain(args).collect(),
+                linux_sandbox,
+            })
         }
-        None => Ok(argv),
+        None => Ok(PreparedDeclaredCli {
+            argv,
+            linux_sandbox: None,
+        }),
     }
 }
+
+type BuiltCommand = (
+    String,
+    Vec<String>,
+    &'static str,
+    Option<LinuxSandboxConfig>,
+);
 
 #[cfg(target_os = "macos")]
 fn protected_command_for_policy(
@@ -348,7 +396,7 @@ fn protected_command_for_policy(
     args: &[String],
     policy: &CommandExecutionPolicy,
     protection: &gents_pack::plugin::allowed::CommandProtection,
-) -> Result<(String, Vec<String>, &'static str)> {
+) -> Result<BuiltCommand> {
     let bounded = matches!(
         policy.mode,
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
@@ -416,17 +464,82 @@ fn protected_command_for_policy(
         .chain(["--".to_owned(), command.to_owned()])
         .chain(args.iter().cloned())
         .collect();
-    Ok((SANDBOX_EXEC.to_owned(), argv, sandbox))
+    Ok((SANDBOX_EXEC.to_owned(), argv, sandbox, None))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn protected_command_for_policy(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+    protection: &gents_pack::plugin::allowed::CommandProtection,
+) -> Result<BuiltCommand> {
+    let bounded = matches!(
+        policy.mode,
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+    );
+    let read_only = (policy.mode == CommandExecutionMode::ReadOnly)
+        .then(|| read_only_launch(root, command, args, policy))
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let (sandbox, program, argv, writable_root, allow_network, allow_writes_outside_denied) =
+        match read_only {
+            Some(launch) if launch.sandbox == READ_ONLY_LANDLOCK => (
+                READ_ONLY_LANDLOCK,
+                launch.program,
+                launch.args,
+                None,
+                launch.network,
+                false,
+            ),
+            Some(launch) => (
+                "linux_operator_state_guard",
+                launch.program,
+                launch.args,
+                None,
+                true,
+                true,
+            ),
+            None if bounded => (
+                "linux_landlock",
+                command.to_owned(),
+                args.to_vec(),
+                Some(root.to_path_buf()),
+                policy.effective_network_mode().allows_network(),
+                false,
+            ),
+            None => (
+                "linux_operator_state_guard",
+                command.to_owned(),
+                args.to_vec(),
+                None,
+                true,
+                true,
+            ),
+        };
+    Ok((
+        program,
+        argv,
+        sandbox,
+        Some(LinuxSandboxConfig {
+            writable_root,
+            allow_network,
+            deny_hard_links: policy.mode == CommandExecutionMode::ArtifactWrite,
+            denied_paths: protection.paths().to_vec(),
+            allow_writes_outside_denied,
+        }),
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn protected_command_for_policy(
     _root: &Path,
     _command: &str,
     _args: &[String],
     _policy: &CommandExecutionPolicy,
     _protection: &gents_pack::plugin::allowed::CommandProtection,
-) -> Result<(String, Vec<String>, &'static str)> {
+) -> Result<BuiltCommand> {
     anyhow::bail!("Command isolation for runtime permissions is unavailable on this platform.")
 }
 
@@ -435,18 +548,18 @@ fn sandboxed_command_for_policy(
     command_name: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> std::result::Result<(String, Vec<String>, &'static str), ToolError> {
+) -> std::result::Result<BuiltCommand, ToolError> {
     if policy.mode == CommandExecutionMode::ReadOnly {
         let launch = read_only_launch(root, command_name, args, policy)?;
-        if launch.sandbox == READ_ONLY_SEATBELT {
-            return read_only_seatbelt_command(launch).map_err(Into::into);
+        if is_read_only_kernel_sandbox(launch.sandbox) {
+            return read_only_kernel_command(launch).map_err(Into::into);
         }
-        return Ok((launch.program, launch.args, launch.sandbox));
+        return Ok((launch.program, launch.args, launch.sandbox, None));
     }
     let sandbox = select_sandbox_for_execution(policy)?;
     match policy.mode {
         CommandExecutionMode::ReadOnly | CommandExecutionMode::Unrestricted => {
-            Ok((command_name.to_string(), args.to_vec(), sandbox))
+            Ok((command_name.to_string(), args.to_vec(), sandbox, None))
         }
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite => {
             sandboxed_workspace_write_command(
@@ -465,7 +578,7 @@ fn sandboxed_command_for_policy(
 fn select_sandbox_for_execution(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<&'static str, ToolError> {
-    select_sandbox(policy.mode, workspace_write_sandbox_enforced())
+    select_sandbox(policy.mode, host_sandbox_backend())
         .map_err(|reason| policy_denial(policy, reason))
 }
 
@@ -477,7 +590,7 @@ fn sandboxed_workspace_write_command(
     network_mode: CommandNetworkMode,
     sandbox: &'static str,
     artifact_only: bool,
-) -> Result<(String, Vec<String>, &'static str)> {
+) -> Result<BuiltCommand> {
     let mut policy = macos_workspace_write_policy(network_mode);
     if artifact_only {
         policy.push_str("\n(deny file-link)\n");
@@ -490,10 +603,33 @@ fn sandboxed_workspace_write_command(
         command_name.to_string(),
     ];
     sandbox_args.extend(args.iter().cloned());
-    Ok((SANDBOX_EXEC.to_string(), sandbox_args, sandbox))
+    Ok((SANDBOX_EXEC.to_string(), sandbox_args, sandbox, None))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn sandboxed_workspace_write_command(
+    root: &Path,
+    command_name: &str,
+    args: &[String],
+    network_mode: CommandNetworkMode,
+    sandbox: &'static str,
+    artifact_only: bool,
+) -> Result<BuiltCommand> {
+    Ok((
+        command_name.to_string(),
+        args.to_vec(),
+        sandbox,
+        Some(LinuxSandboxConfig {
+            writable_root: Some(root.to_path_buf()),
+            allow_network: network_mode.allows_network(),
+            deny_hard_links: artifact_only,
+            denied_paths: Vec::new(),
+            allow_writes_outside_denied: false,
+        }),
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn sandboxed_workspace_write_command(
     _root: &Path,
     _command_name: &str,
@@ -501,27 +637,39 @@ fn sandboxed_workspace_write_command(
     _network_mode: CommandNetworkMode,
     _sandbox: &'static str,
     _artifact_only: bool,
-) -> Result<(String, Vec<String>, &'static str)> {
-    anyhow::bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
+) -> Result<BuiltCommand> {
+    anyhow::bail!("workspace_write bash requires a kernel sandbox on this build")
 }
 
 #[cfg(target_os = "macos")]
-fn read_only_seatbelt_command(
-    launch: ReadOnlyLaunch,
-) -> Result<(String, Vec<String>, &'static str)> {
+fn read_only_kernel_command(launch: ReadOnlyLaunch) -> Result<BuiltCommand> {
     let profile = rendered_profile(launch.sandbox, launch.network)?;
     let argv = ["-p".to_owned(), profile, "--".to_owned(), launch.program]
         .into_iter()
         .chain(launch.args)
         .collect();
-    Ok((SANDBOX_EXEC.to_owned(), argv, launch.sandbox))
+    Ok((SANDBOX_EXEC.to_owned(), argv, launch.sandbox, None))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn read_only_seatbelt_command(
-    _launch: ReadOnlyLaunch,
-) -> Result<(String, Vec<String>, &'static str)> {
-    anyhow::bail!("the read-only command sandbox requires macOS seatbelt on this build")
+#[cfg(target_os = "linux")]
+fn read_only_kernel_command(launch: ReadOnlyLaunch) -> Result<BuiltCommand> {
+    Ok((
+        launch.program,
+        launch.args,
+        launch.sandbox,
+        Some(LinuxSandboxConfig {
+            writable_root: None,
+            allow_network: launch.network,
+            deny_hard_links: false,
+            denied_paths: Vec::new(),
+            allow_writes_outside_denied: false,
+        }),
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn read_only_kernel_command(_launch: ReadOnlyLaunch) -> Result<BuiltCommand> {
+    anyhow::bail!("the read-only command sandbox requires a kernel sandbox on this build")
 }
 
 #[cfg(target_os = "macos")]

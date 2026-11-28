@@ -12,8 +12,9 @@ use super::{lsp_server_sandbox, CommandExecutionMode, CommandNetworkMode};
 #[test]
 fn generated_command_sandbox_cases_match_rust_selection() {
     use gents_lean_vocab::families::contracts_command_sandbox_selection as family;
-    family::replay::<CommandExecutionMode, CommandNetworkMode>(|i| {
-        let selected = select_sandbox(i.mode, i.workspace_write_sandbox_enforced);
+    use gents_session::workspace::sandbox::SandboxBackend;
+    family::replay::<CommandExecutionMode, CommandNetworkMode, SandboxBackend>(|i| {
+        let selected = select_sandbox(i.mode, i.sandbox_backend);
         let profile = selected.as_ref().ok().and_then(|sandbox| {
             seatbelt_profile(
                 sandbox,

@@ -166,7 +166,7 @@ async fn run_cli_command(
         .binary_path
         .to_str()
         .context("CLI executable path is not valid UTF-8")?;
-    let launch_argv =
+    let prepared =
         prepare_declared_cli_command(call, &cwd, command, argv, &config.allowed_argv_prefixes)
             .await?;
 
@@ -174,7 +174,7 @@ async fn run_cli_command(
     let bounds = tool_execution_bounds(call, std::time::Duration::from_secs(timeout_secs));
 
     let outcome = run_managed_exec(ManagedExecRequest {
-        argv: launch_argv,
+        argv: prepared.argv,
         cwd: cwd.clone(),
         deadline_at: bounds.deadline_at,
         cancellation_token: bounds.cancellation_token,
@@ -184,6 +184,7 @@ async fn run_cli_command(
         tool_name: Some(config.name.clone()),
         live_output: bounds.live_output.clone(),
         process_recorder: gents_session::exec::ownership::process_recorder(call),
+        linux_sandbox: prepared.linux_sandbox,
     })
     .await;
 

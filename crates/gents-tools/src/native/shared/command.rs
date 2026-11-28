@@ -7,7 +7,7 @@ pub use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode, Work
 
 #[path = "command_args.rs"]
 mod command_args;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "command_credentials.rs"]
 mod command_credentials;
 #[path = "command_env.rs"]
@@ -97,7 +97,7 @@ impl CommandExecutionPolicy {
 
     pub fn write_capable() -> Self {
         Self {
-            mode: if cfg!(target_os = "macos") {
+            mode: if workspace_write_sandbox_enforced() {
                 CommandExecutionMode::WorkspaceWrite
             } else {
                 CommandExecutionMode::Unrestricted
@@ -229,6 +229,7 @@ pub(crate) struct PreparedManagedCommand {
     pub(crate) args: Vec<String>,
     pub(crate) environment: RapidHashMap<String, String>,
     pub(crate) sandbox: &'static str,
+    pub(crate) linux_sandbox: Option<gents_session::workspace::sandbox::LinuxSandboxConfig>,
     pub(crate) operator_guard_home: Option<PathBuf>,
     pub(crate) credential_snapshot: Option<Vec<PathBuf>>,
 }
@@ -276,16 +277,17 @@ pub(crate) async fn prepare_managed_command(
         args: launch.args,
         environment: launch.environment,
         sandbox: launch.sandbox,
+        linux_sandbox: launch.linux_sandbox,
         operator_guard_home: launch
             .protection
             .as_ref()
             .map(|guard| guard.home().to_owned()),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         credential_snapshot: launch
             .credentials
             .as_ref()
             .map(command_credentials::CredentialProtection::snapshot),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         credential_snapshot: None,
     })
 }
@@ -297,14 +299,14 @@ pub(crate) async fn current_managed_command_credential_snapshot(
     if !protects_credentials {
         return Ok(None);
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         command_credentials::capture(call)
             .await
             .map(|protection| Some(protection.snapshot()))
             .map_err(|error| format!("{error:#}"))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = call;
         Ok(None)

@@ -136,6 +136,7 @@ pub(crate) async fn run_linter_diagnostics(
         tool_name: Some("lsp".into()),
         live_output: None,
         process_recorder: gents_session::exec::ownership::process_recorder(call),
+        linux_sandbox: command.linux_sandbox,
     })
     .await;
     match outcome {

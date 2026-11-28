@@ -1,0 +1,38 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-plugin-authoring",
+      "comparability_version": 1,
+      "title": "Plugins: build, test, data calls, rebuild, delegate and package sealed JS plugins without bash",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/freight_tariff_plugin.json",
+        "./cases/vault_ledger_plugin.json",
+        "./cases/pricing_rule_rebuild.json",
+        "./cases/dice_turn_engine.json",
+        "./cases/clerk_plugin_delegation.json",
+        "./cases/harbor_fee_app_pack.json",
+        "./cases/customs_duty_plugin.json",
+        "./cases/inventory_reserve_plugin.json",
+        "./cases/clinic_triage_plugin_pack.json",
+        "./cases/escrow_release_plugin.json",
+        "./cases/permit_fee_rebuild.json",
+        "./cases/fleet_audit_plugin_pack.json"
+      ]
+    }
+  ]
+}

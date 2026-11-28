@@ -84,6 +84,7 @@ pub async fn run_plugin_build(
         tool_name: Some("config".to_owned()),
         live_output: None,
         process_recorder: gents_session::exec::ownership::process_recorder(call),
+        linux_sandbox: command.linux_sandbox,
     })
     .await;
     match outcome {
