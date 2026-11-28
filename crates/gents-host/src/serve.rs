@@ -1974,7 +1974,7 @@ mod shim_host_tests {
         }
     }
 
-    /// On macOS the loopback bind alone succeeds beside a wildcard listener.
+    /// macOS lets the loopback bind succeed beside a wildcard listener; Linux refuses the bind itself.
     #[tokio::test]
     async fn preflight_refuses_a_port_another_program_holds_on_a_wildcard_address() {
         let listener = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, 0))
@@ -1985,11 +1985,10 @@ mod shim_host_tests {
             .await
             .expect_err("a port another program holds must not be shared");
 
+        let message = format!("{error:#}");
         assert!(
-            error
-                .to_string()
-                .contains("another program accepts connections"),
-            "unexpected diagnostic: {error:#}"
+            message.contains(&port.to_string()) && message.contains("--http-port"),
+            "unexpected diagnostic: {message}"
         );
     }
 

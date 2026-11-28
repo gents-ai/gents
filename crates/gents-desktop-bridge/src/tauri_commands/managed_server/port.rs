@@ -289,8 +289,16 @@ pub(super) async fn settle_port_at(
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?
                 .map_err(|error| {
+                    let code = match error {
+                        gents_service::node_port::MoveError::NoFreePort { .. } => {
+                            BridgeErrorCode::InvalidArgument
+                        }
+                        gents_service::node_port::MoveError::Settings(_) => {
+                            BridgeErrorCode::Backend
+                        }
+                    };
                     BridgeError::new(
-                        BridgeErrorCode::InvalidArgument,
+                        code,
                         gents_protocol::error_chain::ErrorChain(&error).to_string(),
                     )
                 })?;

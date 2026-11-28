@@ -329,8 +329,9 @@ async fn ensure_home_not_served(
     home: &Path,
     user: Option<&gents_store::config_client::ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
+    // Reset exists to retire homes this build cannot read, so fall back like port observation.
     let config = gents_service::server_host::ServerConfig::for_home(home.to_path_buf())
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+        .unwrap_or_else(|_| gents_service::server_host::ServerConfig::standard(home.to_path_buf()));
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
     if matching_external_server(home, user).await?.is_some() {
         return Err(BridgeError::new(

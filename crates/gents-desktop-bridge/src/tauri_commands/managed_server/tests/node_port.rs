@@ -6,10 +6,16 @@ use tokio::io::AsyncWriteExt as _;
 
 /// A listener that answers HTTP, but not as Gents.
 async fn other_app() -> (tokio::task::JoinHandle<()>, u16) {
-    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .await
-        .unwrap();
-    let port = listener.local_addr().unwrap().port();
+    // The move searches upward, so the last port would leave it nowhere to go.
+    let (listener, port) = loop {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        if port < u16::MAX {
+            break (listener, port);
+        }
+    };
     let task = tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
             let _ = stream
