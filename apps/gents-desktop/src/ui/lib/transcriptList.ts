@@ -869,9 +869,22 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
             reconcile();
           }, AWAIT_PLACE_MS);
         }
+        /* left at the newest sent turn, it opens held there with the room
+           its reply fills, as it was left: drawn before that reply arrives,
+           the turn keeps its place instead of sitting at the foot */
+        const turns = live.current.options.turns;
+        const newestTurn =
+          place !== null &&
+          place !== "awaiting" &&
+          turns[turns.length - 1] === place.key;
+        if (newestTurn) roomKey = place.key;
         setMode(
           place && place !== "awaiting"
-            ? { kind: "read", key: place.key, offset: place.offset }
+            ? {
+                kind: newestTurn ? "turn" : "read",
+                key: place.key,
+                offset: place.offset,
+              }
             : { kind: "follow" },
         );
         /* drawn once the rows around the place are measured, so the

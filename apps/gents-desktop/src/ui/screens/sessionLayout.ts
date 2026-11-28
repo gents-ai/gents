@@ -13,11 +13,21 @@ export function useHeaderScrolledOut(scroller: HTMLElement | null) {
     if (!marker || !scroller) return;
     const opened = performance.now();
     let pending: ReturnType<typeof setTimeout> | null = null;
+    let first = true;
     const io = new IntersectionObserver(
       ([e]) => {
         const next = !e!.isIntersecting;
         if (pending !== null) clearTimeout(pending);
         pending = null;
+        /* a session opened at the reader's place has its header out from the
+           first frame: say so at once rather than draw an empty bar while
+           the open settles; any change after that still waits */
+        if (first && next) {
+          first = false;
+          setOut(true);
+          return;
+        }
+        first = false;
         const wait = SETTLING_MS - (performance.now() - opened);
         if (wait <= 0) setOut(next);
         else pending = setTimeout(() => setOut(next), wait);

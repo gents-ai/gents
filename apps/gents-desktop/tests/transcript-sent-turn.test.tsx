@@ -168,6 +168,42 @@ describe("the view goes to a sent turn once per send", () => {
     expect(await placeKeptAfterScroll()).toMatchObject({ key: "assistant-1" });
   });
 
+  it("reopens a session left at its newest turn held there, with the room its reply fills", async () => {
+    const items = [...exchange(0, "r-0"), ...exchange(2, "r-1")];
+    const sent = userMessage({
+      itemKey: "user-4",
+      requestId: "r-sent",
+      sequence: 4,
+      content: "Question 4",
+    });
+    const app = testApp({ session: snapshot([...items, sent], "r-sent") });
+    send(app, "r-sent", "Question 4");
+
+    const first = renderIn(app, <OpenTranscript />);
+    await waitFor(() => expect(takenOf(app, "r-sent")).toBe(true));
+    expect((await placeKeptAfterScroll())?.key).toBe("turn:r-sent");
+    const room = () =>
+      Number.parseFloat(
+        (
+          screen
+            .getByTestId("scroller")
+            .querySelector(
+              "[data-transcript-list] ~ [aria-hidden]",
+            ) as HTMLElement | null
+        )?.style.height ?? "0",
+      );
+    const held = room();
+    expect(held).toBeGreaterThan(0);
+    first.unmount();
+
+    /* reopened before the reply has arrived: the turn keeps its place and
+       its room, where a reading place would have none */
+    renderIn(app, <OpenTranscript />);
+    await screen.findByText("Question 4");
+    await waitFor(() => expect(room()).toBe(held));
+    expect(screen.getByTestId("scroller").dataset.following).toBe("false");
+  });
+
   it("goes to a turn sent while the transcript is drawn", async () => {
     const items = [...exchange(0, "r-0"), ...exchange(2, "r-1")];
     const app = testApp({ session: snapshot(items, "r-1") });
