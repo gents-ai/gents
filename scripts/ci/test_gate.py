@@ -617,22 +617,48 @@ class VeraTests(unittest.TestCase):
         self.assertEqual(vera.pop("test:cli"), "gents-cli")
         self.assertEqual(set(vera.values()), {""})
 
-    def test_vera_partition_runs_only_vera_tests_against_warm_side_tree(self):
+    def test_vera_partition_runs_only_vera_tests_against_shared_tree_and_sccache(self):
         selection = sharded(1, everything=True)
         calls = []
         with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}), \
+                mock.patch.dict(os.environ, {
+                    "CARGO_TARGET_DIR": "/cache/runner-a",
+                    "RUSTC_WRAPPER": "/usr/local/bin/sccache",
+                    "CARGO_INCREMENTAL": "0",
+                }), \
                 mock.patch.object(gate, "ROOT", Path(directory)), \
                 mock.patch.object(gate, "nextest", lambda arguments, **options: calls.append((arguments, options)) or True), \
                 mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
                 mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
             gate.run(selection, "build:portable:vera")
-        self.assertEqual(len(calls), 2)
-        for arguments, options in calls:
-            self.assertEqual(arguments[0], "run")
-            self.assertEqual(arguments[arguments.index("--target-dir") + 1], "/cache/runner-a/vera")
-            self.assertEqual(options["extra_env"], {"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
-            self.assertEqual(options["drop_env"], ("CARGO_TARGET_DIR",))
+        self.assertEqual(len(calls), 1)
+        [(arguments, options)] = calls
+        self.assertEqual(arguments[0], "run")
+        self.assertEqual(arguments[arguments.index("--target-dir") + 1], "/cache/runner-a")
+        self.assertIsNone(options.get("extra_env"))
+        self.assertEqual(options["drop_env"], ("CARGO_TARGET_DIR",))
+        self.assertEqual(
+            arguments[arguments.index("--features") + 1],
+            "gents-store/vera,gents-tools/vera,gents-toolcalls/vera,gents-cli/vera",
+        )
+        filterset = arguments[arguments.index("-E") + 1]
+        for package, (target, test_filter) in gate.VERA_TESTS.items():
+            self.assertIn(f"(binary_id(={gate.binary_id(package, target)}) & test(~{test_filter}))", filterset)
+        # Single-package selections pass only that package's target flag and feature.
+        for package, expected_tail in (
+            ("gents-store", ["run", "-p", "gents-store", "--lib", "--features", "gents-store/vera"]),
+            ("gents-cli", ["run", "-p", "gents-cli", "--test", "integration", "--features", "gents-cli/vera"]),
+        ):
+            calls.clear()
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}), \
+                    mock.patch.object(gate, "ROOT", Path(directory)), \
+                    mock.patch.object(gate, "nextest", lambda arguments, **options: calls.append((arguments, options)) or True), \
+                    mock.patch.object(gate, "results", []):
+                gate.run_vera_tests([package])
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0][:len(expected_tail)], expected_tail)
+            self.assertIsNone(calls[0][1].get("extra_env"))
 
     def test_the_build_job_runs_them_in_their_own_nextest_build(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
@@ -649,25 +675,25 @@ class VeraTests(unittest.TestCase):
                 mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
             os.environ.pop("GITHUB_ACTIONS", None)
             gate.run_build(selection, "portable")
-        self.assertEqual(len(calls), 3)
-        archive, vera, cli = calls
+        self.assertEqual(len(calls), 2)
+        archive, vera = calls
         self.assertEqual(archive[0], "archive")
         self.assertNotIn("vera", " ".join(archive))
-        self.assertEqual(vera[:9], ["run", "-p", "gents-store", "-p", "gents-tools", "-p", "gents-toolcalls", "--lib",
-                                    "--features"])
-        self.assertEqual(vera[9], "gents-store/vera,gents-tools/vera,gents-toolcalls/vera")
-        self.assertEqual(cli[:6], ["run", "-p", "gents-cli", "--test", "integration", "--features"])
-        self.assertEqual(cli[6], "gents-cli/vera")
-        filtersets = vera[vera.index("-E") + 1] + cli[cli.index("-E") + 1]
+        self.assertEqual(vera[:14], [
+            "run", "-p", "gents-store", "-p", "gents-tools", "-p", "gents-toolcalls", "-p", "gents-cli",
+            "--lib", "--test", "integration", "--features",
+            "gents-store/vera,gents-tools/vera,gents-toolcalls/vera,gents-cli/vera",
+        ])
+        filterset = vera[vera.index("-E") + 1]
         for package in entry["vera"].split():
             target, test_filter = gate.VERA_TESTS[package]
-            self.assertIn(f"(binary_id(={gate.binary_id(package, target)}) & test(~{test_filter}))", filtersets)
+            self.assertIn(f"(binary_id(={gate.binary_id(package, target)}) & test(~{test_filter}))", filterset)
 
     def test_they_wait_for_the_lean_contract(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
         tests = {package: (1, 0) for package in selection["archives"][0]["packages"].split()
                  if package not in gate.NO_TESTS}
-        for built, expected in ((True, ["archive", "run", "run"]), (False, ["archive"])):
+        for built, expected in ((True, ["archive", "run"]), (False, ["archive"])):
             contract = mock.Mock(**{"wait.return_value": built})
             calls = []
             with tempfile.TemporaryDirectory() as directory, \
