@@ -293,3 +293,162 @@ export function withSentTurns(
     return !request || best.get(request) === item;
   });
 }
+
+/** How long a message whose content is still arriving is held back before
+    it is drawn with its placeholder. Most rows complete well within it, so
+    they appear once, whole, instead of flashing a placeholder and jumping. */
+export const SETTLE_MS = 1_500;
+
+/** The rows to draw now: a message still loading is left out until it is
+    complete or has been loading for `graceMs`; inputs this device sent are
+    always drawn, since their own copy was replaced by the row. `firstSeen`
+    keeps when each held row was first seen loading. */
+/** An input's text, once this device has shown it, stays shown: a later read
+    that has the input's row but not yet its message (a reload, the request
+    turning from queued to running) would otherwise swap the text for "still
+    syncing" and back. `known` holds the text by request, across renders. */
+export function keepKnownInputs(
+  items: RenderedTimelineItem[],
+  known: Map<string, string>,
+  kept = 128,
+): RenderedTimelineItem[] {
+  let changed = false;
+  const out = items.map((item) => {
+    if (item.kind !== "userMessage" && item.kind !== "pendingUserTurn") return item;
+    const request = requestOf(item);
+    if (!request) return item;
+    const loading =
+      item.kind === "userMessage" && item.reconstruction?.state === "loading";
+    if (!loading) {
+      if (item.content?.trim()) {
+        known.delete(request);
+        known.set(request, item.content);
+        if (known.size > kept) known.delete(known.keys().next().value!);
+      }
+      return item;
+    }
+    const text = known.get(request);
+    if (text === undefined) return item;
+    changed = true;
+    return { ...item, content: text, reconstruction: { state: "ready" as const } };
+  });
+  return changed ? out : items;
+}
+
+const LIVE_PREFIX = "live-assistant-";
+
+/** A reply's live text stays shown until its saved message can be drawn: when
+    the next turn starts, the finished reply's live row goes, and its saved
+    message may still be loading for a second or two (its last pieces in
+    flight), which drew "Loading message" in between. `live` holds the last
+    live text by request, across renders; only the newest saved reply of that
+    request takes it, since a turn that used tools has several. */
+export function keepLiveReplies(
+  items: RenderedTimelineItem[],
+  live: Map<string, string>,
+  kept = 32,
+): RenderedTimelineItem[] {
+  for (const item of items) {
+    if (item.kind !== "liveAssistant" || !item.itemKey.startsWith(LIVE_PREFIX))
+      continue;
+    if (!item.content?.trim()) continue;
+    const request = item.itemKey.slice(LIVE_PREFIX.length);
+    live.delete(request);
+    live.set(request, item.content);
+    if (live.size > kept) live.delete(live.keys().next().value!);
+  }
+  const newest = new Map<string, number>();
+  items.forEach((item, index) => {
+    if (item.kind === "assistantMessage" && item.requestId)
+      newest.set(item.requestId, index);
+  });
+  let changed = false;
+  const out = items.map((item, index) => {
+    if (item.kind !== "assistantMessage" || !item.requestId) return item;
+    const text = live.get(item.requestId);
+    if (text === undefined) return item;
+    if (item.reconstruction.state !== "loading") {
+      if (item.reconstruction.state === "ready") live.delete(item.requestId);
+      return item;
+    }
+    if (newest.get(item.requestId) !== index) return item;
+    changed = true;
+    return { ...item, content: text, reconstruction: { state: "ready" as const } };
+  });
+  return changed ? out : items;
+}
+
+export type SeenReplies = {
+  sessionId: string | null;
+  keys: Set<string>;
+  primed: boolean;
+};
+
+export const noSeenReplies = (sessionId: string | null): SeenReplies => ({
+  sessionId,
+  keys: new Set(),
+  primed: false,
+});
+
+/** The saved replies that arrived while this session's transcript was drawn:
+    a reply not among the rows first drawn, and placed after every row seen so
+    far. Such a reply was never shown live (the model answered faster than
+    the screen drew), so it types in rather than popping in whole. Rows of an
+    older page are placed before rows already seen, and are not new. */
+export function arrivedReplies(
+  items: RenderedTimelineItem[],
+  seen: SeenReplies,
+  sessionId: string | null,
+): { seen: SeenReplies; arrived: string[] } {
+  if (seen.sessionId !== sessionId) seen = noSeenReplies(sessionId);
+  if (!seen.primed) {
+    if (items.length === 0) return { seen, arrived: [] };
+    return {
+      seen: { sessionId, keys: new Set(items.map((i) => i.itemKey)), primed: true },
+      arrived: [],
+    };
+  }
+  let lastSeen = -1;
+  items.forEach((item, index) => {
+    if (seen.keys.has(item.itemKey)) lastSeen = index;
+  });
+  const arrived: string[] = [];
+  let keys = seen.keys;
+  items.forEach((item, index) => {
+    if (keys.has(item.itemKey)) return;
+    if (keys === seen.keys) keys = new Set(seen.keys);
+    keys.add(item.itemKey);
+    if (
+      index > lastSeen &&
+      item.kind === "assistantMessage" &&
+      item.reconstruction.state === "ready"
+    )
+      arrived.push(item.itemKey);
+  });
+  return { seen: keys === seen.keys ? seen : { ...seen, keys }, arrived };
+}
+
+export function settledRows(
+  items: RenderedTimelineItem[],
+  firstSeen: Map<string, number>,
+  now: number,
+  sentHere: ReadonlySet<string>,
+  graceMs = SETTLE_MS,
+): { items: RenderedTimelineItem[]; nextAt: number | null } {
+  const loading = new Set<string>();
+  let nextAt: number | null = null;
+  const shown = items.filter((item) => {
+    if (item.kind !== "userMessage" && item.kind !== "assistantMessage") return true;
+    if (item.reconstruction?.state !== "loading") return true;
+    const request = requestOf(item);
+    if (request && sentHere.has(request)) return true;
+    loading.add(item.itemKey);
+    const first = firstSeen.get(item.itemKey) ?? now;
+    firstSeen.set(item.itemKey, first);
+    if (now - first >= graceMs) return true;
+    nextAt = nextAt === null ? first + graceMs : Math.min(nextAt, first + graceMs);
+    return false;
+  });
+  for (const key of [...firstSeen.keys()]) if (!loading.has(key)) firstSeen.delete(key);
+  return { items: shown.length === items.length ? items : shown, nextAt };
+}

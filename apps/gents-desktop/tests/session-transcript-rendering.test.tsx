@@ -2,6 +2,7 @@ import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { SETTLE_MS } from "../src/ui/screens/stream-reveal";
 
 const markdownRender = vi.hoisted(() => vi.fn());
 
@@ -105,16 +106,24 @@ describe("SessionScreen transcript render boundary", () => {
     const row = base.timelineItems[0]!;
     if (row.kind !== "assistantMessage") throw new Error("expected assistant row");
     const props = { ...UNRELATED, inFlight: false, scroller: null, content: null };
-    const view = renderIn(
-      testApp(),
-      <TranscriptPanel
-        {...props}
-        session={{
-          ...base,
-          timelineItems: [{ ...row, reconstruction: { state: "loading" } }],
-        }}
-      />,
-    );
+    /* a message still loading is held back up to SETTLE_MS before it says so */
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let view: ReturnType<typeof renderIn>;
+    try {
+      view = renderIn(
+        testApp(),
+        <TranscriptPanel
+          {...props}
+          session={{
+            ...base,
+            timelineItems: [{ ...row, reconstruction: { state: "loading" } }],
+          }}
+        />,
+      );
+      act(() => vi.advanceTimersByTime(SETTLE_MS));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(screen.getByTestId("assistant-output-unavailable")).toHaveTextContent(
       "Loading message",
     );

@@ -1,6 +1,12 @@
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
+  arrivedReplies,
+  noSeenReplies,
+  SETTLE_MS,
+  settledRows,
+  keepKnownInputs,
+  keepLiveReplies,
   closeOpenFence,
   drawKey,
   drawKeys,
@@ -545,5 +551,148 @@ describe("the turn the view goes to after a send", () => {
       { requestId: "b", foldedIntoRequestId: "x" },
     ];
     expect(sentTurnKey([a, b], "s1", "x", folds)).toBeNull();
+  });
+});
+
+describe("holding back messages still loading", () => {
+  const loading = (itemKey: string, requestId: string | null = null) =>
+    ({
+      kind: "userMessage",
+      itemKey,
+      inputRequestId: requestId,
+      ownsTurn: false,
+      reconstruction: { state: "loading", error: null, deniedDependencyDocId: null },
+    }) as unknown as RenderedTimelineItem;
+
+  it("draws a loading row only after the grace period", () => {
+    const seen = new Map<string, number>();
+    const first = settledRows([loading("a")], seen, 0, new Set());
+    expect(first.items).toHaveLength(0);
+    expect(first.nextAt).toBe(SETTLE_MS);
+    expect(settledRows([loading("a")], seen, SETTLE_MS, new Set()).items).toHaveLength(
+      1,
+    );
+  });
+
+  it("never holds back an input sent from this device", () => {
+    const shown = settledRows(
+      [loading("a", "req-1")],
+      new Map(),
+      0,
+      new Set(["req-1"]),
+    );
+    expect(shown.items).toHaveLength(1);
+  });
+
+  it("keeps an input's text once shown, when a later read lacks its message", () => {
+    const known = new Map<string, string>();
+    const ready = {
+      kind: "userMessage",
+      itemKey: "a",
+      inputRequestId: "req-1",
+      ownsTurn: false,
+      content: "Also end with a moral.",
+      reconstruction: { state: "ready" },
+    } as unknown as RenderedTimelineItem;
+    keepKnownInputs([ready], known);
+    const [kept] = keepKnownInputs([loading("a", "req-1")], known);
+    expect(kept).toMatchObject({
+      content: "Also end with a moral.",
+      reconstruction: { state: "ready" },
+    });
+    const [other] = keepKnownInputs([loading("b", "req-2")], known);
+    expect(other).toMatchObject({ reconstruction: { state: "loading" } });
+  });
+
+  it("keeps a reply's live text until its saved message can be drawn", () => {
+    const live = new Map<string, string>();
+    const streaming = {
+      kind: "liveAssistant",
+      itemKey: "live-assistant-req-9",
+      content: "The ferry left at dawn.",
+      reasoning: null,
+    } as unknown as RenderedTimelineItem;
+    keepLiveReplies([streaming], live);
+    const saved = (state: string, itemKey = "m-2") =>
+      ({
+        kind: "assistantMessage",
+        itemKey,
+        requestId: "req-9",
+        sequence: 2,
+        content: null,
+        reasoning: null,
+        timestamp: null,
+        reconstruction: { state },
+      }) as unknown as RenderedTimelineItem;
+    /* the live row is gone and the saved reply still loads: its live text shows */
+    const [earlier, newest] = keepLiveReplies(
+      [saved("loading", "m-1"), saved("loading")],
+      live,
+    );
+    expect(earlier).toMatchObject({ reconstruction: { state: "loading" } });
+    expect(newest).toMatchObject({
+      content: "The ferry left at dawn.",
+      reconstruction: { state: "ready" },
+    });
+    /* once the saved reply is ready it is drawn as saved, and forgotten */
+    keepLiveReplies([saved("ready")], live);
+    expect(live.has("req-9")).toBe(false);
+  });
+});
+
+describe("which saved replies arrived while the transcript was drawn", () => {
+  const reply = (itemKey: string, state = "ready") =>
+    ({
+      kind: "assistantMessage",
+      itemKey,
+      content: "text",
+      reconstruction: { state },
+    }) as unknown as RenderedTimelineItem;
+  const input = (itemKey: string) =>
+    ({ kind: "userMessage", itemKey }) as unknown as RenderedTimelineItem;
+
+  it("is none of the rows a session is first drawn with", () => {
+    const first = arrivedReplies([input("u-1"), reply("a-1")], noSeenReplies("s"), "s");
+    expect(first.arrived).toEqual([]);
+    expect(arrivedReplies([], noSeenReplies("s"), "s").seen.primed).toBe(false);
+  });
+
+  it("is a ready reply placed after every row seen so far, once", () => {
+    const opened = arrivedReplies(
+      [input("u-1"), reply("a-1")],
+      noSeenReplies("s"),
+      "s",
+    );
+    const grown = [input("u-1"), reply("a-1"), input("u-2"), reply("a-2")];
+    const next = arrivedReplies(grown, opened.seen, "s");
+    expect(next.arrived).toEqual(["a-2"]);
+    expect(arrivedReplies(grown, next.seen, "s").arrived).toEqual([]);
+  });
+
+  it("is not a reply of an older page, nor one still loading", () => {
+    const opened = arrivedReplies(
+      [input("u-5"), reply("a-5")],
+      noSeenReplies("s"),
+      "s",
+    );
+    const older = arrivedReplies(
+      [input("u-1"), reply("a-1"), input("u-5"), reply("a-5")],
+      opened.seen,
+      "s",
+    );
+    expect(older.arrived).toEqual([]);
+    const loading = arrivedReplies(
+      [input("u-1"), reply("a-1"), input("u-5"), reply("a-5"), reply("a-6", "loading")],
+      older.seen,
+      "s",
+    );
+    expect(loading.arrived).toEqual([]);
+  });
+
+  it("starts over for another session", () => {
+    const opened = arrivedReplies([reply("a-1")], noSeenReplies("s"), "s");
+    expect(
+      arrivedReplies([reply("b-1"), reply("b-2")], opened.seen, "t").arrived,
+    ).toEqual([]);
   });
 });

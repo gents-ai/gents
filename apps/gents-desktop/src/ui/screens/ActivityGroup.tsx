@@ -123,6 +123,9 @@ type GroupState = {
   folded: Record<string, boolean>;
   openStep: Record<string, string | null>;
   reasoning: Record<string, ReasoningState>;
+  /** groups first drawn while they still worked */
+  seenLive: Record<string, boolean>;
+  markSeenLive: (groupKey: string) => void;
   setFolded: (groupKey: string, folded: boolean) => void;
   setOpenStep: (groupKey: string, stepKey: string | null) => void;
   setReasoning: (key: string, state: ReasoningState) => void;
@@ -133,9 +136,11 @@ export function useGroupState(sessionKey: string | null): GroupState {
   const [folded, setFoldedMap] = useState<Record<string, boolean>>({});
   const [openStep, setOpenStepMap] = useState<Record<string, string | null>>({});
   const [reasoning, setReasoningMap] = useState<Record<string, ReasoningState>>({});
+  const [seenLive, setSeenLiveMap] = useState<Record<string, boolean>>({});
   const [session, setSession] = useState(sessionKey);
   if (session !== sessionKey) {
     setSession(sessionKey);
+    setSeenLiveMap({});
     setFoldedMap({});
     setOpenStepMap({});
     setReasoningMap({});
@@ -145,11 +150,14 @@ export function useGroupState(sessionKey: string | null): GroupState {
       folded,
       openStep,
       reasoning,
+      seenLive,
+      markSeenLive: (key) =>
+        setSeenLiveMap((m) => (m[key] ? m : { ...m, [key]: true })),
       setFolded: (key, value) => setFoldedMap((m) => ({ ...m, [key]: value })),
       setOpenStep: (key, value) => setOpenStepMap((m) => ({ ...m, [key]: value })),
       setReasoning: (key, value) => setReasoningMap((m) => ({ ...m, [key]: value })),
     }),
-    [folded, openStep, reasoning],
+    [folded, openStep, reasoning, seenLive],
   );
 }
 
@@ -218,12 +226,18 @@ function placeWorkers(members: GroupMember[]): PlacedMember[] {
 
 const SHOWN_MS = 1600;
 
+const POC_LIVE_FAILURES_STAY_FOLDED = true;
+
 export function ActivityGroup({
   entry,
   workers,
+  running = true,
 }: {
   entry: Extract<TranscriptEntry, { kind: "group" }>;
   workers: Workers;
+  /** whether its turn still runs: a turn that ended on this group leaves
+      it unsettled, yet nothing in it is live any more */
+  running?: boolean;
 }) {
   const state = useContext(GroupStateContext)!;
   const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
@@ -233,8 +247,28 @@ export function ActivityGroup({
     (member) => member.kind === "tool" && stepStatus(member.tool) === "failed",
   );
   const chosenStep = state.openStep[entry.key];
-  const openStep = chosenStep === undefined ? (firstFailed?.key ?? null) : chosenStep;
-  const folded = !single && (chosen ?? (!failed && !openStep));
+  /* POC: a group first seen while it still works stays as the reader saw
+     it, folded: opened as each failure happened, it pushed the turn below
+     down. One first seen settled opens its first failure, as before. */
+  const seenLive = POC_LIVE_FAILURES_STAY_FOLDED && state.seenLive[entry.key] === true;
+  useEffect(() => {
+    if (
+      POC_LIVE_FAILURES_STAY_FOLDED &&
+      running &&
+      !entry.settled &&
+      state.seenLive[entry.key] === undefined
+    )
+      state.markSeenLive(entry.key);
+  }, [running, entry.settled, entry.key, state]);
+  const liveNow = POC_LIVE_FAILURES_STAY_FOLDED && running && !entry.settled;
+  const openStep =
+    chosenStep === undefined
+      ? seenLive || liveNow
+        ? null
+        : (firstFailed?.key ?? null)
+      : chosenStep;
+  const folded =
+    !single && (chosen ?? (seenLive || liveNow ? true : !failed && !openStep));
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   const last = entry.members[entry.members.length - 1];

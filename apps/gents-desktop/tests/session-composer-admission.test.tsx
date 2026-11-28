@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
+import { SETTLE_MS } from "../src/ui/screens/stream-reveal";
 import {
   type ChatSendRequest,
   type DesktopSessionSnapshot,
@@ -999,7 +1000,14 @@ describe("SessionScreen automated inputs", () => {
         ] as DesktopSessionSnapshot["timelineItems"],
       }),
     });
-    renderScreen(app);
+    /* an input still loading is held back up to SETTLE_MS before it says so */
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      renderScreen(app);
+      act(() => vi.advanceTimersByTime(SETTLE_MS));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(
       screen
         .getAllByTestId("user-input-unavailable")
