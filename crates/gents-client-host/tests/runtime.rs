@@ -105,17 +105,35 @@ const STEERING_INPUT: &str = "Steering input from the installed editor.";
 const STEERING_REPLY: &str = "Steering input received.";
 
 #[cfg(feature = "editor-e2e")]
+async fn run_fixture_editor(scenario: &'static str, evidence: &str) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::Editor(scenario))
+        .await
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
+    copy_editor_evidence(temp.path(), evidence)
+}
+
+#[cfg(feature = "editor-e2e")]
+async fn run_live_editor(scenario: &str, evidence: &str) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), scenario)
+        .await
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
+    copy_editor_evidence(temp.path(), evidence)
+}
+
+#[cfg(feature = "editor-e2e")]
 #[cfg_attr(
     windows,
     ignore = "installed reply-loss relay requires a POSIX executable fixture"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Editor(scenario::GOAL_DELIVERY))
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+    run_fixture_editor(
+        scenario::GOAL_DELIVERY,
+        "editor-goal-delivery-canonical.json",
+    )
+    .await
 }
 
 #[cfg(all(feature = "editor-e2e", unix))]
@@ -174,17 +192,13 @@ async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Res
 #[cfg(all(feature = "editor-e2e", unix))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_steers_text_input_into_a_live_request() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-steering").await?;
-    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+    run_live_editor("live-steering", "editor-steering-canonical.json").await
 }
 
 #[cfg(all(feature = "editor-e2e", unix))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_steers_text_input_and_preserves_a_live_goal() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-goal-steering").await?;
-    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+    run_live_editor("live-goal-steering", "editor-steering-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -199,21 +213,13 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Editor(scenario::STEERING))
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+    run_fixture_editor(scenario::STEERING, "editor-steering-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_steers_pending_input_and_continues_the_same_goal() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Editor(scenario::GOAL_STEERING))
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+    run_fixture_editor(scenario::GOAL_STEERING, "editor-steering-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -241,51 +247,32 @@ async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Res
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-workspace")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
+    run_live_editor("live-workspace", "editor-workspace-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_preserves_image_bytes_through_submission_and_reload() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let result = exercise(temp.path(), Journey::Editor(scenario::IMAGES)).await;
-    result.with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-images-canonical.json")
+    run_fixture_editor(scenario::IMAGES, "editor-images-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "retry")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-retry-canonical.json")
+    run_live_editor("retry", "editor-retry-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_reviews_retained_file_images_without_reading_the_working_copy() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-review")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-review-canonical.json")
+    run_live_editor("live-review", "editor-review-canonical.json").await
 }
 
 #[cfg(all(feature = "editor-e2e", unix))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_changes() -> Result<()>
 {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-undo")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-undo-canonical.json")
+    run_live_editor("live-undo", "editor-undo-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -305,11 +292,7 @@ async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Res
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Editor(scenario::GOALS))
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
+    run_fixture_editor(scenario::GOALS, "editor-goal-recovery-canonical.json").await
 }
 
 /// Releases the reply every request not answered otherwise waits on.
@@ -412,52 +395,40 @@ fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-goal-removal")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-goal-removal-canonical.json")
+    run_live_editor("live-goal-removal", "editor-goal-removal-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-goal-replacement")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-goal-replacement-canonical.json")
+    run_live_editor(
+        "live-goal-replacement",
+        "editor-goal-replacement-canonical.json",
+    )
+    .await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_answers_a_native_question_and_uses_the_edited_worker_prompt() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-questions")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-questions-canonical.json")
+    run_live_editor("live-questions", "editor-questions-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    live_runtime::exercise_editor(temp.path(), "live-related-work")
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
+    run_live_editor("live-related-work", "editor-related-work-canonical.json").await
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_observes_related_worker_failure_without_losing_completed_work_or_the_parent_draft(
 ) -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Editor(scenario::RELATED_WORK_FAILURE))
-        .await
-        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
-    copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
+    run_fixture_editor(
+        scenario::RELATED_WORK_FAILURE,
+        "editor-related-work-canonical.json",
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

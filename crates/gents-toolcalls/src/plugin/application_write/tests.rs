@@ -682,41 +682,21 @@ mod plugin {
     }
 
     #[tokio::test]
-    async fn plugin_write_to_a_runtime_collection_is_refused() {
+    async fn plugin_write_to_runtime_or_ungranted_collection_is_refused() {
         let node = node().await;
-        let error = apply_all(
-            &node,
-            &grant(&["AgentRequest"]),
-            vec![write(
-                DataOp::Insert,
-                "AgentRequest",
-                None,
-                json!({"body": "x"}),
-            )],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("declared data grant"),
-            "{error:#}"
-        );
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn plugin_write_outside_the_grant_is_refused() {
-        let node = node().await;
-        let error = apply_all(
-            &node,
-            &grant(&["Other"]),
-            vec![write(DataOp::Insert, "Note", None, json!({"body": "x"}))],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("declared data grant"),
-            "{error:#}"
-        );
+        for (granted, target) in [("AgentRequest", "AgentRequest"), ("Other", "Note")] {
+            let error = apply_all(
+                &node,
+                &grant(&[granted]),
+                vec![write(DataOp::Insert, target, None, json!({"body": "x"}))],
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("declared data grant"),
+                "{target}: {error:#}"
+            );
+        }
         assert_eq!(notes(&node).await, json!([]));
         node.shutdown().await.expect("node shutdown");
     }

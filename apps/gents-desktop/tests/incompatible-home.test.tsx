@@ -487,6 +487,44 @@ function ResetSettings() {
 }
 
 describe("user-invoked desktop reset", () => {
+  it("offers to start fresh when startup cannot read saved connections", async () => {
+    const user = userEvent.setup();
+    const run = harness({
+      fetchDesktopSnapshot: vi.fn(async () => {
+        throw new Error("decoding the client runtime directory");
+      }),
+    });
+    run.resetManagedServer.mockImplementation(async () =>
+      preview({ stores: [], reason: "fullReset" }),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Start fresh…" }));
+
+    expect(run.resetManagedServer).toHaveBeenCalledExactlyOnceWith(
+      undefined,
+      undefined,
+      true,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Reset Gents on this Mac" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so instead of an empty list when nothing on disk would change", async () => {
+    const user = userEvent.setup();
+    const resetManagedServer = vi.fn(async () =>
+      preview({ stores: [], plannedPaths: [], reason: "fullReset" }),
+    );
+    renderIn(testApp({ api: { resetManagedServer } }), <ResetSettings />);
+
+    await user.click(await screen.findByRole("button", { name: "Reset…" }));
+
+    expect(
+      await screen.findByTestId("incompatible-home-nothing-planned"),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("incompatible-home-planned")).not.toBeInTheDocument();
+  });
+
   it("previews healthy state from Settings and allows cancelling without retirement", async () => {
     const user = userEvent.setup();
     const resetManagedServer = vi.fn(async () =>

@@ -1,8 +1,6 @@
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
-import { inNativeShell } from "../../../lib/nativeShell";
-import { isMacTauriShell } from "../../../lib/shellPlatform";
 import { Group, Row } from "../agent/rows";
 
 export function DeveloperPanel() {
@@ -12,7 +10,7 @@ export function DeveloperPanel() {
       toast(`DB explorer failed to open: ${String(e)}`);
     });
   };
-  const canReset = lifecycle.home.canReset && (!inNativeShell() || isMacTauriShell());
+  const canReset = lifecycle.home.canFullReset;
   return (
     <div>
       {actions.canOpenDbExplorer && (

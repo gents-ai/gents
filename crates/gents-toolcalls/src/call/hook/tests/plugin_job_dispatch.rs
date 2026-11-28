@@ -4,11 +4,11 @@ use crate::background::job::records::{read_pin, read_progress, read_step_state, 
 use crate::background::job::JobBinding;
 use crate::call::lifecycle::admission_fixture::fixture_job_pin;
 use crate::plugin::executor::PluginExecutor;
-use crate::test_support::installed_plugin;
 use crate::test_support::live_settings;
 use defra_node::Node as EmbeddedNode;
 use gents_pack::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use gents_pack::plugin::store;
+use gents_pack::plugin::test_fixtures::installed_plugin;
 use gents_protocol::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration, PluginJobDeclaration,
