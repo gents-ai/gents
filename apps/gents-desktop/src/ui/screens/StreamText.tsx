@@ -16,10 +16,23 @@ function smoothingOn() {
   }
 }
 
+/* how much of each streamed reply has been shown, so a reply drawn again
+   (its session reopened, its row scrolled back into view) starts where the
+   reader left it instead of typing out from its first character */
+const SHOWN_KEPT = 64;
+const shownBefore = new Map<string, number>();
+function keepShown(key: string, length: number) {
+  shownBefore.delete(key);
+  shownBefore.set(key, length);
+  if (shownBefore.size > SHOWN_KEPT)
+    shownBefore.delete(shownBefore.keys().next().value!);
+}
+
 export function StreamText({
   text,
   directives = false,
   onRevealed,
+  revealKey,
 }: {
   text: string;
   /** as Markdown's: the caller says whether this is the model's own reply */
@@ -27,10 +40,17 @@ export function StreamText({
   /** told the length of `text` once every character of it is shown, and
       null while some are not */
   onRevealed?: (length: number | null) => void;
+  /** names the reply, so a fresh mount resumes from what was shown */
+  revealKey?: string;
 }) {
   const [enabled] = useState(smoothingOn);
   const [initial] = useState(() =>
-    initialReveal(enabled ? 0 : text.length, text.length),
+    initialReveal(
+      enabled
+        ? Math.min(text.length, (revealKey && shownBefore.get(revealKey)) || 0)
+        : text.length,
+      text.length,
+    ),
   );
   const reveal = useRef<RevealState>(initial);
   const [visible, setVisible] = useState(() =>
@@ -40,6 +60,9 @@ export function StreamText({
   const target = useRef(text);
   target.current = text;
   const running = enabled && visible < text.length;
+  useEffect(() => {
+    if (revealKey) keepShown(revealKey, visible);
+  }, [revealKey, visible]);
   const report = useRef(onRevealed);
   report.current = onRevealed;
   useEffect(

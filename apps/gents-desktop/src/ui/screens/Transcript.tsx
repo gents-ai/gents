@@ -57,6 +57,12 @@ import {
   lingerSentTurn,
   noDrawKeys,
   requestOf,
+  settledRows,
+  keepKnownInputs,
+  keepLiveReplies,
+  arrivedReplies,
+  noSeenReplies,
+  type SeenReplies,
   withSentTurns,
   type DrawKeys,
   type HeldLive,
@@ -172,6 +178,8 @@ function AttachmentsOnly({ item }: { item: PersonInput }) {
 }
 
 const ParentContext = createContext<ParentWork | null>(null);
+/* the saved replies that arrived while this transcript was drawn */
+const ArrivedContext = createContext<ReadonlySet<string>>(new Set());
 
 function keptSendItem({ draft }: TranscriptSend): RenderedTimelineItem {
   let request = null;
@@ -494,11 +502,15 @@ export function Reply({
 }) {
   const live = item.kind === "liveAssistant";
   const ready = item.kind === "liveAssistant" || item.reconstruction.state === "ready";
+  /* a saved reply that was never shown live (the model answered faster than
+     the screen drew) types in like a live one instead of popping in whole */
+  const arrived = useContext(ArrivedContext);
+  const [fresh] = useState(() => !live && arrived.has(item.itemKey));
   /* a reply that streamed in keeps typing after its saved message lands; its
      copy button and time wait for the last character, so they are not pushed
      down line by line. The length shown is compared with the text's own, so
      a saved message longer than the live text waits from its first frame */
-  const [typing, setTyping] = useState(live);
+  const [typing, setTyping] = useState(live || fresh);
   const [revealed, setRevealed] = useState<number | null>(null);
   const settled =
     !live &&
@@ -541,7 +553,14 @@ export function Reply({
         ) : item.content ? (
           <ReplyText
             content={item.content}
-            live={live}
+            live={live || fresh}
+            revealKey={
+              /* the key its live row was revealed under, so a reply already
+                 seen streaming does not type itself out again once saved */
+              item.kind === "assistantMessage" && item.requestId
+                ? `live-assistant-${item.requestId}`
+                : item.itemKey
+            }
             onTyping={setTyping}
             onRevealed={setRevealed}
           />
@@ -554,11 +573,13 @@ export function Reply({
 function ReplyText({
   content,
   live,
+  revealKey,
   onTyping,
   onRevealed,
 }: {
   content: string;
   live: boolean;
+  revealKey: string;
   /** told whether this text types itself out */
   onTyping: (typing: boolean) => void;
   onRevealed: (length: number | null) => void;
@@ -566,7 +587,14 @@ function ReplyText({
   const [revealing] = useState(live);
   useEffect(() => onTyping(revealing), [revealing, onTyping]);
   if (!revealing) return <Markdown directives>{content}</Markdown>;
-  return <StreamText text={content} directives onRevealed={onRevealed} />;
+  return (
+    <StreamText
+      text={content}
+      directives
+      revealKey={revealKey}
+      onRevealed={onRevealed}
+    />
+  );
 }
 
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
@@ -626,13 +654,15 @@ const ItemRow = memo(function ItemRow({
 const GroupRow = memo(function GroupRow({
   entry,
   workers,
+  running,
 }: {
   entry: Extract<TranscriptEntry, { kind: "group" }>;
   workers: Workers;
+  running: boolean;
 }) {
   return (
     <div className="min-w-0 pb-5">
-      <ActivityGroup entry={entry} workers={workers} />
+      <ActivityGroup entry={entry} workers={workers} running={running} />
     </div>
   );
 });
@@ -741,13 +771,45 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       : "");
   const continuing =
     Boolean(latest?.failureReason) && session?.turnState === "processing";
-  const visible = useMemo(
+  const unsettled = useMemo(
     () =>
       continuing
         ? rows.items.filter((item) => item.kind !== "liveAssistant")
         : rows.items,
     [continuing, rows.items],
   );
+  /* an input's text and a reply's live text, once shown, stay shown while a
+     later read is still loading their message; any other message still
+     loading waits up to SETTLE_MS before it is drawn, so it appears once,
+     whole, instead of flashing a placeholder */
+  const sentHere = useView((view) => view.sentTurns);
+  const knownInputs = useRef(new Map<string, string>());
+  const liveReplies = useRef(new Map<string, string>());
+  const settleRef = useRef(new Map<string, number>());
+  const [settleTick, setSettleTick] = useState(0);
+  const settled = useMemo(
+    () =>
+      settledRows(
+        keepLiveReplies(
+          keepKnownInputs(unsettled, knownInputs.current),
+          liveReplies.current,
+        ),
+        settleRef.current,
+        Date.now(),
+        new Set(sentHere.map((turn) => turn.requestId)),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unsettled, sentHere, settleTick],
+  );
+  useEffect(() => {
+    if (settled.nextAt === null) return;
+    const timer = setTimeout(
+      () => setSettleTick((n) => n + 1),
+      Math.max(0, settled.nextAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [settled.nextAt]);
+  const visible = settled.items;
   const showError =
     Boolean(responseError) && !wasInterrupted && (continuing || !inFlight);
 
@@ -830,6 +892,23 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     [turns, held.replacedBy, sessionKey],
   );
   keysRef.current = keys;
+  const seenRef = useRef<SeenReplies>(noSeenReplies(sessionKey));
+  const arrivedRef = useRef<{ sessionId: string | null; keys: Set<string> }>({
+    sessionId: sessionKey,
+    keys: new Set(),
+  });
+  const arrived = useMemo(() => {
+    const next = arrivedReplies(turns, seenRef.current, sessionKey);
+    seenRef.current = next.seen;
+    if (arrivedRef.current.sessionId !== sessionKey)
+      arrivedRef.current = { sessionId: sessionKey, keys: new Set() };
+    if (next.arrived.length > 0)
+      arrivedRef.current = {
+        sessionId: sessionKey,
+        keys: new Set([...arrivedRef.current.keys, ...next.arrived]),
+      };
+    return arrivedRef.current.keys;
+  }, [turns, sessionKey]);
   const entries = useMemo(() => groupTranscript(turns), [turns]);
   /* each drawn item's message number, by its item key: a group's key is
      the key of the item it opens with */
@@ -1171,104 +1250,106 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       )}
       <WorkerActionsContext.Provider value={workerActions}>
         <ParentContext.Provider value={parentWork}>
-          <GroupStateContext.Provider value={groupState}>
-            <div {...list.listProps} data-transcript-list data-rows={entries.length}>
-              {list.items.map(({ index, start }) => {
-                const entry = entries[index]!;
-                return (
-                  <div
-                    key={entryKey(entry)}
-                    {...list.attributes(index, start)}
-                    className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
-                  >
-                    {entry.kind === "item" ? (
-                      <ItemRow
-                        rowKey={drawKey(keys, entry.item)}
-                        item={entry.item}
-                        background={entry.background}
-                        workers={entry.background && workers}
-                        changes={changes.get(entry.key)}
-                        worked={worked.get(entry.key)}
-                        day={dayOpens.get(entry.key) ?? null}
-                        kept={keptOf(entry.item)}
-                      />
-                    ) : (
-                      <GroupRow entry={entry} workers={workers} />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {rows.joined ? (
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5">
-                {continuing && showError && <FailedEarlier message={responseError} />}
-                {continuing &&
-                  session?.timelineItems
-                    .filter((item) => item.kind === "liveAssistant")
-                    .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
-                {wasInterrupted && !inFlight && (
-                  <StoppedNotice
-                    cause={session?.latestRequestOutcome?.cancelCause ?? null}
-                    stoppedBeforeRunning={
-                      session?.latestRequestOutcome?.stoppedBeforeRunning === true
-                    }
-                  />
-                )}
-                {showError && (
-                  <Notice
-                    tone="destructive"
-                    title="This turn couldn't finish"
-                    description={
-                      failureText(latest?.failureReason) ??
-                      (latest?.failureReason
-                        ? "Something went wrong while the agent was answering."
-                        : "The request failed before a response was available.")
-                    }
-                    details={latest?.failureReason?.trim() || undefined}
-                    actions={
-                      session?.retryEligibility?.eligible && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={retrying}
-                          onClick={retry}
-                        >
-                          {retrying ? "Retrying…" : "Retry"}
-                        </Button>
-                      )
-                    }
-                  >
-                    {session?.timelineItems.some(
-                      (item) =>
-                        (item.kind === "userMessage" ||
-                          item.kind === "pendingUserTurn") &&
-                        !!item.attachments?.length,
-                    ) && (
-                      <p className="text-xs">
-                        Attachments stay in this conversation. Start a new chat to
-                        continue without them.
-                      </p>
-                    )}
-                  </Notice>
-                )}
-                {/* the run's line: laid out as a reply is, but not one */}
-                <div className="relative min-w-0">
-                  <div data-slot="activity-line" className="prose-app px-2">
-                    <ActivityLine status={status} />
+          <ArrivedContext.Provider value={arrived}>
+            <GroupStateContext.Provider value={groupState}>
+              <div {...list.listProps} data-transcript-list data-rows={entries.length}>
+                {list.items.map(({ index, start }) => {
+                  const entry = entries[index]!;
+                  return (
+                    <div
+                      key={entryKey(entry)}
+                      {...list.attributes(index, start)}
+                      className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
+                    >
+                      {entry.kind === "item" ? (
+                        <ItemRow
+                          rowKey={drawKey(keys, entry.item)}
+                          item={entry.item}
+                          background={entry.background}
+                          workers={entry.background && workers}
+                          changes={changes.get(entry.key)}
+                          worked={worked.get(entry.key)}
+                          day={dayOpens.get(entry.key) ?? null}
+                          kept={keptOf(entry.item)}
+                        />
+                      ) : (
+                        <GroupRow entry={entry} workers={workers} running={inFlight} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {rows.joined ? (
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5">
+                  {continuing && showError && <FailedEarlier message={responseError} />}
+                  {continuing &&
+                    session?.timelineItems
+                      .filter((item) => item.kind === "liveAssistant")
+                      .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+                  {wasInterrupted && !inFlight && (
+                    <StoppedNotice
+                      cause={session?.latestRequestOutcome?.cancelCause ?? null}
+                      stoppedBeforeRunning={
+                        session?.latestRequestOutcome?.stoppedBeforeRunning === true
+                      }
+                    />
+                  )}
+                  {showError && (
+                    <Notice
+                      tone="destructive"
+                      title="This turn couldn't finish"
+                      description={
+                        failureText(latest?.failureReason) ??
+                        (latest?.failureReason
+                          ? "Something went wrong while the agent was answering."
+                          : "The request failed before a response was available.")
+                      }
+                      details={latest?.failureReason?.trim() || undefined}
+                      actions={
+                        session?.retryEligibility?.eligible && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={retrying}
+                            onClick={retry}
+                          >
+                            {retrying ? "Retrying…" : "Retry"}
+                          </Button>
+                        )
+                      }
+                    >
+                      {session?.timelineItems.some(
+                        (item) =>
+                          (item.kind === "userMessage" ||
+                            item.kind === "pendingUserTurn") &&
+                          !!item.attachments?.length,
+                      ) && (
+                        <p className="text-xs">
+                          Attachments stay in this conversation. Start a new chat to
+                          continue without them.
+                        </p>
+                      )}
+                    </Notice>
+                  )}
+                  {/* the run's line: laid out as a reply is, but not one */}
+                  <div className="relative min-w-0">
+                    <div data-slot="activity-line" className="prose-app px-2">
+                      <ActivityLine status={status} />
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div
-                className="min-h-5 text-center text-xs text-muted-foreground"
-                data-testid="transcript-newer-status"
-              >
-                {rows.loading === "newer" ? "Loading newer messages…" : null}
-              </div>
-            )}
-            {/* the room a held turn's reply fills, below everything drawn */}
-            <div aria-hidden="true" style={{ height: list.room }} />
-          </GroupStateContext.Provider>
+              ) : (
+                <div
+                  className="min-h-5 text-center text-xs text-muted-foreground"
+                  data-testid="transcript-newer-status"
+                >
+                  {rows.loading === "newer" ? "Loading newer messages…" : null}
+                </div>
+              )}
+              {/* the room a held turn's reply fills, below everything drawn */}
+              <div aria-hidden="true" style={{ height: list.room }} />
+            </GroupStateContext.Provider>
+          </ArrivedContext.Provider>
         </ParentContext.Provider>
       </WorkerActionsContext.Provider>
     </div>
