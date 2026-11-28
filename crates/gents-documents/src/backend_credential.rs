@@ -1,3 +1,5 @@
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use serde::{Deserialize, Serialize};
 
 /// This value is stored only in the native `secret_configuration` resource.

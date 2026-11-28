@@ -3,6 +3,7 @@ use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2p
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::node_scope::ContextCalls as _;
 use std::{sync::Arc, time::Duration};
 
 struct TestNode {
@@ -256,6 +257,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
             gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
             doc_id,
+            &[],
         )
         .await
         .unwrap();
@@ -329,7 +331,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
     );
     assert!(
         receiver
-            .authorized_signed_block_bytes(cid, Some(owner.did()))
+            .authorized_signed_block_bytes_by(cid, owner.did())
             .await
             .is_err(),
         "an unrelated transport peer obtained the journal block: {pull:?}"

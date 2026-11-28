@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -116,6 +117,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
             gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             DOCUMENT,
+            &[],
         )
         .await?;
     assert!(reads(&node, &owner).await?);
@@ -129,6 +131,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
             gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             AGENT_DOCUMENT,
+            &[],
         )
         .await?;
     assert!(reads_document(&node, &agent, AGENT_DOCUMENT).await?);
@@ -208,6 +211,7 @@ async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Resul
             gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             DOCUMENT,
+            &[],
         )
         .await?;
     assert!(reads(&node, &owner).await?);

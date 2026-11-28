@@ -29,6 +29,7 @@ pub struct BaselineCollection<'a> {
     pub name: &'a str,
     pub sdl: &'a str,
     pub expected_version: Option<&'a str>,
+    pub expected_collection_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +113,9 @@ fn build_catalog(ids: &gents_protocol::schemas::HomePolicyIds) -> Catalog<'stati
                 name,
                 sdl,
                 expected_version: Some(root),
+                expected_collection_id: Some(Box::leak(
+                    schema.collection_id.clone().into_boxed_str(),
+                )),
             }
         })
         .collect();

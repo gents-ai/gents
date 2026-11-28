@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::collections::VecDeque;
 
 use super::*;
@@ -884,6 +885,7 @@ async fn readiness_binding_preflight_matches_model() {
                         .replace(&policy_binding, ""),
                 )
                 .await
+                .map(|_| ())
                 .unwrap(),
             "different" => {
                 node.add_dac_policy_with_counter_as(

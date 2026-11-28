@@ -637,6 +637,7 @@ mod tests {
                     &policy.id,
                     &object.resource,
                     &object.id,
+                    &[],
                 )
                 .await?;
             }

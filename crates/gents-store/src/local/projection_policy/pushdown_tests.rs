@@ -78,7 +78,7 @@ async fn projection_acp_policy_resources_drive_document_decisions() -> anyhow::R
     let resource_name = "AgentRequest";
     let doc_id = "req-projection-acp-lifecycle-1";
 
-    acp.register_doc_object(&owner, &policy_id, resource_name, doc_id)
+    acp.register_doc_object(&owner, &policy_id, resource_name, doc_id, &[])
         .await?;
 
     assert!(

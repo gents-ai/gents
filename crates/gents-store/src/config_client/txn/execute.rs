@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -242,7 +243,10 @@ impl ConfigApplyTxn<'_> {
         trusted_schema: &str,
     ) -> Result<Value> {
         if self.has_pack_interpreter() {
-            let schemas = query::parse_sdl(trusted_schema)?;
+            let schemas = super::super::client_signed_agent::parse_signing_sdl(
+                trusted_schema,
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )?;
             if schemas.len() != 1 {
                 return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
             }
@@ -261,7 +265,10 @@ impl ConfigApplyTxn<'_> {
             return self.execute_with_variables(document, variables).await;
         };
         super::super::client_signed_agent::client_signer(endpoint)?;
-        let schemas = query::parse_sdl(trusted_schema)?;
+        let schemas = super::super::client_signed_agent::parse_signing_sdl(
+            trusted_schema,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )?;
         if schemas.len() != 1 {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }
@@ -292,7 +299,10 @@ impl ConfigApplyTxn<'_> {
         trusted_schema: &str,
     ) -> Result<Value> {
         if self.has_pack_interpreter() {
-            let schemas = query::parse_sdl(trusted_schema)?;
+            let schemas = super::super::client_signed_agent::parse_signing_sdl(
+                trusted_schema,
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )?;
             if schemas.len() != 1 {
                 return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
             }
@@ -315,7 +325,10 @@ impl ConfigApplyTxn<'_> {
             return self.execute_with_variables(document, variables).await;
         };
         super::super::client_signed_agent::client_signer(endpoint)?;
-        let schemas = query::parse_sdl(trusted_schema)?;
+        let schemas = super::super::client_signed_agent::parse_signing_sdl(
+            trusted_schema,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )?;
         if schemas.len() != 1 {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }
@@ -1357,7 +1370,7 @@ pub(super) fn native_relationship_error(error: defra_node::Error) -> ConfigClien
         defra_node::Error::Acp(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) => {
             ConfigClientError::RelationshipNotManaged(Box::new(error))
         }
-        defra_node::Error::TransactionConflict
+        defra_node::Error::TransactionConflict(_)
         | defra_node::Error::Query(query::error::QueryError::TransactionConflict(_)) => {
             retry::transaction_conflict(ConflictSource::TypedError)
         }

@@ -21,6 +21,7 @@ const OWNER_FILES: &[&str] = &[
 const READ_OWNER_FILES: &[&str] = &[
     "crates/gents-store/src/config_client/txn/auto_commit.rs",
     "crates/gents-store/src/graphql.rs",
+    "crates/gents-store/src/node_scope/context_calls.rs",
 ];
 
 const NODE_ONLY_METHODS: &[&str] = &["execute_as", "execute_request", "runner"];

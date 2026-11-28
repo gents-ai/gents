@@ -1,4 +1,5 @@
 use super::*;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[test]
@@ -683,8 +684,7 @@ mod plugin {
                 .await
                 .unwrap();
         }
-        node.add_collection(
-            "type Note { owner: String body: String tags: [String] }
+        node.add_collection("type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }
              type Twin { owner: String key: String body: String created_at: String }",
         )

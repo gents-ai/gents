@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;

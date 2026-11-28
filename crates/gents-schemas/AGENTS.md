@@ -10,7 +10,8 @@ contract depends on it instead of `gents-protocol`.
 
 - SDL names a built-in policy by its placeholder (`$household`), never by ID;
   a home's `HomePolicyIds` fill the IDs in when the schema is loaded.
-- `agent_ownership_policy.yaml` and `mailbox_policy.yaml` are generated from
+- `agent_ownership_policy.yaml`, `agent_ownership_policy_v2.yaml` and
+  `mailbox_policy.yaml` are generated from
   the Lean policy model by
   `cargo run -p gents-lean-vocab --example regenerate_household_policy`;
   regenerate them, never edit them.

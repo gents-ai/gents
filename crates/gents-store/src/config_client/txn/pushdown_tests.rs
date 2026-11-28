@@ -573,7 +573,7 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         workers.spawn(async move {
             let phase = |name| phases.lock().unwrap_or_else(|e| e.into_inner())[writer] = name;
             barrier.wait().await;
-            let transaction = node.begin_transaction_guard(false).await?;
+            let transaction = node.new_txn(false).await?;
             phase("begun");
             let current = active.fetch_add(1, Ordering::SeqCst) + 1;
             maximum.fetch_max(current, Ordering::SeqCst);
@@ -583,7 +583,7 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
             phase("committing");
             let committed = match transaction.commit().await {
                 Ok(()) => true,
-                Err(query::TransactionError::Conflict(_)) => false,
+                Err(defra_node::Error::TransactionConflict(_)) => false,
                 Err(error) => return Err(error.into()),
             };
             phase(if committed { "committed" } else { "conflict" });

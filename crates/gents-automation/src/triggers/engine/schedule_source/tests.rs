@@ -1,6 +1,7 @@
 use super::{schedule_visibility, ScheduleSource, TriggerSource};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use gents_store::test_support::STALL_CEILING;
 use serde_json::json;
 use std::sync::Arc;
@@ -204,7 +205,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("updated Schedule CID is missing"))?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -236,7 +237,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         let cid = response["data"]["add_Schedule"][0]["_version"][0]["cid"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Schedule genesis CID is missing"))?;
-        let (block, signature) = node.authorized_signed_block_bytes(cid, Some(user)).await?;
+        let (block, signature) = node.authorized_signed_block_bytes_by(cid, user).await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
         let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
@@ -308,7 +309,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("updated Schedule CID is missing"))?;
             let (block, signature) = node
-                .authorized_signed_block_bytes(cid, Some(user.did()))
+                .authorized_signed_block_bytes_by(cid, user.did())
                 .await?;
             let block = defra_core::block::Block::from_dag_cbor(&block)?;
             let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

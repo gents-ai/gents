@@ -717,8 +717,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 
     let (db, runtime) = selected_surface_runtime().await;
     let node = db.node.clone();
-    node.add_collection(
-        "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
+    node.add_collection("type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
     )
         .await
         .unwrap();

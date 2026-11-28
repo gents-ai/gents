@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 struct FieldDef {
     name: String,
+    constant: String,
     kind: &'static str,
 }
 
@@ -157,7 +158,22 @@ fn parse_field(type_name: &str, line: &str) -> FieldDef {
         .split(|ch: char| ch.is_whitespace() || ch == '@')
         .next()
         .unwrap_or_default();
-    let kind = match declared.trim_end_matches('!') {
+    let declared = declared.trim_end_matches('!');
+    if declared
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
+        && declared.chars().all(|ch| ch.is_ascii_alphanumeric())
+        && !SCALARS.contains(&declared)
+    {
+        // A single-object relation: documents carry the related ID in `_<field>ID`.
+        return FieldDef {
+            constant: format!("{}_ID", name.to_ascii_uppercase()),
+            name: format!("_{name}ID"),
+            kind: "Str",
+        };
+    }
+    let kind = match declared {
         "String" | "ID" => "Str",
         "Int" => "Int",
         "Float" => "Float",
@@ -169,8 +185,16 @@ fn parse_field(type_name: &str, line: &str) -> FieldDef {
         "[Int]" | "[Int!]" => "IntList",
         other => panic!("{type_name}.{name}: unsupported schema type {other:?}"),
     };
-    FieldDef { name, kind }
+    FieldDef {
+        constant: name.to_ascii_uppercase(),
+        name,
+        kind,
+    }
 }
+
+const SCALARS: [&str; 8] = [
+    "String", "ID", "Int", "Float", "Boolean", "DateTime", "JSON", "Blob",
+];
 
 fn module_name(type_name: &str) -> String {
     let mut out = String::new();
@@ -209,7 +233,7 @@ fn render_type(out: &mut String, def: &TypeDef) {
     .unwrap();
     let mut names = Vec::new();
     for field in &def.fields {
-        let constant = field.name.to_ascii_uppercase();
+        let constant = &field.constant;
         assert!(
             !RESERVED.contains(&constant.as_str()),
             "{}.{} collides with a generated constant",
@@ -238,7 +262,7 @@ fn render_type(out: &mut String, def: &TypeDef) {
     .unwrap();
     write!(out, "            selection").unwrap();
     for field in &def.fields {
-        write!(out, ".field({})", field.name.to_ascii_uppercase()).unwrap();
+        write!(out, ".field({})", field.constant).unwrap();
     }
     writeln!(out, "\n        }}\n    }}").unwrap();
     let is_str = |name: &str| {

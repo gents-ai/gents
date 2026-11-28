@@ -86,7 +86,8 @@ pub(crate) fn publisher_field(node: &defra_node::Node) -> anyhow::Result<String>
 fn publisher_field_for_id(id: Option<&str>) -> String {
     id.map(|id| {
         format!(
-            "publisher_node_id: \"{}\",",
+            "{}: \"{}\",",
+            gents_protocol::schemas::PUBLISHER_NODE_ID_FIELD,
             gents_store::graphql::escape_graphql_string(id)
         )
     })

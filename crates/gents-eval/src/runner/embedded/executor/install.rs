@@ -804,6 +804,11 @@ fn trusted_fixture_schema(
             std::str::from_utf8(bytes).with_context(|| format!("decoding pack schema {path:?}"))
         })
         .collect::<Result<Vec<_>>>()?;
+    let known_collections: rapidhash::RapidHashMap<_, _> =
+        query::parse_sdl(&gents_protocol::schemas::ALL.join("\n"))?
+            .into_iter()
+            .map(|schema| (schema.name.to_string(), schema.collection_id))
+            .collect();
     for sdl in gents_protocol::schemas::ALL
         .iter()
         .copied()
@@ -811,7 +816,7 @@ fn trusted_fixture_schema(
         .chain(seed_schemas.iter().map(String::as_str))
         .chain(pack_schemas)
     {
-        let schemas = query::parse_sdl(sdl)?;
+        let schemas = query::parse_sdl_with_known_collections(sdl, known_collections.clone())?;
         if schemas.iter().any(|schema| schema.name == collection) {
             anyhow::ensure!(
                 schemas.len() == 1,

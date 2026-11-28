@@ -5,6 +5,7 @@ use gents_session::request::lifecycle::client::*;
 use gents_session::test_support::{assert_block_signer, seed_owned_agent};
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::node_scope::ContextCalls as _;
 
 #[tokio::test]
 async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
@@ -466,7 +467,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         if observe_request().await.grants && !before.grants {
             let doc = request_doc().await.unwrap();
             assert!(node
-                .delete_dac_actor_relationship(
+                .delete_dac_actor_relationship_by(
                     user.did(),
                     "AgentRequest",
                     doc["_docID"].as_str().unwrap(),
@@ -613,7 +614,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         let before = &case.input.before;
         if observe_task_request().await.grants && !before.grants {
             assert!(node
-                .delete_dac_actor_relationship(
+                .delete_dac_actor_relationship_by(
                     user.did(),
                     "AgentRequest",
                     task_request().await.unwrap()["_docID"].as_str().unwrap(),

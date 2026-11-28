@@ -17,6 +17,7 @@ use anyhow::Context;
 use defra_node::Node as EmbeddedNode;
 use gents_store::config_client::schema_introspection::SchemaField;
 use gents_store::config_client::ConfigAccess;
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -1399,8 +1400,7 @@ fn obligation_surface(
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     gents_store::schema::ensure_runtime_schemas(&node).await?;
-    node.add_collection(
-        "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
+    node.add_collection("type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
     .await?;
     Ok(node)
@@ -1495,8 +1495,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    node.add_collection(
-        "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
+    node.add_collection("type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
     )
     .await?;
     Ok(node)
@@ -1876,8 +1875,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let (builder, runtime) = gents_store::test_support::keyed_node_builder();
     let node = Arc::new(builder.with_node_acp_enabled().build().await?);
     gents_store::schema::ensure_runtime_schemas(&node).await?;
-    node.add_collection(
-        "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
+    node.add_collection("type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
     let access = ConfigAccess::local_runtime(node.clone(), runtime.clone())?;

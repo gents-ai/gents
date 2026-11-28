@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use gents_protocol::schemas;
 
 use super::common::{self, fresh_node};
+use crate::node_scope::ContextCalls as _;
 use crate::schema::catalog::{
     baseline, ensure, ensure_runtime, runtime_catalog, validate_existing_schema,
     BaselineCollection, Catalog, SchemaError,
@@ -541,11 +542,13 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
                 name: "PinnedFixture",
                 sdl: EXPECTED_SDL,
                 expected_version: Some(&expected_root),
+                expected_collection_id: None,
             },
             BaselineCollection {
                 name: "AddedFixture",
                 sdl: ADDED_SDL,
                 expected_version: None,
+                expected_collection_id: None,
             },
         ],
         ordinary_indexes: &[],

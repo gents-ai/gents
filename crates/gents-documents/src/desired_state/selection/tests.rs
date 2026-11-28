@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -184,7 +185,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .and_then(|row| row["cid"].as_str())
         .context("Skill genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -327,7 +328,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .and_then(|row| row["cid"].as_str())
         .context("agent-created Skill genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(&agent_binding.agent_did))
+        .authorized_signed_block_bytes_by(cid, &agent_binding.agent_did)
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;

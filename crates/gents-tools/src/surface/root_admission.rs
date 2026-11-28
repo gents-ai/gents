@@ -946,6 +946,7 @@ pub fn canonicalize_tools_root(
 mod tests {
     use super::*;
     use gents_session::workspace::root_resolution::RootDenialReason;
+    use gents_store::node_scope::ContextCalls as _;
 
     #[test]
     fn reader_step_keeps_commands_runnable_and_home_guidance_separate() {

@@ -4,6 +4,7 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents::eval::documents::*;
 use gents_documents::EvalSplit;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, RelationshipMatch};
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::json;
 use std::sync::Arc;
 #[tokio::test]

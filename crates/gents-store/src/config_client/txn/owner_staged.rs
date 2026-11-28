@@ -20,6 +20,8 @@
 //! refusal is the apply's `CommittedRelationshipsIncomplete` error with the
 //! documents committed.
 
+use crate::node_scope::ContextCalls as _;
+
 use std::sync::Arc;
 
 use futures::future::BoxFuture;

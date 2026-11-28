@@ -1,6 +1,7 @@
 use super::*;
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::node_scope::ContextCalls as _;
 
 async fn signed_reply(
     node: &EmbeddedNode,
@@ -80,7 +81,7 @@ async fn persisted_request(
         .unwrap()
         .unwrap();
     let doc_id = doc["_docID"].as_str().unwrap();
-    node.add_dac_actor_relationship(
+    node.add_dac_actor_relationship_by(
         gents_store::test_support::fixture_root().did(),
         "AgentRequest",
         doc_id,

@@ -5,6 +5,7 @@ use gents_lean_vocab::families::goal_client_start_contracts_replacements::{
 };
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_admission::RequestScope;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -516,7 +517,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
             .as_str()
             .unwrap();
         let (block_bytes, signature_bytes) = node
-            .authorized_signed_block_bytes(cid, Some(fixture.user.did()))
+            .authorized_signed_block_bytes_by(cid, fixture.user.did())
             .await
             .unwrap();
         let block = defra_core::block::Block::from_dag_cbor(&block_bytes).unwrap();

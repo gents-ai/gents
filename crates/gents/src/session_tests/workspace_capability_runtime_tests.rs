@@ -9,6 +9,7 @@ use gents_session::workspace::{
     WorkspaceReaderBinding,
 };
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[tokio::test]

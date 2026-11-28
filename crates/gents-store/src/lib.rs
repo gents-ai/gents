@@ -12,6 +12,7 @@ pub mod graphql;
 pub mod identity;
 pub mod local;
 pub mod node_extension;
+pub mod node_scope;
 pub mod provenance;
 pub mod schema;
 pub mod service;

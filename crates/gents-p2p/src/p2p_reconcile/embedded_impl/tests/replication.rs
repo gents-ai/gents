@@ -3,6 +3,7 @@ use super::fixtures::{
     signed_p2p_node_without_schemas, test_node, wait_for_active_peer, wait_for_peer_info,
 };
 use super::*;
+use gents_store::node_scope::ContextCalls as _;
 
 async fn document_permission(
     node: &Arc<defra_node::Node>,

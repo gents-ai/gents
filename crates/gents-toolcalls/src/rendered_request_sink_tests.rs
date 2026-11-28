@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -1244,7 +1245,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
         assert!(!commits.is_empty());
         for commit in commits {
             let (block, signature) = node
-                .authorized_signed_block_bytes(&commit.cid, Some(agent.did()))
+                .authorized_signed_block_bytes_by(&commit.cid, agent.did())
                 .await
                 .unwrap();
             let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

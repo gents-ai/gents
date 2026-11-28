@@ -10,7 +10,7 @@ resources:
       - name: agent_manager
         types: [nodes->administrator]
       - name: transport_publisher
-        types: [actor:individual]
+        types: [actor]
     permissions:
       - name: read
         expr: administrator + runtime_reader
@@ -106,7 +106,8 @@ resources:
         expr: writer
       - name: delete
         expr: writer
-    create: {parent: parent, requires: transport_publisher}
+    collection:
+      create: parent->transport_publisher
   - name: scoped_discovery
     relations:
       - name: parent
@@ -129,7 +130,8 @@ resources:
         expr: writer
       - name: delete
         expr: writer
-    create: {parent: parent, requires: transport_publisher}
+    collection:
+      create: parent->transport_publisher
   - name: enrollment_records
     relations:
       - name: parent
@@ -152,7 +154,8 @@ resources:
         expr: writer
       - name: delete
         expr: writer
-    create: {parent: parent, requires: transport_publisher}
+    collection:
+      create: parent->transport_publisher
   - name: configuration
     relations:
       - name: parent
@@ -301,7 +304,8 @@ resources:
         expr: parent->session_admin
       - name: delete
         expr: parent->session_admin
-    create: {parent: parent, requires: session_admin}
+    collection:
+      create: parent->session_admin
   - name: goal_receipts
     relations:
       - name: parent

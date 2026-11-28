@@ -8,6 +8,7 @@ use gents_session::session::message::{
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::node_scope::ContextCalls as _;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     cause, owner, set_state, signer, PublishedAdmissionOptions, PublishedSessionMessage,
 };
@@ -30,7 +31,7 @@ async fn started(
 /// owning Agent; the node's own caller holds no relation to them.
 async fn signer_as_actor(node: &defra_node::Node, actor: &str, cid: &str) -> String {
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(actor))
+        .authorized_signed_block_bytes_by(cid, actor)
         .await
         .unwrap();
     let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

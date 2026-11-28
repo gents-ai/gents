@@ -175,7 +175,8 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    execute(&ctx, command, &deps, &mut out).await
+    // Boxed: the command futures nest deeper than the layout query depth.
+    Box::pin(execute(&ctx, command, &deps, &mut out)).await
 }
 
 pub(crate) async fn execute(

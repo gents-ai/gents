@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 
 use gents_documents::read_desired_state_record_in_txn;

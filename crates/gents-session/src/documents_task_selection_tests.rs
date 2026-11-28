@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -344,7 +345,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         .min_by_key(|commit| commit.height)
         .context("Task genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(&genesis.cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(&genesis.cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;

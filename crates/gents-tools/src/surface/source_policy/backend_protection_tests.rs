@@ -1,5 +1,6 @@
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 
 /// A NAC owner for a fresh test store: never its Node
 /// (`Identity.NodeProvisioning.nacOwner`).

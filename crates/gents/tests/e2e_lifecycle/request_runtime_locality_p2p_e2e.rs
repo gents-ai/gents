@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -183,7 +184,7 @@ async fn authenticated_requester_observes_owner_terminal() {
     // verified against its detached signature.
     let (block, signature) = fixture
         .node
-        .authorized_signed_block_bytes(genesis, Some(fixture.user_did()))
+        .authorized_signed_block_bytes_by(genesis, fixture.user_did())
         .await
         .unwrap();
     let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
@@ -314,6 +315,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
             "delivered_requests",
             &doc,
+            &[],
         )
         .await
         .unwrap();
@@ -337,7 +339,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         fixture
             .peer
             .node
-            .authorized_signed_block_bytes(cid, Some(fixture.peer.node_identity.did()))
+            .authorized_signed_block_bytes_by(cid, fixture.peer.node_identity.did())
             .await
             .is_err(),
         "peer obtained a runtime-local request block: {pull:?}"

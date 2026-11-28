@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::{Arc, LazyLock, Weak};
 use std::time::Instant;
 

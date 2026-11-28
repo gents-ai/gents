@@ -1,5 +1,6 @@
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -215,7 +216,7 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
     let (block, signature) = launching
         .home
         .node
-        .authorized_signed_block_bytes(cid, Some(&evaluator))
+        .authorized_signed_block_bytes_by(cid, &evaluator)
         .await
         .unwrap();
     let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

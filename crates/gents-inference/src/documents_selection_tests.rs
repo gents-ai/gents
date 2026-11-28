@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -172,7 +173,7 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
         .and_then(|row| row["cid"].as_str())
         .context("CompactionConfig genesis missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
@@ -247,7 +248,7 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
         .and_then(|row| row["cid"].as_str())
         .context("CompactionConfig threshold update missing")?;
     let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(cid, user.did())
         .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;

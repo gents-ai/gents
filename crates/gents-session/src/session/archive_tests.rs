@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::model_test_support::{model_session, model_time, wire_session};
 use gents_protocol::session::SessionArchiveVisibility;
+use gents_store::node_scope::ContextCalls as _;
 
 #[test]
 fn authorized_archive_transitions_match_executed_model() {
@@ -67,7 +68,7 @@ async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<A
 /// AgentSession is governed by the Agent ownership policy, so its signed block
 /// is read as the user who wrote it; the node identity holds no session relation.
 async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> Result<String> {
-    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)

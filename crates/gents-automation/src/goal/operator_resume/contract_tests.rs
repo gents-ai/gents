@@ -1,5 +1,6 @@
 use super::support;
 use super::*;
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::json;
 use support::*;
 

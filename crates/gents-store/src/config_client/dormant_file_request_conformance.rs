@@ -1,5 +1,6 @@
 use super::{ConfigAccess, GraphqlEndpoint};
 use crate::identity::NodeIdentity;
+use crate::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 use std::sync::Arc;
 

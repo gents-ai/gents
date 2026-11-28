@@ -1,6 +1,7 @@
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 #[tokio::test]

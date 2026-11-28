@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 

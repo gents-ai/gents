@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 #[tokio::test]
 async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row() {
     use gents_store::identity::NodeIdentity;

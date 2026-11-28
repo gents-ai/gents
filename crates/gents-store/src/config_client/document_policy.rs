@@ -1,4 +1,5 @@
 use super::{graphql, graphql_api_base, ConfigAccess, ConfigClientError};
+use crate::node_scope::ContextCalls as _;
 
 impl ConfigAccess {
     /// Registers `policy`, the text of a DefraDB document access policy, with

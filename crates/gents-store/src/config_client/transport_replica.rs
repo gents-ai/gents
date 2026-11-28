@@ -47,11 +47,7 @@ impl ReplicaOwnership for TransportReplica {
     ) -> acp::Result<bool> {
         // A gated genesis must be registered by its publisher. Registering it
         // as the receiver would lend the receiver's parent permission to the signer.
-        if collection
-            .policy
-            .as_ref()
-            .is_some_and(|policy| policy.parent_field.is_some())
-        {
+        if collection.policy_bindings().next().is_some() {
             return Ok(false);
         }
         let expected_resource = identity_policy_resource(&collection.name);
@@ -107,13 +103,15 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_cannot_lend_its_registration_permission_to_a_replica_signer() {
-        use gents_protocol::schemas::{HomePolicyIds, PEER_REGISTRY};
+        use gents_protocol::schemas::{HomePolicyIds, NODE, PEER_REGISTRY, PEER_REGISTRY_NAME};
         let ids = HomePolicyIds::embedded_vera_transport_v2();
         let policy = ids.id(BuiltInPolicy::Household);
-        let collection = query::parse_sdl(&ids.render(PEER_REGISTRY))
+        let collection = query::parse_sdl(&ids.render(&format!("{NODE}\n{PEER_REGISTRY}")))
             .unwrap()
-            .remove(0);
-        assert!(collection.policy.as_ref().unwrap().parent_field.is_some());
+            .into_iter()
+            .find(|collection| collection.name == PEER_REGISTRY_NAME)
+            .unwrap();
+        assert!(collection.policy_bindings().next().is_some());
         let receiver = TransportReplica(ReplicaGroup {
             owner: Did::new(crate::test_support::config_signer().did()).unwrap(),
             policy: policy.into(),

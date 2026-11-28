@@ -271,6 +271,7 @@ mod tests {
             IDENTITY_PERMISSION_POLICY_ID,
             IDENTITY_PERMISSION_RESOURCE_NAME,
             &case.row_owner,
+            &[],
         )
         .await?;
 

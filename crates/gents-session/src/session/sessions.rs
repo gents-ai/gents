@@ -1264,6 +1264,7 @@ mod relationship_publication_tests {
 
 #[cfg(test)]
 mod invoke_session_isolation_tests {
+    use gents_store::node_scope::ContextCalls as _;
     use std::sync::Arc;
 
     use gents_store::config_client::{ConfigAccess, NodePermission};

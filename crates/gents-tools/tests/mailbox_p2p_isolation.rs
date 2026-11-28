@@ -5,6 +5,7 @@ use gents_session::session::mailbox::{
 };
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::node_scope::ContextCalls as _;
 use std::{sync::Arc, time::Duration};
 
 async fn node(identity: Arc<KeyIdentity>, directory: &std::path::Path) -> Arc<defra_node::Node> {
@@ -180,7 +181,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     );
     assert!(
         receiver
-            .authorized_signed_block_bytes(cid, Some(agent.did()))
+            .authorized_signed_block_bytes_by(cid, agent.did())
             .await
             .is_err(),
         "unrelated peer obtained mailbox block: {pull:?}"

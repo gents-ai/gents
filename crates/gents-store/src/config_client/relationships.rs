@@ -4,6 +4,7 @@ use super::relationship_fence::{
 };
 use super::{graphql, graphql_api_base, ConfigAccess, ConfigClientError};
 use crate::config_client::WriteRoute;
+use crate::node_scope::ContextCalls as _;
 
 /// A detached ACP1 grant for a document committed by the authenticated creator.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

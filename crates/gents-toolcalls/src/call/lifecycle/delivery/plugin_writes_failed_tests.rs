@@ -1,4 +1,5 @@
 use super::*;
+use gents_store::node_scope::ContextCalls as _;
 
 #[test]
 fn plugin_writes_failure_keeps_a_typed_conflict_replayable() {
@@ -66,7 +67,7 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
     let parcel = gents_store::graphql::created_doc_id(&created, "TerminalParcel").unwrap();
     fixture
         .node
-        .add_dac_actor_relationship(
+        .add_dac_actor_relationship_by(
             owner.as_str(),
             "TerminalParcel",
             &parcel,

@@ -14,6 +14,8 @@
 //! - `Option` fields omitted from an `update:` clause preserve the stored
 //!   value; explicit clearing requires `field: null`.
 
+use crate::node_scope::ContextCalls as _;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod access_classification_fixture;
 #[cfg(test)]
@@ -1138,9 +1140,10 @@ impl ConfigAccess {
                 local
                     .run_owned(move |node| async move {
                         match context.identity() {
-                            Some(_) => node.add_collection_as(&context, &sdl).await.map(|_| ()),
+                            Some(_) => node.add_collection_as(&context, &sdl).await,
                             None => node.add_collection(&sdl).await,
                         }
+                        .map(|_| ())
                         .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
                     })
                     .await

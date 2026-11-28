@@ -3,6 +3,7 @@ use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, Worksp
 use crate::workspace::{git, git_worktree_caps, Fixture};
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,5 +1,6 @@
 use super::*;
 use gents_store::identity::NodeIdentity;
+use gents_store::node_scope::ContextCalls as _;
 
 #[tokio::test]
 async fn plugin_profile_follows_the_immediate_callers_selection() -> anyhow::Result<()> {

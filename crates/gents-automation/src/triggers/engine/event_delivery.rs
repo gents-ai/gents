@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
+#[cfg(test)]
+use gents_store::node_scope::ContextCalls as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 

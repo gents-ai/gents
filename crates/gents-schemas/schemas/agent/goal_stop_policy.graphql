@@ -1,6 +1,6 @@
-type GoalStopPolicy @policy(id: "$household", resource: "goal_policies", parentField: "agent_doc_id") {
+type GoalStopPolicy @governed(root: "gents") @policy(id: "$household", resource: "goal_policies") {
     goal_doc_id: String @index(unique: true) @immutable
-    agent_doc_id: String @index @immutable
+    agent: Agent @immutable @policy(relation: "parent")
     session_doc_id: String @index @immutable
     agent_did: String @index @immutable
     node_did: String @index @immutable

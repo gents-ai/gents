@@ -145,7 +145,7 @@ pub async fn write_goal_stop_policy_in_txn(
         None => {
             let mut input = fields;
             input["goal_doc_id"] = goal_doc_id.into();
-            input["agent_doc_id"] = target.agent_doc_id.into();
+            input["_agentID"] = target.agent_doc_id.into();
             input["session_doc_id"] = target.session_doc_id.into();
             input["agent_did"] = target.agent_did.into();
             input["node_did"] = target.node_did.into();

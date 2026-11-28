@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use gents_protocol::client_authentication::ClientAuthentication;
 
 use super::{ConfigAccess, ConfigClientError, GraphqlEndpoint, Result};

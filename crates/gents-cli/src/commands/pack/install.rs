@@ -213,7 +213,7 @@ pub(super) async fn install_documents_command_with_local(
     local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
     let (receipt, failed_step) =
-        install_documents_report(access, pack, args, local_endpoint).await?;
+        Box::pin(install_documents_report(access, pack, args, local_endpoint)).await?;
     crate::print_json(&receipt)?;
     match failed_step {
         Some(failed) => Err(anyhow::anyhow!(
@@ -414,7 +414,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 args.scope.graphql.as_deref(),
             )
             .await?;
-            install_documents_command_with_local(access, &pack, &args, local_endpoint).await
+            Box::pin(install_documents_command_with_local(
+                access,
+                &pack,
+                &args,
+                local_endpoint,
+            ))
+            .await
         }
         PackKind::Assets | PackKind::Plugins => {
             if !args.dependency_variables.is_empty() {

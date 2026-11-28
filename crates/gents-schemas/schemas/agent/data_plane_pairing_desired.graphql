@@ -2,8 +2,8 @@ type DataPlanePairingDesired @policy(id: "$household", resource: "application_pa
     peer_id: String @index(unique: true)
     node_did: String @index
     actor_did: String @index @immutable
-    collections: [String!]!
-    replicator_addresses: [String!]!
+    collections: [String!]
+    replicator_addresses: [String!]
     template: String @index
     source: String @index
     created_at: DateTime @index(direction: DESC)

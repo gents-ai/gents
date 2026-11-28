@@ -1250,6 +1250,7 @@ mod registry_parsing_tests {
 mod tests {
     use chrono::Duration as ChronoDuration;
     use defra_node::Node as EmbeddedNode;
+    use gents_store::node_scope::ContextCalls as _;
     use rmcp::model::ListToolsResult;
     use serde_json::Value;
     use std::sync::Arc;

@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 

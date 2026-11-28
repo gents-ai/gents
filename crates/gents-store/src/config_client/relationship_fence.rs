@@ -8,6 +8,8 @@ use axum::response::{IntoResponse as _, Response};
 use defra_node::Node as EmbeddedNode;
 use rapidhash::RapidHashMap;
 
+use crate::node_scope::ContextCalls as _;
+
 use super::owner_staged_route::OwnerStagedRoute;
 
 /// Header carrying the detached grant's baseline revocation fence epoch over HTTP.

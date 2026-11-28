@@ -1,3 +1,4 @@
+use crate::node_scope::ContextCalls as _;
 use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::collections::BTreeMap;
@@ -2136,7 +2137,7 @@ resources:
     )
     .await
     .unwrap();
-    node.add_dac_actor_relationship(owner, "IdentityFact", &doc_id, "reader", reader_did)
+    node.add_dac_actor_relationship_by(owner, "IdentityFact", &doc_id, "reader", reader_did)
         .await
         .unwrap();
     let reader_access = ConfigAccess::local_managed_agent(
@@ -2277,7 +2278,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
     for (step, authorized) in [false, true, false, true].into_iter().enumerate() {
         if step > 0 {
             if authorized {
-                node.add_dac_actor_relationship(
+                node.add_dac_actor_relationship_by(
                     owner,
                     "IndependentReadFact",
                     &id,
@@ -2287,7 +2288,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                 .await
                 .unwrap();
             } else {
-                node.delete_dac_actor_relationship(
+                node.delete_dac_actor_relationship_by(
                     owner,
                     "IndependentReadFact",
                     &id,

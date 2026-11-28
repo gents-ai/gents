@@ -570,8 +570,7 @@ mod tests {
         let data = temp.path().join("data");
         let node = plaintext_node(&data).await;
         // CompactionConfig as v0.19.0 and v1.0.0-rc1 declared it.
-        node.add_collection(
-            r#"type CompactionConfig @branchable { compaction_id: String agent_did: String @index }"#,
+        node.add_collection(r#"type CompactionConfig @branchable { compaction_id: String agent_did: String @index }"#,
         )
         .await
         .unwrap();

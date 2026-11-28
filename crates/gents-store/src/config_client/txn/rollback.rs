@@ -224,15 +224,12 @@ where
     let (registered, registration) = tokio::sync::oneshot::channel();
     let owner_node = Arc::clone(&node);
     let mut native_owner: BoxFuture<'static, Result<()>> = Box::pin(async move {
-        let transaction = owner_node
-            .begin_transaction_guard(read_only)
-            .await
-            .map_err(|error| {
-                retry::transaction_storage_failure(ConfigClientError::BeginTransaction {
-                    source: error,
-                })
-            })?;
-        let _ = registered.send(transaction.handle().clone());
+        let transaction = owner_node.new_txn(read_only).await.map_err(|error| {
+            retry::transaction_storage_failure(ConfigClientError::BeginTransaction {
+                source: crate::node_scope::transaction_error(error),
+            })
+        })?;
+        let _ = registered.send(crate::node_scope::handle(transaction.id()));
         std::future::pending::<()>().await;
         drop(transaction);
         Ok(())

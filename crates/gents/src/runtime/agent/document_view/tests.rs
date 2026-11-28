@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use super::*;
@@ -832,7 +833,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         .as_str()
         .unwrap();
     let (block, signature) = node
-        .authorized_signed_block_bytes(node_cid, Some(user.did()))
+        .authorized_signed_block_bytes_by(node_cid, user.did())
         .await
         .unwrap();
     let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();

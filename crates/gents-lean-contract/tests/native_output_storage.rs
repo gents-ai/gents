@@ -1,8 +1,5 @@
 use crypto::Key;
-use defra_core::{
-    signing::{SigningConfig, SigningKeyType},
-    RequestContext,
-};
+use defra_core::signing::{SigningConfig, SigningKeyType};
 use defra_node::{Node as EmbeddedNode, QueryRequest};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
@@ -41,10 +38,8 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         .build()
         .await
         .unwrap();
-    let context =
-        RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, gents_schemas::AGENT_OWNERSHIP_POLICY, 0)
+        .add_dac_policy_with_counter(gents_schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await
         .unwrap();
     assert_eq!(

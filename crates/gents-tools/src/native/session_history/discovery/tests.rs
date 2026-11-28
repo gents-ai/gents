@@ -1,6 +1,7 @@
 use super::*;
 use gents_loop::tool::Tool;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::node_scope::ContextCalls as _;
 use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use std::sync::Arc;
 
@@ -84,7 +85,7 @@ resources:
                 Ok::<_, anyhow::Error>(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
             })
         }).await.unwrap();
-    node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())
+    node.add_dac_actor_relationship_by(owner.did(), "AgentSession", &doc, "reader", reader.did())
         .await
         .unwrap();
     let allowed_tool = SessionHistoryTool::new(

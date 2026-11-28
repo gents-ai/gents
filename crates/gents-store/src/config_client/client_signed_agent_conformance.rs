@@ -1,4 +1,5 @@
 use super::client_signed_agent::{create_route, CreateRoute};
+use crate::node_scope::ContextCalls as _;
 
 #[test]
 fn signed_update_uses_one_physical_target_with_additional_scope_predicates() {
@@ -554,7 +555,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
         }).await?;
         let rows = &response["data"][format!("add_{}", collection.graphql_type())];
         let cid = rows[0]["_version"][0]["cid"].as_str().expect("genesis CID");
-        let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor.did())).await?;
+        let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor.did()).await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
         let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
@@ -570,7 +571,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
         }).await?;
         let rows = &response["data"][format!("update_{}", collection.graphql_type())];
         let cid = rows[0]["_version"][0]["cid"].as_str().expect("update CID");
-        let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor.did())).await?;
+        let (block, signature) = node.authorized_signed_block_bytes_by(cid, actor.did()).await?;
         let block = defra_core::block::Block::from_dag_cbor(&block)?;
         let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
         let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
@@ -624,7 +625,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
             node.add_dac_actor_relationship_as(&context, "AgentContext", &doc_id, "writer", editor.did()).await?;
             let edited = edit().await?;
             let cid = edited["data"]["update_AgentContext"][0]["_version"][0]["cid"].as_str().unwrap();
-            let (block, signature) = node.authorized_signed_block_bytes(cid, Some(editor.did())).await?;
+            let (block, signature) = node.authorized_signed_block_bytes_by(cid, editor.did()).await?;
             let block = defra_core::block::Block::from_dag_cbor(&block)?;
             let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
             assert_eq!(db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)?, editor.did());

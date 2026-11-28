@@ -235,7 +235,7 @@ pub async fn project_transport_document(
     let (owner, local_publisher) = if ids == HomePolicyIds::embedded_vera_transport_v2() {
         // Registration already bound this document to the publisher's Node.
         let parent = document
-            .get("publisher_node_id")
+            .get(gents_protocol::schemas::PUBLISHER_NODE_ID_FIELD)
             .and_then(|value| value.as_str())
             .filter(|id| !id.is_empty())
             .ok_or_else(|| failure("transport document has no publisher Node"))?;

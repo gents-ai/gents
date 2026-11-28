@@ -1,3 +1,4 @@
+use gents_store::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use super::model_test_support::{model_session, model_time, wire_session};
@@ -263,9 +264,7 @@ async fn verified_signer_as_user(
     cid: &str,
     user_did: &str,
 ) -> anyhow::Result<String> {
-    let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(user_did))
-        .await?;
+    let (block, signature) = node.authorized_signed_block_bytes_by(cid, user_did).await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::node_scope::ContextCalls as _;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
