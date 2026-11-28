@@ -44,6 +44,8 @@ enum AuthoringCall {
     Export {
         name: String,
         namespace: String,
+        dir: Option<String>,
+        version: Option<String>,
         selection: ExportSelection,
     },
 }
@@ -209,19 +211,19 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
         "export" => {
             anyhow::ensure!(parsed.switches.is_empty(), "pack export takes no switches");
             let [name] = parsed.positionals.as_slice() else {
-                bail!("pack export requires exactly one snake_case NAME; the pack is written to <NAME> inside the effective tool root");
+                bail!("pack export requires exactly one snake_case NAME; the pack is written to options.dir or <NAME> inside the effective tool root");
             };
             let mut selection = ExportSelection::default();
             for (option, values) in &parsed.options {
                 match (option.as_str(), selectable_kind(option)) {
-                    ("namespace", _) => {}
+                    ("namespace" | "dir" | "version", _) => {}
                     ("tag", _) => selection.tags.extend(values.iter().cloned()),
                     ("collection", _) => selection.collections.extend(values.iter().cloned()),
                     (_, Some(kind)) => selection
                         .documents
                         .extend(values.iter().map(|id| (kind, id.clone()))),
                     _ => bail!(
-                        "unknown pack export option --{option}; it takes --namespace, --tag, --collection and IDs per kind: {}",
+                        "unknown pack export option --{option}; it takes --namespace, --dir, --version, --tag, --collection and IDs per kind: {}",
                         SELECTABLE_KINDS
                             .iter()
                             .map(|(word, _)| format!("--{word}"))
@@ -233,6 +235,8 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             Ok(AuthoringCall::Export {
                 name: name.clone(),
                 namespace: parsed.one("namespace")?.unwrap_or("gents").to_owned(),
+                dir: parsed.one("dir")?.map(ToOwned::to_owned),
+                version: parsed.one("version")?.map(ToOwned::to_owned),
                 selection,
             })
         }
@@ -301,8 +305,19 @@ impl ConfigCommandTool {
             AuthoringCall::Export {
                 name,
                 namespace,
+                dir,
+                version,
                 selection,
-            } => self.export(&name, &namespace, &selection).await,
+            } => {
+                self.export(
+                    &name,
+                    &namespace,
+                    dir.as_deref(),
+                    version.as_deref(),
+                    &selection,
+                )
+                .await
+            }
         }
     }
 
@@ -400,16 +415,20 @@ impl ConfigCommandTool {
         &self,
         name: &str,
         namespace: &str,
+        dir: Option<&str>,
+        version: Option<&str>,
         selection: &ExportSelection,
     ) -> Result<String> {
         let context = self.authoring_paths("export", true).await?;
-        let dir = admit_scaffold_dir(&context, &pack_name(name))?;
+        let target_dir = dir.map(str::to_owned).unwrap_or_else(|| pack_name(name));
+        let dir = admit_scaffold_dir(&context, &target_dir)?;
         let report = export_pack(
             &self.core.access()?,
             self.core.node_did(),
             &dir,
             name,
             namespace,
+            version,
             selection,
         )
         .await?;
@@ -418,6 +437,7 @@ impl ConfigCommandTool {
         ordered! {
             "completed": true,
             "pack": report.pack,
+            "version": report.version,
             "dir": relative,
             "selected": report.selected,
             "by_reference": report.by_reference,
@@ -768,6 +788,39 @@ mod tests {
             };
             assert!(error.contains(expected), "{words:?}: {error}");
         }
+    }
+
+    #[test]
+    fn export_accepts_dir_and_version_options() {
+        let argv: Vec<String> = [
+            "fees",
+            "--namespace",
+            "harbor",
+            "--dir",
+            "harbor_fees",
+            "--version",
+            "1.2.3",
+            "--collection",
+            "FeeSchedule",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let AuthoringCall::Export {
+            name,
+            namespace,
+            dir,
+            version,
+            selection,
+        } = parse_authoring_args("export", &argv).unwrap()
+        else {
+            panic!("export parses to an export call");
+        };
+        assert_eq!(name, "fees");
+        assert_eq!(namespace, "harbor");
+        assert_eq!(dir.as_deref(), Some("harbor_fees"));
+        assert_eq!(version.as_deref(), Some("1.2.3"));
+        assert!(selection.collections.contains("FeeSchedule"));
     }
 
     #[test]

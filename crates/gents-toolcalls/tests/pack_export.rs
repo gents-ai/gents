@@ -139,6 +139,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         &out.path().join("doubler"),
         "doubler",
         "fixture",
+        None,
         &selection(vec![(Collection::Agent, worker.agent_did.clone())]),
     )
     .await
@@ -280,6 +281,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         &out.path().join("refused"),
         "refused",
         "fixture",
+        None,
         &selection(vec![(Collection::Tools, tools_id.clone())]),
     )
     .await

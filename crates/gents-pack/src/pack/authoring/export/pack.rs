@@ -34,6 +34,7 @@ const AGENT_REFERENCE_FIELDS: [&str; 4] = [
 pub struct ExportReport {
     pub pack: String,
     pub namespace: String,
+    pub version: String,
     pub dir: PathBuf,
     /// The parts the selection named, as `Kind/ID` and `collection/Name`.
     pub selected: Vec<String>,
@@ -54,6 +55,7 @@ pub struct ExportReport {
 struct Plan {
     name: String,
     namespace: String,
+    version: Option<String>,
     closure: Closure,
     schemas: BTreeMap<String, String>,
 }
@@ -67,10 +69,18 @@ pub async fn export_pack(
     dir: impl LocateTarget,
     name: &str,
     namespace: &str,
+    version: Option<&str>,
     selection: &ExportSelection,
 ) -> Result<ExportReport> {
     let name = pack_name(name);
     Names::new(&name, namespace)?;
+    if let Some(version) = version {
+        anyhow::ensure!(
+            gents_documents::pack_spec::is_valid_index_version(version)
+                && semver::Version::parse(version).is_ok(),
+            "pack version must be a valid semver string (e.g. \"1.0.0\"), not {version:?}"
+        );
+    }
     let dir = dir.locate_target(Intent::Create)?;
     anyhow::ensure!(
         !dir.exists(),
@@ -102,6 +112,7 @@ pub async fn export_pack(
     let plan = Plan {
         name,
         namespace: namespace.to_owned(),
+        version: version.map(ToOwned::to_owned),
         closure,
         schemas,
     };
@@ -113,6 +124,7 @@ pub async fn export_pack(
     Ok(ExportReport {
         pack: written.pack,
         namespace: written.namespace,
+        version: written.version,
         dir: written.root.path().to_path_buf(),
         selected: written.selected,
         by_reference: written.by_reference,
@@ -128,6 +140,7 @@ pub async fn export_pack(
 struct Written {
     pack: String,
     namespace: String,
+    version: String,
     root: RootDir,
     selected: Vec<String>,
     by_reference: Vec<PulledByReference>,
@@ -199,6 +212,7 @@ fn write(dir: &Located, node_did: &str, plan: Plan) -> Result<Written> {
     let Plan {
         name,
         namespace,
+        version,
         closure,
         schemas,
     } = plan;
@@ -416,6 +430,13 @@ fn write(dir: &Located, node_did: &str, plan: Plan) -> Result<Written> {
             .extend(inference_slots.iter().cloned());
     }
     pack.manifest["description"] = json!(format!("{} pack, exported from a live node.", name));
+    if let Some(version) = version {
+        pack.manifest["version"] = json!(version);
+    }
+    let version = pack.manifest["version"]
+        .as_str()
+        .unwrap_or("0.1.0")
+        .to_owned();
     pack.save()?;
     pack.root()
         .write(
@@ -427,6 +448,7 @@ fn write(dir: &Located, node_did: &str, plan: Plan) -> Result<Written> {
     Ok(Written {
         pack: name,
         namespace,
+        version,
         root: pack.root().clone(),
         selected: closure.selected,
         by_reference: closure.pulled,

@@ -38,6 +38,7 @@ pub(crate) async fn export(args: PackExportArgs) -> Result<()> {
         &dir,
         &args.name,
         &args.namespace,
+        None,
         &selection,
     )
     .await;

@@ -192,6 +192,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         &out.path().join("ticket_desk"),
         "ticket_desk",
         "fixture",
+        None,
         &selection,
     )
     .await
@@ -500,6 +501,7 @@ async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
         &dir,
         "refused",
         "fixture",
+        None,
         &ExportSelection {
             documents: [
                 (Collection::Agent, worker.agent_did.clone()),
@@ -571,6 +573,7 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
         &dir,
         "notes_app",
         "fixture",
+        None,
         &ExportSelection {
             documents: [
                 (Collection::Page, "notes".to_owned()),
@@ -647,6 +650,7 @@ async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_w
         &out.path().join("help_desk"),
         "help_desk",
         "fixture",
+        None,
         &ExportSelection {
             collections: ["HelpArticle".to_owned()].into(),
             ..ExportSelection::default()

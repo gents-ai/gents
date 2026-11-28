@@ -110,8 +110,8 @@ const HELP_INDEX: &[(&str, &str)] = &[
     ("batch", "ordered config calls"),
 ];
 
-const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
-Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool.";
+const HELP_GRAMMAR: &str = "Config resources: list, get, create, update, delete. target_id names the resource; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
+Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Application data uses query, write and schema.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -411,7 +411,7 @@ impl Tool for ConfigCommandTool {
         ToolDefinition {
             name: Self::NAME.to_owned(),
             description: r#"Read and change Gents configuration through a native API, not a shell. Collection definitions and migrations use the separate schema tool.
-Call {"argv":[RESOURCE,VERB],"target_id"?:ID,"set"?:{field:value},"clear"?:[field],"options"?:{name:value}}. Documents share list, get, create, update, delete. Writes validate and commit immediately. ["validate"] audits saved configuration; fix reported errors before reporting completion. Preview writes nothing.
+Call {"argv":[RESOURCE,VERB],"target_id"?:ID,"set"?:{field:value},"clear"?:[field],"options"?:{name:value}}. Config resources share list, get, create, update, delete; application data uses the query, write, and schema tools. Writes validate and commit immediately. ["validate"] audits saved configuration; fix reported errors before reporting completion. Preview writes nothing.
 Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent","list"]. ["help"] lists granted resources; ["help",RESOURCE] explains fields and exceptions."#.to_owned(),
             parameters: json!({
                 "type": "object",
@@ -530,6 +530,12 @@ impl ConfigCommandTool {
         };
         if command == "schema" {
             bail!("Schema management uses the separate schema tool. Call schema with argv:[\"help\"]. Enable it through Tools.built_ins.enable_schema_tool; config grants do not imply schema access");
+        }
+        if matches!(command, "documents" | "document" | "docs" | "doc") {
+            bail!(
+                "Application data documents use the separate query, write, and schema tools, not config (enable them in Tools.datastore / Tools.built_ins.enable_schema_tool). Granted config resources: {}. See [\"help\"]",
+                model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
+            );
         }
         if argv.get(1).is_some_and(|verb| verb == "apply") {
             if let Some(refusal) = apply_refusal(command) {

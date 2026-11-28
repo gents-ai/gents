@@ -150,10 +150,12 @@ impl PluginSourceDocument {
     /// made before anything compiles.
     pub fn validate(&self) -> Result<()> {
         let id = &self.plugin_id;
-        anyhow::ensure!(
-            super::is_snake_case_name(id),
-            "plugin name must be snake_case: {id:?}"
-        );
+        if !super::is_snake_case_name(id) {
+            if let Some(suggested) = super::suggest_snake_case_name(id) {
+                anyhow::bail!("plugin name must be snake_case: {id:?}; use {suggested:?}");
+            }
+            anyhow::bail!("plugin name must be snake_case: {id:?}");
+        }
         anyhow::ensure!(
             !self.language.trim().is_empty(),
             "plugin {id:?} needs a language"

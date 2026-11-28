@@ -25,6 +25,27 @@ pub fn is_snake_case_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
+/// Converts a candidate name into a valid `snake_case` suggestion when
+/// possible (`"clinic-triage"` -> `Some("clinic_triage")`), returning `None`
+/// if the normalized result still does not satisfy [`is_snake_case_name`].
+pub fn suggest_snake_case_name(name: &str) -> Option<String> {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            if !out.is_empty() && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let candidate = out.trim_matches('_').to_owned();
+    is_snake_case_name(&candidate).then_some(candidate)
+}
+
 /// One `DatastoreToolSurface` a page may call into, by the surface's id on
 /// the agent's node, narrowed to the named tools. A pack page declares these
 /// under `ux[].data`; a page document under `data`.
@@ -213,7 +234,12 @@ impl PageDocument {
     /// admit the same declarations.
     pub fn validate(&self) -> Result<()> {
         let id = &self.page_id;
-        anyhow::ensure!(is_snake_case_name(id), "page id must be snake_case: {id:?}");
+        if !is_snake_case_name(id) {
+            if let Some(suggested) = suggest_snake_case_name(id) {
+                anyhow::bail!("page id must be snake_case: {id:?}; use {suggested:?}");
+            }
+            anyhow::bail!("page id must be snake_case: {id:?}");
+        }
         for (what, text) in [
             ("module", Some(self.module.as_str())),
             ("css", self.css.as_deref()),
@@ -290,7 +316,9 @@ mod tests {
         let base = json!({"page_id":"board","node_did":"did:key:n","module":"export default {}"});
         page(base.clone()).validate().unwrap();
         for (field, replacement, expected) in [
-            ("page_id", json!("Board Page"), "snake_case"),
+            ("page_id", json!("Board Page"), r#"use "board_page""#),
+            ("page_id", json!("clinic-triage"), r#"use "clinic_triage""#),
+            ("page_id", json!("123-page"), "page id must be snake_case"),
             ("module", json!("  "), "needs a module"),
             (
                 "module",
