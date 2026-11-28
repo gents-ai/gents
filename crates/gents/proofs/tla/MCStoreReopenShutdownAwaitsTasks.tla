@@ -1,0 +1,4 @@
+---- MODULE MCStoreReopenShutdownAwaitsTasks ----
+EXTENDS StoreReopen
+
+====

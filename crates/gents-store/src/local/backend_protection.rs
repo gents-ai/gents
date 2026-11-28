@@ -86,6 +86,8 @@ pub enum BackendProtectionError {
     Io(#[from] std::io::Error),
     #[error("backend protection native operation failed")]
     Node(#[from] defra_node::Error),
+    #[error(transparent)]
+    Home(#[from] super::home::HomeError),
     #[error("backend protection schema initialization failed")]
     Schema(#[source] anyhow::Error),
     #[error("backend protection durable sync failed")]
@@ -180,6 +182,9 @@ fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
     Ok(did.to_owned())
 }
 
+/// Builds the node over the store at `data`, whose lock the caller holds,
+/// once the engine of any node it built there before has released the
+/// directory (`home::wait_for_engine_release`).
 pub async fn build_configured(
     builder: defra_node::NodeBuilder,
     data: &Path,
@@ -188,6 +193,7 @@ pub async fn build_configured(
     let record = document_acp::recorded_deployment(data)?;
     let ids =
         document_acp::policy_ids_for_connection(record.as_ref().map(|record| &record.connection));
+    super::home::wait_for_engine_release(data).await?;
     let node = Arc::new(start(builder).await?);
     let configure = || -> Result<()> {
         document_acp::check_started(&node, data, document_acp)?;

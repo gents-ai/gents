@@ -1,0 +1,4 @@
+---- MODULE MCStoreReopen ----
+EXTENDS StoreReopen
+
+====
