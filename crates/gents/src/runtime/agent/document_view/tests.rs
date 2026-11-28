@@ -1860,6 +1860,7 @@ fn finding_decl() -> gents_documents::WriteToolDecl {
             })
             .collect(),
         output_obligation: None,
+        key_fields: None,
     }
 }
 

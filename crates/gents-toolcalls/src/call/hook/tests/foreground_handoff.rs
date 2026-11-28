@@ -139,6 +139,7 @@ async fn foreground_handoff_after_parent_completion(
                     max_output_bytes: 4096, stdin: Vec::new(), environment: None,
                     tool_name: Some("handoff-command".into()), live_output: None,
                     process_recorder: None,
+                    linux_sandbox: None,
                 }).await;
                 match result {
                     gents_session::exec::ManagedExecOutcome::Exited { stdout, .. } =>

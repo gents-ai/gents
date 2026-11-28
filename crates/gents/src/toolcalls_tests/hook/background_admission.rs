@@ -330,10 +330,12 @@ async fn background_command_consent(
     allowed
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn background_commands_keep_workspace_consent_after_dispatch() {
-    assert!(gents_session::workspace::sandbox::workspace_write_sandbox_enforced());
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        return;
+    }
     let cases = gents_lean_vocab::families::workspace_permissions_sandboxed_background::cases::<
         String,
         String,
@@ -346,7 +348,9 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
 #[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]
 async fn background_commands_without_a_sandbox_never_run() {
-    assert!(!gents_session::workspace::sandbox::workspace_write_sandbox_enforced());
+    if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        return;
+    }
     let cases = gents_lean_vocab::families::workspace_permissions_unsandboxed_background::cases::<
         String,
         String,

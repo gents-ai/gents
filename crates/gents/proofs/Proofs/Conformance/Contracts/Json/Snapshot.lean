@@ -24,6 +24,7 @@ import Proofs.Conformance.Contracts.Json.Shards.S21
 import Proofs.Conformance.Contracts.Json.Shards.S22
 import Proofs.Conformance.Contracts.Json.Shards.S23
 import Proofs.Conformance.Contracts.Json.Shards.S24
+import Proofs.Conformance.DatastoreUpsert
 
 namespace Conformance.Contracts
 

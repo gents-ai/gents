@@ -680,6 +680,7 @@ pub mod test_support {
                 tool_name: Some("process-ownership-test".into()),
                 live_output: None,
                 process_recorder: Some(observer),
+                linux_sandbox: None,
             }));
             let identity = receiver.await.expect("test process was recorded");
             Self {

@@ -16,7 +16,7 @@ structure CommandSandboxCase where
   name : String
   category : String
   mode : ExecutionMode
-  workspaceWriteSandboxEnforced : Bool
+  sandboxBackend : SandboxBackend
   lookupCommand : String
   networkMode : NetworkMode
   decision : SandboxDecision
@@ -63,14 +63,14 @@ def validationCase
 def sandboxCase
     (name category : String)
     (mode : ExecutionMode)
-    (workspaceWriteSandboxEnforced : Bool)
+    (sandboxBackend : SandboxBackend)
     (lookupCommand : String := "git")
     (network : NetworkMode := .inherit) : CommandSandboxCase :=
-  let support := { workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced }
+  let support := { sandboxBackend := sandboxBackend }
   { name := name
   , category := category
   , mode := mode
-  , workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced
+  , sandboxBackend := sandboxBackend
   , lookupCommand := lookupCommand
   , networkMode := network
   , decision := selectSandbox support mode
@@ -494,57 +494,92 @@ def commandSandboxCases : List CommandSandboxCase :=
       "read_only_with_backend_selects_the_read_only_profile"
       "read_only_sandbox_selection"
       .readOnly
-      true
+      .macosSeatbelt
   , sandboxCase
       "read_only_network_reader_reaches_the_network"
       "read_only_sandbox_selection"
       .readOnly
-      true
+      .macosSeatbelt
       "curl"
   , sandboxCase
       "read_only_network_reader_under_disabled_network_is_offline"
       "read_only_sandbox_selection"
       .readOnly
-      true
+      .macosSeatbelt
+      "curl"
+      .disabled
+  , sandboxCase
+      "read_only_with_linux_landlock_selects_the_read_only_profile"
+      "read_only_sandbox_selection"
+      .readOnly
+      .linuxLandlock
+  , sandboxCase
+      "read_only_linux_network_reader_reaches_the_network"
+      "read_only_sandbox_selection"
+      .readOnly
+      .linuxLandlock
+      "curl"
+  , sandboxCase
+      "read_only_linux_network_reader_under_disabled_network_is_offline"
+      "read_only_sandbox_selection"
+      .readOnly
+      .linuxLandlock
       "curl"
       .disabled
   , sandboxCase
       "read_only_without_backend_selects_policy_read_only"
       "read_only_sandbox_selection"
       .readOnly
-      false
+      .none
   , sandboxCase
       "workspace_write_enforced_selects_macos_seatbelt"
       "workspace_write_sandbox_selection"
       .workspaceWrite
-      true
+      .macosSeatbelt
   , sandboxCase
       "workspace_write_enabled_network_reaches_the_network"
       "workspace_write_sandbox_selection"
       .workspaceWrite
-      true
+      .macosSeatbelt
+      "git"
+      .enabled
+  , sandboxCase
+      "workspace_write_enforced_selects_linux_landlock"
+      "workspace_write_sandbox_selection"
+      .workspaceWrite
+      .linuxLandlock
+  , sandboxCase
+      "workspace_write_linux_enabled_network_reaches_the_network"
+      "workspace_write_sandbox_selection"
+      .workspaceWrite
+      .linuxLandlock
       "git"
       .enabled
   , sandboxCase
       "workspace_write_unenforced_denies"
       "workspace_write_sandbox_selection"
       .workspaceWrite
-      false
+      .none
   , sandboxCase
       "artifact_write_enforced_selects_macos_seatbelt"
       "artifact_write_sandbox_selection"
       .artifactWrite
-      true
+      .macosSeatbelt
+  , sandboxCase
+      "artifact_write_enforced_selects_linux_landlock"
+      "artifact_write_sandbox_selection"
+      .artifactWrite
+      .linuxLandlock
   , sandboxCase
       "artifact_write_unenforced_denies"
       "artifact_write_sandbox_selection"
       .artifactWrite
-      false
+      .none
   , sandboxCase
       "unrestricted_selects_unsandboxed_unrestricted"
       "unrestricted_unsandboxed_labeling"
       .unrestricted
-      false
+      .none
   ]
 
 def commandEnvCases : List CommandEnvCase :=

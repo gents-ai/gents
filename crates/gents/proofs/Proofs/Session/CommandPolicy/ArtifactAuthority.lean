@@ -112,11 +112,12 @@ theorem spawned_never_escalates {k : SpawnKind} {m out : ExecutionMode}
 
 theorem artifact_requires_sandbox (support : RuntimeSupport) (sandbox : SandboxKind)
     (h : selectSandbox support .artifactWrite = .selected sandbox) :
-    support.workspaceWriteSandboxEnforced = true ∧ sandbox = .macosSeatbelt := by
+    support.workspaceWriteSandboxEnforced = true ∧ sandbox.isWriteKernelSandbox = true := by
   cases support with
-  | mk enforced =>
-    cases enforced <;> simp [selectSandbox] at h ⊢
-    exact h.symm
+  | mk backend =>
+    cases backend <;> simp [selectSandbox, RuntimeSupport.workspaceWriteSandboxEnforced] at h ⊢
+    · subst h; rfl
+    · subst h; rfl
 
 theorem artifact_disabled_network_validation (request : CommandRequest) :
     validateNetworkMode .artifactWrite .disabled request = .allow := rfl

@@ -95,16 +95,15 @@ theorem workspaceWrite_requires_enforced_sandbox
     (hselected :
       selectSandbox support .workspaceWrite = .selected sandbox) :
     support.workspaceWriteSandboxEnforced = true ∧
-      sandbox = .macosSeatbelt := by
+      sandbox.isWriteKernelSandbox = true := by
   cases support with
-  | mk enforced =>
-      cases enforced
-      · simp [selectSandbox] at hselected
-      · simp [selectSandbox] at hselected ⊢
-        exact hselected.symm
+  | mk backend =>
+      cases backend <;> simp [selectSandbox, RuntimeSupport.workspaceWriteSandboxEnforced] at hselected ⊢
+      · subst hselected; rfl
+      · subst hselected; rfl
 
 theorem workspaceWrite_without_enforced_sandbox_denies :
-    selectSandbox { workspaceWriteSandboxEnforced := false } .workspaceWrite =
+    selectSandbox { sandboxBackend := .none } .workspaceWrite =
       .denied .workspaceWriteSandboxUnavailable := by
   rfl
 
@@ -112,7 +111,8 @@ theorem unrestricted_is_explicitly_unsandboxed
     (support : RuntimeSupport) :
     selectSandbox support .unrestricted =
       .selected .unsandboxedUnrestricted := by
-  rfl
+  cases support with
+  | mk backend => cases backend <;> rfl
 
 /-- A write-capable bounded command never consults the read-only allowlist: what
 a binary declares about its effects cannot widen a workspace or artifact
@@ -133,9 +133,9 @@ theorem bounded_modes_select_only_the_kernel_sandbox
     (support : RuntimeSupport) (mode : ExecutionMode) (sandbox : SandboxKind)
     (bounded : mode = .workspaceWrite ∨ mode = .artifactWrite)
     (selected : selectSandbox support mode = .selected sandbox) :
-    sandbox = .macosSeatbelt := by
-  rcases support with ⟨enforced⟩
-  rcases bounded with rfl | rfl <;> cases enforced <;> simp_all [selectSandbox]
+    sandbox.isWriteKernelSandbox = true := by
+  rcases support with ⟨backend⟩
+  rcases bounded with rfl | rfl <;> cases backend <;> simp [selectSandbox] at selected <;> subst selected <;> rfl
 
 /-- On a host with a sandbox backend, a read-only command is contained by the
 read-only profile whatever the allowlist admits: it and every process it starts write nothing, inspect but cannot signal
@@ -151,11 +151,18 @@ theorem read_only_effects_are_bounded_by_the_read_only_profile
       some { writes := .nothing
              network := readOnlyReachesNetwork request && policy.networkMode.allowsNetwork
              processInfo := .all } := by
+  rcases support with ⟨sb⟩
   rcases policy with ⟨mode, allowed, forbidden, network, listed⟩
   simp only at readOnly
   subst readOnly
-  simp only [commandProfile, selectSandbox, backend]
-  cases network <;> rfl
+  cases sb with
+  | none => simp [RuntimeSupport.workspaceWriteSandboxEnforced] at backend
+  | macosSeatbelt =>
+      simp only [commandProfile, selectSandbox, seatbeltProfile]
+      cases network <;> rfl
+  | linuxLandlock =>
+      simp only [commandProfile, selectSandbox, seatbeltProfile]
+      cases network <;> rfl
 
 /-- Without a sandbox backend no kernel profile contains a read-only command:
 the allowlist, the argument validators and the launch options
@@ -165,10 +172,12 @@ theorem read_only_without_a_backend_has_no_kernel_profile
     (readOnly : policy.mode = .readOnly)
     (noBackend : support.workspaceWriteSandboxEnforced = false) :
     commandProfile support policy request = none := by
-  rcases policy with ⟨mode, allowed, forbidden, network, listed⟩
-  simp only at readOnly
-  subst readOnly
-  simp [commandProfile, selectSandbox, noBackend, seatbeltProfile]
+  rcases support with ⟨sb⟩
+  cases sb with
+  | none =>
+      simp [commandProfile, selectSandbox, readOnly, seatbeltProfile]
+  | macosSeatbelt => simp [RuntimeSupport.workspaceWriteSandboxEnforced] at noBackend
+  | linuxLandlock => simp [RuntimeSupport.workspaceWriteSandboxEnforced] at noBackend
 
 /-- `sed`'s validator admits a script's `w` command: the read-only profile
 refuses the write, and where no profile contains the command, GNU `--sandbox`

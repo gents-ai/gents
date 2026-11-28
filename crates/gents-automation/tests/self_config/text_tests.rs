@@ -806,7 +806,7 @@ async fn unsupported_surface_mutations_point_to_scoped_tools_help() {
         let help = ok(&tools, recovery).await;
         let help = help.as_str().unwrap();
         assert!(
-            help.contains("Named surface entries support create and query only"),
+            help.contains("Named surface entries are create, upsert or query"),
             "{help}"
         );
         assert!(

@@ -227,6 +227,7 @@ async fn managed_git_with_index(
         tool_name: None,
         live_output: None,
         process_recorder: recorder.cloned(),
+        linux_sandbox: None,
     })
     .await;
     match outcome {

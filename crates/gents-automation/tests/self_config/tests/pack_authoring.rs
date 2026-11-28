@@ -355,9 +355,12 @@ async fn compiling_plugin_source_needs_the_authority_grant() {
 
 /// The build runs through the command sandbox: a builder that tries to write
 /// outside the tool root is refused, and its report still reaches the caller.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_plugin_build_runs_confined_to_the_tool_root() {
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -393,7 +396,12 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
     .await;
 
     let built = config_json(&tools, &["pack", "build", "tool_a"]).await;
-    assert_eq!(built["sandbox"], "macos_seatbelt", "{built}");
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt"
+    } else {
+        "linux_landlock"
+    };
+    assert_eq!(built["sandbox"], expected_sandbox, "{built}");
     assert!(built["out"].as_str().unwrap().ends_with(".pack"), "{built}");
     assert!(
         !escaped.exists(),
