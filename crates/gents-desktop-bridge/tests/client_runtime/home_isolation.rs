@@ -28,8 +28,7 @@ async fn fixed_root_homes_do_not_collide() {
             managed_server: ManagedServerPolicy::Disabled,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
-            service_executable: None,
-            registry: None,
+            ..Default::default()
         },
         None,
     )
@@ -74,8 +73,8 @@ async fn fixed_root_homes_do_not_collide() {
     bridge_core.shutdown().await.expect("bridge store shutdown");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_runtime_allowed_binds_fixed_node_home() {
+#[test]
+fn local_runtime_allowed_binds_fixed_node_home() {
     let tmp = tempdir().expect("tempdir");
     let bridge_root = tmp.path().join("bridge");
     let node_root = tmp.path().join("node");
@@ -96,8 +95,7 @@ async fn local_runtime_allowed_binds_fixed_node_home() {
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
-            service_executable: None,
-            registry: None,
+            ..Default::default()
         },
         None,
     )

@@ -4,110 +4,91 @@ use crate::cause_derivation::{
     derive_request_cause, derive_tool_call_cause, RequestEvidence, ToolCallEvidence,
 };
 
-fn req_default() -> RequestEvidence {
-    RequestEvidence::default()
-}
-fn tool_default() -> ToolCallEvidence {
-    ToolCallEvidence::default()
-}
-
 #[test]
-fn interrupted_when_the_root_request_was_interrupted() {
-    let req = RequestEvidence {
+fn tool_call_cause_derivation_follows_priority_and_ignores_non_cancelled() {
+    let interrupted_req = RequestEvidence {
         interrupted_at: Some("2026-05-20T10:32:14Z".into()),
     };
-    let tool = ToolCallEvidence {
+    let cancelled = ToolCallEvidence {
         lifecycle_state: Some("cancelled".into()),
-        deadline_at: None,
         completed_at: Some("2026-05-20T10:32:15Z".into()),
-        timed_out: false,
+        ..Default::default()
     };
-    let cause = derive_tool_call_cause(&req, &tool).expect("derives");
-    assert_eq!(cause.cause, "interrupted");
-    assert_eq!(cause.source, "requestInterrupt");
-    assert_eq!(cause.confidence, "direct");
-    assert_eq!(cause.at.as_deref(), Some("2026-05-20T10:32:14Z"));
-}
+    let cause = derive_tool_call_cause(&interrupted_req, &cancelled).expect("derives");
+    assert_eq!(
+        (
+            cause.cause.as_str(),
+            cause.source.as_str(),
+            cause.confidence.as_str(),
+            cause.at.as_deref()
+        ),
+        (
+            "interrupted",
+            "requestInterrupt",
+            "direct",
+            Some("2026-05-20T10:32:14Z")
+        )
+    );
 
-#[test]
-fn deadline_when_tool_lifecycle_is_timedout() {
-    let tool = ToolCallEvidence {
+    let timed_out = ToolCallEvidence {
         timed_out: true,
         lifecycle_state: Some("timedOut".into()),
         deadline_at: Some("2026-05-20T10:34:00Z".into()),
         completed_at: Some("2026-05-20T10:35:02Z".into()),
     };
-    let cause = derive_tool_call_cause(&req_default(), &tool).expect("derives");
-    assert_eq!(cause.cause, "deadline");
-    assert_eq!(cause.source, "toolLifecycle");
-    assert!(cause.evidence.iter().any(|e| e.contains("timedOut")));
-}
+    let deadline =
+        derive_tool_call_cause(&RequestEvidence::default(), &timed_out).expect("derives");
+    assert_eq!(
+        (deadline.cause.as_str(), deadline.source.as_str()),
+        ("deadline", "toolLifecycle")
+    );
+    assert!(deadline.evidence.iter().any(|e| e.contains("timedOut")));
 
-#[test]
-fn deadline_wins_over_an_interrupted_root_when_both_signals_present() {
-    let req = RequestEvidence {
-        interrupted_at: Some("2026-05-20T10:32:14Z".into()),
-    };
-    let tool = ToolCallEvidence {
-        timed_out: true,
-        lifecycle_state: Some("timedOut".into()),
-        ..tool_default()
-    };
-    let cause = derive_tool_call_cause(&req, &tool).expect("derives");
-    assert_eq!(cause.cause, "deadline");
-}
+    let both = derive_tool_call_cause(&interrupted_req, &timed_out).expect("derives");
+    assert_eq!(both.cause, "deadline");
 
-#[test]
-fn unknown_when_cancelled_but_no_evidence() {
-    let tool = ToolCallEvidence {
-        lifecycle_state: Some("cancelled".into()),
-        ..tool_default()
-    };
-    let cause = derive_tool_call_cause(&req_default(), &tool).expect("derives");
-    assert_eq!(cause.cause, "unknown");
-    assert_eq!(cause.source, "unresolved");
-    assert!(cause.evidence.iter().any(|e| e.contains("no deadline")));
-    assert!(cause
+    let unknown = derive_tool_call_cause(&RequestEvidence::default(), &cancelled).expect("derives");
+    assert_eq!(
+        (unknown.cause.as_str(), unknown.source.as_str()),
+        ("unknown", "unresolved")
+    );
+    assert!(unknown.evidence.iter().any(|e| e.contains("no deadline")));
+    assert!(unknown
         .evidence
         .iter()
         .any(|e| e.contains("root request not interrupted")));
+
+    for state in ["completed", "failed"] {
+        let tool = ToolCallEvidence {
+            lifecycle_state: Some(state.into()),
+            ..Default::default()
+        };
+        assert!(
+            derive_tool_call_cause(&RequestEvidence::default(), &tool).is_none(),
+            "expected None for lifecycle_state={state}"
+        );
+    }
 }
 
 #[test]
-fn none_for_non_cancelled_tool_calls() {
-    let tool = ToolCallEvidence {
-        lifecycle_state: Some("completed".into()),
-        ..tool_default()
-    };
-    assert!(derive_tool_call_cause(&req_default(), &tool).is_none());
-}
-
-#[test]
-fn none_for_failed_tool_calls() {
-    let tool = ToolCallEvidence {
-        lifecycle_state: Some("failed".into()),
-        ..tool_default()
-    };
-    assert!(
-        derive_tool_call_cause(&req_default(), &tool).is_none(),
-        "expected None for lifecycle_state=failed, but got Some(_)"
-    );
-}
-
-#[test]
-fn request_cause_uses_interrupted_lifecycle_and_terminal_timestamp() {
+fn request_cause_derivation_requires_interrupted_lifecycle() {
     let cause = derive_request_cause(
         Some(RequestLifecycleState::Interrupted),
         Some("2026-05-20T10:36:11Z".into()),
     )
     .expect("derives");
-    assert_eq!(cause.cause, "interrupted");
-    assert_eq!(cause.source, "requestLifecycle");
-    assert_eq!(cause.at.as_deref(), Some("2026-05-20T10:36:11Z"));
-}
-
-#[test]
-fn request_cause_none_without_cancellation_evidence() {
+    assert_eq!(
+        (
+            cause.cause.as_str(),
+            cause.source.as_str(),
+            cause.at.as_deref()
+        ),
+        (
+            "interrupted",
+            "requestLifecycle",
+            Some("2026-05-20T10:36:11Z")
+        )
+    );
     for state in [
         None,
         Some(RequestLifecycleState::Pending),

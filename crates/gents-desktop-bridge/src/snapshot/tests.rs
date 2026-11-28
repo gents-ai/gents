@@ -50,6 +50,44 @@ fn bootstrap_init_config_status_distinguishes_absence_from_unreadable_and_config
     );
 }
 
+pub(super) fn fixture_session(session_id: &str, node_did: &str) -> AgentSession {
+    AgentSession {
+        session_id: session_id.into(),
+        node_did: node_did.into(),
+        requester_did: None,
+        agent_did: "default".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
+        stopped_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    }
+}
+
+pub(super) fn fixture_request(
+    id: &str,
+    session_id: &str,
+    state: gents_protocol::request_lifecycle::RequestLifecycleState,
+) -> AgentRequestRow {
+    AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        doc_id: Some(format!("doc-{id}")),
+        request_id: id.into(),
+        node_did: Some("did:test:amy".into()),
+        agent_did: Some("default".into()),
+        session_id: Some(session_id.into()),
+        content: Some(format!("{id} text")),
+        lifecycle_state: Some(state),
+        execution_origin: Some("interactive".into()),
+        created_at: Some("2026-04-21T12:00:00Z".into()),
+        ..Default::default()
+    }
+}
+
 fn canonical_text_message(
     doc_id: &str,
     session_id: &str,

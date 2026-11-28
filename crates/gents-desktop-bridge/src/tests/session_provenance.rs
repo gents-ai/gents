@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
+use crate::host::{protocol, ClientHost};
 use crate::provenance::{project_caused_calls, session_provenance};
-use crate::tests::support::{provenance_fixture, ProvenanceFixture};
+use crate::tests::support::{attach_host, call_host, provenance_fixture, ProvenanceFixture};
 use crate::types::LinkedSessionView;
 
 fn sessions(links: &[LinkedSessionView]) -> Vec<&str> {
@@ -18,7 +22,7 @@ fn sorted(mut ids: Vec<&str>) -> Vec<&str> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
+async fn session_provenance_tracks_lineage_senders_and_host_wire_reads() {
     let fixture = provenance_fixture().await;
     let ProvenanceFixture {
         desktop,
@@ -29,11 +33,14 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         existing_message,
         ..
     } = &fixture;
-    let view = session_provenance(&desktop.core, fixture.parent())
+
+    let parent_view = session_provenance(&desktop.core, fixture.parent())
         .await
         .expect("provenance");
-
-    let metadata = view.related_sessions.as_ref().expect("related metadata");
+    let metadata = parent_view
+        .related_sessions
+        .as_ref()
+        .expect("related metadata");
     let mut related: Vec<_> = metadata
         .iter()
         .map(|summary| summary.session_id.as_str())
@@ -49,25 +56,25 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
             .all(|summary| summary.message_count.is_none() && summary.tool_call_count.is_none()),
         "metadata reads must not hydrate transcript aggregates"
     );
-    assert_eq!(view.session_id, "sess_parent");
-    assert!(view.started_by.is_none() && view.received.is_empty());
-    assert!(view.opening_request_id.is_none());
+    assert_eq!(parent_view.session_id, "sess_parent");
+    assert!(parent_view.started_by.is_none() && parent_view.received.is_empty());
+    assert!(parent_view.opening_request_id.is_none());
     assert_eq!(
-        sessions(&view.started),
+        sessions(&parent_view.started),
         [child_session.as_str()],
         "started sessions are the sessions whose stored provenance names this session"
     );
     assert_eq!(
-        sessions(&view.sent),
+        sessions(&parent_view.sent),
         ["sess_existing"],
         "a message into a session the Agent opened as a client is not a start"
     );
-    assert!(view
+    assert!(parent_view
         .started
         .iter()
         .all(|link| &link.cause_request_doc_id == parent_doc));
 
-    let mut calls: Vec<_> = view
+    let mut calls: Vec<_> = parent_view
         .calls
         .iter()
         .map(|call| {
@@ -109,94 +116,104 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
             ),
         ]
     );
-    assert!(view
+    assert!(parent_view
         .calls
         .iter()
         .all(|call| call.caused.node_did == desktop.node_did()));
-    fixture.shutdown().await;
-}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
-    let fixture = provenance_fixture().await;
-    let view = session_provenance(&fixture.desktop.core, fixture.child())
+    let child_view = session_provenance(&desktop.core, fixture.child())
         .await
-        .expect("provenance");
-
+        .expect("child provenance");
     assert_eq!(
-        view.started_by
+        child_view
+            .started_by
             .as_ref()
             .map(|link| link.session_id.as_str()),
         Some("sess_parent")
     );
-    assert!(view.started.is_empty() && view.sent.is_empty() && view.calls.is_empty());
-    assert_eq!(
-        view.opening_request_id.as_deref(),
-        Some(fixture.child_opening.as_str())
+    assert!(
+        child_view.started.is_empty() && child_view.sent.is_empty() && child_view.calls.is_empty()
     );
-    let mut senders: Vec<_> = view
+    assert_eq!(
+        child_view.opening_request_id.as_deref(),
+        Some(child_opening.as_str())
+    );
+    let mut senders: Vec<_> = child_view
         .senders
         .iter()
         .map(|turn| (turn.request_id.as_str(), turn.sender.session_id.as_str()))
         .collect();
     senders.sort_unstable();
     let mut expected = vec![
-        (fixture.child_opening.as_str(), "sess_parent"),
-        (fixture.child_message.as_str(), "sess_parent"),
+        (child_opening.as_str(), "sess_parent"),
+        (child_message.as_str(), "sess_parent"),
     ];
     expected.sort_unstable();
     assert_eq!(senders, expected);
-    fixture.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_messaged_session_was_not_started_by_its_sender() {
-    let fixture = provenance_fixture().await;
-    let view = session_provenance(&fixture.desktop.core, fixture.existing())
-        .await
-        .expect("provenance");
-    assert!(view.started_by.is_none());
-    assert_eq!(sessions(&view.received), ["sess_parent"]);
-    fixture.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_root_session_has_no_provenance() {
-    let fixture = provenance_fixture().await;
-    let view = session_provenance(&fixture.desktop.core, fixture.unrelated())
-        .await
-        .expect("provenance");
-    assert!(view.started_by.is_none());
-    assert!(view.received.is_empty() && view.sent.is_empty() && view.started.is_empty());
-    assert!(view.calls.is_empty() && view.senders.is_empty());
-    fixture.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_session_message_keeps_the_call_that_sent_it() {
-    let fixture = provenance_fixture().await;
-    let view = session_provenance(&fixture.desktop.core, fixture.child())
-        .await
-        .expect("provenance");
-    let sender = view
+    let message_sender = child_view
         .senders
         .iter()
-        .find(|turn| turn.request_id == fixture.child_message)
+        .find(|turn| &turn.request_id == child_message)
         .expect("canonical lineage attributes the message");
     assert_eq!(
-        sender.sender.cause_request_doc_id, fixture.parent_doc,
+        &message_sender.sender.cause_request_doc_id, parent_doc,
         "the message remains attached to its exact physical causing request"
     );
-    let parent_view = session_provenance(&fixture.desktop.core, fixture.parent())
-        .await
-        .expect("parent provenance");
-    let call = parent_view
+    assert_eq!(message_sender.sender.session_id, "sess_parent");
+    let message_call = parent_view
         .calls
         .iter()
         .find(|call| call.tool_call_id == "tc_message")
         .expect("the causing agent-message call remains visible");
-    assert_eq!(call.caused.request_id, fixture.child_message);
-    assert_eq!(sender.sender.session_id, "sess_parent");
+    assert_eq!(&message_call.caused.request_id, child_message);
+
+    let existing_view = session_provenance(&desktop.core, fixture.existing())
+        .await
+        .expect("existing provenance");
+    assert!(existing_view.started_by.is_none());
+    assert_eq!(sessions(&existing_view.received), ["sess_parent"]);
+
+    let unrelated_view = session_provenance(&desktop.core, fixture.unrelated())
+        .await
+        .expect("unrelated provenance");
+    assert!(unrelated_view.started_by.is_none());
+    assert!(
+        unrelated_view.received.is_empty()
+            && unrelated_view.sent.is_empty()
+            && unrelated_view.started.is_empty()
+    );
+    assert!(unrelated_view.calls.is_empty() && unrelated_view.senders.is_empty());
+
+    let wire_command = json!({
+        "name": "desktop_session_provenance", "args": { "request": {
+            "nodeDid": desktop.node_did(),
+            "sessionId": "sess_parent",
+            "requesterDid": desktop.user_did()
+        }}
+    });
+    let command: protocol::ClientCommand = serde_json::from_value(wire_command.clone()).unwrap();
+    assert!(command.is_cancellable());
+    let host = Arc::new(ClientHost::new(desktop.core.clone()));
+    let (mut client, hello, task) = attach_host(host, CancellationToken::new()).await;
+    assert!(hello["commands"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("desktop_session_provenance")));
+    let response = call_host(&mut client, 41, wire_command).await;
+    assert!(response["error"].is_null(), "{response}");
+    let observed = &response["result"];
+    assert_eq!(observed["sessionId"], "sess_parent");
+    let started = observed["started"].as_array().unwrap();
+    assert_eq!(started.len(), 1);
+    assert!(started
+        .iter()
+        .all(|link| link["causeRequestDocId"] == *parent_doc));
+    assert!(started
+        .iter()
+        .any(|link| link["sessionId"] == child_session.as_str()));
+    drop(client);
+    task.await.unwrap().unwrap();
+
     fixture.shutdown().await;
 }
 

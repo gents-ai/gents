@@ -101,6 +101,11 @@ async fn seeded_projection_node(
 #[tokio::test]
 async fn generated_edit_receipt_outcome_survives_projection_refresh() {
     use gents_lean_vocab::families::fold_queue_contracts_input_edit_client_observation as observation;
+    let (_node, seeded_access, seeded_doc_id) =
+        seeded_projection_node("replacement-request", "did:test:node").await;
+    let broken_access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::anonymous("invalid endpoint"),
+    );
     for case in
         gents_lean_vocab::families::fold_queue_contracts_input_edit_client_observation::cases::<
             SessionInputEditOutcome,
@@ -111,23 +116,14 @@ async fn generated_edit_receipt_outcome_survives_projection_refresh() {
         let before = store.projection_revision().store_version;
         let mut receipt = applied_receipt();
         receipt.outcome = case.input.receipt_outcome;
-        let mut _node = None;
         let (access, selected) = if case.input.projection_refresh_succeeded {
-            let (node, access, doc_id) =
-                seeded_projection_node("replacement-request", "did:test:node").await;
-            _node = Some(node);
-            receipt.request_doc_ids = vec![doc_id];
-            (access, Vec::new())
+            receipt.request_doc_ids = vec![seeded_doc_id.clone()];
+            (&seeded_access, Vec::new())
         } else {
-            (
-                ConfigAccess::Graphql(gents_store::config_client::GraphqlEndpoint::anonymous(
-                    "invalid endpoint",
-                )),
-                vec!["selected-doc".to_string()],
-            )
+            (&broken_access, vec!["selected-doc".to_string()])
         };
         let (accepted, projection) = merge_accepted_edit_projection(
-            &access,
+            access,
             store.as_ref(),
             receipt,
             &selected,

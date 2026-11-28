@@ -13,7 +13,6 @@ const SEPARATE_TEST_TARGETS: &[(&str, &str, &str)] = &[
     ("gents-cli", "port_allocation", "the Windows editor job builds and runs it without the CLI suite"),
     ("gents-cli", "plugin_build_sandbox", "sets GENTS_PLUGIN_BUILDER for the process"),
     ("gents-desktop-bridge", "connect_this_desktop", "sets HOME and the XDG directories for the process"),
-    ("gents-desktop-bridge", "home_isolation", "sets HOME and the XDG directories for the process"),
     ("gents-session", "log_rate_filter", "installs the global tracing subscriber and drives its clock"),
 ];
 

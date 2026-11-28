@@ -6,30 +6,6 @@ use tokio_util::sync::CancellationToken;
 use super::super::{protocol, ClientHost};
 
 #[tokio::test]
-async fn runtime_location_rejects_an_unknown_node() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = ClientHost::new(core.clone());
-    let command: protocol::ClientCommand = serde_json::from_value(json!({
-        "name":"client_runtime_is_local", "args":{"nodeDid":"did:unconfigured"}
-    }))
-    .unwrap();
-    assert!(command.is_cancellable());
-    let error = host
-        .execute(
-            command,
-            &crate::host::approvals::AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.code,
-        gents_store::client_error::BridgeErrorCode::InvalidArgument
-    );
-    core.shutdown().await.unwrap();
-}
-
-#[tokio::test]
 async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
     use crate::client_runtime::ClientRuntime;
     use gents_store::client_journal::paths::DesktopPaths;
@@ -75,25 +51,17 @@ async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
 }
 
 #[tokio::test]
-async fn paired_model_settings_use_the_authenticated_client_endpoint() {
-    use crate::client_runtime::ClientRuntime;
-    use gents_store::client_journal::paths::DesktopPaths;
+async fn private_snapshot_and_paired_model_settings_use_the_authenticated_client_endpoint() {
+    let served = crate::tests::support::served_desktop().await;
+    let core = served.core.clone();
+    core.stop_observer_for_test().await;
+    let requester = core.node_identity().did().to_owned();
+    let node = served.node_did().to_owned();
 
     // Model settings are read as the User over the paired runtime's
     // authenticated GraphQL; the served runtime refuses any other actor.
-    let directory = tempfile::tempdir().unwrap();
-    let core = Arc::new(
-        ClientRuntime::start_with_paths_and_options(
-            DesktopPaths::from_root(directory.path()),
-            crate::client_test_support::file_journal_options(),
-        )
-        .await
-        .unwrap(),
-    );
-    let (runtime, _agent) = crate::tests::support::served_runtime_for(&core).await;
-    let node = runtime.node_did().to_owned();
     let host = ClientHost::new(core.clone());
-    let result = host
+    let settings = host
         .execute(
             protocol::ClientCommand::InferenceSetupState {
                 node_did: node.clone(),
@@ -103,26 +71,12 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
         )
         .await
         .unwrap();
-    assert_eq!(result["nodeDid"], node.as_str());
-    assert!(result["agentConfigs"]
+    assert_eq!(settings["nodeDid"], node.as_str());
+    assert!(settings["agentConfigs"]
         .as_array()
         .is_some_and(|agents| !agents.is_empty()));
-    // The separate inference-settings HTTP route for a runtime without an
-    // operator endpoint is gone: settings are read through the User's
-    // authenticated endpoint, which makes the paired runtime configured.
     host.require_configured_runtime(&node).await.unwrap();
-    drop(host);
-    core.shutdown().await.unwrap();
-    runtime.shutdown().await;
-}
 
-#[tokio::test]
-async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
-    let served = crate::tests::support::served_desktop().await;
-    let core = served.core.clone();
-    core.stop_observer_for_test().await;
-    let requester = core.node_identity().did().to_owned();
-    let node = served.node_did().to_owned();
     let agent = served.runtime.agent_access(&served.agent).await;
     let file = |id: &str, recipient: &str, kind: &str, action: &str, payload: Option<String>| {
         let context = gents_session::session::mailbox::MailboxStampContext {
@@ -185,7 +139,6 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
         .await
         .unwrap();
     core.refresh_node(&node).await.unwrap();
-    let host = ClientHost::new(core.clone());
     let result = host
         .execute(
             protocol::ClientCommand::Snapshot {},

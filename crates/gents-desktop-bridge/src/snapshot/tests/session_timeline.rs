@@ -3,21 +3,7 @@ use crate::types::{DesktopSessionSnapshot, MessageReconstructionView, Reconstruc
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn timeline_session() -> AgentSession {
-    AgentSession {
-        session_id: "sess-1".into(),
-        node_did: "did:test:amy".into(),
-        requester_did: None,
-        agent_did: "default".into(),
-        created_at: "2026-04-21T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    }
+    fixture_session("sess-1", "did:test:amy")
 }
 
 fn ready() -> MessageReconstructionView {
@@ -750,21 +736,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         "policy_network": "inherit", "latency_ms": 12
     }))
     .expect("canonical denial envelope");
-    let session = AgentSession {
-        session_id: "session-denial".into(),
-        node_did: "did:test:amy".into(),
-        requester_did: None,
-        agent_did: "default".into(),
-        created_at: "2026-04-21T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    };
+    let session = fixture_session("session-denial", "did:test:amy");
     let snapshot = build_session_snapshot_from_store(
         &ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session],

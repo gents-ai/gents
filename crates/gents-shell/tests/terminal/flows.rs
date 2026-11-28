@@ -72,39 +72,23 @@ fn a_bracketed_paste_is_one_message() {
 /// line, or sent, leaves `> alphabravo` or `> bravo` instead.
 const BOX_LINES: [&str; 4] = ["> alpha ", "│   bravo ", "│   charlie ", "│   delta "];
 
-/// Shift-enter as the keyboard protocol sends it, then alt-enter and ctrl-j as any terminal
-/// does: each breaks the line, and enter sends the lines as one message.
+/// Regular is the default key set: `?` shows its help, word/line editing keys
+/// and line-break keys (shift-enter, alt-enter, ctrl-j) edit the box, enter
+/// sends all lines as one message, and `ctrl-q` quits restoring the terminal.
 #[test]
-fn real_line_break_keys_make_one_message_of_many_lines() {
+fn regular_mode_keys_edit_break_lines_and_quit_with_ctrl_q() {
     let s = Shell::start(&[], 36, 132);
-    s.wait_for_all(&["sample data", "INPUT", "Message Engineer"]);
-    s.send("alpha\x1b[13;2ubravo\x1b\rcharlie\ndelta");
-    s.wait_for_all(&BOX_LINES);
-    s.send("\r");
-    let bubble = [" alpha ", " bravo ", " charlie ", " delta "];
-    s.wait_for_all(&[&["sample reply", "Message Engineer"][..], &bubble].concat());
-    s.send("\x11");
-    assert_restored(&s.finish());
-}
-
-/// Typing in vim, `esc enter` in one read is alt-enter: the line breaks and typing goes on.
-#[test]
-fn vim_alt_enter_breaks_the_line_while_typing() {
-    let s = Shell::start(&["--keys", "vim"], 36, 132);
-    s.wait_for_all(&["INPUT", "Message Engineer"]);
-    s.send("alpha\x1b\rbravo");
-    s.wait_for_all(&[BOX_LINES[0], BOX_LINES[1], "INPUT"]);
+    s.wait_for_all(&[
+        "sample data",
+        "INPUT",
+        "ctrl-o next pane",
+        "Message Engineer",
+    ]);
+    s.send("?");
+    s.wait_for_all(&["HELP", "regular", "ctrl-pgdn / ctrl-pgup"]);
     s.send("\x1b");
-    s.wait_for_all(&["NORMAL"]);
-    s.send(":q\r");
-    assert_eq!(s.finish().code, 0);
-}
+    s.wait_gone("ctrl-pgdn / ctrl-pgup");
 
-/// Word and line keys in the forms the keyboard protocol and legacy terminals send.
-#[test]
-fn real_word_and_line_keys_edit_the_box() {
-    let s = Shell::start(&[], 36, 132);
-    s.wait_for_all(&["INPUT", "Message Engineer"]);
     s.send("alpha bravo charlie");
     s.wait_for_all(&["> alpha bravo charlie"]);
     // alt-backspace, as the protocol and then as a legacy terminal sends it
@@ -122,8 +106,16 @@ fn real_word_and_line_keys_edit_the_box() {
     // cmd-right, cmd-backspace
     s.send("\x1b[1;9C\x1b[127;9u");
     s.wait_for_all(&["Message Engineer"]);
+
+    s.send("alpha\x1b[13;2ubravo\x1b\rcharlie\ndelta");
+    s.wait_for_all(&BOX_LINES);
+    s.send("\r");
+    let bubble = [" alpha ", " bravo ", " charlie ", " delta "];
+    s.wait_for_all(&[&["sample reply", "Message Engineer"][..], &bubble].concat());
     s.send("\x11");
-    assert_restored(&s.finish());
+    let e = s.finish();
+    assert_eq!(e.code, 0);
+    assert_restored(&e);
 }
 
 #[test]
@@ -281,31 +273,33 @@ fn emacs_flow() {
     assert_restored(&e);
 }
 
+/// Vim editing sequences in one PTY: `esc enter` breaks a line while typing,
+/// `ctrl-w` deletes a word in input mode, `esc :` in one write acts as two
+/// keys, and `ctrl-w ctrl-h` focuses Sessions in normal mode.
 #[test]
-fn vim_ctrl_w_deletes_a_word_while_writing_and_is_a_chord_in_normal_mode() {
+fn vim_editing_chords_and_esc_sequences() {
     let s = Shell::start(&["--keys", "vim"], 36, 132);
-    s.wait_for_all(&["INPUT"]);
+    s.wait_for_all(&["INPUT", "Message Engineer"]);
+    s.send("alpha\x1b\rbravo");
+    s.wait_for_all(&[BOX_LINES[0], BOX_LINES[1], "INPUT"]);
+    s.send("\r");
+    s.wait_for_all(&["Message Engineer"]);
+
     s.send("hello there");
     s.wait_for_all(&["> hello there"]);
     s.send("\x17q");
     s.wait_for_all(&["> hello q", "1 new session"]);
+
+    s.send("\x1b:");
+    s.wait_for_all(&["Jump to", "JUMP"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
+
     s.send("\x17");
     s.wait_for_all(&["ctrl-w ..."]);
     s.send("\x08");
     wait_sessions_focused(&s);
     s.send(":q\r");
-    assert_eq!(s.finish().code, 0);
-}
-
-#[test]
-fn vim_esc_and_a_key_in_one_write_act_as_two_keys() {
-    let s = Shell::start(&["--keys", "vim"], 36, 132);
-    s.wait_for_all(&["INPUT"]);
-    s.send("\x1b:");
-    s.wait_for_all(&["Jump to", "JUMP"]);
-    s.send("q\r");
     assert_eq!(s.finish().code, 0);
 }
 
