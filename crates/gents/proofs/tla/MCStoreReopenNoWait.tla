@@ -1,0 +1,4 @@
+---- MODULE MCStoreReopenNoWait ----
+EXTENDS StoreReopen
+
+====

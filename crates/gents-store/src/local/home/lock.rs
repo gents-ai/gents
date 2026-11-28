@@ -151,6 +151,45 @@ fn engine_directory(_data_dir: &Path) -> EngineDirectory {
     EngineDirectory::Free
 }
 
+/// Resolves once no storage engine holds the data directory, so the next node
+/// the store lock's holder builds can open it (Lean `StoreHandoff.mayRelease`,
+/// for the holder's own next node; `tla/StoreReopen.tla`). A node the holder
+/// shut down keeps the directory until its engine drops with its last handle,
+/// and defra-node can keep one of its own after the shutdown returned and the
+/// caller dropped the node. Only the holder calls this: no other opener
+/// reaches the engine while the store lock is held, so the engine holding the
+/// directory is one of the holder's nodes letting go. The wait runs on a
+/// dedicated OS thread for at most [`STORE_RELEASE_WAIT`]; an abandoned wait
+/// drops the lock it later takes.
+pub async fn wait_for_engine_release(data_dir: &Path) -> Result<()> {
+    let EngineDirectory::Held(engine) = engine_directory(data_dir) else {
+        return Ok(());
+    };
+    tracing::debug!(
+        data_dir = %data_dir.display(),
+        "waiting for a stopped node's storage engine to release the data directory"
+    );
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("gents-store-engine-wait".into())
+        .spawn(move || {
+            let _ = send.send(crate::local::file_lock::FileLock::exclusive(engine).map(drop));
+        })
+        .map_err(HomeError::StartReleaseWaiter)?;
+    drop(worker);
+    match tokio::time::timeout(STORE_RELEASE_WAIT, receive).await {
+        Ok(waited) => waited
+            .map_err(HomeError::ReleaseWaiterStopped)?
+            .map_err(|source| HomeError::WaitForLock {
+                path: data_dir.join(ENGINE_DIRECTORY_LOCK),
+                source,
+            }),
+        Err(_) => Err(HomeError::EngineStillOpen {
+            path: data_dir.to_path_buf(),
+        }),
+    }
+}
+
 /// A holder's stop, retire or quit is acknowledged only after this resolves
 /// (Lean `ClientInstallation.acknowledgement_requires_closed_store`).
 #[derive(Debug, Clone)]

@@ -53,7 +53,15 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
     Ok(())
 }
 
-async fn fresh_protected_store(home: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+/// A fresh protected store at `home` and the lock it is held under.
+struct LockedStore {
+    data: std::path::PathBuf,
+    lock: home::StoreLock,
+    key: StoreKey,
+    node: std::sync::Arc<dyn NodeIdentity>,
+}
+
+async fn locked_fresh_store(home: &std::path::Path) -> anyhow::Result<LockedStore> {
     let data = home.join("data");
     let (lock_home, lock_data) = (home.to_owned(), data.clone());
     let lock = tokio::task::spawn_blocking(move || {
@@ -85,8 +93,93 @@ async fn fresh_protected_store(home: &std::path::Path) -> anyhow::Result<std::pa
             super::document_acp::DocumentAcp::Local,
         )
         .await?;
-    drop(lock);
-    Ok(data)
+    Ok(LockedStore {
+        data,
+        lock,
+        key,
+        node,
+    })
+}
+
+async fn fresh_protected_store(home: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    Ok(locked_fresh_store(home).await?.data)
+}
+
+/// Notified when a node build starts waiting for a stopped node's engine.
+struct EngineWait(std::sync::Arc<tokio::sync::Notify>);
+
+impl<S> tracing_subscriber::Layer<S> for EngineWait
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        let metadata = event.metadata();
+        if *metadata.level() == tracing::Level::DEBUG
+            && metadata.target() == "gents_store::local::home::lock"
+        {
+            self.0.notify_one();
+        }
+    }
+}
+
+/// A node the store's holder shut down keeps the data directory until its
+/// engine drops with the node's last handle; here another handle of the node
+/// outlives the caller's drop, as defra-node's own can. The next node
+/// built over the store waits for that engine instead of failing with
+/// "database directory is already locked" (`tla/StoreReopen.tla`;
+/// `MCStoreReopenNoWait` is the failure).
+#[tokio::test]
+async fn the_next_node_waits_for_a_stopped_nodes_engine_to_release_the_store() -> anyhow::Result<()>
+{
+    use tracing_subscriber::layer::SubscriberExt as _;
+    let directory = tempfile::tempdir()?;
+    let store = locked_fresh_store(directory.path()).await?;
+    let (node, _admission) = ProtectedBackendStore::open(&store.data, &store.key, &store.lock)
+        .await?
+        .preflight(
+            &store.key,
+            &store.node,
+            super::document_acp::DocumentAcp::Local,
+        )
+        .await?
+        .start_node_with_projection(
+            &store.key,
+            store.node.clone(),
+            std::convert::identity,
+            std::sync::Arc::new(crate::test_support::NoToolSources),
+            Vec::new(),
+            &crate::node_extension::Extensions::none(),
+        )
+        .await?;
+    node.shutdown().await?;
+    let stopped = std::sync::Arc::clone(&node);
+    drop(node);
+
+    let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::registry().with(EngineWait(waiting.clone())),
+    );
+    let mut reopen = std::pin::pin!(async {
+        ProtectedBackendStore::open(&store.data, &store.key, &store.lock)
+            .await?
+            .preflight(
+                &store.key,
+                &store.node,
+                super::document_acp::DocumentAcp::Local,
+            )
+            .await
+            .map(drop)
+    });
+    tokio::select! {
+        biased;
+        reopened = &mut reopen => {
+            panic!("the next node was built while the stopped node held the store: {reopened:?}")
+        }
+        () = waiting.notified() => {}
+    }
+    drop(stopped);
+    reopen.await?;
+    Ok(())
 }
 
 /// A store a newer release made carries a later lineage marker. It is refused

@@ -13,9 +13,9 @@ pub use init_config::{
 };
 pub use lock::{
     acquire_home_store, acquire_store, acquire_store_at, lock_home_store, lock_store,
-    lock_store_at, reserve_runtime_startup, try_store, wait_for_store_release,
-    RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld, StoreRelease,
-    STORE_RELEASE_WAIT,
+    lock_store_at, reserve_runtime_startup, try_store, wait_for_engine_release,
+    wait_for_store_release, RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld,
+    StoreRelease, STORE_RELEASE_WAIT,
 };
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
@@ -105,6 +105,11 @@ pub enum HomeError {
         #[source]
         source: std::io::Error,
     },
+    #[error(
+        "the store at {} is still held by a node this process stopped; restart the process to release it",
+        path.display()
+    )]
+    EngineStillOpen { path: PathBuf },
     #[error("locking {}", path.display())]
     Lock {
         path: PathBuf,
