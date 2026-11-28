@@ -1,6 +1,7 @@
 ---- MODULE InterruptPartialOutput ----
 \* lean: RequestExecutionLease.providerEofIsFailure
-\* crates: gents, gents-loop, gents-session
+\* crates: gents, gents-loop, gents-inference, gents-session
+\* traces: violates
 (***************************************************************************)
 (* Text a provider has already handed to the owned loop when its request   *)
 (* is interrupted. One provider attempt streams `Chunks` text              *)

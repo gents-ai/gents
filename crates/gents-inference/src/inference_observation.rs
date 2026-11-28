@@ -78,6 +78,20 @@ impl InferenceObservationRegistry {
         })
     }
 
+    pub fn received_text_chunks(
+        &self,
+        key: &InferenceKey,
+    ) -> Option<tokio::sync::watch::Receiver<usize>> {
+        let entries = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        match entries.get(key)?.observation.as_ref()? {
+            ProviderObservation::Attempt {
+                activity: Some(activity),
+                ..
+            } => Some(activity.received_text_chunks()),
+            _ => None,
+        }
+    }
+
     pub fn snapshot(&self, key: &InferenceKey) -> Option<InferenceSnapshot> {
         let mut entries = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let entry = entries.get_mut(key)?;

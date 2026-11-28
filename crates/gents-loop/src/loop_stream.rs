@@ -759,6 +759,11 @@ where
                                 (None, Some(next_item.await))
                             }
                         };
+                        if let (Some(Ok(Some(Ok(StreamedAssistantContent::Text(_))))), Some(activity)) =
+                            (&next.1, poll_activity.as_ref())
+                        {
+                            activity.received_text();
+                        }
                         let _ = reply.send((stream, next));
                     }));
                     // `drive_admissions` resumes this generator only after the
@@ -821,6 +826,7 @@ where
                         saw_stream_item = true;
                         item
                     }
+                    Err(_) if saw_stream_item && activity.as_deref().is_some_and(crate::provider_activity::ProviderActivity::unterminated_eof) => break,
                     Err(failure) => {
                         let failure = retry.read_failure(failure.classify(), Utc::now());
                         drop(stream);
