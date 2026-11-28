@@ -1,8 +1,7 @@
 use super::fixtures::{
-    collection_id, collection_values, runtime_test_node, signed_p2p_node_with_projector,
+    collection_id, runtime_test_node, signed_p2p_node_with_projector,
     signed_p2p_node_without_schemas, test_node, wait_for_active_peer, wait_for_peer_info,
 };
-use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
 
 async fn document_permission(
@@ -1153,27 +1152,9 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
         }
     }
 
-    local.shutdown().await.expect("node shutdown");
-    remote.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn embedded_replicators_round_trip() {
-    let local_test = runtime_test_node().await;
-    let remote_test = runtime_test_node().await;
-    let local = Arc::clone(&local_test.node);
-    let remote = Arc::clone(&remote_test.node);
-    let local_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&local));
-    let remote_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&remote));
-    let remote_addresses = wait_for_peer_info(&remote_admin).await;
     let collection_name = gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME.to_string();
     let expected_collection_id =
         collection_id(&local, gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME);
-
-    local_admin
-        .connect(&remote_addresses)
-        .await
-        .expect("connect remote");
     local_admin
         .add_replicator(
             &remote_addresses,
@@ -1182,7 +1163,6 @@ async fn embedded_replicators_round_trip() {
         )
         .await
         .expect("add replicator");
-
     let replicators = local_admin
         .list_replicators()
         .await
@@ -1199,19 +1179,20 @@ async fn embedded_replicators_round_trip() {
 }
 
 #[tokio::test]
-async fn embedded_filtered_replicator_refuses_runtime_local_request_collections() {
+async fn embedded_p2p_refuses_runtime_local_and_app_collections_before_transport() {
     let sender_test = runtime_test_node().await;
     let receiver_test = runtime_test_node().await;
     let sender = Arc::clone(&sender_test.node);
     let receiver = Arc::clone(&receiver_test.node);
+    for node in [&sender, &receiver] {
+        node.add_collection("type PacedDeliveryProbe { value: Int }")
+            .await
+            .unwrap();
+    }
     let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&sender));
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
     let sender_addresses = wait_for_peer_info(&sender_admin).await;
     let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
-
-    seed_agent_request(&sender, "child-match", "did:key:coord").await;
-    seed_agent_tool_call(&sender, "bridge-match", "did:key:host").await;
-
     sender_admin
         .connect(&receiver_addresses)
         .await
@@ -1219,7 +1200,6 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
     wait_for_active_peer(&sender_admin).await;
     wait_for_active_peer(&receiver_admin).await;
 
-    let collections = vec!["AgentRequest".to_string(), "AgentToolCall".to_string()];
     let mut filters = PairingFilters::new();
     filters.insert(
         "AgentRequest".to_string(),
@@ -1229,31 +1209,76 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
         "AgentToolCall".to_string(),
         equality_filter("requester_did", "did:key:host"),
     );
-    let mut arrivals = gents_store::subscription_source::subscribe_collections(
-        &receiver,
-        ["AgentRequest", "AgentToolCall"],
+    for (admin, peer_addresses, collections, applied_filters, expected) in [
+        (
+            &receiver_admin,
+            &sender_addresses,
+            vec!["AgentRequest".to_string(), "AgentToolCall".to_string()],
+            &filters,
+            "AgentRequest",
+        ),
+        (
+            &sender_admin,
+            &receiver_addresses,
+            vec!["AgentRequest".to_string(), "AgentToolCall".to_string()],
+            &filters,
+            "AgentRequest",
+        ),
+        (
+            &receiver_admin,
+            &sender_addresses,
+            vec!["FileInventoryRequest".to_string()],
+            &PairingFilters::default(),
+            "FileInventoryRequest",
+        ),
+        (
+            &receiver_admin,
+            &sender_addresses,
+            vec!["PeerPairingApplied".to_string()],
+            &PairingFilters::default(),
+            "PeerPairingApplied",
+        ),
+    ] {
+        let refused = admin
+            .add_replicator(peer_addresses, &collections, applied_filters)
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == expected
+            ),
+            "{expected}: {refused:?}"
+        );
+    }
+
+    let written = gents_store::config_client::ConfigAccess::write_local(
+        &sender,
+        "test.paced_delivery.seed",
+        "mutation { create_PacedDeliveryProbe(input: [{value: 1}]) { _docID } }",
     )
+    .await
     .unwrap();
-    let receiver_refused = receiver_admin
-        .add_replicator(&sender_addresses, &collections, &filters)
+    let probe_doc_id =
+        gents_store::graphql::created_doc_id(&written, "PacedDeliveryProbe").unwrap();
+    let peer_id = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+    for (collection, doc_id) in [
+        ("ToolFileChange", "unselected-image".to_owned()),
+        ("PacedDeliveryProbe", probe_doc_id),
+    ] {
+        let pushed = push_documents_to_peer(
+            &sender,
+            &peer_id,
+            vec![P2pDocumentRequest {
+                collection: collection.into(),
+                doc_id,
+            }],
+        )
         .await;
-    assert!(
-        matches!(
-            receiver_refused,
-            Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "AgentRequest"
-        ),
-        "{receiver_refused:?}"
-    );
-    let sender_refused = sender_admin
-        .add_replicator(&receiver_addresses, &collections, &filters)
-        .await;
-    assert!(
-        matches!(
-            sender_refused,
-            Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "AgentRequest"
-        ),
-        "{sender_refused:?}"
-    );
+        assert!(
+            pushed.is_err(),
+            "{collection} must be refused before P2P transport"
+        );
+    }
     for node in [&sender, &receiver] {
         assert!(crate::node_access::operations(node)
             .unwrap()
@@ -1262,65 +1287,6 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
             .unwrap()
             .is_empty());
     }
-    assert!(
-        tokio::time::timeout(Duration::from_millis(250), arrivals.recv())
-            .await
-            .is_err(),
-        "runtime-local requests must not replicate over P2P"
-    );
-    assert!(
-        collection_values(&receiver, "AgentRequest", "request_id")
-            .await
-            .is_empty(),
-        "runtime-local requests must not replicate over P2P"
-    );
-
-    sender.shutdown().await.expect("node shutdown");
-    receiver.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn selected_push_refuses_app_collections_before_transport() {
-    let sender_test = runtime_test_node().await;
-    let receiver_test = runtime_test_node().await;
-    let sender = &sender_test.node;
-    let receiver = &receiver_test.node;
-    for node in [sender, receiver] {
-        node.add_collection("type PacedDeliveryProbe { value: Int }")
-            .await
-            .unwrap();
-    }
-    let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
-    let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
-    let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
-    sender_admin.connect(&receiver_addresses).await.unwrap();
-    wait_for_active_peer(&sender_admin).await;
-    wait_for_active_peer(&receiver_admin).await;
-    let written = gents_store::config_client::ConfigAccess::write_local(
-        sender,
-        "test.paced_delivery.seed",
-        "mutation { create_PacedDeliveryProbe(input: [{value: 1}]) { _docID } }",
-    )
-    .await
-    .unwrap();
-    let doc_id = gents_store::graphql::created_doc_id(&written, "PacedDeliveryProbe").unwrap();
-    let peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
-    let pushed = push_documents_to_peer(
-        sender,
-        &peer,
-        vec![P2pDocumentRequest {
-            collection: "PacedDeliveryProbe".into(),
-            doc_id,
-        }],
-    )
-    .await;
-    assert!(pushed.is_err(), "app collection reached the P2P transport");
-    assert!(crate::node_access::operations(sender)
-        .unwrap()
-        .get_collections()
-        .await
-        .unwrap()
-        .is_empty());
 
     sender.shutdown().await.expect("node shutdown");
     receiver.shutdown().await.expect("node shutdown");

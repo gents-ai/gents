@@ -118,10 +118,16 @@ fn generated_bind_cases_match_listener_validation() {
 async fn generated_request_cases_bind_real_requests() {
     let cases = model_cases();
     assert_eq!(cases.requests.len(), 8);
+    let http = client();
+    let open = serve(|addr| stub_router(addr, None)).await;
+    let protected = serve(|addr| stub_router(addr, Some("scrape-secret"))).await;
     for case in cases.requests {
-        let token = case.token_configured.then_some("scrape-secret");
-        let served = serve(|addr| stub_router(addr, token)).await;
-        let mut request = client().get(format!("{}/metrics", served.endpoint));
+        let served = if case.token_configured {
+            &protected
+        } else {
+            &open
+        };
+        let mut request = http.get(format!("{}/metrics", served.endpoint));
         if case.token_presented {
             request = request.bearer_auth("scrape-secret");
         }

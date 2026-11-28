@@ -68,34 +68,12 @@ pub(crate) fn state() -> RuntimeHttpState {
 }
 
 #[tokio::test]
-async fn inference_activity_requires_authenticated_identity() {
+async fn inference_activity_and_backend_discovery_require_authenticated_identity() {
     let app = Router::new()
         .route(
             gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
-        .with_state(state());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    }));
-    let response = reqwest::Client::new()
-        .post(format!("http://{address}{}", gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH))
-        .json(&json!({"node":"node", "session":"session", "request":"request", "generation":"generation"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "no-store"
-    );
-}
-
-#[tokio::test]
-async fn backend_discovery_requires_authenticated_identity() {
-    let app = Router::new()
         .route(
             crate::http::inference_activity::BACKEND_DISCOVERY_PATH,
             post(crate::http::inference_activity::discover_backend),
@@ -106,20 +84,30 @@ async fn backend_discovery_requires_authenticated_identity() {
     let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     }));
-    let response = reqwest::Client::new()
-        .post(format!(
-            "http://{address}{}",
-            crate::http::inference_activity::BACKEND_DISCOVERY_PATH
-        ))
-        .json(&json!({"node_did":"node", "backend_id":"backend"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "no-store"
-    );
+    let client = reqwest::Client::new();
+    for (path, payload) in [
+        (
+            gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH,
+            json!({"node":"node", "session":"session", "request":"request", "generation":"generation"}),
+        ),
+        (
+            crate::http::inference_activity::BACKEND_DISCOVERY_PATH,
+            json!({"node_did":"node", "backend_id":"backend"}),
+        ),
+    ] {
+        let response = client
+            .post(format!("http://{address}{path}"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store",
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1393,36 +1381,55 @@ async fn disabled_p2p_metrics_skip_live_status_fetch() {
     assert!(snapshot.sync_status.is_none());
 }
 
-async fn usage_route(
-    state: &RuntimeHttpState,
-    command: crate::usage_read::UsageReadCommand,
-    bearer: Option<&dyn gents_store::identity::NodeIdentity>,
-) -> (StatusCode, Value) {
-    let app = Router::new()
-        .route("/accounts/usage/read", post(account_usage_read_handler))
-        .with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    }));
-    let client = reqwest::Client::new();
-    let request = client
-        .post(format!("http://{address}/accounts/usage/read"))
-        .json(&command);
-    let request = if let Some(identity) = bearer {
-        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), identity.did())
+struct UsageServer {
+    address: std::net::SocketAddr,
+    client: reqwest::Client,
+    _server: tokio_util::task::AbortOnDropHandle<()>,
+}
+
+impl UsageServer {
+    async fn start(state: &RuntimeHttpState) -> Self {
+        let app = Router::new()
+            .route("/accounts/usage/read", post(account_usage_read_handler))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        Self {
+            address,
+            client: reqwest::Client::new(),
+            _server: server,
+        }
+    }
+
+    async fn post(
+        &self,
+        command: crate::usage_read::UsageReadCommand,
+        bearer: Option<&dyn gents_store::identity::NodeIdentity>,
+    ) -> (StatusCode, Value) {
+        let request = self
+            .client
+            .post(format!("http://{}/accounts/usage/read", self.address))
+            .json(&command);
+        let request = if let Some(identity) = bearer {
+            GraphqlEndpoint::as_principal(
+                format!("http://{}/api/v0/graphql", self.address),
+                identity.did(),
+            )
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap()
             .authorize_runtime(request)
             .await
             .unwrap()
-    } else {
-        request
-    };
-    let response = request.send().await.unwrap();
-    let status = response.status();
-    (status, response.json().await.expect("usage json"))
+        } else {
+            request
+        };
+        let response = request.send().await.unwrap();
+        let status = response.status();
+        (status, response.json().await.expect("usage json"))
+    }
 }
 
 fn usage_command(signer_did: &str) -> crate::usage_read::UsageReadCommand {
@@ -1438,7 +1445,8 @@ fn usage_command(signer_did: &str) -> crate::usage_read::UsageReadCommand {
 
 #[tokio::test]
 async fn account_usage_route_is_unavailable_before_activation() {
-    let (status, body) = usage_route(&state(), usage_command("did:key:zAgent"), None).await;
+    let server = UsageServer::start(&state()).await;
+    let (status, body) = server.post(usage_command("did:key:zAgent"), None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(body["error"].is_string(), "{body}");
 }
@@ -1464,6 +1472,7 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     *state.enrollment_decisions.write().await = Some(
         crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node),
     );
+    let server = UsageServer::start(&state).await;
     let signed = |identity: &Arc<dyn gents_store::identity::NodeIdentity>| {
         let identity = identity.clone();
         async move {
@@ -1477,18 +1486,21 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
         }
     };
 
-    let (status, body) =
-        usage_route(&state, usage_command(owner.did()), Some(owner.as_ref())).await;
+    let (status, body) = server
+        .post(usage_command(owner.did()), Some(owner.as_ref()))
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "unsigned: {body}");
-    let (status, body) = usage_route(&state, signed(&other).await, Some(other.as_ref())).await;
+    let (status, body) = server
+        .post(signed(&other).await, Some(other.as_ref()))
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign: {body}");
 
     let command = signed(&owner).await;
-    let (status, body) = usage_route(&state, command.clone(), Some(other.as_ref())).await;
+    let (status, body) = server.post(command.clone(), Some(other.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "bearer mismatch: {body}");
-    let (status, body) = usage_route(&state, command.clone(), Some(owner.as_ref())).await;
+    let (status, body) = server.post(command.clone(), Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "signed: {body}");
-    let (status, body) = usage_route(&state, command, Some(owner.as_ref())).await;
+    let (status, body) = server.post(command, Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
 }
 

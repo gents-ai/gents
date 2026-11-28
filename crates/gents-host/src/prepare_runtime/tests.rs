@@ -147,49 +147,53 @@ fn preparation_endpoint_excludes_remote_hosts_credentials_and_ambiguous_routes()
 }
 
 #[tokio::test]
-async fn preparation_control_verifies_live_receipts_and_rejects_tampering() {
+async fn preparation_control_verifies_live_receipts_and_rejects_tampering_or_foreign_node() {
     let client = reqwest::Client::new();
-    for tamper in [false, true] {
-        let node = control_node(tamper).await;
-        let result = control(
-            &client,
-            &node.endpoint,
-            node.identity.did(),
-            RuntimeOperation::Observe,
-            None,
-        )
-        .await;
-        if tamper {
-            assert_eq!(
-                result.unwrap_err().reason().unwrap(),
-                RuntimePreparationRefusal::InvalidHome
-            );
-        } else {
-            assert_eq!(result.unwrap().unwrap().build, "b".repeat(64));
-        }
-        assert_eq!(node.seen.lock().unwrap().len(), 1);
-    }
-}
+    let valid_node = control_node(false).await;
+    let observed = control(
+        &client,
+        &valid_node.endpoint,
+        valid_node.identity.did(),
+        RuntimeOperation::Observe,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(observed.build, "b".repeat(64));
 
-#[tokio::test]
-async fn preparation_control_refuses_a_signed_receipt_for_another_node() {
-    let node = control_node(false).await;
     let foreign = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(foreign.path().join("key"), None).unwrap();
-    let error = control(
-        &reqwest::Client::new(),
-        &node.endpoint,
-        identity.did(),
+    let foreign_identity = KeyIdentity::load_or_create(foreign.path().join("key"), None).unwrap();
+    let foreign_error = control(
+        &client,
+        &valid_node.endpoint,
+        foreign_identity.did(),
         RuntimeOperation::Observe,
         None,
     )
     .await
     .unwrap_err();
     assert_eq!(
-        error.reason().unwrap(),
+        foreign_error.reason().unwrap(),
         RuntimePreparationRefusal::InvalidHome
     );
-    assert_eq!(node.seen.lock().unwrap().len(), 1);
+    assert_eq!(valid_node.seen.lock().unwrap().len(), 2);
+
+    let tampered_node = control_node(true).await;
+    let tampered_error = control(
+        &client,
+        &tampered_node.endpoint,
+        tampered_node.identity.did(),
+        RuntimeOperation::Observe,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        tampered_error.reason().unwrap(),
+        RuntimePreparationRefusal::InvalidHome
+    );
+    assert_eq!(tampered_node.seen.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -319,11 +323,29 @@ fn changed_root_requires_an_existing_absolute_directory() {
     );
 }
 
-#[tokio::test]
-async fn live_authority_must_match_the_saved_ceiling_before_retirement() {
-    let node = control_node(false).await;
+fn fixture_init_config(home: &Path, node_did: &str, key_path: &Path) -> StoredInitConfig {
+    StoredInitConfig {
+        home: home.to_string_lossy().into_owned(),
+        node_name: "fixture".into(),
+        node_did: node_did.to_owned(),
+        key_path: Some(key_path.to_string_lossy().into_owned()),
+        identity_backend: Some("file".into()),
+        keychain_label: None,
+        secure_enclave_label: None,
+        tool_package: None,
+        tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
+        tool_root: None,
+        store_encryption: None,
+        document_acp: Default::default(),
+        client_identity: None,
+        registry: None,
+    }
+}
+
+#[test]
+fn live_authority_must_match_the_saved_ceiling_before_retirement() {
     let home = tempfile::tempdir().unwrap();
-    let config = record_home(&node, home.path());
+    let config = fixture_init_config(home.path(), "did:key:fixture", &home.path().join("key"));
     let valid = serde_json::json!({
         "node_did": config.node_did.as_str(),
         "tool_ceiling": "meta-only",
@@ -448,11 +470,11 @@ async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
     assert!(node.seen.lock().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn changed_home_configuration_is_not_overwritten_at_readiness() {
-    let node = control_node(false).await;
+#[test]
+fn changed_home_configuration_is_not_overwritten_at_readiness() {
     let home = tempfile::tempdir().unwrap();
-    let original = record_home(&node, home.path());
+    let original = fixture_init_config(home.path(), "did:key:fixture", &home.path().join("key"));
+    gents_service::home_state::write_init_config(home.path(), &original).unwrap();
     let mut requested = original.clone();
     requested.tool_root = Some("/workspace".into());
     let mut concurrent = original.clone();
@@ -468,22 +490,7 @@ async fn changed_home_configuration_is_not_overwritten_at_readiness() {
 
 fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
     let key = node._home.path().join("key");
-    let config = StoredInitConfig {
-        home: home.to_string_lossy().into_owned(),
-        node_name: "fixture".into(),
-        node_did: node.identity.did().to_owned(),
-        key_path: Some(key.to_string_lossy().into_owned()),
-        identity_backend: Some("file".into()),
-        keychain_label: None,
-        secure_enclave_label: None,
-        tool_package: None,
-        tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
-        tool_root: None,
-        store_encryption: None,
-        document_acp: Default::default(),
-        client_identity: None,
-        registry: None,
-    };
+    let config = fixture_init_config(home, node.identity.did(), &key);
     gents_service::home_state::write_init_config(home, &config).unwrap();
     gents_service::home_state::write_runtime_state(
         home,

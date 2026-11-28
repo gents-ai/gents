@@ -113,7 +113,7 @@ fn mac_restarts_clean_exits_with_bounded_throttle() -> Result<()> {
 }
 
 #[test]
-fn linux_restarts_clean_exits_with_existing_fatal_exit_fences() -> Result<()> {
+fn linux_unit_definition_sets_restart_policy_refusal_fences_and_private_mode() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     manager(
@@ -122,31 +122,24 @@ fn linux_restarts_clean_exits_with_existing_fatal_exit_fences() -> Result<()> {
         ScriptedRunner::with_outputs([ok(), ok()]),
     )
     .install()?;
-    let definition = fs::read_to_string(config.definition_path(NativeServicePlatform::Linux))?;
+    let path = config.definition_path(NativeServicePlatform::Linux);
+    let definition = fs::read_to_string(&path)?;
     assert!(definition.lines().any(|line| line == "Restart=always"));
     assert!(definition.lines().any(|line| line == "RestartSec=2"));
-    Ok(())
-}
-
-#[test]
-fn systemd_does_not_restart_refusals() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let config = config(temp.path(), "gents");
-    manager(
-        config.clone(),
-        NativeServicePlatform::Linux,
-        ScriptedRunner::with_outputs([ok(), ok()]),
-    )
-    .install()?;
-    let definition = fs::read_to_string(config.definition_path(NativeServicePlatform::Linux))?;
     assert!(definition
         .lines()
         .any(|line| line == "RestartPreventExitStatus=65 66 67 68 69 72"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "native service definition must be mode 0600");
+    }
     Ok(())
 }
 
 #[test]
-fn mac_loaded_but_exited_job_is_not_running() -> Result<()> {
+fn mac_loaded_non_running_states_are_transitioning_not_running() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     let runner = ScriptedRunner::with_outputs([
@@ -156,15 +149,24 @@ fn mac_loaded_but_exited_job_is_not_running() -> Result<()> {
         output(true, "state = exited\npid = 44", ""),
         output(true, "501", ""),
         output(true, "{}", ""),
+        output(true, "501", ""),
+        output(true, "state = spawn scheduled", ""),
+        output(true, "501", ""),
+        output(true, "{}", ""),
     ]);
     let service = manager(config, NativeServicePlatform::Macos, runner);
     service.install()?;
-    let status = service.status()?;
-    assert!(status.installed);
-    assert!(!status.running, "an exited launchd job must not be running");
-    assert!(status.job_loaded, "an exited launchd job remains loaded");
-    assert!(status.is_active_or_transitioning());
-    assert!(status.enabled, "print-disabled did not disable the label");
+    for label in ["exited", "spawn scheduled"] {
+        let status = service.status()?;
+        assert!(status.installed, "{label}");
+        assert!(!status.running, "{label} job must not be running");
+        assert!(status.job_loaded, "{label} job remains loaded");
+        assert!(status.is_active_or_transitioning(), "{label}");
+        assert!(
+            status.enabled,
+            "{label}: print-disabled did not disable the label"
+        );
+    }
     Ok(())
 }
 
@@ -332,55 +334,7 @@ fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement
 }
 
 #[test]
-fn status_for_missing_definition_does_not_create_home_or_service_directories() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let root = temp.path().join("missing-root");
-    let config = NativeServiceConfig {
-        home: root.join("agent-home"),
-        executable: root.join("gents"),
-        user_home: root.clone(),
-        service_config_dir: root.join("service-definitions"),
-        search_path: None,
-        associated_bundle_id: None,
-        stderr_path: None,
-    };
-    let status = manager(
-        config,
-        NativeServicePlatform::Linux,
-        ScriptedRunner::default(),
-    )
-    .status()?;
-    assert!(!status.installed && !status.running && !status.enabled);
-    assert!(
-        !root.exists(),
-        "status must not create a host home or service directory"
-    );
-    Ok(())
-}
-
-#[test]
-fn mac_spawn_scheduled_job_is_loaded_but_not_running() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let config = config(temp.path(), "gents");
-    let runner = ScriptedRunner::with_outputs([
-        output(true, "501", ""),
-        ok(),
-        output(true, "501", ""),
-        output(true, "state = spawn scheduled", ""),
-        output(true, "501", ""),
-        output(true, "{}", ""),
-    ]);
-    let service = manager(config, NativeServicePlatform::Macos, runner);
-    service.install()?;
-    let status = service.status()?;
-    assert!(!status.running);
-    assert!(status.job_loaded);
-    assert!(status.is_active_or_transitioning());
-    Ok(())
-}
-
-#[test]
-fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
+fn missing_definition_status_and_stop_do_not_mutate_host() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let root = temp.path().join("missing-root");
     let config = NativeServiceConfig {
@@ -393,9 +347,15 @@ fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
         stderr_path: None,
     };
     let runner = ScriptedRunner::default();
-    manager(config, NativeServicePlatform::Linux, runner.clone()).stop(true)?;
+    let svc = manager(config, NativeServicePlatform::Linux, runner.clone());
+    let status = svc.status()?;
+    assert!(!status.installed && !status.running && !status.enabled);
+    svc.stop(true)?;
     assert!(runner.calls().is_empty());
-    assert!(!root.exists());
+    assert!(
+        !root.exists(),
+        "status and stop must not create a host home or service directory"
+    );
     Ok(())
 }
 
@@ -430,27 +390,6 @@ fn mac_loaded_job_without_a_definition_is_observed_and_stopped() -> Result<()> {
         1,
         "{calls:?}"
     );
-    Ok(())
-}
-
-#[cfg(unix)]
-#[test]
-fn native_definition_is_private_to_the_user() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let temp = tempfile::tempdir()?;
-    let config = config(temp.path(), "gents");
-    manager(
-        config.clone(),
-        NativeServicePlatform::Linux,
-        ScriptedRunner::with_outputs([ok(), ok()]),
-    )
-    .install()?;
-    let mode = fs::metadata(config.definition_path(NativeServicePlatform::Linux))?
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "native service definition must be mode 0600");
     Ok(())
 }
 
@@ -495,27 +434,20 @@ fn a_new_definition_logs_to_the_shared_error_log() -> Result<()> {
 }
 
 #[test]
-fn job_pid_reads_launchd_print() -> Result<()> {
+fn job_pid_parses_launchd_and_systemd_outputs() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
-    let runner = ScriptedRunner::with_outputs([
+    let mac_runner = ScriptedRunner::with_outputs([
         output(true, "501", ""),
         output(true, "state = running\n\tpid = 4312\n", ""),
     ]);
     assert_eq!(
-        manager(config, NativeServicePlatform::Macos, runner).job_pid()?,
+        manager(config.clone(), NativeServicePlatform::Macos, mac_runner).job_pid()?,
         Some(4312)
     );
-    Ok(())
-}
-
-#[test]
-fn linux_job_pid_zero_is_none() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let config = config(temp.path(), "gents");
-    let runner = ScriptedRunner::with_outputs([output(true, "0\n", "")]);
+    let linux_runner = ScriptedRunner::with_outputs([output(true, "0\n", "")]);
     assert_eq!(
-        manager(config, NativeServicePlatform::Linux, runner).job_pid()?,
+        manager(config, NativeServicePlatform::Linux, linux_runner).job_pid()?,
         None
     );
     Ok(())
