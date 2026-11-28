@@ -271,27 +271,10 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
             collection.name.as_str(),
             "AgentRequest" | "AgentSession" | "Agent" | "Node" | "NodeJoinRequest"
         )));
-    core.shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_blank_request_or_session_id_is_retained_under_the_identity_delivery_uses() -> Result<()>
-{
-    let directory = tempfile::tempdir()?;
-    let paths = DesktopPaths::from_root(directory.path());
-    let core = Arc::new(
-        ClientRuntime::start_with_paths_and_options(
-            paths,
-            crate::client_test_support::file_journal_options(),
-        )
-        .await?,
-    );
-    core.stop_observer_for_test().await;
-    let node_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    // Blank request/session IDs are retained under a real identity on an unreachable runtime.
+    let unreachable_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     core.connect_runtime(RuntimeConnection {
-        node_did: node_did.into(),
+        node_did: unreachable_did.into(),
         label: "Unreachable runtime".into(),
         graphql: "http://127.0.0.1:9/api/v0/graphql".into(),
         local_node_home: None,
@@ -299,9 +282,9 @@ async fn a_blank_request_or_session_id_is_retained_under_the_identity_delivery_u
         access_state: None,
     })
     .await?;
-    let saved = core
+    let blank_saved = core
         .send_message(MessageSendInput {
-            node_did: node_did.into(),
+            node_did: unreachable_did.into(),
             session_id: Some("  ".into()),
             request_id: Some(" ".into()),
             content: "Retain this under a real identity".into(),
@@ -309,15 +292,22 @@ async fn a_blank_request_or_session_id_is_retained_under_the_identity_delivery_u
         })
         .await
         .unwrap_err();
-    let saved = saved
+    let blank_saved = blank_saved
         .downcast_ref::<SavedForDelivery>()
         .context("the chat is saved for delivery")?;
-    assert!(!saved.submission_id.trim().is_empty());
-    assert_eq!(saved.submission_id, saved.submission_id.trim());
-    assert_eq!(saved.session_id, saved.submission_id);
-    let pending = outbox::pending(&core.node_arc(), core.node_identity().did(), node_did).await?;
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].submission_id, saved.submission_id);
+    assert!(!blank_saved.submission_id.trim().is_empty());
+    assert_eq!(blank_saved.submission_id, blank_saved.submission_id.trim());
+    assert_eq!(blank_saved.session_id, blank_saved.submission_id);
+    let blank_pending = outbox::pending(
+        &core.node_arc(),
+        core.node_identity().did(),
+        unreachable_did,
+    )
+    .await?;
+    assert_eq!(blank_pending.len(), 1);
+    assert_eq!(blank_pending[0].submission_id, blank_saved.submission_id);
+
     core.shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }

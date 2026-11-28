@@ -553,80 +553,48 @@ mod provider_account_tests {
         assert_user_facing(&missing_endpoint);
 
         let runtime = served().await;
-        require_reachable_configuration(
-            Ok(runtime.user_access()),
-            runtime.node_did(),
-            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        let node_did = runtime.node_did();
+        let claude = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        require_reachable_configuration(Ok(runtime.user_access()), node_did, claude)
+            .await
+            .expect("a serving runtime admits sign-in");
+
+        // Retry only consumes a credential held for the matching (node, provider).
+        let wrong_key_pending = PendingOAuthCredentials::default();
+        let _ = save_issued_credential(
+            &wrong_key_pending,
+            Ok(unreachable_operator()),
+            wrong_key_pending.issue(issued_credential("did:key:zAgent")),
         )
-        .await
-        .expect("a serving runtime admits sign-in");
-    }
-
-    fn held_tokens(pending: &PendingOAuthCredentials, node_did: &str) -> Vec<String> {
-        pending
-            .held_for(node_did)
-            .into_iter()
-            .map(|credential| credential.access_token)
-            .collect()
-    }
-
-    fn credential_with_token(node_did: &str, token: &str) -> OAuthCredential {
-        OAuthCredential {
-            access_token: token.to_string(),
-            ..issued_credential(node_did)
+        .await;
+        for (target_node, target_provider) in [
+            ("did:key:zOther", claude),
+            (
+                "did:key:zAgent",
+                gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            ),
+        ] {
+            let error = retry_pending_credential(
+                &wrong_key_pending,
+                Ok(runtime.user_access()),
+                target_node,
+                target_provider,
+            )
+            .await
+            .expect_err("no credential is held for this key");
+            assert_eq!(error.code, BridgeErrorCode::NotFound);
         }
-    }
-
-    #[tokio::test]
-    async fn a_desktop_sign_in_writes_its_own_key() {
-        let runtime = served().await;
-        let node_did = runtime.node_did();
-        let provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-        let keyed = OAuthCredential {
-            credential_id: format!("{provider}:{node_did}"),
-            provider: provider.to_string(),
-            provider_account_key: Some("user:key-1".to_string()),
-            account_id: None,
-            label: None,
-            ..issued_credential(node_did)
-        };
-        gents_inference::auth::credential::upsert_oauth_credential_on(
-            &runtime.user_access(),
-            &keyed,
-        )
-        .await
-        .expect("seed a keyed row");
-
-        let keyless = gents_inference::auth::xai_login::credential_from_login_tokens(
-            node_did,
-            provider,
-            &gents_inference::auth::xai_login::XaiLoginTokens {
-                access_token: "not-a-jwt".to_string(),
-                refresh_token: "keyless-refresh".to_string(),
-                id_token: None,
-                expires_in: Some(900),
-            },
-            chrono::Utc::now(),
+        assert_eq!(
+            held_tokens(&wrong_key_pending, "did:key:zAgent"),
+            ["issued-access"]
         );
-        let pending = PendingOAuthCredentials::default();
-        save_issued_credential(&pending, Ok(runtime.user_access()), pending.issue(keyless))
-            .await
-            .expect("save the sign-in");
 
-        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
-            .await
-            .expect("list stored credentials");
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].refresh_token, "keyless-refresh");
-        assert_eq!(stored[0].provider_account_key, None);
-    }
-
-    #[tokio::test]
-    async fn failed_save_holds_the_issued_credential_and_retry_saves_it_without_login() {
+        // Failed save holds the credential, observation redacts tokens, and retry persists it.
         let pending = PendingOAuthCredentials::default();
-        let runtime = served().await;
-        let node_did = runtime.node_did();
-        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let unobserved = observe_provider_accounts(&pending, Ok(unreachable_operator()), node_did)
+            .await
+            .expect_err("an unreadable store with nothing held stays an error");
+        assert_eq!(unobserved.code, BridgeErrorCode::Unknown);
 
         let error = save_issued_credential(
             &pending,
@@ -644,57 +612,12 @@ mod provider_account_tests {
         assert!(!serialized.contains("issued-refresh"));
         assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
 
-        let still_down = retry_pending_credential(
-            &pending,
-            Err(anyhow::anyhow!("no operator GraphQL endpoint")),
-            node_did,
-            provider,
-        )
-        .await
-        .expect_err("retry against an unavailable runtime fails");
-        assert_eq!(still_down.code, BridgeErrorCode::CredentialNotSaved);
-        assert_user_facing(&still_down);
-        assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
-
-        let saved =
-            retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
-                .await
-                .expect("retry stores the held credential");
-        assert_eq!(saved.access_token, "issued-access");
-        assert!(held_tokens(&pending, node_did).is_empty());
-        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
-            .await
-            .expect("list stored credentials");
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].provider, provider);
-        assert_eq!(stored[0].access_token, "issued-access");
-        assert_eq!(stored[0].refresh_token, "issued-refresh");
-    }
-
-    #[tokio::test]
-    async fn account_observation_reports_held_sign_ins_without_tokens() {
-        let pending = PendingOAuthCredentials::default();
-        let runtime = served().await;
-        let node_did = runtime.node_did();
-        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-
-        let unobserved = observe_provider_accounts(&pending, Ok(unreachable_operator()), node_did)
-            .await
-            .expect_err("an unreadable store with nothing held stays an error");
-        assert_eq!(unobserved.code, BridgeErrorCode::Unknown);
-
-        let _ = save_issued_credential(
-            &pending,
-            Ok(unreachable_operator()),
-            pending.issue(issued_credential(node_did)),
-        )
-        .await;
         let held = observe_provider_accounts(&pending, Ok(unreachable_operator()), node_did)
             .await
             .expect("held sign-ins are observable while the store is unreachable");
         assert_eq!(held.len(), 1);
         assert!(held[0].pending_save);
-        assert_eq!(held[0].provider, provider);
+        assert_eq!(held[0].provider, claude);
         let json = serde_json::to_string(&held).unwrap();
         assert!(!json.contains("issued-access"));
         assert!(!json.contains("issued-refresh"));
@@ -710,45 +633,91 @@ mod provider_account_tests {
         assert_eq!(with_store.len(), 1);
         assert!(with_store[0].pending_save);
 
-        retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
+        let still_down = retry_pending_credential(
+            &pending,
+            Err(anyhow::anyhow!("no operator GraphQL endpoint")),
+            node_did,
+            claude,
+        )
+        .await
+        .expect_err("retry against an unavailable runtime fails");
+        assert_eq!(still_down.code, BridgeErrorCode::CredentialNotSaved);
+        assert_user_facing(&still_down);
+        assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
+
+        let saved = retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, claude)
             .await
             .expect("retry stores the held credential");
-        let saved = observe_provider_accounts(&pending, Ok(runtime.user_access()), node_did)
+        assert_eq!(saved.access_token, "issued-access");
+        assert!(held_tokens(&pending, node_did).is_empty());
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
+            .await
+            .expect("list stored credentials");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].provider, claude);
+        assert_eq!(stored[0].access_token, "issued-access");
+        assert_eq!(stored[0].refresh_token, "issued-refresh");
+        let observed = observe_provider_accounts(&pending, Ok(runtime.user_access()), node_did)
             .await
             .expect("serving store");
-        assert_eq!(saved.len(), 1);
-        assert!(!saved[0].pending_save);
-        assert_eq!(saved[0].provider, provider);
+        assert_eq!(observed.len(), 1);
+        assert!(!observed[0].pending_save);
+        assert_eq!(observed[0].provider, claude);
+
+        // A desktop sign-in for a disjoint provider writes its own key.
+        let xai = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+        let keyed = OAuthCredential {
+            credential_id: format!("{xai}:{node_did}"),
+            provider: xai.to_string(),
+            provider_account_key: Some("user:key-1".to_string()),
+            account_id: None,
+            label: None,
+            ..issued_credential(node_did)
+        };
+        gents_inference::auth::credential::upsert_oauth_credential_on(
+            &runtime.user_access(),
+            &keyed,
+        )
+        .await
+        .expect("seed a keyed row");
+        let keyless = gents_inference::auth::xai_login::credential_from_login_tokens(
+            node_did,
+            xai,
+            &gents_inference::auth::xai_login::XaiLoginTokens {
+                access_token: "not-a-jwt".to_string(),
+                refresh_token: "keyless-refresh".to_string(),
+                id_token: None,
+                expires_in: Some(900),
+            },
+            chrono::Utc::now(),
+        );
+        save_issued_credential(&pending, Ok(runtime.user_access()), pending.issue(keyless))
+            .await
+            .expect("save the sign-in");
+        let xai_stored: Vec<_> = list_oauth_credentials_on(&runtime.user_access(), node_did)
+            .await
+            .expect("list stored credentials")
+            .into_iter()
+            .filter(|row| row.provider == xai)
+            .collect();
+        assert_eq!(xai_stored.len(), 1);
+        assert_eq!(xai_stored[0].refresh_token, "keyless-refresh");
+        assert_eq!(xai_stored[0].provider_account_key, None);
     }
 
-    #[tokio::test]
-    async fn retry_save_only_uses_a_credential_held_for_that_node_and_provider() {
-        let pending = PendingOAuthCredentials::default();
-        let runtime = served().await;
-        let _ = save_issued_credential(
-            &pending,
-            Ok(unreachable_operator()),
-            pending.issue(issued_credential("did:key:zAgent")),
-        )
-        .await;
+    fn held_tokens(pending: &PendingOAuthCredentials, node_did: &str) -> Vec<String> {
+        pending
+            .held_for(node_did)
+            .into_iter()
+            .map(|credential| credential.access_token)
+            .collect()
+    }
 
-        for (node_did, provider) in [
-            (
-                "did:key:zOther",
-                gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            ),
-            (
-                "did:key:zAgent",
-                gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            ),
-        ] {
-            let error =
-                retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
-                    .await
-                    .expect_err("no credential is held for this key");
-            assert_eq!(error.code, BridgeErrorCode::NotFound);
+    fn credential_with_token(node_did: &str, token: &str) -> OAuthCredential {
+        OAuthCredential {
+            access_token: token.to_string(),
+            ..issued_credential(node_did)
         }
-        assert_eq!(held_tokens(&pending, "did:key:zAgent"), ["issued-access"]);
     }
 
     type Writes = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
@@ -1016,21 +985,52 @@ mod provider_account_tests {
     }
 
     #[tokio::test]
-    async fn a_second_accounts_desktop_sign_in_is_added_beside_the_first() {
+    async fn multi_account_sign_in_labels_refresh_retry_and_discovery() {
+        use gents_documents::BackendAuth;
+        use gents_observe::client_inference::discovery_account;
+
         let runtime = served().await;
         let access = || Ok(runtime.user_access());
         let node_did = runtime.node_did();
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
         let pending = PendingOAuthCredentials::default();
-        let (a, b) = two_accounts(node_did, true);
-        save_issued_credential(&pending, access(), pending.issue(a))
-            .await
-            .expect("save the first account");
+        let labelled =
+            |label: Option<&str>, account: &str, key: Option<&str>, token: &str| OAuthCredential {
+                label: label.map(str::to_string),
+                provider_account_key: key.map(str::to_string).or_else(|| {
+                    claude_sign_in(node_did, Some(account), account, token).provider_account_key
+                }),
+                ..claude_sign_in(node_did, Some(account), account, token)
+            };
+
+        let first_signed = save_issued_credential(
+            &pending,
+            access(),
+            pending.issue(labelled(None, "acct-a", None, "SECRET-a")),
+        )
+        .await
+        .expect("save the first account");
         let first = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
-        let signed = save_issued_credential(&pending, access(), pending.issue(b))
-            .await
-            .expect("save the second account");
+        let signed = save_issued_credential(
+            &pending,
+            access(),
+            pending.issue(labelled(
+                Some("Work"),
+                "acct-b",
+                Some("KEY-SENTINEL"),
+                "SECRET-b",
+            )),
+        )
+        .await
+        .expect("save the second labelled account");
+        let added = SignInView::from(&signed);
+        assert_eq!(added.result, "added");
+        assert_eq!(added.label, "Work");
+        assert!(added.account_ref.is_some());
+        assert_eq!(added.hint, None);
+
         let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
@@ -1039,13 +1039,16 @@ mod provider_account_tests {
         let second = stored
             .iter()
             .find(|row| row.doc_id != first[0].doc_id)
-            .unwrap();
+            .unwrap()
+            .clone();
         assert_eq!(signed.credential.credential_id, second.credential_id);
         assert_ne!(signed.credential.credential_id, first[0].credential_id);
+        assert!(second.account_ref.is_some());
+
         let views = observe_provider_accounts(&pending, access(), node_did)
             .await
             .unwrap();
-        let view = |credential_id: &str| {
+        let view_ref = |credential_id: &str| {
             views
                 .iter()
                 .find(|view| view.credential_id == credential_id)
@@ -1053,9 +1056,140 @@ mod provider_account_tests {
                 .account_ref
                 .clone()
         };
-        assert_eq!(view(&first[0].credential_id), None);
-        assert!(second.account_ref.is_some());
-        assert_eq!(view(&second.credential_id), second.account_ref);
+        assert_eq!(view_ref(&first[0].credential_id), None);
+        assert_eq!(view_ref(&second.credential_id), second.account_ref);
+        let labels: Vec<&str> = views.iter().map(|view| view.label.as_str()).collect();
+        assert_eq!(labels, ["Claude", "Work"]);
+        let views_json = serde_json::to_string(&views).unwrap();
+        assert!(!views_json.contains("SECRET"));
+        assert!(!views_json.contains("KEY-SENTINEL"));
+
+        // Refreshing keeps the existing label even when a new label is passed.
+        let refreshed = SignInView::from(
+            &save_issued_credential(
+                &pending,
+                access(),
+                pending.issue(labelled(None, "acct-b", Some("KEY-SENTINEL"), "SECRET-c")),
+            )
+            .await
+            .expect("refresh the labelled account"),
+        );
+        assert_eq!(refreshed.result, "refreshed");
+        assert_eq!(refreshed.label, "Work");
+        assert_eq!(refreshed.account_ref, added.account_ref);
+        assert!(refreshed
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Work")));
+        let sign_in_json = serde_json::to_string(&[&added, &refreshed]).unwrap();
+        assert!(!sign_in_json.contains("SECRET"));
+
+        for (account, key, kept) in [
+            ("acct-b", Some("KEY-SENTINEL"), "Work"),
+            ("acct-a", None, "Claude"),
+        ] {
+            let refreshed = SignInView::from(
+                &save_issued_credential(
+                    &pending,
+                    access(),
+                    pending.issue(labelled(Some("Spare"), account, key, "SECRET-r")),
+                )
+                .await
+                .expect("refresh the stored account"),
+            );
+            assert_eq!(refreshed.result, "refreshed");
+            assert_eq!(refreshed.label, kept);
+        }
+        let stored_after_refresh = list_oauth_credentials_on(&runtime.user_access(), node_did)
+            .await
+            .unwrap();
+        let effective_labels: Vec<String> = stored_after_refresh
+            .iter()
+            .map(gents_inference::auth::credential::effective_account_label)
+            .collect();
+        assert_eq!(effective_labels, ["Claude", "Work"]);
+
+        // An added account whose requested label is taken falls back to its default label.
+        let taken = save_issued_credential(
+            &pending,
+            access(),
+            pending.issue(labelled(Some("Work"), "acct-c", None, "SECRET-taken")),
+        )
+        .await;
+        assert!(
+            taken.is_ok(),
+            "a stored account is never reported unsaved: {:?}",
+            taken.as_ref().err()
+        );
+        let taken_view = SignInView::from(&taken.unwrap());
+        assert_eq!(taken_view.result, "added");
+        assert_eq!(taken_view.label, "Claude 2");
+
+        // A failed labelled sign-in keeps its label when retried.
+        save_issued_credential(
+            &pending,
+            Ok(unreachable_operator()),
+            pending.issue(labelled(Some("Spare"), "acct-d", None, "SECRET-d")),
+        )
+        .await
+        .expect_err("a runtime that is not serving cannot store the sign-in");
+        retry_pending_credential(&pending, access(), node_did, provider)
+            .await
+            .expect("retry stores the held sign-in");
+        let stored_after_retry = list_oauth_credentials_on(&runtime.user_access(), node_did)
+            .await
+            .unwrap();
+        let spare = stored_after_retry
+            .iter()
+            .find(|row| row.account_id.as_deref() == Some("acct-d"))
+            .expect("the retried account is stored");
+        assert_eq!(spare.label.as_deref(), Some("Spare"));
+
+        // Discovery resolves each account by its backend ref and hides disabled accounts.
+        let user_access = runtime.user_access();
+        let (credential, auth) = discovery_account(
+            &user_access,
+            node_did,
+            provider,
+            second.account_ref.as_deref(),
+        )
+        .await
+        .expect("added account");
+        assert_eq!(
+            credential.map(|row| row.credential_id),
+            Some(second.credential_id.clone())
+        );
+        assert_eq!(
+            auth,
+            BackendAuth::NodeOAuth {
+                account_ref: second.account_ref.clone()
+            }
+        );
+        let (credential, auth) = discovery_account(&user_access, node_did, provider, None)
+            .await
+            .expect("original account");
+        assert_eq!(
+            credential.map(|row| row.credential_id),
+            Some(first_signed.credential.credential_id)
+        );
+        assert_eq!(auth, BackendAuth::NodeOAuth { account_ref: None });
+        gents_inference::auth::credential::set_account_enabled(
+            &user_access,
+            node_did,
+            &second.credential_id,
+            false,
+        )
+        .await
+        .expect("disable the added account");
+        let (credential, _) = discovery_account(
+            &user_access,
+            node_did,
+            provider,
+            second.account_ref.as_deref(),
+        )
+        .await
+        .expect("disabled account");
+        assert_eq!(credential, None);
     }
 
     #[tokio::test]
@@ -1176,202 +1310,6 @@ mod provider_account_tests {
         .expect("resolve")
         .map(|credential| credential.credential_id);
         assert_eq!(first_match, resolved);
-    }
-
-    #[tokio::test]
-    async fn the_account_view_carries_the_label_never_a_token_or_key() {
-        let runtime = served().await;
-        let access = runtime.user_access();
-        let node_did = runtime.node_did();
-        gents_inference::auth::credential::store_sign_in(
-            &access,
-            claude_sign_in(node_did, None, "acct-a", "SECRET-a"),
-            None,
-        )
-        .await
-        .expect("store the first account");
-        gents_inference::auth::credential::store_sign_in(
-            &access,
-            OAuthCredential {
-                provider_account_key: Some("KEY-SENTINEL".to_string()),
-                ..claude_sign_in(node_did, None, "acct-b", "SECRET-b")
-            },
-            Some("Work"),
-        )
-        .await
-        .expect("store the labelled account");
-
-        let views =
-            observe_provider_accounts(&PendingOAuthCredentials::default(), Ok(access), node_did)
-                .await
-                .expect("observe accounts");
-        let labels: Vec<&str> = views.iter().map(|view| view.label.as_str()).collect();
-        assert_eq!(labels, ["Claude", "Work"]);
-        let json = serde_json::to_string(&views).unwrap();
-        assert!(!json.contains("SECRET"));
-        assert!(!json.contains("KEY-SENTINEL"));
-    }
-
-    #[tokio::test]
-    async fn a_labelled_sign_in_reports_its_result_and_keeps_its_label_on_retry() {
-        let runtime = served().await;
-        let access = || Ok(runtime.user_access());
-        let node_did = runtime.node_did();
-        let pending = PendingOAuthCredentials::default();
-        let labelled = |label: &str, account: &str, token: &str| OAuthCredential {
-            label: Some(label.to_string()),
-            ..claude_sign_in(node_did, Some(account), account, token)
-        };
-        save_issued_credential(
-            &pending,
-            access(),
-            pending.issue(claude_sign_in(
-                node_did,
-                Some("acct-a"),
-                "acct-a",
-                "SECRET-a",
-            )),
-        )
-        .await
-        .expect("save the first account");
-
-        let added = SignInView::from(
-            &save_issued_credential(
-                &pending,
-                access(),
-                pending.issue(labelled("Work", "acct-b", "SECRET-b")),
-            )
-            .await
-            .expect("add the labelled account"),
-        );
-        assert_eq!(added.result, "added");
-        assert_eq!(added.label, "Work");
-        assert!(added.account_ref.is_some());
-        assert_eq!(added.hint, None);
-
-        let refreshed = SignInView::from(
-            &save_issued_credential(
-                &pending,
-                access(),
-                pending.issue(claude_sign_in(
-                    node_did,
-                    Some("acct-b"),
-                    "acct-b",
-                    "SECRET-c",
-                )),
-            )
-            .await
-            .expect("refresh the labelled account"),
-        );
-        assert_eq!(refreshed.result, "refreshed");
-        assert_eq!(refreshed.label, "Work");
-        assert_eq!(refreshed.account_ref, added.account_ref);
-        assert!(refreshed
-            .hint
-            .as_deref()
-            .is_some_and(|hint| hint.contains("Work")));
-
-        save_issued_credential(
-            &pending,
-            Ok(unreachable_operator()),
-            pending.issue(labelled("Spare", "acct-d", "SECRET-d")),
-        )
-        .await
-        .expect_err("a runtime that is not serving cannot store the sign-in");
-        retry_pending_credential(
-            &pending,
-            access(),
-            node_did,
-            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-        )
-        .await
-        .expect("retry stores the held sign-in");
-        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
-            .await
-            .unwrap();
-        let spare = stored
-            .iter()
-            .find(|row| row.account_id.as_deref() == Some("acct-d"))
-            .expect("the retried account is stored");
-        assert_eq!(spare.label.as_deref(), Some("Spare"));
-
-        let json = serde_json::to_string(&[&added, &refreshed]).unwrap();
-        assert!(!json.contains("SECRET"));
-    }
-
-    #[tokio::test]
-    async fn a_label_names_only_an_added_account_never_a_refreshed_one() {
-        let runtime = served().await;
-        let access = || Ok(runtime.user_access());
-        let node_did = runtime.node_did();
-        let pending = PendingOAuthCredentials::default();
-        let labelled = |label: Option<&str>, account: &str, token: &str| OAuthCredential {
-            label: label.map(str::to_string),
-            ..claude_sign_in(node_did, Some(account), account, token)
-        };
-        for (label, account) in [(None, "acct-a"), (Some("Work"), "acct-b")] {
-            save_issued_credential(
-                &pending,
-                access(),
-                pending.issue(labelled(label, account, "SECRET-a")),
-            )
-            .await
-            .expect("store the account");
-        }
-
-        for (account, kept) in [("acct-b", "Work"), ("acct-a", "Claude")] {
-            let refreshed = SignInView::from(
-                &save_issued_credential(
-                    &pending,
-                    access(),
-                    pending.issue(labelled(Some("Spare"), account, "SECRET-c")),
-                )
-                .await
-                .expect("refresh the stored account"),
-            );
-            assert_eq!(refreshed.result, "refreshed");
-            assert_eq!(refreshed.label, kept);
-        }
-        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
-            .await
-            .unwrap();
-        let labels: Vec<String> = stored
-            .iter()
-            .map(gents_inference::auth::credential::effective_account_label)
-            .collect();
-        assert_eq!(labels, ["Claude", "Work"]);
-    }
-
-    #[tokio::test]
-    async fn an_added_account_whose_label_is_taken_is_saved_under_its_default_label() {
-        let runtime = served().await;
-        let access = || Ok(runtime.user_access());
-        let node_did = runtime.node_did();
-        let pending = PendingOAuthCredentials::default();
-        let labelled = |label: Option<&str>, account: &str| OAuthCredential {
-            label: label.map(str::to_string),
-            ..claude_sign_in(node_did, Some(account), account, "SECRET")
-        };
-        for (label, account) in [(None, "acct-a"), (Some("Work"), "acct-b")] {
-            save_issued_credential(&pending, access(), pending.issue(labelled(label, account)))
-                .await
-                .expect("store the account");
-        }
-
-        let saved = save_issued_credential(
-            &pending,
-            access(),
-            pending.issue(labelled(Some("Work"), "acct-c")),
-        )
-        .await;
-        assert!(
-            saved.is_ok(),
-            "a stored account is never reported unsaved: {:?}",
-            saved.as_ref().err()
-        );
-        let view = SignInView::from(&saved.unwrap());
-        assert_eq!(view.result, "added");
-        assert_eq!(view.label, "Claude 2");
     }
 
     fn serve_once(body: &'static str) -> String {
@@ -1699,72 +1637,6 @@ mod provider_account_tests {
         for secret in ["SECRET", "KEY-SENTINEL", "IDENTITY"] {
             assert!(!json.contains(secret), "usage views leak {secret}: {json}");
         }
-    }
-
-    #[tokio::test]
-    async fn discovery_reads_the_account_its_backend_names() {
-        use gents_documents::BackendAuth;
-        use gents_observe::client_inference::discovery_account;
-
-        let runtime = served().await;
-        let access = runtime.user_access();
-        let node_did = runtime.node_did();
-        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-        let a = gents_inference::auth::credential::store_sign_in(
-            &access,
-            claude_sign_in(node_did, Some("account-a"), "acct-a", "SECRET-a"),
-            None,
-        )
-        .await
-        .expect("store the original account")
-        .credential;
-        let b = gents_inference::auth::credential::store_sign_in(
-            &access,
-            claude_sign_in(node_did, Some("account-b"), "acct-b", "SECRET-b"),
-            Some("Work"),
-        )
-        .await
-        .expect("store the added account")
-        .credential;
-        assert!(b.account_ref.is_some());
-
-        let (credential, auth) =
-            discovery_account(&access, node_did, provider, b.account_ref.as_deref())
-                .await
-                .expect("added account");
-        assert_eq!(
-            credential.map(|row| row.credential_id),
-            Some(b.credential_id.clone())
-        );
-        assert_eq!(
-            auth,
-            BackendAuth::NodeOAuth {
-                account_ref: b.account_ref.clone()
-            }
-        );
-
-        let (credential, auth) = discovery_account(&access, node_did, provider, None)
-            .await
-            .expect("original account");
-        assert_eq!(
-            credential.map(|row| row.credential_id),
-            Some(a.credential_id)
-        );
-        assert_eq!(auth, BackendAuth::NodeOAuth { account_ref: None });
-
-        gents_inference::auth::credential::set_account_enabled(
-            &access,
-            node_did,
-            &b.credential_id,
-            false,
-        )
-        .await
-        .expect("disable the added account");
-        let (credential, _) =
-            discovery_account(&access, node_did, provider, b.account_ref.as_deref())
-                .await
-                .expect("disabled account");
-        assert_eq!(credential, None);
     }
 }
 

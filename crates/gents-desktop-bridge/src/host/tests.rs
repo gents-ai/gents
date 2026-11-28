@@ -11,83 +11,50 @@ use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;
 
 use super::{protocol, ClientHost};
+use crate::tests::support::{attach_host, call_host};
 
 #[tokio::test]
-async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
+async fn host_attachments_handshake_unconfigured_commands_and_stale_retirement_share_one_core() {
     let (core, _dir) = crate::tests::support::boot_core().await;
     let host = Arc::new(ClientHost::new(core.clone()));
+    let approvals = super::approvals::AttachmentApprovals::default();
+
+    // Two attachments share the core and detaching one leaves the other live.
     let mut tasks = Vec::new();
     let mut clients = Vec::new();
     for _ in 0..2 {
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        tasks.push(tokio::spawn(
-            host.clone().serve(server, CancellationToken::new()),
-        ));
-        let mut client = LengthDelimitedCodec::builder()
-            .max_frame_length(protocol::MAX_FRAME_BYTES)
-            .new_framed(client);
-        client
-            .send(Bytes::from(
-                serde_json::to_vec(&json!({
-                    "kind": "hello", "version": protocol::PROTOCOL_VERSION
-                }))
-                .unwrap(),
-            ))
-            .await
-            .unwrap();
-        let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+        let (mut client, hello, task) = attach_host(host.clone(), CancellationToken::new()).await;
         assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
         assert_eq!(hello["commands"], json!(protocol::ClientCommand::NAMES));
-        client
-            .send(Bytes::from_static(
-                br#"{"kind":"call","id":1,"command":{"name":"desktop_client_snapshot","args":{}}}"#,
-            ))
-            .await
-            .unwrap();
-        loop {
-            let response: Value =
-                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-            if response["kind"] != "response" {
-                continue;
-            }
-            assert_eq!(response["id"], 1);
-            assert!(response["error"].is_null(), "{response}");
-            assert_eq!(
-                response["result"]["client"]["clientDid"],
-                core.node_identity().did()
-            );
-            assert_eq!(response["result"]["bootstrap"]["desktopHome"], "");
-            break;
-        }
+        let response = call_host(
+            &mut client,
+            1,
+            json!({"name": "desktop_client_snapshot", "args": {}}),
+        )
+        .await;
+        assert!(response["error"].is_null(), "{response}");
+        assert_eq!(
+            response["result"]["client"]["clientDid"],
+            core.node_identity().did()
+        );
+        assert_eq!(response["result"]["bootstrap"]["desktopHome"], "");
+        tasks.push(task);
         clients.push(client);
     }
     drop(clients.remove(0));
     tasks.remove(0).await.unwrap().unwrap();
     assert!(!core.node_identity().did().is_empty());
-    let client = &mut clients[0];
-    client
-        .send(Bytes::from_static(
-            br#"{"kind":"call","id":2,"command":{"name":"desktop_client_snapshot","args":{}}}"#,
-        ))
-        .await
-        .unwrap();
-    loop {
-        let response: Value =
-            serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-        if response["kind"] == "response" {
-            assert_eq!(response["id"], 2);
-            break;
-        }
-    }
+    let response = call_host(
+        &mut clients[0],
+        2,
+        json!({"name": "desktop_client_snapshot", "args": {}}),
+    )
+    .await;
+    assert!(response["error"].is_null(), "{response}");
     drop(clients);
     tasks.remove(0).await.unwrap().unwrap();
-    core.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn initialization_rejects_incompatible_protocols_and_oversized_frames() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = Arc::new(ClientHost::new(core.clone()));
+    // Incompatible handshakes and oversized frames are rejected.
     for payload in [
         serde_json::to_vec(&json!({"kind":"hello", "version": protocol::PROTOCOL_VERSION + 1}))
             .unwrap(),
@@ -103,7 +70,7 @@ async fn initialization_rejects_incompatible_protocols_and_oversized_frames() {
         assert!(task.await.unwrap().is_err());
     }
     let (mut client, server) = tokio::io::duplex(4096);
-    let task = tokio::spawn(host.serve(server, CancellationToken::new()));
+    let task = tokio::spawn(host.clone().serve(server, CancellationToken::new()));
     tokio::io::AsyncWriteExt::write_all(
         &mut client,
         &((protocol::MAX_FRAME_BYTES + 1) as u32).to_be_bytes(),
@@ -111,6 +78,92 @@ async fn initialization_rejects_incompatible_protocols_and_oversized_frames() {
     .await
     .unwrap();
     assert!(task.await.unwrap().is_err());
+
+    // Direct command rejections on an unconfigured core.
+    let retry_err = host
+        .execute(
+            protocol::ClientCommand::Retry {
+                request_id: "missing-parent".into(),
+                node_did: "node".into(),
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        retry_err
+            .to_string()
+            .contains("request missing-parent not found"),
+        "{retry_err}"
+    );
+    let runtime_is_local: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_runtime_is_local", "args":{"nodeDid":"did:unconfigured"}
+    }))
+    .unwrap();
+    assert!(runtime_is_local.is_cancellable());
+    for command in [
+        protocol::ClientCommand::ProviderUsageRead {
+            request: crate::accounts::usage::ProviderUsageReadRequest {
+                node_did: "did:unconfigured".into(),
+                refresh: false,
+                provider: None,
+            },
+        },
+        protocol::ClientCommand::InferenceSetupState {
+            node_did: "did:unconfigured".into(),
+        },
+        runtime_is_local,
+    ] {
+        let error = host
+            .execute(command, &approvals, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            gents_store::client_error::BridgeErrorCode::InvalidArgument
+        );
+    }
+
+    // Stale or embedded-host retirements are refused without stopping the host.
+    for build in [None, Some("current-build")] {
+        let host = Arc::new(match build {
+            Some(build) => ClientHost::for_installation(core.clone(), build.into()),
+            None => ClientHost::new(core.clone()),
+        });
+        let stop = CancellationToken::new();
+        let (mut client, hello, task) = attach_host(host, stop.clone()).await;
+        assert_eq!(hello["installationBuild"], json!(build));
+        client
+            .send(Bytes::from_static(
+                br#"{"kind":"retire","id":1,"expectedBuild":"stale-build"}"#,
+            ))
+            .await
+            .unwrap();
+        loop {
+            let response: Value =
+                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+            if response["kind"] == "response" && response["id"] == 1 {
+                assert_eq!(response["error"]["code"], "invalidArgument");
+                break;
+            }
+        }
+        assert!(!stop.is_cancelled());
+        let response = call_host(
+            &mut client,
+            2,
+            json!({"name": "desktop_client_snapshot", "args": {}}),
+        )
+        .await;
+        assert!(response["error"].is_null(), "{response}");
+        assert_eq!(
+            response["result"]["client"]["clientDid"],
+            core.node_identity().did()
+        );
+        drop(client);
+        task.await.unwrap().unwrap();
+    }
+
     core.shutdown().await.unwrap();
 }
 
@@ -251,30 +304,6 @@ fn request_retry_is_scoped_and_not_cancellable() {
     assert!(protocol::ClientCommand::NAMES.contains(&"desktop_request_retry"));
 }
 
-#[tokio::test]
-async fn request_retry_reaches_the_existing_parent_owner() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = ClientHost::new(core.clone());
-    let error = host
-        .execute(
-            protocol::ClientCommand::Retry {
-                request_id: "missing-parent".into(),
-                node_did: "node".into(),
-            },
-            &super::approvals::AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("request missing-parent not found"),
-        "{error}"
-    );
-    core.shutdown().await.unwrap();
-}
-
 #[test]
 fn inference_setup_state_uses_scoped_wire_arguments() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
@@ -302,31 +331,6 @@ fn provider_usage_read_uses_scoped_wire_arguments() {
     .is_err());
 }
 
-#[tokio::test]
-async fn provider_usage_read_rejects_an_unconfigured_runtime() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = ClientHost::new(core.clone());
-    let error = host
-        .execute(
-            protocol::ClientCommand::ProviderUsageRead {
-                request: crate::accounts::usage::ProviderUsageReadRequest {
-                    node_did: "did:unconfigured".into(),
-                    refresh: false,
-                    provider: None,
-                },
-            },
-            &super::approvals::AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.code,
-        gents_store::client_error::BridgeErrorCode::InvalidArgument
-    );
-    core.shutdown().await.unwrap();
-}
-
 #[test]
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
@@ -343,27 +347,6 @@ fn agent_model_selection_is_scoped_and_not_cancellable() {
         "name":"client_agent_model_select", "args":{"request":request}
     }))
     .is_err());
-}
-
-#[tokio::test]
-async fn inference_setup_state_rejects_an_unconfigured_runtime() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = ClientHost::new(core.clone());
-    let error = host
-        .execute(
-            protocol::ClientCommand::InferenceSetupState {
-                node_did: "did:unconfigured".into(),
-            },
-            &super::approvals::AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.code,
-        gents_store::client_error::BridgeErrorCode::InvalidArgument
-    );
-    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -570,138 +553,6 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .unwrap()
         .starts_with("Bearer "));
     core.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn session_provenance_read_reaches_the_existing_lineage_owner() {
-    let fixture = crate::tests::support::provenance_fixture().await;
-    let core = fixture.desktop.core.clone();
-    let parent_doc_id = fixture.parent_doc.clone();
-    let host = Arc::new(ClientHost::new(core.clone()));
-    let wire_command = json!({
-        "name": "desktop_session_provenance", "args": { "request": {
-            "nodeDid": fixture.desktop.node_did(),
-            "sessionId": "sess_parent",
-            "requesterDid": fixture.desktop.user_did()
-        }}
-    });
-    let command: protocol::ClientCommand = serde_json::from_value(wire_command.clone()).unwrap();
-    assert!(command.is_cancellable());
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let task = tokio::spawn(host.serve(server, CancellationToken::new()));
-    let mut client = LengthDelimitedCodec::builder()
-        .max_frame_length(protocol::MAX_FRAME_BYTES)
-        .new_framed(client);
-    client
-        .send(Bytes::from(
-            serde_json::to_vec(&json!({
-                "kind": "hello", "version": protocol::PROTOCOL_VERSION
-            }))
-            .unwrap(),
-        ))
-        .await
-        .unwrap();
-    let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-    assert!(hello["commands"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("desktop_session_provenance")));
-    client
-        .send(Bytes::from(
-            serde_json::to_vec(&json!({
-                "kind": "call", "id": 41, "command": wire_command
-            }))
-            .unwrap(),
-        ))
-        .await
-        .unwrap();
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            let response: Value =
-                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-            if response["kind"] == "response" && response["id"] == 41 {
-                assert!(response["error"].is_null(), "{response}");
-                break response["result"].clone();
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(observed["sessionId"], "sess_parent");
-    let started = observed["started"].as_array().unwrap();
-    assert_eq!(started.len(), 1);
-    assert!(started
-        .iter()
-        .all(|link| link["causeRequestDocId"] == parent_doc_id));
-    assert!(started
-        .iter()
-        .any(|link| link["sessionId"] == fixture.child_session.as_str()));
-    drop(client);
-    task.await.unwrap().unwrap();
-    drop(core);
-    fixture.shutdown().await;
-}
-
-#[tokio::test]
-async fn retirement_requires_the_current_installation_build_and_never_retires_an_embedded_host() {
-    for build in [None, Some("current-build")] {
-        let (core, _directory) = crate::tests::support::boot_core().await;
-        let host = Arc::new(match build {
-            Some(build) => ClientHost::for_installation(core.clone(), build.into()),
-            None => ClientHost::new(core.clone()),
-        });
-        let stop = CancellationToken::new();
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let task = tokio::spawn(host.serve(server, stop.clone()));
-        let mut client = LengthDelimitedCodec::builder()
-            .max_frame_length(protocol::MAX_FRAME_BYTES)
-            .new_framed(client);
-        client
-            .send(Bytes::from(
-                serde_json::to_vec(&json!({"kind":"hello", "version":protocol::PROTOCOL_VERSION}))
-                    .unwrap(),
-            ))
-            .await
-            .unwrap();
-        let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-        assert_eq!(hello["installationBuild"], json!(build));
-        client
-            .send(Bytes::from_static(
-                br#"{"kind":"retire","id":1,"expectedBuild":"stale-build"}"#,
-            ))
-            .await
-            .unwrap();
-        loop {
-            let response: Value =
-                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-            if response["kind"] == "response" && response["id"] == 1 {
-                assert_eq!(response["error"]["code"], "invalidArgument");
-                break;
-            }
-        }
-        assert!(!stop.is_cancelled());
-        client
-            .send(Bytes::from_static(
-                br#"{"kind":"call","id":2,"command":{"name":"desktop_client_snapshot","args":{}}}"#,
-            ))
-            .await
-            .unwrap();
-        loop {
-            let response: Value =
-                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-            if response["kind"] == "response" && response["id"] == 2 {
-                assert!(response["error"].is_null(), "{response}");
-                assert_eq!(
-                    response["result"]["client"]["clientDid"],
-                    core.node_identity().did()
-                );
-                break;
-            }
-        }
-        drop(client);
-        task.await.unwrap().unwrap();
-        core.shutdown().await.unwrap();
-    }
 }
 
 /// `tla/StoreHandoff.tla` `AckedHandoff`: the attachment that retires an

@@ -344,9 +344,10 @@ fn bound_window_deliveries_match_the_lean_table() {
         "n2" => "did:node:1",
         other => panic!("unmodeled node {other}"),
     };
+    let (_temp, state) = state();
     gents_lean_vocab::families::client_window_scope_bound_delivers::replay::<String, String>(
         |input| {
-            let (_temp, state) = state();
+            state.window_event("main", &tauri::WindowEvent::Destroyed);
             state.register_window("main");
             if input.selected != "none" {
                 select(&state, "main", Some(did(&input.selected)));

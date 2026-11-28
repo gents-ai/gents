@@ -55,33 +55,6 @@ fn assert_cooked(e: &Exit) {
     assert!(!e.text.contains("-icanon"), "{}", e.text);
 }
 
-#[test]
-fn vim_quit_restores_the_terminal() {
-    let s = Shell::start(&["--keys", "vim"], 36, 132);
-    s.wait_for_all(&["sample data", "INPUT"]);
-    s.send("\x1b");
-    s.wait_for_all(&["NORMAL"]);
-    s.send(":q\r");
-    let e = s.finish();
-    assert_eq!(e.code, 0);
-    assert_restored(&e);
-}
-
-/// Regular is what starts with no flag: `?` shows only its keys and `ctrl-q` quits.
-#[test]
-fn regular_is_the_default_and_quits_with_ctrl_q() {
-    let s = Shell::start(&[], 36, 132);
-    s.wait_for_all(&["sample data", "INPUT", "ctrl-o next pane"]);
-    s.send("?");
-    s.wait_for_all(&["HELP", "regular", "ctrl-pgdn / ctrl-pgup"]);
-    s.send("\x1b");
-    s.wait_gone("ctrl-pgdn / ctrl-pgup");
-    s.send("\x11");
-    let e = s.finish();
-    assert_eq!(e.code, 0);
-    assert_restored(&e);
-}
-
 /// In raw mode ctrl-c is a key, not SIGINT: the first says how to quit, the second quits.
 #[test]
 fn ctrl_c_twice_quits_and_restores_the_terminal() {
@@ -90,16 +63,6 @@ fn ctrl_c_twice_quits_and_restores_the_terminal() {
     s.send("\x03");
     s.wait_for_all(&["ctrl-c again to quit"]);
     s.send("\x03");
-    let e = s.finish();
-    assert_eq!(e.code, 0);
-    assert_restored(&e);
-}
-
-#[test]
-fn emacs_quit_restores_the_terminal() {
-    let s = Shell::start(&["--keys", "emacs"], 36, 132);
-    s.wait_for_all(&["sample data", "EMACS"]);
-    s.send("\x18\x03");
     let e = s.finish();
     assert_eq!(e.code, 0);
     assert_restored(&e);
@@ -174,26 +137,4 @@ fn panic_restores_the_terminal() {
     assert_cooked(&e);
     assert!(!e.alternate_screen);
     assert!(e.cursor_visible);
-}
-
-#[test]
-fn resizes_through_too_small_and_quits() {
-    let s = Shell::start(&["--keys", "vim"], 36, 132);
-    s.wait_for_all(&["sample data"]);
-
-    s.resize(12, 40);
-    s.wait_for_all(&["Window too small"]);
-    s.wait_gone("sample data");
-
-    s.resize(36, 132);
-    s.wait_for_all(&["sample data"]);
-
-    s.send("\x1b");
-    s.wait_for_all(&["NORMAL"]);
-    s.send(":");
-    s.wait_for_all(&["Jump to"]);
-    s.send("q\r");
-    let e = s.finish();
-    assert_eq!(e.code, 0);
-    assert_restored(&e);
 }

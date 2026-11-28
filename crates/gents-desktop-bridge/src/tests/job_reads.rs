@@ -1,30 +1,9 @@
-use gents_protocol::job::{JobBudget, JobOutcome, JobProgress, JobState};
+use gents_protocol::job::{JobOutcome, JobState};
 
-use super::support::{seed_served_job_row, served_desktop};
+use super::support::{fixture_job_progress, seed_served_job_row, served_desktop};
 use crate::job_view::{job_view, jobs_list};
 use gents_protocol::operations::job::JobListInput;
 use gents_store::client_error::BridgeErrorCode;
-
-fn progress(state: JobState) -> JobProgress {
-    JobProgress {
-        title: "Review".into(),
-        state,
-        pause_reason: None,
-        phases: Vec::new(),
-        active: Vec::new(),
-        spawned: 1,
-        budget: JobBudget {
-            total: 4,
-            spent: 1,
-            remaining: 3,
-        },
-        last_event: "seeded".into(),
-        last_event_at: None,
-        question: None,
-        observed_terminal_children: 0,
-        revision: 1,
-    }
-}
 
 #[tokio::test]
 async fn job_reads_list_and_view_served_rows_through_operator_access() {
@@ -35,7 +14,7 @@ async fn job_reads_list_and_view_served_rows_through_operator_access() {
         "sess-reads",
         "call-failed",
         "failed",
-        &progress(JobState::Failed),
+        &fixture_job_progress("Review", JobState::Failed, None),
         Some(("engine_boom", "boom")),
     )
     .await;
@@ -44,7 +23,7 @@ async fn job_reads_list_and_view_served_rows_through_operator_access() {
         "sess-reads",
         "call-running",
         "running",
-        &progress(JobState::Running),
+        &fixture_job_progress("Review", JobState::Running, None),
         None,
     )
     .await;

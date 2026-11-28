@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::client_runtime::ClientRuntime;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
 use gents_protocol::process_control::{
-    ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
+    OperatorProcessControlRequest, ProcessControlOutcome, ToolControlIntent, ToolControlReceipt,
+    ToolControlReceiptOutcome,
 };
 use gents_store::client_error::BridgeErrorCode;
 use gents_store::config_client::ConfigAccess;
@@ -15,17 +16,17 @@ use crate::types::DesktopJobControlRequest;
 /// A runtime node served over HTTP that the desktop client controls through
 /// its client-signed GraphQL path, with a selected Agent key that answers
 /// control intents in place of the runtime's control owner.
-pub(super) struct ControlRuntime {
-    pub core: Arc<ClientRuntime>,
-    pub runtime: Arc<gents::defra_node::Node>,
-    pub node_did: String,
-    pub client_did: String,
+struct ControlRuntime {
+    core: Arc<ClientRuntime>,
+    runtime: Arc<gents::defra_node::Node>,
+    node_did: String,
+    client_did: String,
     owner: gents_store::identity::KeyIdentity,
-    pub agent: Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: Arc<dyn gents_store::identity::NodeIdentity>,
     _directory: tempfile::TempDir,
 }
 
-pub(super) async fn control_runtime() -> ControlRuntime {
+async fn control_runtime() -> ControlRuntime {
     use gents_store::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
@@ -217,7 +218,7 @@ impl ControlRuntime {
 
 /// The signed intent names the client, the invocation's physical row and its
 /// logical scope, as the runtime's claim requires.
-pub(super) async fn assert_client_signed_intent(
+async fn assert_client_signed_intent(
     control: &ControlRuntime,
     intent: &ToolControlIntent,
     tool_call_doc_id: &str,
@@ -253,7 +254,7 @@ pub(super) async fn assert_client_signed_intent(
 }
 
 #[tokio::test]
-async fn job_control_publishes_a_client_signed_intent_and_requires_the_agent_receipt() {
+async fn job_and_process_control_publish_client_signed_intents_and_require_agent_receipts() {
     let control = control_runtime().await;
     let expected = JobControlOutcome::Applied {
         state: JobState::Cancelled,
@@ -319,5 +320,84 @@ async fn job_control_publishes_a_client_signed_intent_and_requires_the_agent_rec
     let mut other = command(&applied);
     other.node_did = "did:test:unknown-peer".into();
     assert!(job_control(&control.core, &other).await.is_err());
+
+    // Process control shares the same signed-intent / verified-receipt channel.
+    let process_cmd = |doc: &str, call: &str| OperatorProcessControlRequest {
+        node_did: control.node_did.clone(),
+        session_id: "session".into(),
+        tool_call_id: call.into(),
+        tool_call_doc_id: doc.into(),
+    };
+    for (call, outcome) in [
+        (
+            "cancelled",
+            ProcessControlOutcome::Cancelled {
+                live_execution_cancelled: true,
+            },
+        ),
+        ("unverified", ProcessControlOutcome::Unverified),
+        ("lost", ProcessControlOutcome::Lost),
+    ] {
+        let doc = control.invocation(call, true).await;
+        let answered = control.answer(
+            &doc,
+            ToolControlReceiptOutcome::Process(outcome.clone()),
+            None,
+        );
+        assert_eq!(
+            crate::process_control::process_control(&control.core, &process_cmd(&doc, call))
+                .await
+                .unwrap(),
+            outcome
+        );
+        let intent = answered.await.unwrap();
+        assert_client_signed_intent(&control, &intent, &doc, call, "process_stop").await;
+    }
+
+    let process_forged = control.invocation("process-forged", true).await;
+    let answered = control.answer(
+        &process_forged,
+        ToolControlReceiptOutcome::Process(ProcessControlOutcome::Cancelled {
+            live_execution_cancelled: true,
+        }),
+        Some(ToolControlReceiptOutcome::Process(
+            ProcessControlOutcome::Lost,
+        )),
+    );
+    let error = crate::process_control::process_control(
+        &control.core,
+        &process_cmd(&process_forged, "process-forged"),
+    )
+    .await
+    .unwrap_err();
+    let intent = answered.await.unwrap();
+    assert_eq!(error.code, BridgeErrorCode::Unknown);
+    assert!(
+        error.message.contains("the action may still take effect"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&intent.intent_id),
+        "{}",
+        error.message
+    );
+
+    // The displayed logical identity must match the physical row.
+    let mismatched = control.invocation("mismatched", true).await;
+    let process_unreadable = control.invocation("process-unreadable", false).await;
+    for request in [
+        process_cmd(&mismatched, "other-call"),
+        process_cmd(&process_unreadable, "process-unreadable"),
+    ] {
+        assert_eq!(
+            crate::process_control::process_control(&control.core, &request)
+                .await
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::NotFound
+        );
+    }
+
     control.shutdown().await;
 }

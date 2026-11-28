@@ -3,21 +3,10 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) -> AgentSession {
     AgentSession {
-        session_id: id.to_string(),
-        node_did: node.to_string(),
-        requester_did: None,
-        agent_did: "default".to_string(),
-        created_at: "2026-04-21T12:00:00Z".to_string(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
         title: Some(SessionTitle {
             text: format!("{node} run"),
             source: SessionTitleSource::User,
         }),
-        tags: Vec::new(),
-        provenance: None,
         observation: latest.map(|(request_id, lifecycle_state)| SessionObservation {
             reply_preview: None,
             last_activity_at: "2026-04-21T12:01:00Z".to_string(),
@@ -28,22 +17,15 @@ fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) 
                 lifecycle_state,
             }),
         }),
+        ..fixture_session(id, node)
     }
 }
 
 fn request(id: &str, session_id: &str, state: RequestLifecycleState) -> AgentRequestRow {
     AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.to_string()),
-        request_id: id.to_string(),
-        node_did: Some("did:test:amy".to_string()),
-        agent_did: Some("default".to_string()),
-        session_id: Some(session_id.to_string()),
         content: Some("follow up question".to_string()),
-        lifecycle_state: Some(state),
-        execution_origin: Some("interactive".to_string()),
-        created_at: Some("2026-04-21T12:00:00Z".to_string()),
-        ..Default::default()
+        ..fixture_request(id, session_id, state)
     }
 }
 

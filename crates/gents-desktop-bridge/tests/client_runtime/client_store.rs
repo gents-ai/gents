@@ -535,19 +535,26 @@ fn agent_message(alias: &str, key: &str, session: &str, node_did: &str, sequence
     )
 }
 
+/// Covers initial observer load, update ticks, rapid session/request bursts
+/// (`ObserverResync.collectionStartable`), streaming transcript exclusion,
+/// conflicting immutable header detection, and single-Node route scoping on one
+/// served runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
+async fn served_observer_syncs_updates_bursts_transcripts_conflicts_and_node_scoping() -> Result<()>
+{
     let (_tempdir, core, runtime) = served_core().await?;
     let stores = core.stores();
+    let alpha = runtime.node_did().to_owned();
+    let escaped_alpha = gents_store::graphql::escape_graphql_string(&alpha);
+    let requester = gents_store::graphql::escape_graphql_string(core.node_identity().did());
     let mut updates = core.store_updates();
 
-    assert_eq!(stores.snapshot(runtime.node_did()).nodes.len(), 1);
+    // Initial snapshot load and update tick.
+    assert_eq!(stores.snapshot(&alpha).nodes.len(), 1);
     let baseline = *updates.borrow_and_update();
-
     runtime
         .publish_node(serde_json::json!({"display_name": "Test Agent", "enabled": true}))
         .await;
-
     timeout(STALL_CEILING, async {
         loop {
             updates.changed().await.context("watch channel closed")?;
@@ -560,44 +567,28 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .context("timed out waiting for store update")??;
     until(&core, "the refreshed snapshot", |core| {
         core.stores()
-            .snapshot(runtime.node_did())
+            .snapshot(&alpha)
             .nodes
             .iter()
             .any(|node| node.display_name.as_deref() == Some("Test Agent"))
     })
     .await?;
+    assert_eq!(stores.snapshot(&alpha).nodes[0].node_did, alpha);
 
-    assert_eq!(
-        stores.snapshot(runtime.node_did()).nodes[0].node_did,
-        runtime.node_did()
-    );
-    Arc::new(core).shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
-    let (_tempdir, core, runtime) = served_core().await?;
-    runtime
-        .publish_node(serde_json::json!({"enabled": true}))
-        .await;
-    let node_did = gents_store::graphql::escape_graphql_string(runtime.node_did());
-    let requester = gents_store::graphql::escape_graphql_string(core.node_identity().did());
+    // Rapid session writes reach the store with no lost writes.
     for i in 0..20usize {
         runtime
             .user_graphql_access()
             .write(
                 "test.client_store.race_session",
                 &format!(
-                    r#"mutation {{ create_AgentSession(input: {{ node_did: "{node_did}", session_id: "race-{i}", requester_did: "{requester}", agent_did: "{node_did}", created_at: "2026-11-04T00:00:00Z" }}) {{ _docID }} }}"#
+                    r#"mutation {{ create_AgentSession(input: {{ node_did: "{escaped_alpha}", session_id: "race-{i}", requester_did: "{requester}", agent_did: "{escaped_alpha}", created_at: "2026-11-04T00:00:00Z" }}) {{ _docID }} }}"#
                 ),
             )
             .await?;
     }
-
     until(&core, "all 20 sessions in the store", |core| {
-        let snapshot = core.stores().snapshot(runtime.node_did());
+        let snapshot = core.stores().snapshot(&alpha);
         (0..20usize).all(|i| {
             snapshot
                 .sessions
@@ -607,61 +598,30 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     })
     .await?;
 
-    Arc::new(core).shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
-
-/// `ObserverResync.collectionStartable`: a session scope queued while a
-/// partial read is in flight is read when that read settles, not at the
-/// observer's next unrelated wake.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_burst_of_request_changes_all_reach_the_store() -> Result<()> {
-    let (_tempdir, core, runtime) = served_core().await?;
-    runtime
-        .publish_node(serde_json::json!({"enabled": true}))
-        .await;
-    let node_did = gents_store::graphql::escape_graphql_string(runtime.node_did());
-    let requester = gents_store::graphql::escape_graphql_string(core.node_identity().did());
+    // A burst of request changes all reach the store.
     for i in 0..20usize {
         runtime
             .user_graphql_access()
             .write(
                 "test.client_store.burst_request",
                 &format!(
-                    r#"mutation {{ create_AgentRequest(input: {{ request_id: "burst-{i}", purpose: "normal", node_did: "{node_did}", requester_did: "{requester}", agent_did: "{node_did}", session_id: "burst-{i}", content: "burst", lifecycle_state: "processing", created_at: "2026-11-04T00:00:{i:02}Z" }}) {{ _docID }} }}"#
+                    r#"mutation {{ create_AgentRequest(input: {{ request_id: "burst-{i}", purpose: "normal", node_did: "{escaped_alpha}", requester_did: "{requester}", agent_did: "{escaped_alpha}", session_id: "burst-{i}", content: "burst", lifecycle_state: "processing", created_at: "2026-11-04T00:00:{i:02}Z" }}) {{ _docID }} }}"#
                 ),
             )
             .await?;
     }
-
     until(&core, "all 20 requests in the store", |core| {
-        let snapshot = core.stores().snapshot(runtime.node_did());
+        let snapshot = core.stores().snapshot(&alpha);
         (0..20usize).all(|i| snapshot.request_row(&format!("burst-{i}")).is_some())
     })
     .await?;
 
-    Arc::new(core).shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
-    let (_tempdir, core, runtime) = served_core().await?;
-    runtime
-        .publish_node(serde_json::json!({"enabled": true}))
-        .await;
-    until(&core, "the observer's first snapshot", |core| {
-        !core.stores().snapshot(runtime.node_did()).nodes.is_empty()
-    })
-    .await?;
-    let node_did = runtime.node_did().to_owned();
+    // Incremental observer invalidates transcripts without loading them into the streaming store.
     let messages = (0..50usize)
-        .map(|i| agent_message(&format!("m{i}"), &format!("long:{i}"), "long", &node_did, i))
+        .map(|i| agent_message(&format!("m{i}"), &format!("long:{i}"), "long", &alpha, i))
         .collect::<Vec<_>>()
         .join("\n");
-    let mut updates = core.store_updates();
+    let mut transcript_updates = core.store_updates();
     runtime
         .user_graphql_access()
         .write(
@@ -678,7 +638,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
             {
                 return Ok::<(), anyhow::Error>(());
             }
-            updates
+            transcript_updates
                 .changed()
                 .await
                 .context("store update channel closed")?;
@@ -688,13 +648,13 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     .context("timed out waiting for canonical transcript invalidation")??;
     assert!(core
         .stores()
-        .snapshot(&node_did)
+        .snapshot(&alpha)
         .transcript_messages
         .is_empty());
     let page = load_session_transcript_page_on(
         &runtime.user_access(),
         "long",
-        Some(&node_did),
+        Some(&alpha),
         None,
         None,
         Some(40),
@@ -703,16 +663,10 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     assert_eq!(page.message_query_limit, 41);
     assert_eq!(page.store.transcript_messages.len(), 40);
     assert_eq!(page.queried_rows, 41);
-    Arc::new(core).shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> Result<()> {
-    let (_tmp, core, runtime) = served_core().await?;
-    let access = runtime.user_graphql_access();
-    let response = access
+    // Conflicting immutable transcript headers are surfaced as an error.
+    runtime
+        .user_graphql_access()
         .write(
             "test.client_store.conflicting_headers",
             r#"mutation {
@@ -730,38 +684,22 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
             }) { _docID }
         }"#,
         )
-        .await;
-    response?;
-    let creator_access = runtime.user_access();
-    let result = load_session_transcript_page_on(
-        &creator_access,
-        "conflict",
-        Some("did:conflict"),
-        None,
-        None,
-        Some(40),
-    )
-    .await;
+        .await?;
     assert!(
-        result.is_err(),
+        load_session_transcript_page_on(
+            &runtime.user_access(),
+            "conflict",
+            Some("did:conflict"),
+            None,
+            None,
+            Some(40),
+        )
+        .await
+        .is_err(),
         "conflicting immutable headers must be surfaced"
     );
-    Arc::new(core).shutdown().await?;
-    Ok(())
-}
 
-/// The route is scoped to one Node: a neighbouring Node on the same runtime
-/// store never enters the observed projection, in the first snapshot or in
-/// the resnapshot a later change of the routed Node causes. (Before signed
-/// actors this test read a single local store holding every Node; scoping by
-/// route replaced that contract.)
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
-    let (_tempdir, core, runtime) = served_core().await?;
-    runtime
-        .publish_node(serde_json::json!({"enabled": true}))
-        .await;
-    let alpha = runtime.node_did().to_owned();
+    // Neighbouring nodes on the same runtime store stay excluded across resnapshots.
     let beta = runtime.publish_foreign_node().await;
     let transcript = [
         agent_message("alpha", "shared:alpha", "shared", &alpha, 1),
@@ -775,7 +713,6 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
             &format!("mutation {{ {transcript} }}"),
         )
         .await?;
-
     let only_alpha = |core: &ClientRuntime| {
         let nodes = core.stores().snapshot(&alpha).nodes.clone();
         assert!(nodes.iter().all(|node| node.node_did != beta), "{nodes:?}");
@@ -783,11 +720,10 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     };
     until(&core, "the routed node", only_alpha).await?;
 
-    let escaped = gents_store::graphql::escape_graphql_string(&alpha);
     let doc = runtime
         .user_graphql_access()
         .execute(&format!(
-            "{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"
+            "{{ Node(filter: {{node_did: {{_eq: \"{escaped_alpha}\"}}}}) {{ _docID }} }}"
         ))
         .await?;
     let doc = gents_store::graphql::escape_graphql_string(

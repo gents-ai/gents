@@ -22,7 +22,6 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     ))
     .await;
     runtime.publish_node(serde_json::json!({})).await;
-    runtime.publish_node(serde_json::json!({})).await;
     gents_desktop_bridge::client_test_support::connect_runtime(&runtime, &core).await;
     let node_did = runtime.node_did();
 
@@ -412,53 +411,19 @@ async fn enrolled_desktop_saves_agent_with_on_prem_profile() -> Result<()> {
         );
     }
 
-    Arc::new(core).shutdown().await?;
-    runtime.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleting_referenced_backend_reports_single_refusal_and_logs_desktop_error() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientRuntime::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        gents_desktop_bridge::client_test_support::file_journal_options(),
-    )
-    .await?;
-    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
-    let node_did = runtime.node_did();
-    enroll_desktop_client(&core, &runtime).await?;
-
-    let backend: InferenceBackend = serde_json::from_value(json!({
-        "node_did": node_did,
-        "backend_id": "local-2",
-        "name": "Local server",
-        "provider_kind": "OpenAiCompatible",
-        "endpoint": "http://127.0.0.1:11434/v1",
-        "auth": {"kind": "unauthenticated"}
-    }))?;
-    core.save_backend(&backend).await?;
-    let profile: InferenceProfile = serde_json::from_value(json!({
-        "node_did": node_did,
-        "profile_id": "profile-local-2",
-        "display_name": "Local profile",
-        "backend_id": "local-2",
-        "model_name": "qwen3"
-    }))?;
-    core.save_inference_profile(&profile).await?;
-
+    // Deleting a backend referenced by a profile refuses once and logs to desktop-errors.log.
     let error = core
-        .delete_inference_backend("local-2", node_did)
+        .delete_inference_backend("local-desktop", node_did)
         .await
         .expect_err("deleting a backend used by a profile must fail");
     let bridge = gents_store::client_error::BridgeError::classify_transport_error(error);
     assert!(
-        bridge.message.contains("profile-local-2") && bridge.message.contains("local-2"),
+        bridge.message.contains("profile-desktop") && bridge.message.contains("local-desktop"),
         "expected dependent profile and backend in message: {}",
         bridge.message
     );
     assert_eq!(
-        bridge.message.matches("profile-local-2").count(),
+        bridge.message.matches("profile-desktop").count(),
         1,
         "delete refusal must not repeat itself: {}",
         bridge.message
@@ -468,12 +433,11 @@ async fn deleting_referenced_backend_reports_single_refusal_and_logs_desktop_err
         "delete refusal must not show a save hint: {}",
         bridge.message
     );
-
     let log = std::fs::read_to_string(gents_desktop_bridge::logging::desktop_error_log(
         tempdir.path(),
     ))?;
     assert!(
-        log.contains("delete inference backend failed:") && log.contains("profile-local-2"),
+        log.contains("delete inference backend failed:") && log.contains("profile-desktop"),
         "expected desktop-errors.log entry: {log}"
     );
 
