@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use gents_store::agent_identity_watch::AgentIdentityWatch;
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
+const SLOW_SWEEP_EVERY_TICKS: u64 = 6;
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
@@ -38,6 +39,10 @@ struct BackgroundCompletionObserver {
     cancel: CancellationToken,
     subscription: gents_store::subscription_source::ChangeSubscription,
     mailbox_cursor: Option<String>,
+    ticks_since_slow_sweep: u64,
+    relationship_sweep_needed: bool,
+    wake_redrive_needed: bool,
+    last_watched_agents: Vec<String>,
 }
 
 impl BackgroundCompletionObserver {
@@ -62,11 +67,15 @@ impl BackgroundCompletionObserver {
             cancel,
             subscription,
             mailbox_cursor: None,
+            ticks_since_slow_sweep: 0,
+            relationship_sweep_needed: true,
+            wake_redrive_needed: true,
+            last_watched_agents: Vec::new(),
         })
     }
 
     async fn run(&mut self) -> Result<()> {
-        self.run_reconcilers().await?;
+        self.run_reconcilers(true).await?;
         let mut reconciler_tick = tokio::time::interval(Duration::from_secs(5));
         reconciler_tick.reset();
         loop {
@@ -74,7 +83,9 @@ impl BackgroundCompletionObserver {
                 biased;
                 _ = self.cancel.cancelled() => return Ok(()),
                 _ = reconciler_tick.tick() => {
-                    self.run_reconcilers().await?;
+                    self.ticks_since_slow_sweep = self.ticks_since_slow_sweep.saturating_add(1);
+                    let slow_due = self.ticks_since_slow_sweep >= SLOW_SWEEP_EVERY_TICKS;
+                    self.run_reconcilers(slow_due).await?;
                     // Slow sweeps must leave time to drain changes rather than
                     // repeatedly winning this biased select with overdue ticks.
                     reconciler_tick.reset();
@@ -95,7 +106,9 @@ impl BackgroundCompletionObserver {
                         "background completion observer change capacity exceeded; running the recovery sweeps"
                     );
                 }
-                self.run_reconcilers().await?;
+                self.relationship_sweep_needed = true;
+                self.wake_redrive_needed = true;
+                self.run_reconcilers(true).await?;
                 reconciler_tick.reset();
                 continue;
             }
@@ -111,17 +124,8 @@ impl BackgroundCompletionObserver {
             if doc_ids.is_empty() {
                 continue;
             }
+            self.wake_redrive_needed = true;
             for (actor, access) in self.selected_agents() {
-                if let Err(error) =
-                    gents_session::session::recover_agent_session_relationships_with_access(
-                        &access,
-                        &self.local_did,
-                        &actor,
-                    )
-                    .await
-                {
-                    tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
-                }
                 let terminal_parent_docs = match terminal_requests_with_parent_tool_call(
                     &access, &doc_ids,
                 )
@@ -166,8 +170,22 @@ impl BackgroundCompletionObserver {
         }
     }
 
-    async fn run_reconcilers(&mut self) -> Result<()> {
+    async fn run_reconcilers(&mut self, slow_sweep_due: bool) -> Result<()> {
         let identities = self.agents.watcher_identities()?;
+        let mut watched_dids: Vec<String> = identities
+            .iter()
+            .map(|identity| identity.did().to_owned())
+            .collect();
+        watched_dids.sort();
+        let agents_changed = watched_dids != self.last_watched_agents;
+        if agents_changed {
+            self.last_watched_agents = watched_dids;
+            self.relationship_sweep_needed = true;
+            self.wake_redrive_needed = true;
+        }
+        if slow_sweep_due {
+            self.ticks_since_slow_sweep = 0;
+        }
         match gents_session::session::mailbox::sweep_open_mailbox_items(
             &self.node,
             &self.local_did,
@@ -213,26 +231,36 @@ impl BackgroundCompletionObserver {
                 );
             }
         }
+        let run_relationships = slow_sweep_due || self.relationship_sweep_needed;
+        let mut relationship_retry = false;
         for (actor, access) in self.selected_agents() {
-            if let Err(error) =
-                gents_session::session::recover_agent_session_relationships_with_access(
+            if run_relationships {
+                match gents_session::session::recover_agent_session_relationships_with_access(
                     &access,
                     &self.local_did,
                     &actor,
                 )
                 .await
-            {
-                tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
-            }
-            if let Err(error) =
-                gents_store::config_client::session_children::recover_agent_session_child_relationships_with_access(
+                {
+                    Ok(repaired) => relationship_retry |= repaired > 0,
+                    Err(error) => {
+                        relationship_retry = true;
+                        tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
+                    }
+                }
+                match gents_store::config_client::session_children::recover_agent_session_child_relationships_with_access(
                     &access,
                     &self.local_did,
                     &actor,
                 )
                 .await
-            {
-                tracing::warn!(agent_did = %actor, %error, "session child relationship recovery failed; will retry");
+                {
+                    Ok(repaired) => relationship_retry |= repaired > 0,
+                    Err(error) => {
+                        relationship_retry = true;
+                        tracing::warn!(agent_did = %actor, %error, "session child relationship recovery failed; will retry");
+                    }
+                }
             }
             match gents_toolcalls::background::job::recovery::redrive_running_jobs(
                 &self.job_driver,
@@ -249,24 +277,31 @@ impl BackgroundCompletionObserver {
                 }
             }
         }
-        let wake_redrive =
-            gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
-                &self.node,
-                &self.local_did,
-                &identities,
-            )
-            .await?;
-        if !wake_redrive.is_noop() {
-            tracing::debug!(
-                redriven = wake_redrive.redriven,
-                deferred = wake_redrive.deferred,
-                already_redriven = wake_redrive.already_redriven,
-                coalesced = wake_redrive.coalesced,
-                ineligible = wake_redrive.ineligible,
-                failed = wake_redrive.failed,
-                scanned = wake_redrive.scanned,
-                "redrove failed background-completion wakes"
-            );
+        if run_relationships {
+            self.relationship_sweep_needed = relationship_retry;
+        }
+        if slow_sweep_due || self.wake_redrive_needed {
+            let wake_redrive =
+                gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+                    &self.node,
+                    &self.local_did,
+                    &identities,
+                )
+                .await?;
+            self.wake_redrive_needed =
+                wake_redrive.deferred > 0 || wake_redrive.failed > 0 || wake_redrive.redriven > 0;
+            if !wake_redrive.is_noop() {
+                tracing::debug!(
+                    redriven = wake_redrive.redriven,
+                    deferred = wake_redrive.deferred,
+                    already_redriven = wake_redrive.already_redriven,
+                    coalesced = wake_redrive.coalesced,
+                    ineligible = wake_redrive.ineligible,
+                    failed = wake_redrive.failed,
+                    scanned = wake_redrive.scanned,
+                    "redrove failed background-completion wakes"
+                );
+            }
         }
         Ok(())
     }

@@ -852,7 +852,7 @@ tokio::task_local! {
     static STATEMENT_LOG: Arc<std::sync::Mutex<Vec<(Option<&'static str>, String)>>>;
 }
 
-pub(super) fn record_statement(operation: Option<&'static str>, document: &str) {
+pub(in crate::config_client) fn record_statement(operation: Option<&'static str>, document: &str) {
     let _ = STATEMENT_LOG.try_with(|log| {
         log.lock()
             .expect("statement log lock is never poisoned")

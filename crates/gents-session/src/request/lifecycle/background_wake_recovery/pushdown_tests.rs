@@ -73,13 +73,26 @@ fn absent_or_malformed_terminal_timestamp_returns_none() {
 
 #[test]
 fn wake_context_query_scopes_successors_and_pending_by_agent_did() {
-    let query = actor_wake_context_query("did:key:node-1", "did:key:agent-1");
+    let query = actor_wake_context_query(
+        "did:key:node-1",
+        "did:key:agent-1",
+        &["bae-doc-1"],
+        &["session-1"],
+    );
     assert_eq!(
         query
             .matches(r#"agent_did: { _eq: "did:key:agent-1" }"#)
             .count(),
         2,
         "both successors and pending must filter by agent_did: {query}"
+    );
+    assert!(
+        query.contains(r#"retry_parent_request_doc_id: { _in: ["bae-doc-1"] }"#),
+        "successors must filter by candidate doc IDs: {query}"
+    );
+    assert!(
+        query.contains(r#"session_id: { _in: ["session-1"] }"#),
+        "pending must filter by candidate sessions: {query}"
     );
 }
 
@@ -156,6 +169,174 @@ async fn load_candidates_short_circuits_when_no_failed_wakes_exist() {
     assert!(
         successors.is_empty() && pending.is_empty(),
         "successors and pending must be short-circuited when no failed scheduled wakes exist"
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn redrive_skips_pin_queries_for_already_redriven_and_non_wake_rows() {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+
+    let db = AgentHome::start("wake-skip-pins").await;
+    let node_did = db.node_did();
+    let agent_did = db.agent_did();
+    let requester = db.user.did();
+    let session = "wake-skip-pins-session";
+    let session_doc = crate::test_support::create_agent_owned_session_at(
+        &db.agent_access,
+        node_did,
+        session,
+        Some(requester),
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+
+    let wake_input = RequestInput {
+        queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some(QueueSource::BackgroundCompletion.queue_key(session)),
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: Some(1),
+        }),
+        ..Default::default()
+    };
+
+    let create_row = |input: serde_json::Value| {
+        let access = db.agent_access.clone();
+        let session_doc = session_doc.clone();
+        async move {
+            let literal = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+            access
+                .transact_write("test.wake_skip_pins.create", |txn| {
+                    let literal = &literal;
+                    let session_doc = &session_doc;
+                    Box::pin(async move {
+                        let response = txn
+                            .execute(&format!(
+                                "mutation {{ create_AgentRequest(input: {literal}) {{ _docID }} }}"
+                            ))
+                            .await?;
+                        let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents_store::collection::Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture Agent unavailable"))?;
+                        crate::request::lifecycle::stage_request_relationships_in_txn(
+                            txn,
+                            &doc,
+                            &agent_doc,
+                            session_doc,
+                            agent_did,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(doc)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+    };
+
+    // Failed scheduled non-wake request (e.g., cron job).
+    create_row(json!({
+        "request_id": "failed-cron-req",
+        "purpose": "normal",
+        "node_did": node_did,
+        "requester_did": requester,
+        "agent_did": agent_did,
+        "session_id": session,
+        "content": "scheduled task",
+        "execution_origin": "scheduled",
+        "lifecycle_state": "failed",
+        "created_at": "2026-01-01T00:00:01Z",
+        "terminalized_at": "2026-01-01T00:00:02Z",
+        "retry_count": 0,
+        "retry_root_request": "failed-cron-req",
+        "terminal_redrive_attempts": 0,
+        "request_hop": 0,
+    }))
+    .await;
+
+    // Failed background-completion wake that already has a successor.
+    let failed_wake_doc = create_row(json!({
+        "request_id": "failed-wake-req",
+        "purpose": "normal",
+        "node_did": node_did,
+        "requester_did": requester,
+        "agent_did": agent_did,
+        "session_id": session,
+        "content": "wake",
+        "input": wake_input,
+        "execution_origin": "scheduled",
+        "lifecycle_state": "failed",
+        "created_at": "2026-01-01T00:00:03Z",
+        "terminalized_at": "2026-01-01T00:00:04Z",
+        "retry_count": 0,
+        "retry_root_request": "failed-wake-req",
+        "terminal_redrive_attempts": 0,
+        "request_hop": 0,
+    }))
+    .await;
+    create_row(json!({
+        "request_id": "successor-wake-req",
+        "purpose": "normal",
+        "node_did": node_did,
+        "requester_did": requester,
+        "agent_did": agent_did,
+        "session_id": session,
+        "content": "wake retry",
+        "input": wake_input,
+        "execution_origin": "scheduled",
+        "lifecycle_state": "completed",
+        "created_at": "2026-01-01T00:00:10Z",
+        "retry_count": 1,
+        "retry_parent_request": "failed-wake-req",
+        "retry_parent_request_doc_id": failed_wake_doc,
+        "retry_root_request": "failed-wake-req",
+        "retry_key": format!("retry:doc:{failed_wake_doc}"),
+        "terminal_redrive_attempts": 0,
+        "request_hop": 0,
+    }))
+    .await;
+
+    let agent_identity: std::sync::Arc<dyn NodeIdentity> = db.agent_identity.clone();
+    let (report, counts) = gents_store::config_client::count_statements(
+        crate::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            &db.node,
+            node_did,
+            std::slice::from_ref(&agent_identity),
+        ),
+    )
+    .await;
+    let report = report.unwrap();
+    assert_eq!(report.scanned, 2);
+    assert_eq!(report.ineligible, 1);
+    assert_eq!(report.already_redriven, 1);
+    assert_eq!(report.redriven, 0);
+    assert_eq!(
+        counts.total(),
+        2,
+        "sweep should run only the failed-candidate query and one scoped context query"
+    );
+    assert!(
+        !counts
+            .statements()
+            .any(|(_, doc)| doc.contains(gents_protocol::schemas::AGENT_REQUEST_RETRY_BUDGET_NAME)),
+        "already-redriven and non-wake rows must never query AgentRequestRetryBudget"
+    );
+    assert!(
+        !counts
+            .statements()
+            .any(|(_, doc)| doc.contains("retry_parent_request_doc_id: { _neq: null }")),
+        "successor lookup must be scoped to candidate doc IDs rather than scanning all retries"
     );
     db.node.shutdown().await.expect("shut down test node");
 }

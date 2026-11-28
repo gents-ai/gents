@@ -55,7 +55,6 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "InferenceCall",
     "AgentToolCall",
-    "AgentOutputSegment",
     "NodeReadiness",
     "NodeRuntime",
 ];
@@ -1303,9 +1302,16 @@ impl TriggerSource for GoalSource {
                             None => std::future::pending().await,
                         }
                     } => {
-                        if batch.is_none() {
-                            self.subscription = None;
-                            tracing::warn!("goal source subscription closed; continuing durable rescans");
+                        match batch {
+                            Some(batch) => {
+                                if !batch.resync_required && batch.changes.is_empty() {
+                                    continue;
+                                }
+                            }
+                            None => {
+                                self.subscription = None;
+                                tracing::warn!("goal source subscription closed; continuing durable rescans");
+                            }
                         }
                         false
                     }
@@ -1558,5 +1564,26 @@ mod tests {
             vec![watched.did().to_owned()],
             "GoalSource must scan only enabled/resolved watcher identities"
         );
+    }
+
+    #[test]
+    fn goal_observed_collections_exclude_streaming_output_segments() {
+        assert!(
+            !GOAL_OBSERVED_COLLECTIONS.contains(&"AgentOutputSegment"),
+            "streaming output chunks must not wake GoalSource rescans"
+        );
+        for required in [
+            "Goal",
+            "AgentRequest",
+            "InferenceCall",
+            "AgentToolCall",
+            "NodeReadiness",
+            "NodeRuntime",
+        ] {
+            assert!(
+                GOAL_OBSERVED_COLLECTIONS.contains(&required),
+                "GoalSource must continue observing {required}"
+            );
+        }
     }
 }

@@ -1011,6 +1011,8 @@ impl ConfigAccess {
 
     pub fn execute<'a>(&'a self, query: &'a str) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            txn::record_statement(None, query);
             match self {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
                 Self::Local(local) => {
@@ -1045,6 +1047,8 @@ impl ConfigAccess {
         access: txn::ReadAccess,
     ) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            txn::record_statement(None, query);
             match self {
                 Self::Graphql(graphql) => {
                     post_graphql_with_variables(graphql, query, variables).await

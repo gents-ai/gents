@@ -276,6 +276,25 @@
   },
   {
     "read": {
+      "path": "crates/gents-session/src/session/sessions.rs",
+      "collection": "AgentSession",
+      "arguments": "filter: { $GENTS_filter$$GENTS_seek$ }, order: [{ _docID: ASC }], limit: $GENTS_limit$"
+    },
+    "bindings": [
+      {
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, relationships_pending: { _eq: true }",
+        "seek": "",
+        "limit": "65"
+      },
+      {
+        "filter": "node_did: { _eq: \"probe\" }, agent_did: { _eq: \"probe\" }, relationships_pending: { _eq: true }",
+        "seek": ", _docID: { _nin: [\"probe\"] }",
+        "limit": "65"
+      }
+    ]
+  },
+  {
+    "read": {
       "path": "crates/gents-session/src/session/message/inspection.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {$GENTS_scope$$GENTS_bounds$$GENTS_role$}, order: {sequence: DESC}, limit: $GENTS_0$"
@@ -507,12 +526,13 @@
     "read": {
       "path": "crates/gents-session/src/request/hooks/owed.rs",
       "collection": "AgentSession",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, agent_did: { _eq: \"$GENTS_agent_did$\" }, stopped_at: { _ne: null } }, order: { stopped_at: DESC }, limit: $GENTS_bound$"
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, agent_did: { _eq: \"$GENTS_agent_did$\" }, stopped_at: { _ge: \"$GENTS_escaped_horizon$\" } }, order: { stopped_at: DESC }, limit: $GENTS_bound$"
     },
     "bindings": [
       {
         "node": "probe",
         "agent_did": "probe",
+        "escaped_horizon": "probe",
         "bound": "64"
       }
     ]
@@ -521,12 +541,12 @@
     "read": {
       "path": "crates/gents-session/src/request/hooks/owed.rs",
       "collection": "AgentSessionInterrupt",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, interrupted_at: { _ge: \"$GENTS_horizon$\" } }, order: { interrupted_at: DESC }, limit: $GENTS_bound$"
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, interrupted_at: { _ge: \"$GENTS_escaped_horizon$\" } }, order: { interrupted_at: DESC }, limit: $GENTS_bound$"
     },
     "bindings": [
       {
         "node": "probe",
-        "horizon": "probe",
+        "escaped_horizon": "probe",
         "bound": "64"
       }
     ]

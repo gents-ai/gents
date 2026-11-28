@@ -190,11 +190,31 @@ pub async fn read_pin(
     node_did: &str,
     request_doc_id: &str,
 ) -> Result<Option<i64>, RetryBudgetError> {
-    let response = access
-        .execute(&pins_query(node_did, &[request_doc_id]))
-        .await
-        .map_err(|error| RetryBudgetError::Read(anyhow::Error::from(error)))?;
-    Ok(accepted_pins(node_did, &response).remove(request_doc_id))
+    Ok(read_pins_batch(access, node_did, &[request_doc_id])
+        .await?
+        .remove(request_doc_id))
+}
+
+/// The accepted pins of `request_doc_ids` that `access` can read and its Node
+/// signed (`read_pins`), fetched in batched queries.
+pub async fn read_pins_batch(
+    access: &ConfigAccess,
+    node_did: &str,
+    request_doc_ids: &[&str],
+) -> Result<std::collections::BTreeMap<String, i64>, RetryBudgetError> {
+    const CHUNK_SIZE: usize = 64;
+    if request_doc_ids.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let mut pins = std::collections::BTreeMap::new();
+    for chunk in request_doc_ids.chunks(CHUNK_SIZE) {
+        let response = access
+            .execute(&pins_query(node_did, chunk))
+            .await
+            .map_err(|error| RetryBudgetError::Read(anyhow::Error::from(error)))?;
+        pins.extend(accepted_pins(node_did, &response));
+    }
+    Ok(pins)
 }
 
 /// The accepted pins of `request_doc_ids` within one transaction.

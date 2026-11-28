@@ -52,15 +52,28 @@ impl RequestLifecycle {
             })
             .collect::<BTreeSet<_>>();
 
-        let mut eligible = Vec::new();
+        let mut needs_pin = Vec::new();
         for candidate in candidates {
-            let pin = candidate_pin(&accesses, &candidate).await?;
-            let Some(queue_key) = eligible_queue_key(&candidate, pin)? else {
+            let Some(queue_key) = background_queue_key(&candidate)? else {
                 report.ineligible += 1;
                 continue;
             };
             if successor_parents.contains(required_str(candidate.doc_id.as_deref(), "_docID")?) {
                 report.already_redriven += 1;
+                continue;
+            }
+            needs_pin.push((candidate, queue_key));
+        }
+
+        let pins = load_candidate_pins(&accesses, &needs_pin).await?;
+        let now = chrono::Utc::now();
+        let mut eligible = Vec::new();
+        for (candidate, queue_key) in needs_pin {
+            let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
+            let pin = pins.get(doc_id).copied();
+            let retry_count = required_i64(candidate.retry_count, "retry_count")?;
+            if !crate::request::retry_budget::successor_budget_remains(true, retry_count, pin) {
+                report.ineligible += 1;
                 continue;
             }
             if pending_keys.contains(&(
@@ -70,7 +83,7 @@ impl RequestLifecycle {
                 report.coalesced += 1;
                 continue;
             }
-            if !retry_is_due(&candidate, chrono::Utc::now())? {
+            if !retry_is_due(&candidate, now)? {
                 report.deferred += 1;
                 continue;
             }
@@ -141,18 +154,36 @@ fn failed_candidates_query(node_did: &str, agent_did: &str) -> String {
     )
 }
 
-fn actor_wake_context_query(node_did: &str, agent_did: &str) -> String {
+const WAKE_CONTEXT_CHUNK_SIZE: usize = 64;
+
+fn quoted_id_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn actor_wake_context_query(
+    node_did: &str,
+    agent_did: &str,
+    candidate_doc_ids: &[&str],
+    candidate_sessions: &[&str],
+) -> String {
+    let doc_ids = quoted_id_list(candidate_doc_ids);
+    let sessions = quoted_id_list(candidate_sessions);
     format!(
         r#"{{
             successors: AgentRequest(filter: {{
                 node_did: {{ _eq: "{node_did}" }},
                 agent_did: {{ _eq: "{agent_did}" }},
-                retry_parent_request_doc_id: {{ _neq: null }}
+                retry_parent_request_doc_id: {{ _in: [{doc_ids}] }}
             }}) {{ _docID request_id retry_parent_request_doc_id }}
             pending: AgentRequest(filter: {{
                 node_did: {{ _eq: "{node_did}" }},
                 agent_did: {{ _eq: "{agent_did}" }},
-                lifecycle_state: {{ _eq: "{pending}" }}
+                lifecycle_state: {{ _eq: "{pending}" }},
+                session_id: {{ _in: [{sessions}] }}
             }}) {{ _docID request_id session_id requester_did input }}
         }}"#,
         pending = RequestLifecycleState::Pending.as_str(),
@@ -192,30 +223,71 @@ async fn load_candidates(
         if actor_failed.is_empty() {
             continue;
         }
-        let context_response = access
-            .execute(&actor_wake_context_query(&node_did, &agent_did))
-            .await?;
-        let context_data = context_response
-            .get("data")
-            .context("background wake context query has no data")?;
-        if ["successors", "pending"]
-            .iter()
-            .any(|name| context_data.get(name).is_none())
-        {
-            tracing::warn!(agent_did = %actor, "background wake scan omitted context rows for this actor");
+        let mut wake_doc_ids = BTreeSet::new();
+        let mut wake_sessions = BTreeSet::new();
+        for row in &actor_failed {
+            if background_queue_key(row).ok().flatten().is_some() {
+                if let Some(doc_id) = row.doc_id.as_deref() {
+                    wake_doc_ids.insert(doc_id.to_owned());
+                }
+                if let Some(session_id) = row.session_id.as_deref() {
+                    wake_sessions.insert(session_id.to_owned());
+                }
+            }
+        }
+        if wake_doc_ids.is_empty() || wake_sessions.is_empty() {
+            append_unique_rows(&mut failed, &mut seen_failed, actor_failed)?;
+            continue;
+        }
+        let doc_id_list: Vec<&str> = wake_doc_ids.iter().map(String::as_str).collect();
+        let session_list: Vec<&str> = wake_sessions.iter().map(String::as_str).collect();
+        let mut actor_successors = Vec::new();
+        let mut actor_pending = Vec::new();
+        let mut context_omitted = false;
+        let max_chunks = doc_id_list
+            .len()
+            .div_ceil(WAKE_CONTEXT_CHUNK_SIZE)
+            .max(session_list.len().div_ceil(WAKE_CONTEXT_CHUNK_SIZE));
+        for chunk_idx in 0..max_chunks {
+            let doc_start = (chunk_idx * WAKE_CONTEXT_CHUNK_SIZE).min(doc_id_list.len());
+            let doc_end = (doc_start + WAKE_CONTEXT_CHUNK_SIZE).min(doc_id_list.len());
+            let doc_chunk = if doc_start < doc_end {
+                &doc_id_list[doc_start..doc_end]
+            } else {
+                &doc_id_list[..1]
+            };
+            let sess_start = (chunk_idx * WAKE_CONTEXT_CHUNK_SIZE).min(session_list.len());
+            let sess_end = (sess_start + WAKE_CONTEXT_CHUNK_SIZE).min(session_list.len());
+            let sess_chunk = if sess_start < sess_end {
+                &session_list[sess_start..sess_end]
+            } else {
+                &session_list[..1]
+            };
+            let context_response = access
+                .execute(&actor_wake_context_query(
+                    &node_did, &agent_did, doc_chunk, sess_chunk,
+                ))
+                .await?;
+            let context_data = context_response
+                .get("data")
+                .context("background wake context query has no data")?;
+            if ["successors", "pending"]
+                .iter()
+                .any(|name| context_data.get(name).is_none())
+            {
+                tracing::warn!(agent_did = %actor, "background wake scan omitted context rows for this actor");
+                context_omitted = true;
+                break;
+            }
+            actor_successors.extend(agent_request_rows(context_data, "successors")?);
+            actor_pending.extend(agent_request_rows(context_data, "pending")?);
+        }
+        if context_omitted {
             continue;
         }
         append_unique_rows(&mut failed, &mut seen_failed, actor_failed)?;
-        append_unique_rows(
-            &mut successors,
-            &mut seen_successors,
-            agent_request_rows(context_data, "successors")?,
-        )?;
-        append_unique_rows(
-            &mut pending,
-            &mut seen_pending,
-            agent_request_rows(context_data, "pending")?,
-        )?;
+        append_unique_rows(&mut successors, &mut seen_successors, actor_successors)?;
+        append_unique_rows(&mut pending, &mut seen_pending, actor_pending)?;
     }
     failed.sort_by(|a, b| {
         a.terminalized_at
@@ -279,6 +351,7 @@ fn automated_queue_key(queue: &RequestQueue) -> Option<String> {
 }
 
 /// The wake's pin as its Node signed it, read as the wake's own Agent.
+#[cfg(test)]
 async fn candidate_pin(
     accesses: &std::collections::BTreeMap<String, gents_store::config_client::ConfigAccess>,
     candidate: &AgentRequestRow,
@@ -295,11 +368,38 @@ async fn candidate_pin(
     .await?)
 }
 
-fn eligible_queue_key(candidate: &AgentRequestRow, pin: Option<i64>) -> Result<Option<String>> {
-    let retry_count = required_i64(candidate.retry_count, "retry_count")?;
-    if !crate::request::retry_budget::successor_budget_remains(true, retry_count, pin) {
-        return Ok(None);
+/// Batches Node-signed retry-budget pin lookups per `(agent_did, node_did)` so
+/// surviving candidates issue one query per actor rather than one per row.
+async fn load_candidate_pins(
+    accesses: &std::collections::BTreeMap<String, gents_store::config_client::ConfigAccess>,
+    candidates: &[(AgentRequestRow, String)],
+) -> Result<rapidhash::RapidHashMap<String, i64>> {
+    use rapidhash::{HashMapExt, RapidHashMap};
+
+    let mut grouped: std::collections::BTreeMap<(&str, &str), Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for (candidate, _) in candidates {
+        let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
+        let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
+        let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
+        grouped
+            .entry((agent_did, node_did))
+            .or_default()
+            .push(doc_id);
     }
+    let mut pins = RapidHashMap::new();
+    for ((agent_did, node_did), doc_ids) in grouped {
+        let access = accesses
+            .get(agent_did)
+            .context("wake agent signer unavailable")?;
+        let batch =
+            crate::request::retry_budget::read_pins_batch(access, node_did, &doc_ids).await?;
+        pins.extend(batch);
+    }
+    Ok(pins)
+}
+
+fn background_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
     let own_key = gents_protocol::request_input::QueueSource::BackgroundCompletion
         .queue_key(required_str(candidate.session_id.as_deref(), "session_id")?);
     Ok(candidate
@@ -308,6 +408,14 @@ fn eligible_queue_key(candidate: &AgentRequestRow, pin: Option<i64>) -> Result<O
         .and_then(|input| input.queue.as_ref())
         .and_then(automated_queue_key)
         .filter(|key| *key == own_key))
+}
+
+fn eligible_queue_key(candidate: &AgentRequestRow, pin: Option<i64>) -> Result<Option<String>> {
+    let retry_count = required_i64(candidate.retry_count, "retry_count")?;
+    if !crate::request::retry_budget::successor_budget_remains(true, retry_count, pin) {
+        return Ok(None);
+    }
+    background_queue_key(candidate)
 }
 
 pub fn background_wake_retry_delay(retry_count: i64) -> chrono::Duration {

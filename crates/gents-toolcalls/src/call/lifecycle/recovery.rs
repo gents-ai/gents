@@ -170,7 +170,22 @@ enum RecoveryOutcome {
     SessionStopped,
 }
 
+pub(crate) struct RunningToolCallSnapshot {
+    accesses: RecoveryAccesses,
+    rows: Vec<RunningToolCallRow>,
+}
+
 impl super::ToolCallLifecycle {
+    pub(crate) async fn load_running_tool_call_snapshot(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        identities: &RecoveryIdentities,
+    ) -> Result<RunningToolCallSnapshot> {
+        let accesses = recovery_accesses(node, node_did, identities)?;
+        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
+        Ok(RunningToolCallSnapshot { accesses, rows })
+    }
+
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -191,12 +206,15 @@ impl super::ToolCallLifecycle {
         identities: &RecoveryIdentities,
         executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
-        let accesses = recovery_accesses(node, node_did, identities)?;
+        let snapshot = Self::load_running_tool_call_snapshot(node, node_did, identities).await?;
         let tool_calls_recovered =
-            recover_stuck_running_tool_calls(node, node_did, &accesses, executions).await?
-                + Self::reconcile_orphaned_background_tools(node, node_did, identities, executions)
-                    .await?
-                    .tool_calls_terminalized;
+            recover_stuck_running_tool_calls_from_snapshot(node, node_did, &snapshot, executions)
+                .await?
+                + Self::reconcile_orphaned_background_tools_from_snapshot(
+                    node, node_did, &snapshot, executions,
+                )
+                .await?
+                .tool_calls_terminalized;
         let notifications_repaired =
             Self::reconcile_background_completion_side_effects(node, node_did, identities)
                 .await?
@@ -228,22 +246,34 @@ impl super::ToolCallLifecycle {
         identities: &RecoveryIdentities,
         executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<TerminalParentToolReport> {
-        let accesses = recovery_accesses(node, node_did, identities)?;
-        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
+        let snapshot = Self::load_running_tool_call_snapshot(node, node_did, identities).await?;
+        Self::reconcile_terminal_parent_owned_tools_from_snapshot(
+            node, node_did, &snapshot, executions,
+        )
+        .await
+    }
+
+    pub(crate) async fn reconcile_terminal_parent_owned_tools_from_snapshot(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        snapshot: &RunningToolCallSnapshot,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
+    ) -> Result<TerminalParentToolReport> {
+        let accesses = &snapshot.accesses;
         let mut report = TerminalParentToolReport::default();
 
-        for row in rows {
+        for row in &snapshot.rows {
             if row.node_did.as_deref() != Some(node_did) {
                 continue;
             }
-            if await_mode(&row) == AwaitMode::Background
+            if await_mode(row) == AwaitMode::Background
                 || executions.contains(&row.tool_call_id, &row.doc_id).await
                 || row.owned_by_live_execution(executions)
             {
                 continue;
             }
 
-            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
+            let Some((access, parent)) = selected_running_parent(node_did, row, accesses).await?
             else {
                 continue;
             };
@@ -251,13 +281,13 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            let Some(outcome) = classify_terminal_parent_tool_recovery(&row, &parent) else {
+            let Some(outcome) = classify_terminal_parent_tool_recovery(row, &parent) else {
                 continue;
             };
 
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
             let updated =
-                match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
+                match recover_tool_call_row(node, access, row, deadline_at, outcome, true).await {
                     Ok(updated) => updated,
                     Err(error) => {
                         tracing::warn!(
@@ -300,17 +330,30 @@ impl super::ToolCallLifecycle {
         identities: &RecoveryIdentities,
         executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
-        let accesses = recovery_accesses(node, node_did, identities)?;
         executions.recover_retained_foreground().await;
-        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
+        let snapshot = Self::load_running_tool_call_snapshot(node, node_did, identities).await?;
+        Self::reconcile_orphaned_background_tools_from_snapshot(
+            node, node_did, &snapshot, executions,
+        )
+        .await
+    }
+
+    pub(crate) async fn reconcile_orphaned_background_tools_from_snapshot(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        snapshot: &RunningToolCallSnapshot,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
+    ) -> Result<OrphanedBackgroundToolReport> {
+        let accesses = &snapshot.accesses;
+        executions.recover_retained_foreground().await;
         let mut report = OrphanedBackgroundToolReport::default();
 
-        for row in rows {
-            if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
+        for row in &snapshot.rows {
+            if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(row) {
                 continue;
             }
             let registered = executions.contains(&row.tool_call_id, &row.doc_id).await;
-            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
+            let Some((access, parent)) = selected_running_parent(node_did, row, accesses).await?
             else {
                 if unresolved_parent_warning_due(&row.doc_id) {
                     tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, "background tool parent or validated agent is unavailable");
@@ -355,30 +398,37 @@ impl super::ToolCallLifecycle {
                     continue;
                 };
                 if gents_tools::native::is_bash_tool_name(&row.tool_name) {
-                    let mut retained = load_recovery_lifecycle(node, access, &row).await?;
+                    let mut retained = load_recovery_lifecycle(node, access, row).await?;
                     if executions.settle_retained_stop(&mut retained).await? {
                         report.tool_calls_terminalized += usize::from(retained.is_terminal());
                         continue;
                     }
                 }
-                let updated =
-                    match recover_tool_call_row(node, access, &row, deadline_at, cause, true).await
-                    {
-                        Ok(updated) => updated,
-                        Err(error) => {
-                            tracing::warn!(
-                                doc_id = %row.doc_id,
-                                tool_call_id = %row.tool_call_id,
-                                error = %error,
-                                "failed to recover stopped-session background tool"
-                            );
-                            continue;
-                        }
-                    };
+                let updated = match recover_tool_call_row(
+                    node,
+                    access,
+                    row,
+                    deadline_at,
+                    cause,
+                    true,
+                )
+                .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to recover stopped-session background tool"
+                        );
+                        continue;
+                    }
+                };
                 // The worker may have won the terminal CAS while stop was in
                 // flight. Its own completion owns the durable outcome.
                 if updated {
-                    append_recovered_background_tool_completion(node, access, &row, cause).await;
+                    append_recovered_background_tool_completion(node, access, row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -404,7 +454,7 @@ impl super::ToolCallLifecycle {
                     continue;
                 }
                 if gents_tools::native::is_bash_tool_name(&row.tool_name) {
-                    let mut retained = load_recovery_lifecycle(node, access, &row).await?;
+                    let mut retained = load_recovery_lifecycle(node, access, row).await?;
                     if executions.settle_retained_stop(&mut retained).await? {
                         report.tool_calls_terminalized += usize::from(retained.is_terminal());
                         continue;
@@ -413,7 +463,7 @@ impl super::ToolCallLifecycle {
                 let updated = match recover_tool_call_row(
                     node,
                     access,
-                    &row,
+                    row,
                     deadline_at,
                     cause,
                     true,
@@ -427,7 +477,7 @@ impl super::ToolCallLifecycle {
                     }
                 };
                 if updated {
-                    append_recovered_background_tool_completion(node, access, &row, cause).await;
+                    append_recovered_background_tool_completion(node, access, row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -437,7 +487,7 @@ impl super::ToolCallLifecycle {
                 .stop_execution(&row.tool_call_id, &row.doc_id)
                 .await;
             let Some(outcome) = classify_orphaned_background_tool(
-                &row,
+                row,
                 process,
                 task_deleted,
                 session_stopped,
@@ -453,7 +503,7 @@ impl super::ToolCallLifecycle {
             };
 
             let updated =
-                match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
+                match recover_tool_call_row(node, access, row, deadline_at, outcome, true).await {
                     Ok(updated) => updated,
                     Err(error) => {
                         tracing::warn!(
@@ -472,7 +522,7 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            append_recovered_background_tool_completion(node, access, &row, outcome).await;
+            append_recovered_background_tool_completion(node, access, row, outcome).await;
             report.tool_calls_terminalized += 1;
             tracing::info!(
                 doc_id = %row.doc_id,
@@ -499,7 +549,7 @@ impl super::ToolCallLifecycle {
                 continue;
             }
             match selected_agent_observes_terminal_tool(
-                &accesses,
+                accesses,
                 node_did,
                 &record.tool_call_doc_id,
                 &record.tool_call_id,
@@ -908,20 +958,20 @@ mod tests {
     }
 }
 
-async fn recover_stuck_running_tool_calls(
+async fn recover_stuck_running_tool_calls_from_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    accesses: &RecoveryAccesses,
+    snapshot: &RunningToolCallSnapshot,
     executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
 ) -> Result<usize> {
-    let rows = load_running_tool_call_rows_for_agent(node_did, accesses).await?;
+    let accesses = &snapshot.accesses;
 
     let mut recovered = 0;
-    for row in rows {
+    for row in &snapshot.rows {
         // Background rows have their own owners: native processes the
         // orphan sweep, session-message rows the session-message sweep.
         if row.node_did.as_deref() != Some(node_did)
-            || await_mode(&row) == AwaitMode::Background
+            || await_mode(row) == AwaitMode::Background
             || executions.contains(&row.tool_call_id, &row.doc_id).await
             || row.owned_by_live_execution(executions)
         {
@@ -929,18 +979,17 @@ async fn recover_stuck_running_tool_calls(
         }
 
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
-        let Some((access, parent)) = selected_running_parent(node_did, &row, accesses).await?
-        else {
+        let Some((access, parent)) = selected_running_parent(node_did, row, accesses).await? else {
             continue;
         };
-        let outcome = classify_running_tool_recovery(&row, Some(&parent), Utc::now());
+        let outcome = classify_running_tool_recovery(row, Some(&parent), Utc::now());
 
         let Some(outcome) = outcome else {
             continue;
         };
 
         let updated =
-            match recover_tool_call_row(node, access, &row, deadline_at, outcome, true).await {
+            match recover_tool_call_row(node, access, row, deadline_at, outcome, true).await {
                 Ok(updated) => updated,
                 Err(error) => {
                     tracing::warn!(

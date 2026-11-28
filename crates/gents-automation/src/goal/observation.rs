@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gents_protocol::goal_control::{
     GoalRevision, ObservedGoal, SessionGoalObservation, SESSION_GOAL_CONTROL_VERSION,
 };
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 
 use super::*;
 #[cfg(test)]
@@ -16,6 +18,338 @@ use gents_store::identity::NodeIdentity;
 
 pub const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 
+const CHANGED_LOOKUP_CHUNK: usize = 64;
+
+struct SessionScope<'a> {
+    doc_id: &'a str,
+    node_did: &'a str,
+    agent_did: &'a str,
+    session_id: &'a str,
+    requester_did: Option<&'a str>,
+}
+
+impl<'a> SessionScope<'a> {
+    fn from_owner(session: &'a SessionOwnerRow) -> Self {
+        Self {
+            doc_id: &session.doc_id,
+            node_did: &session.session.node_did,
+            agent_did: &session.session.agent_did,
+            session_id: &session.session.session_id,
+            requester_did: session.session.requester_did.as_deref(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SweepSessionRow {
+    #[serde(rename = "_docID")]
+    doc_id: Option<String>,
+    node_did: Option<String>,
+    agent_did: Option<String>,
+    session_id: Option<String>,
+    requester_did: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SweepGoalRow {
+    session_doc_id: Option<String>,
+    #[serde(flatten)]
+    goal: GoalDocument,
+}
+
+async fn session_observation_is_current_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    verifier: &dyn NodeIdentity,
+    scope: &SessionScope<'_>,
+    canonical_goal: Option<&GoalDocument>,
+    rows: &[ObservationRow],
+) -> Result<bool> {
+    let [row] = rows else {
+        return Ok(false);
+    };
+    if row.requester_did.as_deref() != scope.requester_did {
+        return Ok(false);
+    }
+    let Some(previous) = verified_scope(verifier, scope, row).await? else {
+        return Ok(false);
+    };
+    match (previous.goal.as_ref(), canonical_goal) {
+        (None, None) => Ok(true),
+        (Some(_), None) | (None, Some(_)) => Ok(false),
+        (Some(prev), Some(goal)) => {
+            if prev.revision.document != goal.doc_id
+                || prev.assignment_root_request_doc_id != goal.assignment_root_request_doc_id
+            {
+                return Ok(false);
+            }
+            let Some(commit) = gents_store::graphql::newest_document_composite_commit_in_txn(
+                txn,
+                &goal.doc_id,
+                "goal.observation_check",
+            )
+            .await?
+            else {
+                return Ok(false);
+            };
+            Ok(prev.revision.composite == commit.cid)
+        }
+    }
+}
+
+async fn resolve_changed_for_agent(
+    access: &ConfigAccess,
+    owner_did: &str,
+    agent_did: &str,
+    unresolved: &mut RapidHashSet<(&'static str, String)>,
+) -> Result<(BTreeSet<String>, bool)> {
+    let mut by_collection: [(&'static str, Vec<String>); 3] = [
+        ("Goal", Vec::new()),
+        ("AgentSession", Vec::new()),
+        ("GoalObservation", Vec::new()),
+    ];
+    for (collection, doc_id) in unresolved.iter() {
+        if let Some((_, bucket)) = by_collection
+            .iter_mut()
+            .find(|(name, _)| name == collection)
+        {
+            bucket.push(doc_id.clone());
+        }
+    }
+    let owner = escape_graphql_string(owner_did);
+    let agent = escape_graphql_string(agent_did);
+    let (resolved_docs, sessions, needs_full) = access
+        .transact_readonly("goal.observation_sources", |txn| {
+            let by_collection = &by_collection;
+            let owner = &owner;
+            let agent = &agent;
+            Box::pin(async move {
+                let mut resolved_docs = Vec::new();
+                let mut sessions = BTreeSet::new();
+                let mut needs_full = false;
+                for (collection, doc_ids) in by_collection {
+                    if doc_ids.is_empty() {
+                        continue;
+                    }
+                    for chunk in doc_ids.chunks(CHANGED_LOOKUP_CHUNK) {
+                        let ids = chunk
+                            .iter()
+                            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let response = txn
+                            .execute(&format!(
+                                r#"{{ {collection}(filter: {{ _docID: {{ _in: [{ids}] }}, node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent}" }} }}) {{ _docID session_id }} }}"#
+                            ))
+                            .await?;
+                        let rows = response["data"][*collection]
+                            .as_array()
+                            .context("goal observation source omitted rows")?;
+                        for row in rows {
+                            if let Some(doc_id) = row["_docID"].as_str() {
+                                resolved_docs.push((*collection, doc_id.to_owned()));
+                            }
+                            if let Some(session) = row["session_id"]
+                                .as_str()
+                                .filter(|session| !session.trim().is_empty())
+                            {
+                                sessions.insert(session.to_owned());
+                            } else {
+                                needs_full = true;
+                            }
+                        }
+                    }
+                }
+                Ok::<_, anyhow::Error>((resolved_docs, sessions, needs_full))
+            })
+        })
+        .await?;
+    for entry in resolved_docs {
+        unresolved.remove(&entry);
+    }
+    Ok((sessions, needs_full))
+}
+
+async fn plan_full_agent_scopes_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    identity: &dyn NodeIdentity,
+    agent_did: &str,
+) -> Result<Vec<(String, Option<String>)>> {
+    use gents_protocol::document_query::{
+        fields::{
+            agent_session as session_fields, goal as goal_fields, goal_observation as obs_fields,
+        },
+        Filter, Query, Selection,
+    };
+    let sessions_query = Query::select(
+        Selection::doc_id()
+            .field(session_fields::NODE_DID)
+            .field(session_fields::AGENT_DID)
+            .field(session_fields::SESSION_ID)
+            .field(session_fields::REQUESTER_DID),
+    )
+    .filter(
+        Filter::eq(session_fields::NODE_DID, identity.did())
+            .and(Filter::eq(session_fields::AGENT_DID, agent_did)),
+    )
+    .render();
+    let sessions_response = txn.run(&sessions_query).await?;
+    let session_rows: Vec<SweepSessionRow> = serde_json::from_value(
+        sessions_response
+            .pointer("/data/AgentSession")
+            .cloned()
+            .context("goal session sweep omitted rows")?,
+    )
+    .context("decoding goal session sweep rows")?;
+    if session_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let goals_query =
+        Query::select(Selection::owned(GOAL_FIELDS).field(goal_fields::SESSION_DOC_ID))
+            .filter(
+                Filter::eq(goal_fields::NODE_DID, identity.did())
+                    .and(Filter::eq(goal_fields::AGENT_DID, agent_did)),
+            )
+            .render();
+    let goals_response = txn.run(&goals_query).await?;
+    let goal_rows: Vec<SweepGoalRow> = serde_json::from_value(
+        goals_response
+            .pointer("/data/Goal")
+            .cloned()
+            .context("goal sweep omitted rows")?,
+    )
+    .context("decoding goal sweep rows")?;
+    let mut goals_by_session_doc: RapidHashMap<String, Vec<GoalDocument>> = RapidHashMap::new();
+    for row in goal_rows {
+        if let Some(session_doc_id) = row.session_doc_id {
+            goals_by_session_doc
+                .entry(session_doc_id)
+                .or_default()
+                .push(row.goal);
+        }
+    }
+    for goals in goals_by_session_doc.values_mut() {
+        sort_goals_canonical(goals);
+    }
+
+    let obs_query = Query::select(
+        Selection::doc_id()
+            .field(obs_fields::NODE_DID)
+            .field(obs_fields::SESSION_ID)
+            .field(obs_fields::SESSION_DOC_ID)
+            .field(obs_fields::REQUESTER_DID)
+            .field(obs_fields::OBSERVATION_JSON),
+    )
+    .filter(
+        Filter::eq(obs_fields::NODE_DID, identity.did())
+            .and(Filter::eq(obs_fields::AGENT_DID, agent_did)),
+    )
+    .render();
+    let obs_response = txn.run(&obs_query).await?;
+    let obs_rows: Vec<ObservationRow> = serde_json::from_value(
+        obs_response
+            .pointer("/data/GoalObservation")
+            .cloned()
+            .context("goal observation sweep omitted rows")?,
+    )
+    .context("decoding goal observation sweep rows")?;
+    let mut obs_by_session_doc: RapidHashMap<String, Vec<ObservationRow>> = RapidHashMap::new();
+    for row in obs_rows {
+        obs_by_session_doc
+            .entry(row.session_doc_id.clone())
+            .or_default()
+            .push(row);
+    }
+
+    let mut scopes = Vec::new();
+    for row in session_rows {
+        let Some(session_id) = row
+            .session_id
+            .as_deref()
+            .filter(|session| !session.trim().is_empty())
+        else {
+            continue;
+        };
+        let (Some(doc_id), Some(node_did), Some(row_agent_did)) = (
+            row.doc_id.as_deref(),
+            row.node_did.as_deref(),
+            row.agent_did.as_deref(),
+        ) else {
+            scopes.push((session_id.to_owned(), row.requester_did));
+            continue;
+        };
+        let scope = SessionScope {
+            doc_id,
+            node_did,
+            agent_did: row_agent_did,
+            session_id,
+            requester_did: row.requester_did.as_deref(),
+        };
+        let canonical_goal = goals_by_session_doc
+            .get(doc_id)
+            .and_then(|goals| goals.first());
+        let observations = obs_by_session_doc
+            .get(doc_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if !session_observation_is_current_in_txn(
+            txn,
+            identity,
+            &scope,
+            canonical_goal,
+            observations,
+        )
+        .await?
+        {
+            scopes.push((session_id.to_owned(), row.requester_did));
+        }
+    }
+    Ok(scopes)
+}
+
+async fn plan_scoped_agent_sessions_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    identity: &dyn NodeIdentity,
+    agent_did: &str,
+    sessions: &BTreeSet<String>,
+) -> Result<Vec<(String, Option<String>)>> {
+    let mut scopes = Vec::new();
+    for session_id in sessions {
+        let Some(session) =
+            gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                txn,
+                identity.did(),
+                session_id,
+            )
+            .await?
+        else {
+            continue;
+        };
+        if session.session.agent_did != agent_did {
+            continue;
+        }
+        let Ok(rows) = rows_in_txn(txn, &session).await else {
+            scopes.push((session.session.session_id, session.session.requester_did));
+            continue;
+        };
+        let canonical_goal =
+            load_canonical_goal_in_txn(txn, identity.did(), &session.session.session_id).await?;
+        let scope = SessionScope::from_owner(&session);
+        if !session_observation_is_current_in_txn(
+            txn,
+            identity,
+            &scope,
+            canonical_goal.as_ref(),
+            &rows,
+        )
+        .await?
+        {
+            scopes.push((session.session.session_id, session.session.requester_did));
+        }
+    }
+    Ok(scopes)
+}
+
 pub async fn reconcile_goal_observations_with_identities(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
@@ -27,54 +361,78 @@ pub async fn reconcile_goal_observations_with_identities(
         node.node_identity_did() == Some(identity.did()),
         "goal observation runtime identity differs from node"
     );
-    let mut failed = false;
+    for (collection, _) in changed {
+        anyhow::ensure!(
+            SOURCES.contains(collection),
+            "unknown goal observation source"
+        );
+    }
+    let mut accesses = Vec::with_capacity(agent_identities.len());
     for agent in agent_identities {
-        let access = ConfigAccess::local_managed_agent(
+        accesses.push(ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(agent.did())?,
             agent.as_ref(),
-        )?;
-        let scopes = access.transact_readonly("goal.observation_sources", |txn| Box::pin(async move {
-            let owner = escape_graphql_string(identity.did());
-            let agent_did = escape_graphql_string(agent.did());
-            let mut sessions = std::collections::BTreeSet::new();
-            let mut full = full;
-            for (collection, doc_id) in changed {
-                anyhow::ensure!(SOURCES.contains(collection), "unknown goal observation source");
-                let response = txn.execute(&format!(r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ session_id }} }}"#, escape_graphql_string(doc_id))).await?;
-                let rows = response["data"][collection].as_array().context("goal observation source omitted rows")?;
-                if rows.is_empty() { full = true; }
-                for row in rows {
-                    if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
-                        sessions.insert(session.to_owned());
-                    } else { full = true; }
-                }
+        )?);
+    }
+
+    let mut agent_full = vec![full; agent_identities.len()];
+    let mut agent_sessions: Vec<BTreeSet<String>> = (0..agent_identities.len())
+        .map(|_| BTreeSet::new())
+        .collect();
+
+    if !full && !changed.is_empty() {
+        let mut unresolved: RapidHashSet<(&'static str, String)> =
+            changed.iter().cloned().collect();
+        for (idx, (agent, access)) in agent_identities.iter().zip(&accesses).enumerate() {
+            if unresolved.is_empty() {
+                break;
             }
-            let mut scopes = Vec::new();
-            if full {
-                use gents_protocol::document_query::{fields::agent_session as session_fields, Filter, Query, Selection};
-                let rendered = Query::select(Selection::new().field(session_fields::SESSION_ID).field(session_fields::REQUESTER_DID))
-                    .filter(Filter::eq(session_fields::NODE_DID, identity.did()).and(Filter::eq(session_fields::AGENT_DID, agent.did())))
-                    .render();
-                let response = txn.run(&rendered).await?;
-                let rows = response["data"]["AgentSession"].as_array().context("goal session sweep omitted rows")?;
-                for row in rows {
-                    if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
-                        scopes.push((session.to_owned(), row["requester_did"].as_str().map(str::to_owned)));
-                    }
-                }
-            } else {
-                for session_id in sessions {
-                    if let Some(session) = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, identity.did(), &session_id).await? {
-                        if session.session.agent_did == agent.did() {
-                            scopes.push((session.session.session_id, session.session.requester_did));
-                        }
-                    }
-                }
+            let (sessions, needs_full) =
+                resolve_changed_for_agent(access, identity.did(), agent.did(), &mut unresolved)
+                    .await?;
+            agent_sessions[idx] = sessions;
+            if needs_full {
+                agent_full[idx] = true;
             }
-            scopes.sort(); scopes.dedup();
-            Ok::<_, anyhow::Error>(scopes)
-        })).await?;
+        }
+        // Only a deleted or unresolvable Goal/GoalObservation can invalidate an
+        // existing session's projection across agents; an AgentSession doc owned
+        // by another agent or already removed needs no full sweep.
+        if unresolved
+            .iter()
+            .any(|(collection, _)| *collection != "AgentSession")
+        {
+            agent_full.fill(true);
+        }
+    }
+
+    let mut failed = false;
+    for (idx, (agent, access)) in agent_identities.iter().zip(&accesses).enumerate() {
+        let run_full = agent_full[idx];
+        let sessions = &agent_sessions[idx];
+        if !run_full && sessions.is_empty() {
+            continue;
+        }
+        let mut scopes = access
+            .transact_readonly("goal.observation_plan", |txn| {
+                Box::pin(async move {
+                    if run_full {
+                        plan_full_agent_scopes_in_txn(txn, identity.as_ref(), agent.did()).await
+                    } else {
+                        plan_scoped_agent_sessions_in_txn(
+                            txn,
+                            identity.as_ref(),
+                            agent.did(),
+                            sessions,
+                        )
+                        .await
+                    }
+                })
+            })
+            .await?;
+        scopes.sort();
+        scopes.dedup();
         for (session, requester) in scopes {
             if let Err(error) =
                 project_session_goal(node, identity, agent, &session, requester.as_deref()).await
@@ -169,10 +527,18 @@ async fn verified(
     session: &SessionOwnerRow,
     row: &ObservationRow,
 ) -> Result<Option<SessionGoalObservation>> {
-    if row.node_did != session.session.node_did
-        || row.session_id != session.session.session_id
-        || row.session_doc_id != session.doc_id
-        || row.requester_did != session.session.requester_did
+    verified_scope(identity, &SessionScope::from_owner(session), row).await
+}
+
+async fn verified_scope(
+    identity: &dyn NodeIdentity,
+    scope: &SessionScope<'_>,
+    row: &ObservationRow,
+) -> Result<Option<SessionGoalObservation>> {
+    if row.node_did != scope.node_did
+        || row.session_id != scope.session_id
+        || row.session_doc_id != scope.doc_id
+        || row.requester_did.as_deref() != scope.requester_did
     {
         return Ok(None);
     }
@@ -185,11 +551,11 @@ async fn verified(
     };
     if observation
         .validate_scope(
-            &session.session.node_did,
-            &session.session.agent_did,
-            &session.session.session_id,
-            &session.doc_id,
-            session.session.requester_did.as_deref(),
+            scope.node_did,
+            scope.agent_did,
+            scope.session_id,
+            scope.doc_id,
+            scope.requester_did,
         )
         .is_err()
     {
@@ -197,7 +563,7 @@ async fn verified(
     }
     if !identity
         .verify(
-            &session.session.agent_did,
+            scope.agent_did,
             &observation.signing_payload()?,
             &observation.signature,
         )
