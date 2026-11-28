@@ -1421,6 +1421,13 @@ class TlaSelection(unittest.TestCase):
                             "\\* paths: apps/x.ts\n\\* models: A.b\n====\n")
             with self.assertRaises(check.HeaderError):
                 check.spec_header(spec)
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* models: A.b\n\\* paths: apps/x.ts\n\\* traces: violates\n====\n")
+            self.assertEqual(check.spec_header(spec).traces, ["violates"])
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* traces: violates\n\\* models: A.b\n====\n")
+            with self.assertRaises(check.HeaderError):
+                check.spec_header(spec)
 
     def test_lean_a_spec_restates_selects_it(self):
         """Specs that copied Lean by hand name it, as a generated table or on `models:`."""
