@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
@@ -159,5 +159,47 @@ describe("on a narrow window", () => {
 
     await user.click(within(menu).getByRole("button", { name: "Back" }));
     expect(back).toHaveBeenCalledOnce();
+  });
+
+  it("gathers search with the mark and history in the menu's top row, and has no close button", async () => {
+    const app = testApp({
+      snapshot: { bootstrap: {}, client: { deployments: [node()] } },
+    });
+    renderIn(
+      app,
+      <TooltipProvider>
+        <AppShell
+          route={{ name: "mailbox" }}
+          history={{
+            canBack: true,
+            canForward: true,
+            back: () => {},
+            forward: () => {},
+          }}
+        >
+          <p>Content</p>
+        </AppShell>
+      </TooltipProvider>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const bar = screen.getByTestId("window-bar");
+    await user.click(within(bar).getByRole("button", { name: "Menu" }));
+    const menu = await screen.findByRole("dialog", { name: "Sidebar" });
+
+    const top = within(menu).getByTestId("history-nav");
+    expect(within(top).getByRole("button", { name: "Search" })).toBeVisible();
+    expect(within(top).getByRole("button", { name: "Back" })).toBeVisible();
+    expect(within(top).getByRole("button", { name: "Forward" })).not.toHaveClass(
+      "max-md:hidden",
+    );
+    /* one search control, in that row, and no row of its own */
+    expect(within(menu).getAllByRole("button", { name: "Search" })).toHaveLength(1);
+    expect(within(menu).queryByRole("button", { name: "Close" })).toBeNull();
+
+    /* search opens over the page, so the menu gets out of its way */
+    await user.click(within(top).getByRole("button", { name: "Search" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Sidebar" })).toBeNull(),
+    );
   });
 });

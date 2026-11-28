@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type TouchEvent,
 } from "react";
-import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, Menu, PanelLeft } from "lucide-react";
 import { projectSyncOperationalStatus } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -26,7 +26,7 @@ import { sidebar } from "./sidebarChange";
 import type { History, Route } from "@/lib/router";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
-import { openSearch, SearchButton } from "@/screens/SearchPalette";
+import { SearchButton } from "@/screens/SearchPalette";
 import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { useSidebarMode } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
@@ -41,11 +41,18 @@ import { WindowControls } from "./WindowControls";
 import { ActiveNodeLabel } from "./ActiveNodeLabel";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
-function HistoryNav({ history }: { history: History }) {
+function HistoryNav({
+  history,
+  inMenu = false,
+}: {
+  history: History;
+  inMenu?: boolean;
+}) {
   return (
     <div className="flex shrink-0 items-center gap-0.5" data-testid="history-nav">
-      {/* on a phone, search lives in the menu sheet */}
-      <SearchButton className="max-md:hidden" />
+      {/* a narrow window's bar has no room for this group: it sits whole in
+          the menu */}
+      <SearchButton className={inMenu ? undefined : "max-md:hidden"} />
       <Hint label="Back">
         <Button
           variant="ghost"
@@ -62,7 +69,7 @@ function HistoryNav({ history }: { history: History }) {
           variant="ghost"
           size="icon-sm"
           aria-label="Forward"
-          className="max-md:hidden"
+          className={inMenu ? undefined : "max-md:hidden"}
           disabled={!history.canForward}
           onClick={history.forward}
         >
@@ -162,20 +169,40 @@ function SidebarToggle() {
   );
 }
 
-/* a left swipe on the menu drags it with the finger and closes it past a
-   short distance; a mostly vertical move leaves the list to scroll */
+/* a left swipe on the menu drags it with the finger; let go past a short
+   distance it slides out and closes, and short of it slides back. A mostly
+   vertical move leaves the list to scroll */
 function useSwipeToClose() {
   const [offset, setOffset] = useState(0);
-  const from = useRef<{ x: number; y: number; horizontal: boolean | null } | null>(
-    null,
-  );
+  /* animating from where the finger let go */
+  const [settling, setSettling] = useState(false);
+  const from = useRef<{
+    x: number;
+    y: number;
+    horizontal: boolean | null;
+    width: number;
+  } | null>(null);
   return {
-    offset,
-    start: (event: TouchEvent) => {
+    style:
+      offset < 0 || settling
+        ? {
+            transform: `translateX(${offset}px)`,
+            transition: settling
+              ? `transform ${SWIPE_SETTLE_MS}ms cubic-bezier(0.2, 0, 0, 1)`
+              : "none",
+          }
+        : undefined,
+    start: (event: TouchEvent<HTMLElement>) => {
       const touch = event.touches[0];
       from.current = touch
-        ? { x: touch.clientX, y: touch.clientY, horizontal: null }
+        ? {
+            x: touch.clientX,
+            y: touch.clientY,
+            horizontal: null,
+            width: event.currentTarget.getBoundingClientRect().width,
+          }
         : null;
+      setSettling(false);
     },
     move: (event: TouchEvent) => {
       const touch = event.touches[0];
@@ -189,13 +216,32 @@ function useSwipeToClose() {
       if (start.horizontal) setOffset(Math.min(0, dx));
     },
     end: (close: () => void) => {
-      const closing = offset < -60;
+      const start = from.current;
       from.current = null;
-      setOffset(0);
-      if (closing) close();
+      if (!start?.horizontal || offset === 0) {
+        setOffset(0);
+        return;
+      }
+      setSettling(true);
+      if (offset < -60) {
+        setOffset(-start.width - 16);
+        window.setTimeout(() => {
+          close();
+          /* held slid out until the sheet is gone, or its own closing
+             animation would start from where the menu rests */
+          window.setTimeout(() => {
+            setSettling(false);
+            setOffset(0);
+          }, 400);
+        }, SWIPE_SETTLE_MS);
+      } else {
+        setOffset(0);
+        window.setTimeout(() => setSettling(false), SWIPE_SETTLE_MS);
+      }
     },
   };
 }
+const SWIPE_SETTLE_MS = 180;
 
 /* the narrow window's menu also holds what its bar has no room for: the
    mark, history and the sync status, whose dot rides on the menu button */
@@ -244,17 +290,17 @@ function NavSheet({
       <SheetContent
         ref={sheet.popupRef}
         side="left"
-        className="nav-sheet flex w-72 flex-col gap-2 border-border/60 bg-raised pt-4 pb-2"
-        style={
-          drag.offset < 0
-            ? { transform: `translateX(${drag.offset}px)`, transition: "none" }
-            : undefined
-        }
+        /* closed by a swipe left, a press outside or Escape */
+        showCloseButton={false}
+        className="nav-sheet flex w-72 flex-col gap-2 border-border/60 bg-background pt-3 pb-2 [--nav-ground:var(--color-background)]"
+        style={drag.style}
         onTouchStart={drag.start}
         onTouchMove={drag.move}
         onTouchEnd={() => drag.end(() => sheet.onOpenChange(false))}
         onTouchCancel={() => drag.end(() => {})}
         onClickCapture={(e) => {
+          /* a link, a step through history and search (which opens over the
+             page) each take the menu out of the way */
           if (
             (e.target as HTMLElement).closest(
               'a[href], [data-testid="history-nav"] button',
@@ -264,21 +310,10 @@ function NavSheet({
         }}
       >
         <SheetTitle className="sr-only">Sidebar</SheetTitle>
-        <div className="mx-3 flex h-8 items-center gap-1">
+        <div className="flex h-10 items-center gap-1 px-3">
           <MarkLink current={route.name === "agents" || route.name === "nodes"} />
-          {history && <HistoryNav history={history} />}
+          {history && <HistoryNav history={history} inMenu />}
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            sheet.onOpenChange(false);
-            openSearch();
-          }}
-          className="mx-3 flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <Search className="size-4" />
-          <span className="flex-1 text-start">Search</span>
-        </button>
         <NavPanel route={route} settings={settings} syncRow syncInline />
       </SheetContent>
     </Sheet>
@@ -349,7 +384,16 @@ export function WindowBar({
         <NavSheet route={route} settings={settings} history={history} />
         {wide && !navHoldsHistory && <SidebarToggle />}
         {wide && history && !navHoldsHistory && <HistoryNav history={history} />}
-        <ActiveNodeLabel />
+        {/* a narrow window's session bar names its node itself, and the menu
+            holds the rest, so the session's title has the width */}
+        <div
+          className={cn(
+            "flex min-w-0 shrink",
+            route.name === "session" && "max-md:hidden",
+          )}
+        >
+          <ActiveNodeLabel />
+        </div>
         <div
           ref={onPaneBar}
           className="flex h-full min-w-0 flex-1 items-center gap-2"
