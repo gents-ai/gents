@@ -1,8 +1,8 @@
 ---- MODULE ClientSubmissionContention ----
 \* lean: TransactionReplay.disposition, Identity.Configuration.clientSignedWriteMayRetry
 \* crates: gents-session, gents-store
-\* traces: violates
 \* models: TransactionFence.DeclaredFence, TransactionFence.a_bound_session_stays_bound
+\* traces: violates
 \* A User's optimistic chat send racing its session's active turn.
 \*
 \* Client (Lean `ClientOptimisticSend`): the client picks the request

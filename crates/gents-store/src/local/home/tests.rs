@@ -87,6 +87,36 @@ use super::lock::{open_runtime_lock, start_runtime_startup_waiter, start_store_r
 use super::retire::{archive_preflight_with, retire_entries_with};
 use super::*;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn engine_release_waiter_blocks_until_directory_lock_drops() {
+    use std::future::Future as _;
+    use std::task::{Context, Poll};
+
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(data.join("LOCK"))
+        .unwrap();
+    let held = crate::local::file_lock::FileLock::exclusive(lock_file).unwrap();
+
+    let mut waiter = Box::pin(wait_for_engine_release(&data));
+    let waker = futures::task::noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    assert!(
+        matches!(waiter.as_mut().poll(&mut cx), Poll::Pending),
+        "waiter must stay pending while the engine directory lock is held"
+    );
+
+    drop(held);
+    waiter.await;
+}
+
 #[tokio::test]
 async fn store_release_waiter_blocks_until_the_owner_releases_the_lock() {
     let temp = tempfile::tempdir().unwrap();

@@ -151,6 +151,44 @@ fn engine_directory(_data_dir: &Path) -> EngineDirectory {
     EngineDirectory::Free
 }
 
+/// Wait until the storage engine releases its directory lock after a temporary
+/// node shuts down in this process, so the same lock holder can reopen
+/// `data_dir` without racing a draining background handle.
+pub(crate) async fn wait_for_engine_release(data_dir: &Path) {
+    let engine = match engine_directory(data_dir) {
+        EngineDirectory::Free => return,
+        EngineDirectory::Held(engine) => engine,
+    };
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let data_dir_owned = data_dir.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("gents-engine-release-wait".into())
+        .spawn(move || {
+            let result = crate::local::file_lock::FileLock::exclusive(engine).map(drop);
+            let _ = send.send(result);
+        });
+    let worker = match spawned {
+        Ok(worker) => worker,
+        Err(error) => {
+            tracing::warn!(%error, data_dir = %data_dir_owned.display(), "starting the wait for the storage engine failed");
+            return;
+        }
+    };
+    drop(worker);
+    match tokio::time::timeout(STORE_RELEASE_WAIT, receive).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => {
+            tracing::warn!(%error, data_dir = %data_dir_owned.display(), "waiting for the storage engine to release the data directory failed");
+        }
+        Ok(Err(_)) => {
+            tracing::warn!(data_dir = %data_dir_owned.display(), "storage engine release waiter stopped before completing");
+        }
+        Err(_) => {
+            tracing::warn!(data_dir = %data_dir_owned.display(), "timed out waiting for the storage engine to release the data directory");
+        }
+    }
+}
+
 /// A holder's stop, retire or quit is acknowledged only after this resolves
 /// (Lean `ClientInstallation.acknowledgement_requires_closed_store`).
 #[derive(Debug, Clone)]

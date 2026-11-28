@@ -11,6 +11,7 @@ pub use init_config::{
     normalize_registry, read_init_config, recorded_client_identity, recorded_registry,
     write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
 };
+pub(crate) use lock::wait_for_engine_release;
 pub use lock::{
     acquire_home_store, acquire_store, acquire_store_at, lock_home_store, lock_store,
     lock_store_at, reserve_runtime_startup, try_store, wait_for_store_release,

@@ -25,6 +25,7 @@ and optionally, in this order,
 
   \\* models: <Lean.declaration>[, <Lean.declaration>]...
   \\* paths: <repository path>[, <repository path>]...
+  \\* traces: violates
 
 A `lean:` owner is a conformance function the spec reads from its generated
 `LeanDecision_<Namespace>` module; a `models:` declaration is Lean the spec
@@ -96,7 +97,8 @@ LEAN = re.compile(rf"\\\* lean: (none|{LEAN_NAME}(?:, {LEAN_NAME})*)")
 CRATES = re.compile(rf"\\\* crates: (none|{CRATE}(?:, {CRATE})*)")
 REPO_PATH = r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*"
 OPTIONAL = {"models": re.compile(rf"\\\* models: ({LEAN_NAME}(?:, {LEAN_NAME})*)"),
-            "paths": re.compile(rf"\\\* paths: ({REPO_PATH}(?:, {REPO_PATH})*)")}
+            "paths": re.compile(rf"\\\* paths: ({REPO_PATH}(?:, {REPO_PATH})*)"),
+            "traces": re.compile(r"\\\* traces: (violates)")}
 MODULE_PREFIX = "LeanDecision_"
 
 CFG_KEYWORDS = ("CONSTANT", "CONSTANTS", "INIT", "NEXT", "SPECIFICATION", "INVARIANT", "INVARIANTS",
@@ -155,7 +157,7 @@ def expectation(cfg):
     return Expect(match.group(1), floor)
 
 
-class Header(namedtuple("Header", "lean crates models paths")):
+class Header(namedtuple("Header", "lean crates models paths traces")):
     """A spec's header lines; each field is a list of names."""
 
 
@@ -183,7 +185,7 @@ def spec_header(spec):
             raise HeaderError(f"{spec.name}: `{line}` must be one `\\* {key}: <name>, ...` line, "
                               f"in the order {', '.join(keys)}")
         optional[key] = names(match)
-    return Header(names(lean), names(crates), optional["models"], optional["paths"])
+    return Header(names(lean), names(crates), optional["models"], optional["paths"], optional["traces"])
 
 
 def extends(module_file):
@@ -227,13 +229,14 @@ def generated_module(owner):
 
 
 def graph(tla=TLA):
-    """Spec name -> {path, lean, crates, models, paths, configs, generated}."""
+    """Spec name -> {path, lean, crates, models, paths, traces, configs, generated}."""
     known = specs(tla)
     nodes = {}
     for name, path in known.items():
         header = spec_header(path)
         nodes[name] = {"path": path, "lean": header.lean, "crates": header.crates, "models": header.models,
-                       "paths": header.paths, "configs": [], "generated": generated_imports(path)}
+                       "paths": header.paths, "traces": header.traces, "configs": [],
+                       "generated": generated_imports(path)}
     for cfg in configs(tla):
         nodes[spec_of(cfg, known)]["configs"].append(cfg)
     return nodes
@@ -778,8 +781,7 @@ def traces(check):
             raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
         return directory / (cfg.stem + ".json"), data
 
-    participating = {spec for spec in nodes
-                     if r"\* traces: violates" in (TLA / (spec + ".tla")).read_text().splitlines()}
+    participating = {spec for spec, node in nodes.items() if "violates" in node["traces"]}
     boundaries = {entry["config"] for entry in json.loads((TLA / "trace-coverage.json").read_text())}
     configs = [(spec, cfg) for spec, node in nodes.items() for cfg in node["configs"]
                if (spec in participating or cfg.stem in boundaries)
