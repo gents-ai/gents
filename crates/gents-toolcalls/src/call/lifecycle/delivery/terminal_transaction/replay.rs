@@ -103,7 +103,8 @@ pub(super) async fn delivery_replay_permits(
         requester_filter,
         ..
     } = terminalization;
-    let delivery_key_escaped = escape_graphql_string(&tool_delivery_key(session_id, tool_doc_id));
+    let delivery_key = tool_delivery_key(session_id, tool_doc_id);
+    let delivery_key_escaped = escape_graphql_string(&delivery_key);
     let (source, writer) = tool_output_identity(tool_doc_id);
     let existing = txn.execute(&format!(
         r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{delivery_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
@@ -111,29 +112,41 @@ pub(super) async fn delivery_replay_permits(
     let existing_rows = existing["data"]["AgentMessage"]
         .as_array()
         .context("tool delivery lookup omitted rows")?;
-    anyhow::ensure!(
-        existing_rows.len() <= 1,
-        "ambiguous canonical tool delivery replay"
-    );
+    if existing_rows.len() > 1 {
+        return Err(
+            gents_session::request::streaming::canonical::MessageKeyConflict::new(
+                &delivery_key,
+                "ambiguous canonical tool delivery replay",
+            )
+            .into(),
+        );
+    }
     if publish_native_result && spawned_by_tool_call_doc_id.is_none() {
         if let Some(row) = existing_rows.first() {
             let existing = decode_transcript_message_row(row)?;
-            anyhow::ensure!(
-                existing.message.request_doc_id.as_deref() == Some(request_doc_id)
-                    && existing.message.session_id == session_id
-                    && existing.message.node_did == node_did
-                    && existing.message.requester_did.as_deref() == requester_did
-                    && existing.message.role == MessageRole::User
-                    && existing.message.outcome == OutputOutcome::Complete
-                    && matches!(&existing.message.publication,
+            let matches_invocation = existing.message.request_doc_id.as_deref()
+                == Some(request_doc_id)
+                && existing.message.session_id == session_id
+                && existing.message.node_did == node_did
+                && existing.message.requester_did.as_deref() == requester_did
+                && existing.message.role == MessageRole::User
+                && existing.message.outcome == OutputOutcome::Complete
+                && matches!(&existing.message.publication,
                     MessagePublication::ToolDelivery { tool_call_doc_id: id } if id == tool_doc_id)
-                    && matches!(existing.message.blocks.as_slice(),
+                && matches!(existing.message.blocks.as_slice(),
                     [MessageBlock::ToolResult { tool_call_doc_id: id, id: result_id,
                         call_id: result_call_id, .. }]
                     if id == tool_doc_id && result_id == tool_call_id
-                        && result_call_id.as_deref() == call_id),
-                "canonical tool delivery replay conflicts with accepted invocation"
-            );
+                        && result_call_id.as_deref() == call_id);
+            if !matches_invocation {
+                return Err(
+                    gents_session::request::streaming::canonical::MessageKeyConflict::new(
+                        &delivery_key,
+                        "canonical tool delivery replay conflicts with accepted invocation",
+                    )
+                    .into(),
+                );
+            }
             let lifecycle = txn
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{
@@ -227,23 +240,27 @@ pub(super) async fn delivery_replay_permits(
                 fields.state,
                 output_budget,
             )?;
-            anyhow::ensure!(
-                reconstructed.text == plan.raw
-                    && if plan.diagnostic {
-                        diagnostic_replay_matches(
-                            &reconstructed.text,
-                            text,
-                            &result_payload.presentation,
-                        )?
-                    } else {
-                        result_payload.presentation == plan.presentation
-                            && render_presentation(
-                                &reconstructed.text,
-                                &result_payload.presentation,
-                            )? == plan.rendered
-                    },
-                "canonical tool delivery replay payload differs from terminal plan"
-            );
+            let payload_matches = reconstructed.text == plan.raw
+                && if plan.diagnostic {
+                    diagnostic_replay_matches(
+                        &reconstructed.text,
+                        text,
+                        &result_payload.presentation,
+                    )?
+                } else {
+                    result_payload.presentation == plan.presentation
+                        && render_presentation(&reconstructed.text, &result_payload.presentation)?
+                            == plan.rendered
+                };
+            if !payload_matches {
+                return Err(
+                    gents_session::request::streaming::canonical::MessageKeyConflict::new(
+                        &delivery_key,
+                        "canonical tool delivery replay payload differs from terminal plan",
+                    )
+                    .into(),
+                );
+            }
             return Ok(false);
         }
     }

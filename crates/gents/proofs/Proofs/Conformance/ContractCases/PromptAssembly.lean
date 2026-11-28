@@ -1312,6 +1312,7 @@ inductive ReplayEvent where
   | respond (turn : Nat) (reasoning : List String)
   | reasoningOnly (turn : Nat) (reasoning : List String)
   | interrupted (turn : Nat) (reasoning : List String)
+  | recovered (turn : Nat) (reasoning : List String)
   | compact (keep : Nat)
   | repair
   | stripRetry
@@ -1357,7 +1358,8 @@ private def replayedTurns (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
     | _ => none
 
 private def simRespond (sim : ReplaySim) (turn : Nat) (reasoning : List String)
-    (complete : Bool) (answer : Bool := true) : ReplaySim :=
+    (complete : Bool) (answer : Bool := true)
+    (origin : PromptAssembly.ClaudeMap.ReplayOrigin := .acceptedProvider) : ReplaySim :=
   let resolve := resolveFrom sim.resolutions
   let rows := sim.effective
   let restored :=
@@ -1375,7 +1377,7 @@ private def simRespond (sim : ReplaySim) (turn : Nat) (reasoning : List String)
     { source := some (simTag turn), physicalHeader := some ("h" ++ toString turn),
       blockIndices := List.range blocks.length, blocks }
   let evidence : PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
-    { origin := .acceptedProvider,
+    { origin := origin,
       reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness row,
       issuer := sim.issuer, wire := sim.wire, physicalHeader := "h" ++ toString turn,
       complete, captured := some sent }
@@ -1396,6 +1398,7 @@ private def simStep (sim : ReplaySim) : ReplayEvent → ReplaySim
       { sim with durable := sim.durable ++ [row], effective := sim.effective ++ [row] }
   | .respond turn reasoning => simRespond sim turn reasoning true
   | .interrupted turn reasoning => simRespond sim turn reasoning false
+  | .recovered turn reasoning => simRespond sim turn reasoning false true .recoveredProvider
   | .reasoningOnly turn reasoning => simRespond sim turn reasoning true false
   | .compact keep =>
       let rows := userRow "summary" :: sim.effective.drop (sim.effective.length - keep)
@@ -1452,6 +1455,11 @@ def replayScenarios : List ReplaySim :=
   , claudeScenario "interrupted-turn"
       [u "a", r 1 ["t1"], u "b", .interrupted 2 ["t2"], u "c", r 3 ["t3"], u "d", r 4 [],
        .restart, u "e", r 5 []]
+  , claudeScenario "recovered-stopped-chain-survives-append-only"
+      [u "a", .recovered 1 ["t1"], u "b", r 2 ["t2"], u "c", r 3 []]
+  , claudeScenario "recovered-stopped-then-compacted-no-resurrection"
+      [u "a", .recovered 1 ["t1"], u "b", r 2 ["t2"], .compact 2, u "c", r 3 ["t3"],
+       .restart, u "d", r 4 []]
   , claudeScenario "reasoning-only-claude-turn"
       [u "a", r 1 ["t1"], u "b", .reasoningOnly 2 ["t2"], u "c", r 3 ["t3"], u "d", r 4 []]
   , claudeScenario "redacted-thinking"
@@ -1482,6 +1490,8 @@ example : replayScenarios.map (fun sim => (sim.name, sim.lastReplayed)) =
     , ("tool-change-without-reasoning-then-revert", [1, 3])
     , ("issuer-switch-then-back", [3])
     , ("interrupted-turn", [3])
+    , ("recovered-stopped-chain-survives-append-only", [1, 2])
+    , ("recovered-stopped-then-compacted-no-resurrection", [3])
     , ("reasoning-only-claude-turn", [3])
     , ("redacted-thinking", [1, 2])
     , ("unsigned-thinking-cuts-run", [3])

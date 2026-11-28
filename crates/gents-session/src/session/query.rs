@@ -41,6 +41,12 @@ pub async fn session_is_stopped(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
+    gents_store::config_client::ensure_runtime_path_actor(
+        node,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionSelection,
+        Some(actor.as_str()),
+    )?;
     gents_store::config_client::ConfigAccess::transact_local_readonly(
         node,
         Some(actor.clone()),
@@ -130,6 +136,12 @@ pub async fn load_session_requester_scope(
     session_id: &str,
     agent_did: &str,
 ) -> Result<Option<String>> {
+    gents_store::config_client::ensure_runtime_path_actor(
+        node,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionSelection,
+        Some(agent_did),
+    )?;
     use gents_protocol::document_query::{
         fields::agent_session as session, Filter, Query, Selection,
     };
@@ -164,6 +176,12 @@ pub async fn require_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
+    gents_store::config_client::ensure_runtime_path_actor(
+        node,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionResume,
+        actor.as_ref().map(::identity::Did::as_str),
+    )?;
     let row = gents_store::config_client::ConfigAccess::transact_local_readonly(
         node,
         actor,
@@ -194,6 +212,12 @@ pub async fn load_session_agent_selection(
     session_id: &str,
     requester: Option<Option<&str>>,
 ) -> Result<Option<String>> {
+    gents_store::config_client::ensure_runtime_path_actor(
+        node,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionSelection,
+        Some(actor.as_str()),
+    )?;
     Ok(
         gents_store::config_client::ConfigAccess::transact_local_readonly(
             node,

@@ -2432,3 +2432,583 @@ async fn forks_rebuild_after_a_concurrent_source_session_write() {
     );
     db.node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn generated_immutable_compaction_write_decisions_match_lean_owner() {
+    use gents_lean_vocab::families::immutable_compaction_write_decision as family;
+    use gents_store::identity::NodeIdentity as _;
+
+    gents_lean_vocab::snapshot().await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "immutable-compaction-conformance",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
+    let node_did = db.node_identity.did();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(node_did).unwrap(),
+    )
+    .grant_node_permission(
+        &agent_did,
+        gents_store::config_client::NodePermission::DocumentDelete,
+    )
+    .await
+    .unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent_did,
+        agent.as_ref(),
+    )
+    .unwrap();
+
+    let files = |ids: &[u64]| -> Vec<String> {
+        ids.iter().map(|id| format!("/tmp/file-{id}.rs")).collect()
+    };
+
+    let cases = family::cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let session = format!("imm-compaction-{}", case.input.name);
+        let first_prompts: Vec<String> = vec!["seed-0".into(), "seed-1".into()];
+        publish_signed_history(&db, &user, &client, &binding, &session, &first_prompts).await;
+
+        let mut request_docs = std::collections::BTreeMap::<u64, (String, String)>::new();
+        for request_index in [0usize, 1usize] {
+            let request_id = format!("{session}-request-{request_index}");
+            let response = access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+                    escape_graphql_string(&request_id),
+                ))
+                .await
+                .unwrap();
+            let row = &response["data"]["AgentRequest"][0];
+            request_docs.insert(
+                (request_index + 1) as u64,
+                (request_id, row["_docID"].as_str().unwrap().to_owned()),
+            );
+        }
+
+        let target_sequences = case
+            .input
+            .stored_sequences
+            .iter()
+            .map(|seq| u32::try_from(*seq).unwrap())
+            .collect::<Vec<_>>();
+        let existing_sequences = stored_sequences(&access, &session).await;
+        let first_request_doc = request_docs[&1].1.clone();
+        for sequence in &target_sequences {
+            if !existing_sequences.contains(sequence) {
+                import_history_observation_as(
+                    &access,
+                    HistoryObservation {
+                        request_id: &first_request_doc,
+                        session_id: &session,
+                        node_did,
+                        requester_did: Some(user.did()),
+                        text: &format!("msg-{sequence}"),
+                        message_key_suffix: &format!("stored-{sequence}"),
+                        sequence: *sequence,
+                        tool_call: None,
+                    },
+                )
+                .await;
+            }
+        }
+        assert_eq!(stored_sequences(&access, &session).await, target_sequences);
+
+        let mut generations = Vec::new();
+        generations.push(
+            load_prompt_compaction_state_with_access(
+                &access,
+                &session,
+                node_did,
+                Some(user.did()),
+                None,
+            )
+            .await
+            .unwrap()
+            .generation,
+        );
+
+        for prior in &case.input.prior_entries {
+            let (req_id, req_doc) = &request_docs[&prior.request_id];
+            let read = files(&prior.files_read);
+            let modified = files(&prior.files_modified);
+            let current_gen = generations.last().unwrap();
+            compaction_entries::save_compaction_entry_with_access(
+                &access,
+                compaction_entries::NewExactSessionCompaction {
+                    agent_did: agent.did(),
+                    session_id: &session,
+                    node_did,
+                    requester_did: Some(user.did()),
+                    request_id: req_id,
+                    request_doc_id: req_doc,
+                    files_read: &read,
+                    files_modified: &modified,
+                    compacted_through_sequence: u32::try_from(prior.cursor).unwrap(),
+                    original_tokens: usize::try_from(prior.original_tokens).unwrap(),
+                    compacted_tokens: usize::try_from(prior.compacted_tokens).unwrap(),
+                    expected_generation: current_gen,
+                },
+                &format!("summary-{}", prior.summary),
+                u32::try_from(prior.messages_compacted).unwrap(),
+            )
+            .await
+            .unwrap();
+            generations.push(
+                load_prompt_compaction_state_with_access(
+                    &access,
+                    &session,
+                    node_did,
+                    Some(user.did()),
+                    None,
+                )
+                .await
+                .unwrap()
+                .generation,
+            );
+        }
+
+        if case.input.replace_source_message {
+            let cursor = u32::try_from(case.input.candidate.cursor).unwrap();
+            let found = access
+                .execute(&format!(
+                    r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, sequence: {{ _eq: {cursor} }} }}, limit: 2) {{ _docID }} }}"#,
+                    escape_graphql_string(&session),
+                ))
+                .await
+                .unwrap();
+            let doc_id = found["data"]["AgentMessage"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            access
+                .write(
+                    "test.replace_source_message_delete",
+                    &format!(
+                        r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&doc_id),
+                    ),
+                )
+                .await
+                .unwrap();
+            import_history_observation_as(
+                &access,
+                HistoryObservation {
+                    request_id: &first_request_doc,
+                    session_id: &session,
+                    node_did,
+                    requester_did: Some(user.did()),
+                    text: "replaced-source-content",
+                    message_key_suffix: &format!("replaced-{cursor}"),
+                    sequence: cursor,
+                    tool_call: None,
+                },
+            )
+            .await;
+        }
+
+        let before_count = load_compaction_entries(&access, &session, node_did, Some(user.did()))
+            .await
+            .unwrap()
+            .len();
+        let candidate = &case.input.candidate;
+        let (req_id, req_doc) = &request_docs[&candidate.request_id];
+        let read = files(&candidate.files_read);
+        let modified = files(&candidate.files_modified);
+        let expected_gen =
+            &generations[usize::try_from(case.input.expected_generation_len).unwrap()];
+        let result = compaction_entries::save_compaction_entry_with_access(
+            &access,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: agent.did(),
+                session_id: &session,
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: req_id,
+                request_doc_id: req_doc,
+                files_read: &read,
+                files_modified: &modified,
+                compacted_through_sequence: u32::try_from(candidate.cursor).unwrap(),
+                original_tokens: usize::try_from(candidate.original_tokens).unwrap(),
+                compacted_tokens: usize::try_from(candidate.compacted_tokens).unwrap(),
+                expected_generation: expected_gen,
+            },
+            &format!("summary-{}", candidate.summary),
+            u32::try_from(candidate.messages_compacted).unwrap(),
+        )
+        .await;
+        let after_entries = load_compaction_entries(&access, &session, node_did, Some(user.did()))
+            .await
+            .unwrap();
+
+        let (outcome, pinned_sequences) = match result {
+            Ok(entry) => {
+                let pinned = entry
+                    .source_message_versions
+                    .iter()
+                    .map(|fact| u64::try_from(fact.sequence).unwrap())
+                    .collect::<Vec<_>>();
+                let outcome = if after_entries.len() > before_count {
+                    "create"
+                } else {
+                    "idempotent_replay"
+                };
+                (outcome.to_owned(), pinned)
+            }
+            Err(error) if CompactionIntegrityConflict::occurs_in(error.as_ref()) => {
+                assert_eq!(after_entries.len(), before_count);
+                ("integrity_conflict".to_owned(), Vec::new())
+            }
+            Err(error) if StaleCompactionGeneration::occurs_in(error.as_ref()) => {
+                assert_eq!(after_entries.len(), before_count);
+                ("stale_generation".to_owned(), Vec::new())
+            }
+            Err(error)
+                if CompactionCursorNamesNoMessage::occurs_in(error.as_ref())
+                    || CompactionCursorRegression::occurs_in(error.as_ref()) =>
+            {
+                assert_eq!(after_entries.len(), before_count);
+                ("invalid_cursor".to_owned(), Vec::new())
+            }
+            Err(error) => panic!(
+                "{}: unexpected compaction failure: {error:#}",
+                case.input.name
+            ),
+        };
+        case.check(family::CompactionWriteOutput {
+            outcome,
+            pinned_sequences,
+        });
+    }
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn compaction_entry_is_create_only_and_pins_exact_source_versions() {
+    use gents_store::identity::NodeIdentity as _;
+
+    let (db, user, agent, access, requests) =
+        signed_compaction_fixture("compaction-immutable", "session-immutable", 3).await;
+    let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-immutable").await;
+    let generation = load_prompt_compaction_state_with_access(
+        &access,
+        "session-immutable",
+        node_did,
+        Some(user.did()),
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
+
+    let saved = compaction_entries::save_compaction_entry_with_access(
+        &access,
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: "session-immutable",
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: &requests[0].0,
+            request_doc_id: &requests[0].1,
+            files_read: &["/tmp/a.rs".to_owned()],
+            files_modified: &["/tmp/b.rs".to_owned()],
+            compacted_through_sequence: sequences[1],
+            original_tokens: 300,
+            compacted_tokens: 60,
+            expected_generation: &generation,
+        },
+        "immutable summary",
+        2,
+    )
+    .await
+    .unwrap();
+
+    let message_rows = access
+        .execute(
+            r#"{ AgentMessage(filter: { session_id: { _eq: "session-immutable" } }, order: { sequence: ASC }) { _docID sequence _version { cid height fieldName } } }"#,
+        )
+        .await
+        .unwrap();
+    let expected_versions = message_rows["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(2)
+        .map(|row| gents_protocol::transcript::TranscriptFactRef {
+            doc_id: row["_docID"].as_str().unwrap().to_owned(),
+            sequence: row["sequence"].as_i64().unwrap(),
+            commit_cid: gents_store::graphql::document_composite_version(row, "expected")
+                .unwrap()
+                .unwrap()
+                .cid,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(saved.source_message_versions, expected_versions);
+
+    let stored = access
+        .execute(r#"{ CompactionEntry(filter: { session_id: { _eq: "session-immutable" } }) { _docID compaction_key } }"#)
+        .await
+        .unwrap();
+    let doc_id = stored["data"]["CompactionEntry"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let escaped_doc = escape_graphql_string(&doc_id);
+    for mutation in [
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ summary: "rewritten" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ sequence: 9 }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ compacted_through_sequence: 9 }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ messages_compacted: 9 }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ files_read: "[]" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ files_modified: "[]" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ original_tokens: 1 }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ compacted_tokens: 1 }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ session_id: "other" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ request_id: "other" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ compaction_key: "other" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+        ),
+    ] {
+        assert!(
+            access
+                .write("test.immutable_compaction_update", &mutation)
+                .await
+                .is_err(),
+            "DefraDB @immutable must reject updating CompactionEntry: {mutation}"
+        );
+    }
+    let json_update = access
+        .transact_write("test.immutable_compaction_versions_update", |txn| {
+            let escaped_doc = &escaped_doc;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    &format!(
+                        r#"mutation($versions: JSON) {{ update_CompactionEntry(docID: "{escaped_doc}", input: {{ source_message_versions: $versions }}) {{ _docID }} }}"#
+                    ),
+                    &serde_json::json!({
+                        "versions": [{
+                            "doc_id": "bae-tampered",
+                            "sequence": 1,
+                            "commit_cid": "bafytampered"
+                        }]
+                    }),
+                )
+                .await
+            })
+        })
+        .await;
+    assert!(
+        json_update.is_err(),
+        "DefraDB @immutable must reject updating CompactionEntry.source_message_versions"
+    );
+
+    let entries = load_compaction_entries(&access, "session-immutable", node_did, Some(user.did()))
+        .await
+        .unwrap();
+    assert_eq!(entries, vec![saved]);
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn fork_copies_and_validates_pinned_compaction_source_message_versions() {
+    use gents_store::identity::NodeIdentity as _;
+
+    let (db, user, client, binding) = fork_reader_node("fork-compaction-pins").await;
+    let node_did = db.node_identity.did();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    publish_signed_history(
+        &db,
+        &user,
+        &client,
+        &binding,
+        "fork-src",
+        &["turn-1".into(), "turn-2".into(), "turn-3".into()],
+    )
+    .await;
+    let sequences = stored_sequences(&agent_access, "fork-src").await;
+    let req_resp = agent_access
+        .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "fork-src-request-0" } }, limit: 2) { _docID } }"#)
+        .await
+        .unwrap();
+    let request_doc_id = req_resp["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let generation = load_prompt_compaction_state_with_access(
+        &agent_access,
+        "fork-src",
+        node_did,
+        Some(user.did()),
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
+    let source_compaction = compaction_entries::save_compaction_entry_with_access(
+        &agent_access,
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: "fork-src",
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: "fork-src-request-0",
+            request_doc_id: &request_doc_id,
+            files_read: &[],
+            files_modified: &[],
+            compacted_through_sequence: sequences[1],
+            original_tokens: 200,
+            compacted_tokens: 40,
+            expected_generation: &generation,
+        },
+        "source compaction summary",
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(source_compaction.source_message_versions.len(), 2);
+
+    let forked = fork_on(
+        &client,
+        ForkParams {
+            source_session_id: "fork-src",
+            boundary: ForkBoundary::UserTurn(2),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(forked.copied_compaction_entries, 1);
+    let child_compactions =
+        load_compaction_entries(&client, &forked.session_id, node_did, Some(user.did()))
+            .await
+            .unwrap();
+    assert_eq!(child_compactions.len(), 1);
+    assert_eq!(
+        child_compactions[0].source_message_versions,
+        source_compaction.source_message_versions
+    );
+
+    let tampered_key = compaction_key(node_did, "fork-src", Some(user.did()), 2);
+    let session_doc = session_doc_id(&client, "fork-src").await;
+    agent_access
+        .transact_write("test.seed_tampered_compaction_pin", |txn| {
+            let tampered_key = &tampered_key;
+            let request_doc_id = &request_doc_id;
+            let session_doc = &session_doc;
+            let user_did = user.did();
+            let through = sequences[2];
+            Box::pin(async move {
+                use gents_protocol::document_query::{
+                    fields::compaction_entry as fields, Create, Input,
+                };
+                let mutation = Create::new(
+                    Input::new()
+                        .set(fields::COMPACTION_KEY, tampered_key)
+                        .set(fields::SESSION_ID, "fork-src")
+                        .set(fields::NODE_DID, node_did)
+                        .set(fields::REQUESTER_DID, user_did)
+                        .set(fields::REQUEST_ID, "fork-src-request-0")
+                        .set(fields::REQUEST_DOC_ID, request_doc_id)
+                        .set(fields::SEQUENCE, 2u32)
+                        .set(fields::SUMMARY, "tampered pin")
+                        .set(
+                            fields::FILES_READ,
+                            compaction_entries::encode_file_path_delta(&[])?,
+                        )
+                        .set(
+                            fields::FILES_MODIFIED,
+                            compaction_entries::encode_file_path_delta(&[])?,
+                        )
+                        .set(fields::MESSAGES_COMPACTED, 1u32)
+                        .set(fields::COMPACTED_THROUGH_SEQUENCE, through)
+                        .set(
+                            fields::SOURCE_MESSAGE_VERSIONS,
+                            serde_json::json!([{
+                                "doc_id": "bae-wrong-doc",
+                                "sequence": i64::from(through),
+                                "commit_cid": "bafywrongcid"
+                            }]),
+                        )
+                        .set(fields::ORIGINAL_TOKENS, 100u32)
+                        .set(fields::COMPACTED_TOKENS, 20u32)
+                        .set(fields::CREATED_AT, "2026-11-27T00:00:00Z"),
+                )
+                .render();
+                let resp = txn.run(&mutation).await?;
+                let doc = gents_store::graphql::created_doc_id(&resp, "CompactionEntry")?;
+                txn.add_resource_relationship(
+                    "CompactionEntry",
+                    &doc,
+                    "parent",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+
+    let refused = fork_on(
+        &client,
+        ForkParams {
+            source_session_id: "fork-src",
+            boundary: ForkBoundary::UserTurn(3),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .expect_err(
+        "fork must reject compaction whose pinned source versions disagree with source headers",
+    );
+    assert!(
+        format!("{refused:#}").contains("pinned source_message_versions disagree"),
+        "unexpected fork refusal: {refused:#}"
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}

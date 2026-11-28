@@ -280,9 +280,9 @@ pub async fn fork(
 fn control_failure(error: SessionControlError, found: &AgentSession) -> SessionOperationError {
     match error {
         SessionControlError::IdentityRequired => SessionOperationError::IdentityRequired,
-        SessionControlError::ActorUnavailable | SessionControlError::ManagedSignerRequired => {
-            SessionOperationError::IdentityRequired
-        }
+        SessionControlError::ActorUnavailable
+        | SessionControlError::ManagedSignerRequired
+        | SessionControlError::RuntimeActorAuthority(_) => SessionOperationError::IdentityRequired,
         SessionControlError::RemoteNode { node_did } => {
             SessionOperationError::RemoteNodeUnsupported { node_did }
         }

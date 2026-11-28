@@ -87,6 +87,153 @@ fn reasoning_audit_prefix_follows_the_lean_model() {
 }
 
 #[test]
+fn reasoning_audit_recovery_follows_the_lean_model() {
+    use gents_lean_vocab::families::reasoning_audit_recovery::{RecoveryEntryWire, RecoveryOutput};
+    use gents_protocol::output::extent::inspect_open_source;
+    use gents_protocol::output::recovery::retained_block_indices_from_validated_extent;
+    use gents_protocol::output::SourceClose;
+
+    gents_lean_vocab::families::reasoning_audit_recovery::replay(|input| {
+        let observation: Observation = wire::decode(&input.input.0);
+        let audit = Json(wire::encode(&wire::audit(&observation)));
+        let records = wire::segments(&observation.records, observation.session);
+        let observed_records = observed(&records);
+        let request_doc_id = wire::nat(observation.target.coordinate.request);
+        let source = wire::source(&observation.target.coordinate.source);
+        let writer = wire::writer(&observation.target.writer);
+        match plan_recovery_prefix(&observed_records, &request_doc_id, &source, &writer) {
+            Err(_) => RecoveryOutput {
+                valid: false,
+                close_stream_bytes: Vec::new(),
+                retained: Vec::new(),
+                audit,
+            },
+            Ok(plan) => {
+                let SourceClose::Closed {
+                    outcome: OutputOutcome::Partial,
+                    stream_bytes,
+                    ..
+                } = &plan.close
+                else {
+                    panic!("{}: recovery plan must emit Partial close", input.name);
+                };
+                let extent =
+                    inspect_open_source(&observed_records, &request_doc_id, &source, &writer)
+                        .expect("planned open source inspects cleanly");
+                let block_indices = retained_block_indices_from_validated_extent(&extent);
+                let blocks = plan
+                    .retained_blocks("recovery-close")
+                    .expect("planned blocks bind cleanly");
+                assert_eq!(
+                    plan.retained_streams.len(),
+                    block_indices.len(),
+                    "{}: stream and block index counts must agree",
+                    input.name
+                );
+                assert_eq!(
+                    blocks.len(),
+                    plan.retained_streams.len(),
+                    "{}: planned blocks must match retained streams",
+                    input.name
+                );
+                if !blocks.is_empty() {
+                    let exemplar = records
+                        .iter()
+                        .map(|(_, segment)| segment)
+                        .find(|segment| {
+                            segment.request_doc_id == request_doc_id && segment.source == source
+                        })
+                        .expect("planned source has at least one segment");
+                    let close_segment = OutputSegment {
+                        node_did: exemplar.node_did.clone(),
+                        requester_did: exemplar.requester_did.clone(),
+                        session_id: exemplar.session_id.clone(),
+                        request_doc_id: request_doc_id.clone(),
+                        source: source.clone(),
+                        writer: writer.clone(),
+                        ordinal: None,
+                        runs: Vec::new(),
+                        payload: String::new(),
+                        close: Some(plan.close.clone()),
+                        created_at: extent
+                            .last_created_at
+                            .clone()
+                            .unwrap_or_else(|| exemplar.created_at.clone()),
+                    };
+                    let mut with_close = records.clone();
+                    with_close.push(("recovery-close".to_owned(), close_segment.clone()));
+                    let header = TranscriptMessage {
+                        message_key: format!("reasoning-recovery:{}", input.name),
+                        session_id: exemplar.session_id.clone(),
+                        node_did: exemplar.node_did.clone(),
+                        requester_did: exemplar.requester_did.clone(),
+                        request_doc_id: Some(request_doc_id.clone()),
+                        publication: MessagePublication::RequestRecovery {
+                            execution_generation: "recovery".to_owned(),
+                        },
+                        outcome: OutputOutcome::Partial,
+                        sequence: 0,
+                        role: MessageRole::Assistant,
+                        native_id: None,
+                        native_request_id: None,
+                        blocks: blocks.clone(),
+                        created_at: close_segment.created_at.clone(),
+                    };
+                    reconstruct_message(&observed(&with_close), &[], &[], &header).unwrap_or_else(
+                        |error| {
+                            panic!(
+                                "{}: planned recovery header must reconstruct cleanly: {error:?}",
+                                input.name
+                            )
+                        },
+                    );
+                }
+                let retained = plan
+                    .retained_streams
+                    .iter()
+                    .copied()
+                    .zip(block_indices)
+                    .zip(&blocks)
+                    .map(|((stream, block_index), block)| match block {
+                        MessageBlock::Text { .. } => RecoveryEntryWire {
+                            stream: u64::from(stream),
+                            block_index: u64::from(block_index),
+                            kind: "text".to_owned(),
+                            signature: None,
+                        },
+                        MessageBlock::Reasoning { parts, .. } => match parts.as_slice() {
+                            [ReasoningPart::Text { signature, .. }] => RecoveryEntryWire {
+                                stream: u64::from(stream),
+                                block_index: u64::from(block_index),
+                                kind: "reasoning".to_owned(),
+                                signature: signature.clone(),
+                            },
+                            [ReasoningPart::Redacted { .. }] => RecoveryEntryWire {
+                                stream: u64::from(stream),
+                                block_index: u64::from(block_index),
+                                kind: "redacted".to_owned(),
+                                signature: None,
+                            },
+                            other => panic!(
+                                "{}: unexpected reasoning recovery part {other:?}",
+                                input.name
+                            ),
+                        },
+                        other => panic!("{}: unexpected recovery block {other:?}", input.name),
+                    })
+                    .collect();
+                RecoveryOutput {
+                    valid: true,
+                    close_stream_bytes: stream_bytes.clone(),
+                    retained,
+                    audit,
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn canonical_output_projection_follows_the_lean_model() {
     gents_lean_vocab::families::canonical_output_projection_view::replay(|input| {
         let observation: Observation = wire::decode(&input.input.0);

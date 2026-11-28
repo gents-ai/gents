@@ -934,10 +934,312 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         other.as_ref(),
     )
     .unwrap();
+    let runtime_access = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(fixture.runtime.did()).unwrap(),
+    );
+    let runtime_error = load(&runtime_access, request, cutoff)
+        .await
+        .expect_err("the hosting runtime node key must be refused on wake_input::load");
+    assert!(
+        gents_store::config_client::is_runtime_actor_authority_error(runtime_error.as_ref()),
+        "expected RuntimeActorAuthorityError, got {runtime_error:#}"
+    );
     assert!(
         load(&other_access, request, cutoff).await.is_err(),
         "a different Agent must not observe the selected Agent's wake"
     );
+    drop(lifecycle);
+    drop(parent);
+    node.shutdown().await.expect("node shutdown");
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}
+
+#[tokio::test]
+async fn private_session_runtime_paths_match_lean_actor_authority() {
+    use gents_lean_vocab::families::runtime_actor_authority_private_session_access::{
+        cases, PrivateSessionObserved,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_protocol::request_lifecycle::RequestHopCause;
+    use gents_protocol::tool_call::AwaitMode;
+    use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
+    use gents_session::request::lifecycle::{
+        build_signed_client_request, submit_client_request, RequestIdentity, RequestSigner,
+        RequestSpec, RequestTerminalOutcome,
+    };
+    use gents_session::request::watcher::DefraWatcher;
+    use gents_store::config_client::is_runtime_actor_authority_error;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+
+    let (fixture, mut parent) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "runtime-actor-authority".into(),
+        await_mode: AwaitMode::Background,
+        start_running: false,
+        composition: gents_automation::lifecycle_hooks::composition(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let runtime_did = fixture.runtime.did().to_owned();
+    let user_did = fixture.requester_identity.did().to_owned();
+    let selected = parent.request().agent_did.clone();
+    let agent_row = fixture
+        .client
+        .execute(&format!(
+            r#"{{Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{agent_did creation_nonce}}}}"#,
+            escape_graphql_string(&selected),
+        ))
+        .await
+        .unwrap();
+    let [agent_row] = agent_row["data"]["Agent"].as_array().unwrap().as_slice() else {
+        panic!("fixture Agent must be unique");
+    };
+    let binding: gents_protocol::agent_identity::AgentIdentityBinding =
+        serde_json::from_value(agent_row.clone()).unwrap();
+    let selected_identity =
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
+    let selected_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(selected_identity.did()).unwrap(),
+        selected_identity.as_ref(),
+    )
+    .unwrap();
+    let sibling_binding = gents_store::identity::provision_agent_identity_authorized(
+        &node,
+        fixture.runtime.as_ref(),
+        &identity::Did::new(&user_did).unwrap(),
+    )
+    .await
+    .unwrap();
+    gents_inference::test_support::install_test_agent_binding_with_access(
+        &runtime_did,
+        "Sibling Agent",
+        &sibling_binding,
+        &fixture.client,
+    )
+    .await;
+    let sibling_identity =
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &sibling_binding)
+            .unwrap();
+    let sibling_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(sibling_identity.did()).unwrap(),
+        sibling_identity.as_ref(),
+    )
+    .unwrap();
+    let runtime_access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(&runtime_did).unwrap());
+
+    let original = parent.request().clone();
+    let wake = persist_background_completion_with_message_waking_with_access(
+        &selected_access,
+        &node,
+        &original,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "private background result",
+            message_key: "background-completion-notification:runtime-actor-authority:tool",
+            wake_content: "Review private background completion",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some("background_completion:runtime-actor-authority".into()),
+                queued_after_request_id: Some(original.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: RequestHopCause::Continuation,
+        },
+    )
+    .await
+    .unwrap()
+    .request
+    .expect("background wake request");
+    let header = fixture
+        .tool
+        .accepted_header_doc_id()
+        .expect("published background call header")
+        .to_owned();
+    parent
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::Message {
+                message_doc_id: header,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let wake_query = format!(
+        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{{}}}}}"#,
+        escape_graphql_string(&wake.doc_id),
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
+    );
+    let wake_row = selected_access.execute(&wake_query).await.unwrap();
+    let [wake_row] = wake_row["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("selected Agent must see one wake request");
+    };
+    let wake_row: AgentRequestRow = serde_json::from_value(wake_row.clone()).unwrap();
+    let wake_request: crate::AgentRequest = wake_row.try_into().unwrap();
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        fixture.runtime.clone(),
+        authority,
+    );
+    let (wake_request, _) = verifier
+        .verify_fresh_for_claim_with_identity(&wake_request, selected_identity.as_ref())
+        .await
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        wake_request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "wake-test-backend",
+    );
+    lifecycle
+        .bind_managed_agent(selected_identity.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let cutoff = lifecycle.background_completion_input_through_sequence();
+    let claimed_wake = lifecycle.request();
+
+    let watched_request = build_signed_client_request(
+        &fixture.client,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: "watched-private-request".into(),
+                node_did: runtime_did.clone(),
+                requester_did: Some(user_did.clone()),
+                agent_did: selected.clone(),
+                session_id: "watched-private-session".into(),
+                content: "private pending work".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: "2026-11-04T00:00:00Z".into(),
+            },
+            AgentRequestAdmissionRecord::client(&user_did),
+        ),
+        RequestSigner::Identity(fixture.requester_identity.as_ref()),
+    )
+    .await
+    .unwrap();
+    submit_client_request(&fixture.client, &watched_request)
+        .await
+        .unwrap();
+
+    for case in cases() {
+        let (actor_did, actor_identity, actor_access) = match case.input.actor.as_str() {
+            "node_key" => (
+                identity::Did::new(&runtime_did).unwrap(),
+                fixture.runtime.clone(),
+                &runtime_access,
+            ),
+            "selected_agent" => (
+                identity::Did::new(selected_identity.did()).unwrap(),
+                selected_identity.clone(),
+                &selected_access,
+            ),
+            "sibling_agent" => (
+                identity::Did::new(sibling_identity.did()).unwrap(),
+                sibling_identity.clone(),
+                &sibling_access,
+            ),
+            other => panic!("unmodeled actor {other}"),
+        };
+        let observed = match case.input.runtime_path.as_str() {
+            "session_resume" => {
+                match gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+                    node.clone(),
+                    &original.session_id,
+                    &runtime_did,
+                    Some(&user_did),
+                    actor_did,
+                    gents_toolcalls::call::hook::FailurePolicy::default(),
+                )
+                .await
+                {
+                    Ok(_) => PrivateSessionObserved {
+                        admitted: true,
+                        observed: true,
+                    },
+                    Err(error) => PrivateSessionObserved {
+                        admitted: !is_runtime_actor_authority_error(error.as_ref()),
+                        observed: false,
+                    },
+                }
+            }
+            "session_selection" => match gents_session::session::load_session_agent_selection(
+                &node,
+                &actor_did,
+                &runtime_did,
+                &original.session_id,
+                Some(Some(&user_did)),
+            )
+            .await
+            {
+                Ok(found) => PrivateSessionObserved {
+                    admitted: true,
+                    observed: found.is_some(),
+                },
+                Err(error) => PrivateSessionObserved {
+                    admitted: !is_runtime_actor_authority_error(error.as_ref()),
+                    observed: false,
+                },
+            },
+            "request_watch" => {
+                match DefraWatcher::for_agents(node.clone(), &runtime_did, vec![actor_identity]) {
+                    Ok(watcher) => {
+                        let pending = watcher.pending_requests().await.unwrap();
+                        PrivateSessionObserved {
+                            admitted: true,
+                            observed: pending
+                                .iter()
+                                .any(|row| row.request_id == "watched-private-request"),
+                        }
+                    }
+                    Err(error) => PrivateSessionObserved {
+                        admitted: !is_runtime_actor_authority_error(error.as_ref()),
+                        observed: false,
+                    },
+                }
+            }
+            "wake_input_load" => match load(actor_access, claimed_wake, cutoff).await {
+                Ok(messages) => PrivateSessionObserved {
+                    admitted: true,
+                    observed: !messages.is_empty(),
+                },
+                Err(error) => PrivateSessionObserved {
+                    admitted: !is_runtime_actor_authority_error(error.as_ref()),
+                    observed: false,
+                },
+            },
+            other => panic!("unmodeled runtime path {other}"),
+        };
+        case.check(observed);
+    }
+
     drop(lifecycle);
     drop(parent);
     node.shutdown().await.expect("node shutdown");

@@ -53,6 +53,10 @@ pub struct TimelineCompactionEvent {
     pub sequence: i64,
     pub summary: String,
     pub messages_compacted: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_through_sequence: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_message_versions: Vec<gents_protocol::transcript::TranscriptFactRef>,
     pub original_tokens: i64,
     pub compacted_tokens: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

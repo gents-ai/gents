@@ -697,6 +697,7 @@ fn compaction_is_a_stably_identified_timeline_event() {
             original_tokens: 900,
             compacted_tokens: 120,
             created_at: Some("2026-05-04T12:00:02Z".to_string()),
+            ..Default::default()
         }],
         ..Default::default()
     });
@@ -709,6 +710,62 @@ fn compaction_is_a_stably_identified_timeline_event() {
     assert_eq!(event.compaction_key, "session-root:1");
     assert_eq!(event.request_id, "req-root");
     assert_eq!(event.summary, "durable compact summary");
+    assert!(event.compacted_through_sequence.is_none());
+    assert!(event.source_message_versions.is_empty());
+
+    let pinned = vec![
+        gents_protocol::transcript::TranscriptFactRef {
+            doc_id: "bae-msg-1".to_string(),
+            sequence: 1,
+            commit_cid: "bafymsg1".to_string(),
+        },
+        gents_protocol::transcript::TranscriptFactRef {
+            doc_id: "bae-msg-2".to_string(),
+            sequence: 2,
+            commit_cid: "bafymsg2".to_string(),
+        },
+    ];
+    let with_pins = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            created_at: Some("2026-05-04T12:00:00Z".to_string()),
+            ..Default::default()
+        },
+        requests: vec![TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            ..Default::default()
+        }],
+        compactions: vec![TimelineCompactionRow {
+            doc_id: Some("doc-compact".to_string()),
+            compaction_key: "session-root:1".to_string(),
+            request_id: Some("req-root".to_string()),
+            request_doc_id: Some("doc-root".to_string()),
+            session_id: "session-root".to_string(),
+            sequence: 1,
+            summary: "durable compact summary".to_string(),
+            messages_compacted: 2,
+            compacted_through_sequence: Some(2),
+            source_message_versions: Some(pinned.clone()),
+            original_tokens: 900,
+            compacted_tokens: 120,
+            created_at: Some("2026-05-04T12:00:02Z".to_string()),
+        }],
+        ..Default::default()
+    });
+    let pinned_event = with_pins
+        .events
+        .iter()
+        .find_map(|event| match event {
+            RunTimelineEvent::Compaction(event) => Some(event),
+            _ => None,
+        })
+        .expect("pinned compaction event");
+    assert_eq!(pinned_event.compacted_through_sequence, Some(2));
+    assert_eq!(pinned_event.source_message_versions, pinned);
 }
 
 #[test]

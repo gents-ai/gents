@@ -421,6 +421,10 @@ pub struct TimelineCompactionRow {
     pub summary: String,
     #[serde(default)]
     pub messages_compacted: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_through_sequence: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_message_versions: Option<Vec<gents_protocol::transcript::TranscriptFactRef>>,
     #[serde(default)]
     pub original_tokens: i64,
     #[serde(default)]

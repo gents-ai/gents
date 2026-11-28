@@ -250,6 +250,16 @@ def livePartialItem : RecoveryItem :=
   ⟨partialClose 101 0 1 5,
     some { message with header := { message.header with publication := .requestRecovery 7 } }⟩
 
+def lateStoppedRaw : Segment :=
+  { StreamingResponse.ReasoningAudit.stoppedObserved with
+    id := 134,
+    flush := some ⟨1, [⟨3, 1, some { StreamingResponse.ReasoningAudit.body with block := 1 }⟩], [66]⟩,
+    createdAt := 11 }
+
+def liveStoppedPartialItem : RecoveryItem :=
+  ⟨StreamingResponse.ReasoningAudit.stoppedClose,
+    some { StreamingResponse.ReasoningAudit.recoveredReasoning with createdAt := 5 }⟩
+
 def livePartialCases : List Case :=
   [ mkCase "live_partial_publication_replays_after_late_raw_arrival" (world 5)
       [.appendRaw 1 5 (raw 100 0 0 5), .closePartial 5 7 livePartialItem,
@@ -261,14 +271,18 @@ def livePartialCases : List Case :=
        .closePartial 5 7 { livePartialItem with closing := partialClose 101 0 0 5 }]
   , mkCase "live_partial_recovers_stopped_reasoning" (world 5)
       [.appendRaw 1 5 StreamingResponse.ReasoningAudit.stoppedObserved,
-       .closePartial 5 7 ⟨StreamingResponse.ReasoningAudit.stoppedClose,
-         some { StreamingResponse.ReasoningAudit.recoveredReasoning with createdAt := 5 }⟩]
+       .closePartial 5 7 liveStoppedPartialItem]
+  , mkCase "live_partial_stopped_reasoning_replays_after_late_raw_arrival" (world 5)
+      [.appendRaw 1 5 StreamingResponse.ReasoningAudit.stoppedObserved,
+       .closePartial 5 7 liveStoppedPartialItem,
+       .replicate lateStoppedRaw,
+       .closePartial 6 7 liveStoppedPartialItem]
   ]
 
 example : livePartialCases.map (fun value => value.expected.map
     (List.map (·.accepted))) =
     [some [true, true, true, true], some [true, false], some [true, false],
-      some [true, true]] := by
+      some [true, true], some [true, true, true, true]] := by
   native_decide
 
 example : ((livePartialCases.head?.bind (·.expected)).bind List.getLast?).map
@@ -370,6 +384,42 @@ example : ((run (world 5) 600 numericRecoveryInputs).bind List.getLast?).map
     some (true, [(930, 0), (931, 1), (932, 2), (933, 3)]) := by
   native_decide
 
+private def sigFragUnstoppedClose : Segment :=
+  { StreamingResponse.ReasoningAudit.sigFragA with
+    id := 130, flush := none, close := some (.closed .«partial» 2 [1, 2]), createdAt := 10 }
+
+private def unstoppedSingleClose : Segment :=
+  { StreamingResponse.ReasoningAudit.sigFragA with
+    id := 131, flush := none, close := some (.closed .«partial» 1 [1, 1]), createdAt := 10 }
+
+private def completedThenInterruptedClose : Segment :=
+  { StreamingResponse.ReasoningAudit.sigFragA with
+    id := 132, flush := none,
+    close := some (.closed .«partial» 3 [1, 2, 0, 1, 1]), createdAt := 10 }
+
+private def completedThenInterruptedHeader : MessageEnvelope :=
+  { header :=
+      { id := 211, session := 1, request := some 10, origin := none
+        refs := [⟨132, 0⟩], outcome := .«partial», role := .assistant
+        publication := .requestRecovery 8 }
+    key := "recovery-211", sequence := 0, nativeId := none
+    blocks := [.reasoning none [.text ⟨⟨132, 0⟩, .full⟩ (some "S1")]]
+    createdAt := 10 }
+
+private def foreignAttemptClose : Segment :=
+  { StreamingResponse.ReasoningAudit.foreignAttemptStop with
+    id := 133, flush := none,
+    close := some (.closed .«partial» 1 [1, 1, 0]), createdAt := 10 }
+
+private def foreignAttemptHeader : MessageEnvelope :=
+  { header :=
+      { id := 212, session := 1, request := some 10, origin := none
+        refs := [⟨133, 0⟩], outcome := .«partial», role := .assistant
+        publication := .requestRecovery 8 }
+    key := "recovery-212", sequence := 0, nativeId := none
+    blocks := [.reasoning none [.text ⟨⟨133, 0⟩, .full⟩ (some "S")]]
+    createdAt := 10 }
+
 /-- Terminal recovery is distinct from resumable generation replacement. The
 selection is exact and supplied to the canonical transaction, not chosen by
 the observation adapter. -/
@@ -398,12 +448,33 @@ def terminalRecoveryCases : List Case :=
         .recoverTerminal 2 10 8 .interrupted (.message 200) []]
   , mkCase "cancelled_headerless_recovery_rejects_late_output"
       (world 5) [.recoverTerminal 2 10 8 .interrupted .noMessage [],
-        .appendRaw 1 11 lateStaleFlush] ]
+        .appendRaw 1 11 lateStaleFlush]
+  , mkCase "crash_before_durable_reasoning_stop_recovers_no_reasoning_header"
+      (world 5) [.appendRaw 1 5 StreamingResponse.ReasoningAudit.sigFragA,
+        .appendRaw 1 6 StreamingResponse.ReasoningAudit.sigFragB,
+        .recoverTerminal 2 10 8 .failed .noMessage [⟨sigFragUnstoppedClose, none⟩]]
+  , mkCase "crash_after_durable_reasoning_stop_recovers_only_stopped_block"
+      (world 5) [.appendRaw 1 5 StreamingResponse.ReasoningAudit.sigFragA,
+        .appendRaw 1 6 StreamingResponse.ReasoningAudit.sigFragStop,
+        .appendRaw 1 7 StreamingResponse.ReasoningAudit.interruptedSecondBlock,
+        .recoverTerminal 2 10 8 .failed (.message 211)
+          [⟨completedThenInterruptedClose, some completedThenInterruptedHeader⟩]]
+  , mkCase "stale_generation_cannot_append_reasoning_stop_after_crash_recovery"
+      (world 5) [.appendRaw 1 5 StreamingResponse.ReasoningAudit.sigFragA,
+        .recoverTerminal 2 10 8 .failed .noMessage [⟨unstoppedSingleClose, none⟩],
+        .appendRaw 1 11 StreamingResponse.ReasoningAudit.lateStopAfterRecovery]
+  , mkCase "foreign_source_reasoning_stop_cannot_recover_unstopped_block"
+      (world 5) [.appendRaw 1 5 StreamingResponse.ReasoningAudit.sigFragA,
+        .appendRaw 1 6 StreamingResponse.ReasoningAudit.foreignAttemptStop,
+        .recoverTerminal 2 10 8 .failed (.message 212)
+          [⟨unstoppedSingleClose, none⟩, ⟨foreignAttemptClose, some foreignAttemptHeader⟩]] ]
 
 example : (terminalRecoveryCases.drop 5).map
     (fun value => value.expected.map (List.map (·.accepted))) =
     [some [true, true, false, true], some [true, true, true],
-      some [true, false]] := by native_decide
+      some [true, false], some [true, true, true],
+      some [true, true, true, true], some [true, true, false],
+      some [true, true, true]] := by native_decide
 
 /-- One native transaction covers the tool close and its paired result header.
 The separate close/deliver steps remain executable model witnesses, not claims

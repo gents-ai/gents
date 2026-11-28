@@ -443,10 +443,15 @@ async fn background_completion_transaction_attempt(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        notifications.len() <= 1,
-        "background completion notification key resolved to multiple rows"
-    );
+    if notifications.len() > 1 {
+        return Err(
+            crate::request::streaming::canonical::MessageKeyConflict::new(
+                message_key,
+                "background completion notification key resolved to multiple rows",
+            )
+            .into(),
+        );
+    }
     anyhow::ensure!(
         existing_notification_doc_id.is_none() || notifications.len() == 1,
         "observed background notification disappeared"
@@ -460,18 +465,22 @@ async fn background_completion_transaction_attempt(
             parent.requester_did.as_deref(),
         )
         .await?;
-        anyhow::ensure!(
-            row.message.message_key == message_key
-                && row.message.session_id == parent.session_id
-                && row.message.node_did == parent.node_did
-                && row.message.requester_did == parent.requester_did
-                && row.message.role == gents_protocol::output::MessageRole::User
-                && reconstructed == gents_protocol::message::Message::user(content)
-                && matches!(&row.message.publication,
-                    gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id }
-                    if tool_call_doc_id == &native.tool_call_doc_id),
-            "canonical background notification replay conflicts with authority, scope, or content"
-        );
+        let notification_matches = row.message.message_key == message_key
+            && row.message.session_id == parent.session_id
+            && row.message.node_did == parent.node_did
+            && row.message.requester_did == parent.requester_did
+            && row.message.role == gents_protocol::output::MessageRole::User
+            && reconstructed == gents_protocol::message::Message::user(content)
+            && matches!(&row.message.publication,
+                gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id }
+                if tool_call_doc_id == &native.tool_call_doc_id);
+        if !notification_matches {
+            return Err(crate::request::streaming::canonical::MessageKeyConflict::new(
+                message_key,
+                "canonical background notification replay conflicts with authority, scope, or content",
+            )
+            .into());
+        }
         let doc_id = row
             .message
             .request_doc_id

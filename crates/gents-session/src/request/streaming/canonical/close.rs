@@ -4,7 +4,7 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, ReconstructionError, SourceClose, StreamPayload,
+    OutputWriter, PayloadPresentation, ReasoningPart, ReconstructionError, SourceClose,
     TranscriptMessage,
 };
 
@@ -24,7 +24,8 @@ use super::{
         load_request_in_txn, load_source_in_txn, retained_partial_blocks,
         validate_closed_source_extent, validate_source_physical_identities,
     },
-    PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
+    MessageKeyConflict, PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection,
+    ProviderPartialCandidate,
 };
 
 pub async fn close_provider_attempt_with_signer(
@@ -391,6 +392,21 @@ pub(crate) async fn request_headers_in_txn(
     .await
 }
 
+fn partial_recovery_block_matches_close(block: &MessageBlock, close_doc_id: &str) -> bool {
+    match block {
+        MessageBlock::Text { text } => {
+            text.presentation == PayloadPresentation::Full
+                && text.output.close_doc_id == close_doc_id
+        }
+        MessageBlock::Reasoning { id: None, parts } => match parts.as_slice() {
+            [ReasoningPart::Text { text, .. }] => text.close_doc_id == close_doc_id,
+            [ReasoningPart::Redacted { data }] => data.close_doc_id == close_doc_id,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 async fn partial_header_in_txn(
     txn: &ConfigApplyTxn<'_>,
     inputs: PartialHeaderInputs<'_>,
@@ -422,27 +438,37 @@ async fn partial_header_in_txn(
         .filter(|row| row.message.message_key == message_key)
         .collect::<Vec<_>>();
     if let [existing] = matching.as_slice() {
-        anyhow::ensure!(
-            existing.message.request_doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
-                && existing.message.publication
-                    == (MessagePublication::RequestRecovery {
-                        execution_generation: generation.to_owned(),
-                    })
-                && existing.message.outcome == OutputOutcome::Partial
-                && existing.message.role == MessageRole::Assistant
-                && existing.message.native_id.is_none()
-                && existing.message.blocks.iter().all(|block| matches!(block,
-                    MessageBlock::Text { text }
-                        if text.presentation == PayloadPresentation::Full
-                            && text.output.close_doc_id == closing.doc_id)),
-            "partial publication replay changed its exact header"
-        );
+        let header_matches = existing.message.request_doc_id.as_deref()
+            == Some(prepared.request_doc_id.as_str())
+            && existing.message.publication
+                == (MessagePublication::RequestRecovery {
+                    execution_generation: generation.to_owned(),
+                })
+            && existing.message.outcome == OutputOutcome::Partial
+            && existing.message.role == MessageRole::Assistant
+            && existing.message.native_id.is_none()
+            && existing.message.native_request_id.is_none()
+            && existing
+                .message
+                .blocks
+                .iter()
+                .all(|block| partial_recovery_block_matches_close(block, &closing.doc_id));
+        if !header_matches {
+            return Err(MessageKeyConflict::new(
+                &message_key,
+                "partial publication replay changed its exact header",
+            )
+            .into());
+        }
         if let Some(factory) = header_factory {
             let proposed = factory(&closing.doc_id)?;
-            anyhow::ensure!(
-                proposed == existing.message,
-                "partial publication replay changed its header candidate"
-            );
+            if proposed != existing.message {
+                return Err(MessageKeyConflict::new(
+                    &message_key,
+                    "partial publication replay changed its header candidate",
+                )
+                .into());
+            }
         }
         crate::session::load_canonical_message_in_txn(
             txn,
@@ -453,27 +479,40 @@ async fn partial_header_in_txn(
         .await?;
         return Ok(Some(existing.doc_id.clone()));
     }
-    anyhow::ensure!(
-        matching.is_empty(),
-        "partial publication identity is ambiguous"
-    );
+    if !matching.is_empty() {
+        return Err(MessageKeyConflict::new(
+            &message_key,
+            "partial publication identity is ambiguous",
+        )
+        .into());
+    }
     if replay {
         let Some(SourceClose::Closed { segments, .. }) = closing.segment.close.as_ref() else {
             anyhow::bail!("partial replay has no Partial closure")
         };
-        let retains_text = records.iter().any(|row| {
-            row.segment
-                .ordinal
-                .is_some_and(|ordinal| ordinal < *segments)
-                && row.segment.runs.iter().any(|run| {
-                    run.declaration.as_ref().is_some_and(|declaration| {
-                        declaration.part_index == 0
-                            && matches!(declaration.payload, StreamPayload::Text)
-                    })
-                })
-        });
+        let bounded = records
+            .iter()
+            .filter(|row| {
+                row.doc_id == closing.doc_id
+                    || row
+                        .segment
+                        .ordinal
+                        .is_some_and(|ordinal| ordinal < *segments)
+            })
+            .map(|row| ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            })
+            .collect::<Vec<_>>();
+        let retained = retained_partial_blocks(
+            &bounded,
+            &prepared.request_doc_id,
+            &prepared.source,
+            &prepared.writer,
+            closing,
+        )?;
         anyhow::ensure!(
-            !retains_text,
+            retained.is_empty(),
             "partial close replay is missing its committed publication header"
         );
         return Ok(None);

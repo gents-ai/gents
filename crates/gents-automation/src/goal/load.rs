@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_goals_for_session(
     node: &EmbeddedNode,
     node_did: &str,
@@ -23,6 +24,7 @@ pub async fn load_goals_for_session(
     Ok(goals)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_canonical_goal(
     node: &EmbeddedNode,
     node_did: &str,
@@ -43,6 +45,7 @@ pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     });
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDocument>> {
     let response = graphql_with_transaction_retry(node, query, "Goal query").await?;
     rows(&response, "Goal").context("decoding Goal rows")
