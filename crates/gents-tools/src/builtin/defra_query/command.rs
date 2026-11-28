@@ -5,6 +5,7 @@ use serde_json::{json, Map, Value};
 use super::relation::{self, ResolveError, SelectionRefusal};
 use super::schema::discovery_payload;
 use super::{build_query, CollectionScope, DefraQueryParams};
+use gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME;
 use gents_store::config_client::schema_introspection::validate_identifier;
 use gents_store::config_client::{ConfigClientError, ConfigRead, RerunNote, TransactionFailure};
 
@@ -196,24 +197,96 @@ pub async fn execute_command(
         .map_err(QueryCommandError::erased)
 }
 
+fn positional_collection_refusal(args: &QueryParams, verb: &str, extra: &str) -> SelectionRefusal {
+    let mut corrected = args.clone();
+    corrected.argv = vec![verb.to_owned()];
+    let message = match args.collection.as_deref() {
+        None => {
+            corrected.collection = Some(extra.to_owned());
+            let fields_note = if matches!(verb, "find" | "search" | "explain")
+                && !args.options.contains_key("fields")
+            {
+                " (and pass options.fields, or discover fields with argv:[\"fields\"])"
+            } else {
+                ""
+            };
+            format!(
+                "argv takes only the command verb [{verb:?}]; pass {extra:?} in the collection parameter instead{fields_note}"
+            )
+        }
+        Some(existing) if existing == extra => {
+            format!(
+                "argv takes only the command verb [{verb:?}]; omit {extra:?} from argv and keep it in collection"
+            )
+        }
+        Some(_) => {
+            format!(
+                "argv takes only the command verb [{verb:?}]; put the collection name in collection, not argv"
+            )
+        }
+    };
+    SelectionRefusal {
+        message,
+        next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected}),
+    }
+}
+
+fn unknown_option_error(
+    args: &QueryParams,
+    command: &str,
+    key: &str,
+    allowed: &[&str],
+) -> QueryCommandError {
+    if command == "search" && matches!(key, "query" | "keywords") {
+        let next_call =
+            if !args.options.contains_key("text") && args.options.contains_key("search_fields") {
+                let mut corrected = args.clone();
+                if let Some(val) = corrected.options.remove(key) {
+                    corrected.options.insert("text".into(), val);
+                }
+                json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected})
+            } else {
+                json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": ["help", "search"]}})
+            };
+        return SelectionRefusal {
+            message: format!(
+                "unknown option {key:?}; for BM25 keyword search use options.text with options.search_fields (not {key:?}). Accepted options: {allowed:?}"
+            ),
+            next_call,
+        }
+        .into();
+    }
+    anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into()
+}
+
 pub(super) async fn execute_typed_command(
     access: &dyn ConfigRead,
     args: &QueryParams,
     scope: &CollectionScope,
 ) -> std::result::Result<Value, QueryCommandError> {
     let mut argv = args.argv.iter().map(String::as_str).collect::<Vec<_>>();
-    if argv.last() == Some(&"--help") {
+    let dash_help = argv.last() == Some(&"--help");
+    if dash_help {
         argv.pop();
         argv.insert(0, "help");
     }
     if argv.first() == Some(&"help") {
-        if args.collection.is_some() || !args.options.is_empty() {
-            return Err(anyhow!("help accepts argv only").into());
+        if !dash_help && !args.options.is_empty() {
+            return Err(SelectionRefusal {
+                message: "help accepts argv only (omit options)".into(),
+                next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": args.argv}}),
+            }
+            .into());
         }
         if argv.len() > 2 {
             return Err(anyhow!("help accepts one command").into());
         }
         return Ok(json!({"help":query_help(argv.get(1).copied())?}));
+    }
+    if let [verb, extra] = argv.as_slice() {
+        if COMMANDS.contains(verb) {
+            return Err(positional_collection_refusal(args, verb, extra).into());
+        }
     }
     if argv.len() != 1 {
         return Err(anyhow!(
@@ -260,7 +333,7 @@ pub(super) async fn execute_typed_command(
     };
     for key in args.options.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into());
+            return Err(unknown_option_error(args, command, key, allowed));
         }
     }
     let observed = relation::observe(access, collection)
@@ -272,10 +345,16 @@ pub(super) async fn execute_typed_command(
     let requested: Vec<String> = if command == "count" {
         vec!["_docID".into()]
     } else {
-        serde_json::from_value(args.options.get("fields").cloned().context(
-            "options.fields is required; call query with argv:[fields] to discover names",
-        )?)
-        .context("options.fields must be an array of field names")?
+        let Some(raw_fields) = args.options.get("fields").cloned() else {
+            return Err(SelectionRefusal {
+                message: "options.fields is required; call query with argv:[\"fields\"] to discover names"
+                    .into(),
+                next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": ["fields"], "collection": collection}}),
+            }
+            .into());
+        };
+        serde_json::from_value(raw_fields)
+            .context("options.fields must be an array of field names")?
     };
     let (fields, relations) = relation::resolve(access, &observed, &requested, scope).await?;
     let limit = args
