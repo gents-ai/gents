@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::experience::{AttemptRow, OutcomeRow, ProblemRow};
+use super::experience::{score_admitted, AttemptRow, OutcomeRow, ProblemRow};
 use super::{created_at_millis, MAX_ALIAS_ROWS};
 
 pub(super) struct CallerContext {
@@ -96,8 +96,8 @@ pub(super) fn parse_attempts(value: &Value) -> Vec<AttemptRow> {
                         executed_model_name: row
                             .pointer("/provenance/executed_model_name")
                             .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_owned),
                         carried_from: row
                             .get("carried_from")
                             .and_then(Value::as_str)
@@ -126,8 +126,20 @@ pub(super) fn parse_outcomes(value: &Value) -> Vec<OutcomeRow> {
                         attempt_key: row.get("attempt_key")?.as_str()?.to_owned(),
                         fixed: parse_string_list(row.get("fixed")),
                         missed: parse_string_list(row.get("missed")),
-                        passed: row.get("passed").and_then(Value::as_u64).unwrap_or(0),
-                        total: row.get("total").and_then(Value::as_u64).unwrap_or(0),
+                        score: score_admitted(
+                            row.get("passed").and_then(Value::as_i64),
+                            row.get("total").and_then(Value::as_i64),
+                        )
+                        .score,
+                        executed_model_name: row
+                            .pointer("/provenance/executed_model_name")
+                            .and_then(Value::as_str)
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_owned),
+                        carried_from: row
+                            .get("carried_from")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
                         created_at: row
                             .get("created_at")
                             .and_then(Value::as_str)
@@ -167,4 +179,3 @@ pub(crate) const PROBLEM_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMOR
 pub(super) const ATTEMPT_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_ATTEMPT_NAME;
 pub(super) const OUTCOME_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_OUTCOME_NAME;
 pub(super) const ALIAS_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_ALIAS_NAME;
-pub(super) const GUARD_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_ALIAS_GUARD_NAME;

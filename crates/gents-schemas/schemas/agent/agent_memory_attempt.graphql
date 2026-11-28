@@ -1,7 +1,10 @@
 type AgentMemoryAttempt
-  @policy(id: "$household", resource: "agent_memory") {
+  @policy(id: "$household", resource: "agent_memory", parentField: "agent_doc_id")
+  @index(fields: ["agent_did", "agent_doc_id", "attempt_key"])
+  @index(fields: ["agent_did", "agent_doc_id", "problem_key", "created_at"]) {
     attempt_key: String @index(unique: true)
     agent_did: String @index @immutable
+    agent_doc_id: String @index @immutable
     problem_key: String @index
     what: String @fulltext
     rationale: String

@@ -627,20 +627,138 @@
   },
   {
     "read": {
-      "path": "crates/gents-tools/src/memory.rs",
-      "collection": "AgentMemory",
-      "arguments": "filter: {agent_did: {_eq: \"$GENTS_0$\"}}, order: [{created_at: DESC}], limit: $GENTS_limit$"
+      "path": "crates/gents-tools/src/memory/carry.rs",
+      "collection": "AgentMemoryProblem",
+      "arguments": "filter: $GENTS_0$, order: [{problem_key: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
     },
     "bindings": [
       {
-        "0": "probe",
+        "0": "{_and: [{agent_did: {_eq: \"probe\"}}, {agent_doc_id: {_eq: \"probe\"}}]}",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/carry.rs",
+      "collection": "AgentMemoryAttempt",
+      "arguments": "filter: $GENTS_0$, order: [{attempt_key: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "0": "{_and: [{agent_did: {_eq: \"probe\"}}, {agent_doc_id: {_eq: \"probe\"}}]}",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/carry.rs",
+      "collection": "AgentMemoryOutcome",
+      "arguments": "filter: $GENTS_0$, order: [{outcome_key: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "0": "{_and: [{agent_did: {_eq: \"probe\"}}, {agent_doc_id: {_eq: \"probe\"}}]}",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/carry.rs",
+      "collection": "AgentMemoryAlias",
+      "arguments": "filter: $GENTS_0$, order: [{from_problem_key: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "0": "{_and: [{agent_did: {_eq: \"probe\"}}, {agent_doc_id: {_eq: \"probe\"}}]}",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/carry.rs",
+      "collection": "$GENTS_MEMORY_COLLECTION$",
+      "arguments": "filter: $GENTS_0$, order: [{memory_key: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "0": "{_and: [{agent_did: {_eq: \"probe\"}}, {agent_doc_id: {_eq: \"probe\"}}]}",
+        "MEMORY_COLLECTION": "AgentMemory",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/experience_store.rs",
+      "collection": "AgentMemoryAttempt",
+      "arguments": "filter: {_and: [{agent_did: {_eq: \"$GENTS_agent$\"}}, {agent_doc_id: {_eq: \"$GENTS_doc$\"}}, {problem_key: {_in: $GENTS_keys$}}]}, order: [{created_at: DESC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "agent": "probe",
+        "doc": "probe",
+        "keys": "[\"probe\"]",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/experience_store.rs",
+      "collection": "AgentMemoryOutcome",
+      "arguments": "filter: {_and: [{agent_did: {_eq: \"$GENTS_agent$\"}}, {agent_doc_id: {_eq: \"$GENTS_doc$\"}}, {attempt_key: {_in: $GENTS_keys$}}]}, order: [{created_at: ASC}], limit: $GENTS_probe$"
+    },
+    "bindings": [
+      {
+        "agent": "probe",
+        "doc": "probe",
+        "keys": "[\"probe\"]",
+        "probe": "10"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/experience_store.rs",
+      "collection": "AgentMemoryProblem",
+      "arguments": "filter: {_and: [{agent_did: {_eq: \"$GENTS_agent$\"}}, {agent_doc_id: {_eq: \"$GENTS_doc$\"}}]}, order: [{created_at: DESC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
+    },
+    "bindings": [
+      {
+        "agent": "probe",
+        "doc": "probe",
+        "limit": "10",
+        "offset": "0"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-tools/src/memory/facts.rs",
+      "collection": "AgentMemory",
+      "arguments": "filter: {_and: [{agent_did: {_eq: \"$GENTS_agent$\"}}, {agent_doc_id: {_eq: \"$GENTS_doc$\"}}]}, order: [{created_at: DESC}], limit: $GENTS_limit$"
+    },
+    "bindings": [
+      {
+        "agent": "probe",
+        "doc": "probe",
         "limit": "10"
       }
     ]
   },
   {
     "read": {
-      "path": "crates/gents-tools/src/memory.rs",
+      "path": "crates/gents-tools/src/memory/facts.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {session_id: {_eq: \"$GENTS_0$\"}, node_did: {_eq: \"$GENTS_1$\"}}, order: [{sequence: ASC}], limit: $GENTS_limit$, offset: $GENTS_offset$"
     },

@@ -4,17 +4,17 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use super::experience::{
-    flags, fold, normalize, resolve, unresolved_count, AttemptRow, Current, Experience,
-    FoldedProblem, OutcomeRow, Rows, Score,
+    flags, fold, lands_on, normalize, problem_key, resolve, unresolved_count, AttemptRow, Current,
+    Experience, FoldedProblem, Observation, OutcomeRow, Rows, Score,
 };
 use super::experience_rows::{
     parse_aliases, parse_attempts, parse_outcomes, parse_problems, string_list, CallerContext,
     ProblemRecord, PROBLEM_COLLECTION,
 };
 use super::{
-    content_hash, created_at_millis, link_parent_to_agent, nullable_string, vector_literal,
-    MemoryParams, MemoryStore, MAX_ALIAS_ROWS, MAX_ATTEMPTS_PER_PAGE, MAX_OUTCOMES_PER_PAGE,
-    MAX_PAGE, MAX_RECALL_PROBLEMS, PROBLEM_NEIGHBORS,
+    agent_doc_id_in_txn, created_at_millis, nullable_string, vector_literal, MemoryParams,
+    MemoryStore, MAX_ALIAS_ROWS, MAX_ATTEMPTS_PER_PAGE, MAX_OUTCOMES_PER_PAGE, MAX_PAGE,
+    MAX_RECALL_PROBLEMS, PROBLEM_NEIGHBORS,
 };
 
 const DEFAULT_PAGE: usize = 25;
@@ -71,6 +71,10 @@ fn score_json(score: Option<Score>) -> Value {
     }
 }
 
+fn latest_json(latest: Option<Observation>) -> Value {
+    score_json(latest.and_then(|observation| observation.score))
+}
+
 pub(super) struct RecallPage {
     pub(super) ranking: &'static str,
     pub(super) ranks: Vec<String>,
@@ -97,18 +101,37 @@ pub(super) async fn ensure_problem_in_txn(
 ) -> anyhow::Result<ProblemRecord> {
     let existing = txn
         .execute(&format!(
-            "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: 1) {{ problem_key name carried_from created_at }}}}",
+            "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: 1) {{ problem_key name carried_from created_at }}}}",
             agent = gents_store::graphql::escape_graphql_string(agent_did),
+            doc = gents_store::graphql::escape_graphql_string(agent_doc_id),
             key = gents_store::graphql::escape_graphql_string(problem.problem_key),
         ))
         .await?;
     if let Some(record) = parse_problems(&existing).into_iter().next() {
         return Ok(record);
     }
+    let landing = txn
+        .execute(&format!(
+            "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{normalized_name: {{_eq: \"{normalized}\"}}}}]}}, limit: 1) {{ problem_key name carried_from created_at }}}}",
+            agent = gents_store::graphql::escape_graphql_string(agent_did),
+            doc = gents_store::graphql::escape_graphql_string(agent_doc_id),
+            normalized = gents_store::graphql::escape_graphql_string(problem.normalized),
+        ))
+        .await?;
+    let landed: Vec<ProblemRecord> = parse_problems(&landing);
+    if let Some(key) = lands_on(
+        &landed.iter().map(ProblemRecord::row).collect::<Vec<_>>(),
+        problem.name,
+    ) {
+        if let Some(record) = landed.into_iter().find(|record| record.problem_key == key) {
+            return Ok(record);
+        }
+    }
     let mutation = format!(
-        "mutation {{ add_AgentMemoryProblem(input: {{ problem_key: \"{problem_key}\", agent_did: \"{agent_did}\", name: \"{name}\", normalized_name: \"{normalized}\", embedding: [{literal}], embed_model_id: {embed_model_id}, opened_request_id: {request_id}, opened_session_id: {session_id}, provenance: {provenance}, created_at: \"{created_at}\" }}) {{ _docID }} }}",
+        "mutation {{ add_AgentMemoryProblem(input: {{ problem_key: \"{problem_key}\", agent_did: \"{agent_did}\", agent_doc_id: \"{agent_doc_id}\", name: \"{name}\", normalized_name: \"{normalized}\", embedding: [{literal}], embed_model_id: {embed_model_id}, opened_request_id: {request_id}, opened_session_id: {session_id}, provenance: {provenance}, created_at: \"{created_at}\" }}) {{ _docID }} }}",
         problem_key = gents_store::graphql::escape_graphql_string(problem.problem_key),
         agent_did = gents_store::graphql::escape_graphql_string(agent_did),
+        agent_doc_id = gents_store::graphql::escape_graphql_string(agent_doc_id),
         name = gents_store::graphql::escape_graphql_string(problem.name),
         normalized = gents_store::graphql::escape_graphql_string(problem.normalized),
         created_at = gents_store::graphql::escape_graphql_string(problem.created_at),
@@ -119,11 +142,10 @@ pub(super) async fn ensure_problem_in_txn(
         session_id = nullable_string(problem.session_id),
     );
     let created = txn.execute(&mutation).await?;
-    let doc_id = created
+    created
         .pointer(&format!("/data/add_{PROBLEM_COLLECTION}/0/_docID"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("problem write returned no document id"))?;
-    link_parent_to_agent(txn, PROBLEM_COLLECTION, doc_id, agent_doc_id).await?;
     Ok(ProblemRecord {
         problem_key: problem.problem_key.to_owned(),
         name: problem.name.to_owned(),
@@ -134,7 +156,7 @@ pub(super) async fn ensure_problem_in_txn(
 
 fn request_provenance_query(request_id: &str) -> String {
     format!(
-        "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 1) {{ executed_model_name executed_reasoning_effort executed_inference_profile_id executed_runtime_generation workspace_id session_id }}}}",
+        "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 1) {{ executed_model_name executed_reasoning_effort executed_inference_profile_id executed_runtime_generation workspace_id session_id backend_id }}}}",
         gents_store::graphql::escape_graphql_string(request_id),
     )
 }
@@ -155,10 +177,13 @@ fn caller_context_from_row(
         ] {
             if let Some(text) = row.get(field).and_then(Value::as_str) {
                 values.insert(field.to_owned(), Value::String(text.to_owned()));
-                if field == "executed_model_name" {
+                if field == "executed_model_name" && !text.is_empty() {
                     executed_model_name = Some(text.to_owned());
                 }
             }
+        }
+        if let Some(backend) = row.get("backend_id").and_then(Value::as_str) {
+            values.insert("backend_id".to_owned(), Value::String(backend.to_owned()));
         }
         if let Some(generation) = row
             .get("executed_runtime_generation")
@@ -222,14 +247,8 @@ impl MemoryStore<'_> {
     ) -> anyhow::Result<CallerContext> {
         let row = match request_id {
             Some(request_id) => {
-                let read = self.read(&request_provenance_query(request_id)).await;
-                match read {
-                    Ok(value) => value.pointer("/data/AgentRequest/0").cloned(),
-                    Err(error) => {
-                        tracing::warn!(%error, "memory provenance request read failed");
-                        None
-                    }
-                }
+                let value = self.read(&request_provenance_query(request_id)).await?;
+                value.pointer("/data/AgentRequest/0").cloned()
             }
             None => None,
         };
@@ -243,16 +262,17 @@ impl MemoryStore<'_> {
     fn reader(&self, context: &CallerContext) -> Current {
         Current {
             agent_did: self.agent_did.to_owned(),
-            executed_model_name: context.executed_model_name.clone().unwrap_or_default(),
+            executed_model_name: context.executed_model_name.clone(),
         }
     }
 
     async fn aliases(&self) -> anyhow::Result<Vec<(String, String)>> {
         let value = self
             .read(&format!(
-                "{{AgentMemoryAlias(filter: {{agent_did: {{_eq: \"{}\"}}}}, limit: {}) {{ from_problem_key to_problem_key }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
+                "{{AgentMemoryAlias(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}]}}, limit: {}) {{ from_problem_key to_problem_key }}}}",
                 MAX_ALIAS_ROWS + 1,
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             ))
             .await?;
         parse_aliases(&value)
@@ -264,9 +284,10 @@ impl MemoryStore<'_> {
         }
         let value = self
             .read(&format!(
-                "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{problem_key: {{_in: {}}}}}]}}) {{ problem_key name carried_from created_at }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
-                string_list(keys),
+                "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{problem_key: {{_in: {keys}}}}}]}}) {{ problem_key name carried_from created_at }}}}",
+                keys = string_list(keys),
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             ))
             .await?;
         Ok(parse_problems(&value))
@@ -283,9 +304,10 @@ impl MemoryStore<'_> {
         }
         let value = self
             .read(&format!(
-                "{{AgentMemoryAttempt(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{problem_key: {{_in: {}}}}}]}}, order: [{{created_at: DESC}}], limit: {limit}, offset: {offset}) {{ attempt_key problem_key predicted accepted carried_from created_at provenance }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
-                string_list(keys),
+                "{{AgentMemoryAttempt(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{problem_key: {{_in: {keys}}}}}]}}, order: [{{created_at: DESC}}], limit: {limit}, offset: {offset}) {{ attempt_key problem_key predicted accepted carried_from created_at provenance }}}}",
+                keys = string_list(keys),
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             ))
             .await?;
         Ok(parse_attempts(&value))
@@ -301,10 +323,11 @@ impl MemoryStore<'_> {
         }
         let value = self
             .read(&format!(
-                "{{AgentMemoryOutcome(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{attempt_key: {{_in: {}}}}}]}}, order: [{{created_at: ASC}}], limit: {}) {{ outcome_key attempt_key fixed missed passed total created_at }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
-                string_list(attempt_keys),
-                limit + 1,
+                "{{AgentMemoryOutcome(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{attempt_key: {{_in: {keys}}}}}]}}, order: [{{created_at: ASC}}], limit: {probe}) {{ outcome_key attempt_key fixed missed passed total carried_from created_at provenance }}}}",
+                keys = string_list(attempt_keys),
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
+                probe = limit + 1,
             ))
             .await?;
         let mut outcomes = parse_outcomes(&value);
@@ -338,8 +361,9 @@ impl MemoryStore<'_> {
         limit: usize,
     ) -> anyhow::Result<(&'static str, Vec<ProblemHit>)> {
         let filter = format!(
-            "{{agent_did: {{_eq: \"{}\"}}}}",
-            gents_store::graphql::escape_graphql_string(self.agent_did)
+            "{{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}]}}",
+            agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+            doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
         );
         let bm25_query = format!(
             "{{AgentMemoryProblem(filter: {filter}, limit: {limit}, order: [{{_alias: {{_score: DESC}}}}]) {{ _docID problem_key name created_at _score: BM25(query: \"{}\", fields: [\"name\"]) }}}}",
@@ -447,7 +471,7 @@ impl MemoryStore<'_> {
         if normalized.chars().count() > 4_000 {
             anyhow::bail!("problem name exceeds 4000 characters");
         }
-        let problem_key = content_hash(self.agent_did, &normalized);
+        let problem_key = problem_key(self.agent_did, name);
         let vector = self
             .embedder
             .embed_one(name.to_owned())
@@ -458,7 +482,7 @@ impl MemoryStore<'_> {
             .open_problem(&problem_key, name, &normalized, &vector, &context)
             .await?;
         let nearest = self
-            .nearest_problems(name, std::slice::from_ref(&problem_key))
+            .nearest_problems(name, std::slice::from_ref(&record.problem_key))
             .await?;
         Ok(json!({
             "problem_key": record.problem_key,
@@ -500,27 +524,7 @@ impl MemoryStore<'_> {
                 let node_did = node_did.clone();
                 let agent_did = agent_did.clone();
                 Box::pin(async move {
-                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Agent,
-                        &node_did,
-                        &agent_did,
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
-                    let existing = parse_problems(
-                        &txn.execute(&format!(
-                            "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent_did}\"}}}}, {{problem_key: {{_eq: \"{problem_key}\"}}}}]}}, limit: 1) {{ problem_key name carried_from created_at }}}}",
-                            agent_did = gents_store::graphql::escape_graphql_string(&agent_did),
-                            problem_key = gents_store::graphql::escape_graphql_string(&problem_key),
-                        ))
-                        .await?,
-                    )
-                    .into_iter()
-                    .next();
-                    if let Some(record) = existing {
-                        return Ok(record);
-                    }
+                    let agent_doc_id = agent_doc_id_in_txn(txn, &node_did, &agent_did).await?;
                     ensure_problem_in_txn(
                         txn,
                         &agent_doc_id,
@@ -605,7 +609,7 @@ impl MemoryStore<'_> {
             "carried_from": problem.carried_from,
             "merged": merged_keys(&aliases, &canonical),
             "attempts": problem.attempts,
-            "latest": score_json(problem.latest),
+            "latest": latest_json(problem.latest.clone()),
             "unresolved": unresolved_count(&problem),
             "last_active": problem.last_active,
             "nearest": nearest,
@@ -624,8 +628,9 @@ impl MemoryStore<'_> {
         let (limit, offset) = page(&args);
         let value = self
             .read(&format!(
-                "{{AgentMemoryProblem(filter: {{agent_did: {{_eq: \"{}\"}}}}, order: [{{created_at: DESC}}], limit: {limit}, offset: {offset}) {{ problem_key name carried_from created_at }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
+                "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}]}}, order: [{{created_at: DESC}}], limit: {limit}, offset: {offset}) {{ problem_key name carried_from created_at }}}}",
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             ))
             .await?;
         let rows = parse_problems(&value);
@@ -677,7 +682,7 @@ impl MemoryStore<'_> {
                 let (count, latest, unresolved, flags, last_active) = match problem {
                     Some(problem) => (
                         problem.attempts.len(),
-                        problem.latest,
+                        problem.latest.clone(),
                         unresolved_count(problem),
                         flags(problem)
                             .iter()
@@ -698,7 +703,7 @@ impl MemoryStore<'_> {
                     "name": record.name,
                     "merged": merged_keys(&aliases, &record.problem_key),
                     "attempts": count,
-                    "latest": score_json(latest),
+                    "latest": latest_json(latest),
                     "unresolved": unresolved,
                     "provenance_flags": flags,
                     "last_active": last_active,

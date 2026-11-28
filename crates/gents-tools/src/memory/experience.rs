@@ -14,7 +14,7 @@ pub struct AttemptRow {
     pub problem_key: String,
     pub predicted: Vec<String>,
     pub accepted: bool,
-    pub executed_model_name: String,
+    pub executed_model_name: Option<String>,
     pub carried_from: Option<String>,
     pub created_at: u64,
 }
@@ -25,8 +25,9 @@ pub struct OutcomeRow {
     pub attempt_key: String,
     pub fixed: Vec<String>,
     pub missed: Vec<String>,
-    pub passed: u64,
-    pub total: u64,
+    pub score: Option<Score>,
+    pub executed_model_name: Option<String>,
+    pub carried_from: Option<String>,
     pub created_at: u64,
 }
 
@@ -41,7 +42,7 @@ pub struct Rows {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Current {
     pub agent_did: String,
-    pub executed_model_name: String,
+    pub executed_model_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,8 +72,10 @@ impl MergeDecision {
 pub enum Provenance {
     Same,
     OtherModel,
+    UnknownModel,
     OtherAgent,
     OtherModelAndAgent,
+    UnknownModelAndOtherAgent,
 }
 
 impl Provenance {
@@ -80,8 +83,10 @@ impl Provenance {
         match self {
             Self::Same => "same setting",
             Self::OtherModel => "other model",
+            Self::UnknownModel => "unknown model",
             Self::OtherAgent => "other agent",
             Self::OtherModelAndAgent => "other model and agent",
+            Self::UnknownModelAndOtherAgent => "unknown model and other agent",
         }
     }
 }
@@ -90,6 +95,80 @@ impl Provenance {
 pub struct Score {
     pub passed: u64,
     pub total: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreDecision {
+    Scored,
+    Unscored,
+    Unpaired,
+    Negative,
+    ExceedsTotal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoreAdmission {
+    pub decision: ScoreDecision,
+    pub score: Option<Score>,
+}
+
+/// Lean `scoreAdmitted`: an outcome records `passed` of `total` only when both
+/// counts are given, neither is negative and `passed` is at most `total`.
+/// Neither count is an unscored outcome, never 0 of 0.
+pub fn score_admitted(passed: Option<i64>, total: Option<i64>) -> ScoreAdmission {
+    match (passed, total) {
+        (None, None) => ScoreAdmission {
+            decision: ScoreDecision::Unscored,
+            score: None,
+        },
+        (Some(passed), Some(total)) => {
+            if passed < 0 || total < 0 {
+                ScoreAdmission {
+                    decision: ScoreDecision::Negative,
+                    score: None,
+                }
+            } else if total < passed {
+                ScoreAdmission {
+                    decision: ScoreDecision::ExceedsTotal,
+                    score: None,
+                }
+            } else {
+                ScoreAdmission {
+                    decision: ScoreDecision::Scored,
+                    score: Some(Score {
+                        passed: passed as u64,
+                        total: total as u64,
+                    }),
+                }
+            }
+        }
+        _ => ScoreAdmission {
+            decision: ScoreDecision::Unpaired,
+            score: None,
+        },
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Observation {
+    pub outcome_key: String,
+    pub score: Option<Score>,
+    pub provenance: Provenance,
+}
+
+impl Observation {
+    fn text(&self) -> String {
+        let score = match self.score {
+            Some(score) => format!("{}/{}", score.passed, score.total),
+            None => "unscored".to_owned(),
+        };
+        if self.provenance == Provenance::Same {
+            score
+        } else {
+            format!("{score} ({})", self.provenance.text())
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,8 +180,7 @@ pub struct FoldedAttempt {
     pub fixed: Vec<String>,
     pub missed: Vec<String>,
     pub unresolved: Vec<String>,
-    pub outcome_keys: Vec<String>,
-    pub latest: Option<Score>,
+    pub outcomes: Vec<Observation>,
     pub provenance: Provenance,
     pub created_at: u64,
 }
@@ -114,7 +192,7 @@ pub struct FoldedProblem {
     pub carried_from: Option<String>,
     pub merged: Vec<String>,
     pub attempts: Vec<FoldedAttempt>,
-    pub latest: Option<Score>,
+    pub latest: Option<Observation>,
     pub last_active: u64,
 }
 
@@ -135,6 +213,11 @@ pub fn normalize(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+/// The key a root cause is filed under, from the agent and the raw name.
+pub(crate) fn problem_key(agent_did: &str, name: &str) -> String {
+    super::content_hash(agent_did, &normalize(name))
 }
 
 pub fn lands_on(problems: &[ProblemRow], root_cause: &str) -> Option<String> {
@@ -205,17 +288,41 @@ pub fn merge_admitted(
     MergeDecision::Admitted
 }
 
-fn provenance(current: &Current, attempt: &AttemptRow) -> Provenance {
-    let other_model = attempt.executed_model_name != current.executed_model_name;
-    let other_agent = attempt
-        .carried_from
-        .as_deref()
-        .is_some_and(|agent| agent != current.agent_did);
-    match (other_model, other_agent) {
-        (false, false) => Provenance::Same,
-        (true, false) => Provenance::OtherModel,
-        (false, true) => Provenance::OtherAgent,
-        (true, true) => Provenance::OtherModelAndAgent,
+fn known_model(name: Option<&str>) -> Option<&str> {
+    name.filter(|model| !model.is_empty())
+}
+
+fn provenance(current: &Current, model: Option<&str>, carried_from: Option<&str>) -> Provenance {
+    let other_agent = carried_from.is_some_and(|agent| agent != current.agent_did);
+    match (
+        known_model(current.executed_model_name.as_deref()),
+        known_model(model),
+    ) {
+        (Some(reader), Some(recorded)) => match (reader != recorded, other_agent) {
+            (false, false) => Provenance::Same,
+            (true, false) => Provenance::OtherModel,
+            (false, true) => Provenance::OtherAgent,
+            (true, true) => Provenance::OtherModelAndAgent,
+        },
+        _ => {
+            if other_agent {
+                Provenance::UnknownModelAndOtherAgent
+            } else {
+                Provenance::UnknownModel
+            }
+        }
+    }
+}
+
+fn observe(current: &Current, outcome: &OutcomeRow) -> Observation {
+    Observation {
+        outcome_key: outcome.outcome_key.clone(),
+        score: outcome.score,
+        provenance: provenance(
+            current,
+            outcome.executed_model_name.as_deref(),
+            outcome.carried_from.as_deref(),
+        ),
     }
 }
 
@@ -279,15 +386,15 @@ fn fold_attempt(current: &Current, outcomes: &[OutcomeRow], attempt: &AttemptRow
         fixed,
         missed,
         unresolved,
-        outcome_keys: observed
+        outcomes: observed
             .iter()
-            .map(|outcome| outcome.outcome_key.clone())
+            .map(|outcome| observe(current, outcome))
             .collect(),
-        latest: observed.last().map(|outcome| Score {
-            passed: outcome.passed,
-            total: outcome.total,
-        }),
-        provenance: provenance(current, attempt),
+        provenance: provenance(
+            current,
+            attempt.executed_model_name.as_deref(),
+            attempt.carried_from.as_deref(),
+        ),
         created_at: attempt.created_at,
     }
 }
@@ -360,10 +467,7 @@ fn fold_problem(current: &Current, rows: &Rows, key: &str) -> FoldedProblem {
             .iter()
             .map(|attempt| fold_attempt(current, &rows.outcomes, attempt))
             .collect(),
-        latest: observed.last().map(|outcome| Score {
-            passed: outcome.passed,
-            total: outcome.total,
-        }),
+        latest: observed.last().map(|outcome| observe(current, outcome)),
         last_active,
     }
 }
@@ -417,8 +521,10 @@ pub(crate) fn flags(problem: &FoldedProblem) -> Vec<Provenance> {
     [
         Provenance::Same,
         Provenance::OtherModel,
+        Provenance::UnknownModel,
         Provenance::OtherAgent,
         Provenance::OtherModelAndAgent,
+        Provenance::UnknownModelAndOtherAgent,
     ]
     .into_iter()
     .filter(|relation| {
@@ -431,10 +537,11 @@ pub(crate) fn flags(problem: &FoldedProblem) -> Vec<Provenance> {
 }
 
 fn line(problem: &FoldedProblem) -> String {
-    let latest = match problem.latest {
-        Some(score) => format!("{}/{}", score.passed, score.total),
-        None => "none".to_owned(),
-    };
+    let latest = problem
+        .latest
+        .as_ref()
+        .map(Observation::text)
+        .unwrap_or_else(|| "none".to_owned());
     let origin = match flags(problem) {
         relations if relations.is_empty() => String::new(),
         relations => format!(
@@ -533,10 +640,10 @@ mod tests {
         to_problem_key: String,
     }
 
-    fn current(agent_did: &str, executed_model_name: &str) -> Current {
+    fn current(agent_did: &str, executed_model_name: Option<&str>) -> Current {
         Current {
             agent_did: agent_did.to_owned(),
-            executed_model_name: executed_model_name.to_owned(),
+            executed_model_name: executed_model_name.map(str::to_owned),
         }
     }
 
@@ -580,7 +687,10 @@ mod tests {
     fn memory_experience_fold_replays_the_lean_family() {
         families::memory_experience_fold::replay::<Provenance>(|input| {
             let experience = fold(
-                &current(&input.current.agent_did, &input.current.executed_model_name),
+                &current(
+                    &input.current.agent_did,
+                    input.current.executed_model_name.as_deref(),
+                ),
                 &rows(&input.rows),
             );
             let folded: families::memory_experience_fold::Experience<Provenance> =
@@ -593,7 +703,10 @@ mod tests {
     fn memory_experience_recall_replays_the_lean_family() {
         families::memory_experience_recall::replay(|input| {
             let experience = fold(
-                &current(&input.current.agent_did, &input.current.executed_model_name),
+                &current(
+                    &input.current.agent_did,
+                    input.current.executed_model_name.as_deref(),
+                ),
                 &rows(&input.rows),
             );
             generated::<families::memory_experience_recall::Index>(recall(
@@ -614,16 +727,43 @@ mod tests {
                 .iter()
                 .map(|problem| problem.problem_key.clone())
                 .collect();
-            let decision = merge_admitted(
+            merge_admitted(
                 &keys,
                 &merged_aliases,
                 &input.from_problem_key,
                 &input.to_problem_key,
-            );
-            families::memory_experience_merge_admission::MergeOutput {
-                decision,
-                lands_on: lands_on(&problems, &input.root_cause),
-            }
+            )
+        });
+    }
+
+    #[test]
+    fn memory_experience_lands_on_replays_the_lean_family() {
+        families::memory_experience_lands_on::replay(|input| {
+            let problems: Vec<ProblemRow> = input
+                .existing
+                .iter()
+                .map(|name| ProblemRow {
+                    problem_key: problem_key(&input.agent_did, name),
+                    name: name.clone(),
+                    carried_from: None,
+                    created_at: 0,
+                })
+                .collect();
+            lands_on(&problems, &input.root_cause).and_then(|key| {
+                problems
+                    .iter()
+                    .find(|problem| problem.problem_key == key)
+                    .map(|problem| problem.name.clone())
+            })
+        });
+    }
+
+    #[test]
+    fn memory_experience_score_admission_replays_the_lean_family() {
+        families::memory_experience_score_admission::replay::<ScoreDecision>(|input| {
+            generated::<families::memory_experience_score_admission::ScoreAdmission<ScoreDecision>>(
+                score_admitted(input.passed, input.total),
+            )
         });
     }
 }

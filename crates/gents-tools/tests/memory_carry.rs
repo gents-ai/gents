@@ -137,16 +137,21 @@ async fn agent_doc(db: &AgentHome, agent_did: &str) -> String {
 
 async fn assert_parented(db: &AgentHome, collection: &str, doc_id: &str) {
     let agent_doc = agent_doc(db, db.agent_did()).await;
-    let edges = db
+    let value = db
         .agent_access
-        .list_document_relationships(collection, doc_id)
+        .execute(&format!(
+            "{{{collection}(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 1) {{ agent_doc_id }}}}",
+            escape_graphql_string(doc_id),
+        ))
         .await
-        .expect("the agent lists its document relationships");
-    assert!(
-        edges
-            .iter()
-            .any(|edge| edge.relation == "parent" && edge.subject.contains(&agent_doc)),
-        "{collection} {doc_id} is not parented to agents {agent_doc}: {edges:?}"
+        .expect("the memory row is readable");
+    let stored = value
+        .pointer(&format!("/data/{collection}/0/agent_doc_id"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        stored,
+        Some(agent_doc.as_str()),
+        "{collection} {doc_id} does not name the Agent document"
     );
 }
 
@@ -312,7 +317,10 @@ async fn carry_copies_once_and_lands_on_the_existing_problem() {
     assert_eq!(report["stored"]["attempts"], 1, "{report}");
     assert_eq!(report["stored"]["outcomes"], 1, "{report}");
     assert_eq!(report["stored"]["aliases"], 1, "{report}");
-    assert_eq!(report["stored"]["facts"], 1, "{report}");
+    assert_eq!(
+        report["stored"]["facts"], 0,
+        "a memory_reader reads experience only, never facts: {report}"
+    );
     assert_eq!(report["next_cursor"], Value::Null, "{report}");
 
     let caller_did = escape_graphql_string(db.agent_did());
@@ -389,8 +397,8 @@ async fn carry_copies_once_and_lands_on_the_existing_problem() {
             .as_array()
             .expect("provenance flags")
             .iter()
-            .any(|flag| flag == "other agent"),
-        "the carried attempt is flagged as another agent's: {entry}"
+            .any(|flag| flag == "unknown model and other agent"),
+        "the carried attempt is flagged as another agent's with an unknown model: {entry}"
     );
 
     let outcomes = rows(
@@ -441,15 +449,10 @@ async fn carry_copies_once_and_lands_on_the_existing_problem() {
         ),
     )
     .await;
-    assert_eq!(facts.len(), 1);
-    assert_eq!(facts[0]["text"], "warm the worker pool before serving");
-    assert_eq!(facts[0]["agent_did"], db.agent_did());
-    assert_parented(
-        &db,
-        "AgentMemory",
-        facts[0]["_docID"].as_str().expect("fact document"),
-    )
-    .await;
+    assert!(
+        facts.is_empty(),
+        "a memory_reader grant carries no facts: {facts:?}"
+    );
 
     let again = call(
         caller.as_ref(),
@@ -470,7 +473,7 @@ async fn carry_copies_once_and_lands_on_the_existing_problem() {
     assert_eq!(count(&db, "AgentMemoryAttempt").await, 1);
     assert_eq!(count(&db, "AgentMemoryOutcome").await, 1);
     assert_eq!(count(&db, "AgentMemoryAlias").await, 1);
-    assert_eq!(count(&db, "AgentMemory").await, 1);
+    assert_eq!(count(&db, "AgentMemory").await, 0);
 }
 
 #[tokio::test]
@@ -544,5 +547,5 @@ async fn cloning_grants_memory_reader_and_the_clone_carries() {
     )
     .await;
     assert_eq!(carried["stored"]["problems"], 2, "{carried}");
-    assert_eq!(carried["stored"]["facts"], 1, "{carried}");
+    assert_eq!(carried["stored"]["facts"], 0, "{carried}");
 }

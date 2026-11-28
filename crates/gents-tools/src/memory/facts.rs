@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::experience::{recall, Current};
 use super::experience_store::RecallPage;
-use super::{content_hash, embedder, MemoryStore, MEMORY_COLLECTION};
+use super::{agent_doc_id, content_hash, embedder, MemoryStore, MEMORY_COLLECTION};
 
 pub(crate) const DEFAULT_TOP_K: usize = 8;
 pub(crate) const MAX_TOP_K: usize = 50;
@@ -107,10 +107,11 @@ impl MemoryStore<'_> {
         let vector = super::vector_literal(&vector);
         let created_at = Utc::now().to_rfc3339();
         let mutation = format!(
-            "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", embed_model_id: \"{embed_model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
+            "mutation {{ add_AgentMemory(input: {{ memory_key: \"{memory_key}\", node_did: \"{node_did}\", agent_did: \"{agent_did}\", agent_doc_id: \"{agent_doc_id}\", session_id: \"{session_id}\", session_doc_id: \"{session_doc_id}\", request_doc_id: {request_doc_id}, requester_did: {requester_did}, creator_did: \"{agent_did}\", source: \"{source}\", kind: \"{kind}\", text: \"{text}\", embedding: [{vector}], content_hash: \"{content_hash}\", embed_model_id: \"{embed_model_id}\", created_at: \"{created_at}\", metadata: {metadata} }}) {{ _docID }} }}",
             memory_key = gents_store::graphql::escape_graphql_string(&memory_key),
             node_did = gents_store::graphql::escape_graphql_string(self.node_did),
             agent_did = gents_store::graphql::escape_graphql_string(self.agent_did),
+            agent_doc_id = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             session_id = gents_store::graphql::escape_graphql_string(session_id),
             session_doc_id = gents_store::graphql::escape_graphql_string(session_doc_id),
             source = gents_store::graphql::escape_graphql_string(source),
@@ -120,7 +121,7 @@ impl MemoryStore<'_> {
             embed_model_id = gents_store::graphql::escape_graphql_string(MODEL_ID),
         );
         let doc_id = match self
-            .create_and_link(MEMORY_COLLECTION, &mutation, "tool.memory.remember")
+            .create(MEMORY_COLLECTION, &mutation, "tool.memory.remember")
             .await
         {
             Ok(doc_id) => doc_id,
@@ -150,9 +151,10 @@ impl MemoryStore<'_> {
     async fn existing_memory(&self, content_hash: &str) -> anyhow::Result<Option<SearchHit>> {
         let existing = self
             .read(&format!(
-                "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{content_hash: {{_eq: \"{}\"}}}}]}}, limit: 1) {{ _docID memory_key text kind source created_at }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
-                gents_store::graphql::escape_graphql_string(content_hash),
+                "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{content_hash: {{_eq: \"{hash}\"}}}}]}}, limit: 1) {{ _docID memory_key text kind source created_at }}}}",
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
+                hash = gents_store::graphql::escape_graphql_string(content_hash),
             ))
             .await?;
         Ok(existing
@@ -178,8 +180,9 @@ impl MemoryStore<'_> {
         }
         let limit = limit.clamp(1, MAX_TOP_K);
         let filter = format!(
-            "{{agent_did: {{_eq: \"{}\"}}}}",
-            gents_store::graphql::escape_graphql_string(self.agent_did)
+            "{{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}]}}",
+            agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+            doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
         );
         let bm25_query = format!(
             "{{AgentMemory(filter: {filter}, limit: {limit}, order: [{{_alias: {{_score: DESC}}}}]) {{ _docID memory_key text kind source created_at _score: BM25(query: \"{}\", fields: [\"text\"]) }}}}",
@@ -242,8 +245,9 @@ impl MemoryStore<'_> {
         let limit = limit.clamp(1, MAX_TOP_K);
         let value = self
             .read(&format!(
-                "{{AgentMemory(filter: {{agent_did: {{_eq: \"{}\"}}}}, order: [{{created_at: DESC}}], limit: {limit}) {{ _docID memory_key text kind source created_at }}}}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
+                "{{AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}]}}, order: [{{created_at: DESC}}], limit: {limit}) {{ _docID memory_key text kind source created_at }}}}",
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
             ))
             .await?;
         Ok(parse_rows(&value)
@@ -265,9 +269,10 @@ impl MemoryStore<'_> {
     pub(crate) async fn forget(&self, memory_key: &str) -> anyhow::Result<usize> {
         let value = self
             .write(&format!(
-                "mutation {{ delete_AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{}\"}}}}, {{memory_key: {{_eq: \"{}\"}}}}]}}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(self.agent_did),
-                gents_store::graphql::escape_graphql_string(memory_key),
+                "mutation {{ delete_AgentMemory(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{agent_doc_id: {{_eq: \"{doc}\"}}}}, {{memory_key: {{_eq: \"{key}\"}}}}]}}) {{ _docID }} }}",
+                agent = gents_store::graphql::escape_graphql_string(self.agent_did),
+                doc = gents_store::graphql::escape_graphql_string(&self.agent_doc_id),
+                key = gents_store::graphql::escape_graphql_string(memory_key),
             ))
             .await?;
         Ok(value
@@ -613,11 +618,19 @@ pub async fn inject_with_experience_budget(
             return None;
         }
     };
+    let agent_doc_id = match agent_doc_id(access, node_did, agent_did).await {
+        Ok(agent_doc_id) => agent_doc_id,
+        Err(error) => {
+            tracing::warn!(%error, "memory Agent document unavailable; continuing without memory");
+            return None;
+        }
+    };
     let store = MemoryStore {
         node,
         node_did,
         actor,
         agent_did,
+        agent_doc_id,
         access,
         embedder: &embedder,
     };
@@ -631,7 +644,7 @@ pub async fn inject_with_experience_budget(
     };
     let current = Current {
         agent_did: agent_did.to_owned(),
-        executed_model_name: setting.model_name.to_owned(),
+        executed_model_name: Some(setting.model_name.to_owned()).filter(|name| !name.is_empty()),
     };
     let experience = match store.recall_page(prompt, &current).await {
         Ok(page) => experience_section(&page, setting, experience_budget),

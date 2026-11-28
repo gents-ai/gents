@@ -107,16 +107,18 @@ async fn assert_parented(db: &AgentHome, collection: &str, doc_id: &str) {
     )
     .await;
     let agent_doc = agent[0]["_docID"].as_str().expect("the agent document");
-    let edges = db
-        .agent_access
-        .list_document_relationships(collection, doc_id)
-        .await
-        .expect("the agent lists its document relationships");
-    assert!(
-        edges
-            .iter()
-            .any(|edge| edge.relation == "parent" && edge.subject.contains(agent_doc)),
-        "{collection} {doc_id} is not parented to agents {agent_doc}: {edges:?}"
+    let stored = rows(
+        db,
+        &format!(
+            "{{{collection}(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 1) {{ agent_doc_id }}}}",
+            escape_graphql_string(doc_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        stored[0]["agent_doc_id"].as_str(),
+        Some(agent_doc),
+        "{collection} {doc_id} does not name the Agent document"
     );
 }
 
@@ -257,8 +259,12 @@ async fn attempt_and_outcome_record_request_provenance() {
     assert_eq!(attempts[0]["fixed"], json!(["startup succeeds"]));
     assert_eq!(attempts[0]["missed"], json!(["readiness under one second"]));
     assert_eq!(attempts[0]["unresolved"], json!([]));
-    assert_eq!(attempts[0]["latest"], json!({"passed": 3, "total": 4}));
+    assert_eq!(
+        attempts[0]["outcomes"][0]["score"],
+        json!({"passed": 3, "total": 4})
+    );
     assert_eq!(attempts[0]["provenance"], "same");
+    assert_eq!(shown["latest"], json!({"passed": 3, "total": 4}));
     assert_eq!(shown["attempts_truncated"], false);
 
     let refusal = call_error(

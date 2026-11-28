@@ -1,10 +1,12 @@
 type AgentMemory
-  @policy(id: "$household", resource: "agent_memory")
+  @policy(id: "$household", resource: "agent_memory_facts", parentField: "agent_doc_id")
   @index(fields: ["agent_did", "content_hash"], unique: true)
-  @index(fields: ["agent_did", "created_at"]) {
+  @index(fields: ["agent_did", "agent_doc_id", "created_at"])
+  @index(fields: ["agent_did", "agent_doc_id", "memory_key"]) {
     memory_key: String @index(unique: true)
     node_did: String @index @immutable
     agent_did: String @index @immutable
+    agent_doc_id: String @index @immutable
     session_id: String @index @immutable
     session_doc_id: String @index @immutable
     request_doc_id: String
@@ -16,6 +18,8 @@ type AgentMemory
     embedding: [Float32!] @index(vector: {dimensions: 256, diskann: {R: 64, lBuild: 100, lSearch: 100, alphaPercent: 120, sampleBytes: 134217728, residentCodes: true}})
     content_hash: String @index
     embed_model_id: String
+    carried_from: String @index
+    source_memory_key: String
     created_at: DateTime @index(direction: DESC)
     last_used_at: DateTime
     metadata: JSON

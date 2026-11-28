@@ -1,7 +1,10 @@
 type AgentMemoryOutcome
-  @policy(id: "$household", resource: "agent_memory") {
+  @policy(id: "$household", resource: "agent_memory", parentField: "agent_doc_id")
+  @index(fields: ["agent_did", "agent_doc_id", "outcome_key"])
+  @index(fields: ["agent_did", "agent_doc_id", "attempt_key", "created_at"]) {
     outcome_key: String @index(unique: true)
     agent_did: String @index @immutable
+    agent_doc_id: String @index @immutable
     attempt_key: String @index
     fixed: JSON
     missed: JSON

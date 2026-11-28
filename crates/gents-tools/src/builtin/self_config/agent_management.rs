@@ -1292,7 +1292,7 @@ async fn agent_apply_in_txn(
         }
     }
     let mut experience = None;
-    if crate::memory::experience_staged(!preview, preview) {
+    if !preview {
         if let Some(attempt) = attempt {
             let doc_id = ops::read_owned_doc(txn, SelfConfigTarget::Agent, owner, &id)
                 .await?

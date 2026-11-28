@@ -2,9 +2,9 @@
 //! multilingual embedder, hybrid retrieval, and a bounded `memory` tool.
 //!
 //! The collections are part of the runtime baseline under the household
-//! `agent_memory` policy. A row's `parent` relationship is its agent, so ACP
-//! grants the agent the owner boundary and memory outlives the session that
-//! wrote it.
+//! `agent_memory` policy. A row's `agent_doc_id` names its Agent document, so
+//! ACP grants the agent the owner boundary and memory outlives the session
+//! that wrote it.
 
 use std::sync::Arc;
 
@@ -224,13 +224,9 @@ pub fn change_summary(
     format!("{collection} {target_id}: {fields}")
 }
 
-/// Lean `SelfConfig.StructuredConfig.experienceStaged`: a write records its
-/// attempt exactly when it enters the write path and commits. A preview and
-/// a refused write stage nothing.
-pub fn experience_staged(committed: bool, preview: bool) -> bool {
-    committed && !preview
-}
-
+/// Lean `SelfConfig.StructuredConfig.experienceStaged`: a write stages its
+/// attempt exactly when it commits outside a preview; the transaction is the
+/// guarantee.
 #[derive(Debug)]
 pub struct StagedAttempt {
     pub attempt_key: String,
@@ -304,19 +300,41 @@ pub(crate) struct MemoryStore<'a> {
     node_did: &'a str,
     actor: identity::Did,
     agent_did: &'a str,
+    agent_doc_id: String,
     access: &'a ConfigAccess,
     embedder: &'a StaticEmbedder,
 }
 
-pub(crate) async fn link_parent_to_agent(
+pub(crate) async fn agent_doc_id_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    collection: &str,
-    doc_id: &str,
-    agent_doc_id: &str,
-) -> anyhow::Result<()> {
-    txn.add_resource_relationship(collection, doc_id, "parent", "agents", agent_doc_id)
-        .await?;
-    Ok(())
+    node_did: &str,
+    agent_did: &str,
+) -> anyhow::Result<String> {
+    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+        txn,
+        Collection::Agent,
+        node_did,
+        agent_did,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
+    Ok(agent_doc_id)
+}
+
+pub(crate) async fn agent_doc_id(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+) -> anyhow::Result<String> {
+    let node_did = node_did.to_owned();
+    let agent_did = agent_did.to_owned();
+    access
+        .transact_readonly("tool.memory.agent", move |txn| {
+            let node_did = node_did.clone();
+            let agent_did = agent_did.clone();
+            Box::pin(async move { agent_doc_id_in_txn(txn, &node_did, &agent_did).await })
+        })
+        .await
 }
 
 impl<'a> MemoryStore<'a> {
@@ -345,44 +363,22 @@ impl<'a> MemoryStore<'a> {
             .map_err(anyhow::Error::from)
     }
 
-    pub(crate) async fn create_and_link(
+    pub(crate) async fn create(
         &self,
         collection: &str,
         mutation: &str,
         operation: &'static str,
     ) -> anyhow::Result<String> {
-        let mutation = mutation.to_owned();
-        let collection = collection.to_owned();
-        let node_did = self.node_did.to_owned();
-        let agent_did = self.agent_did.to_owned();
-        self.access
-            .transact_write(operation, move |txn| {
-                let mutation = mutation.clone();
-                let collection = collection.clone();
-                let node_did = node_did.clone();
-                let agent_did = agent_did.clone();
-                Box::pin(async move {
-                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        Collection::Agent,
-                        &node_did,
-                        &agent_did,
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
-                    let created = txn.execute(&mutation).await?;
-                    let doc_id = created
-                        .pointer(&format!("/data/add_{collection}/0/_docID"))
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("{collection} write returned no document id")
-                        })?
-                        .to_owned();
-                    link_parent_to_agent(txn, &collection, &doc_id, &agent_doc_id).await?;
-                    Ok::<String, anyhow::Error>(doc_id)
-                })
-            })
+        let created = self
+            .access
+            .write(operation, mutation)
             .await
+            .map_err(anyhow::Error::from)?;
+        created
+            .pointer(&format!("/data/add_{collection}/0/_docID"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("{collection} write returned no document id"))
     }
 
     pub(crate) async fn session_scope(
@@ -482,12 +478,13 @@ pub struct MemoryTool {
 }
 
 impl MemoryTool {
-    fn store(&self) -> anyhow::Result<MemoryStore<'_>> {
+    async fn store(&self) -> anyhow::Result<MemoryStore<'_>> {
         Ok(MemoryStore {
             node: &self.node,
             node_did: &self.node_did,
             actor: identity::Did::new(&self.agent_did)?,
             agent_did: &self.agent_did,
+            agent_doc_id: agent_doc_id(&self.access, &self.node_did, &self.agent_did).await?,
             access: &self.access,
             embedder: &self.embedder,
         })
@@ -556,7 +553,7 @@ impl Tool for MemoryTool {
                 "list"
             }
         });
-        let store = self.store()?;
+        let store = self.store().await?;
         let value = match action {
             "help" => json!({"help": help_text(args.topic.as_deref())}),
             "remember" => {
@@ -746,14 +743,6 @@ mod tests {
         assert_eq!(params.problem_key.as_deref(), Some("p"));
         assert_eq!(params.predicted, Some(vec!["a".to_owned()]));
         assert_eq!(params.accepted, Some(false));
-    }
-
-    #[test]
-    fn experience_is_staged_only_when_a_write_commits() {
-        assert!(experience_staged(true, false));
-        assert!(!experience_staged(false, false));
-        assert!(!experience_staged(true, true));
-        assert!(!experience_staged(false, true));
     }
 
     #[test]

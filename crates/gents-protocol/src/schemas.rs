@@ -129,7 +129,7 @@ pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
     (EVENT_SOURCE_CURSOR_NAME, "configuration"),
     (CERTIFIED_ASSIGNMENT_STATE_NAME, "configuration"),
     (AGENT_NAME, "agents"),
-    (AGENT_MEMORY_NAME, "agent_memory"),
+    (AGENT_MEMORY_NAME, "agent_memory_facts"),
     (AGENT_MEMORY_PROBLEM_NAME, "agent_memory"),
     (AGENT_MEMORY_ATTEMPT_NAME, "agent_memory"),
     (AGENT_MEMORY_OUTCOME_NAME, "agent_memory"),
