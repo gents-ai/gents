@@ -258,28 +258,41 @@ async fn malformed_response_heads_are_rejected() {
     }
     too_many.push_str("\r\n");
 
-    let cases: [(&str, Vec<u8>, fn(&TransportError) -> bool); 4] = [
-        ("unknown encoding", with_encoding("compress", b"x"), |e| {
-            matches!(e, TransportError::UnsupportedEncoding)
-        }),
-        (
-            "conflicting content-length",
-            b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab".to_vec(),
-            |e| matches!(e, TransportError::BadFraming),
-        ),
-        (
-            "oversized head",
-            format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "a".repeat(70_000)).into_bytes(),
-            |e| matches!(e, TransportError::HeadTooLarge),
-        ),
-        ("too many headers", too_many.into_bytes(), |e| {
-            matches!(e, TransportError::HeadTooLarge)
-        }),
+    struct ErrorCase {
+        name: &'static str,
+        response: Vec<u8>,
+        matches_err: fn(&TransportError) -> bool,
+    }
+    let cases = [
+        ErrorCase {
+            name: "unknown encoding",
+            response: with_encoding("compress", b"x"),
+            matches_err: |e| matches!(e, TransportError::UnsupportedEncoding),
+        },
+        ErrorCase {
+            name: "conflicting content-length",
+            response: b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab"
+                .to_vec(),
+            matches_err: |e| matches!(e, TransportError::BadFraming),
+        },
+        ErrorCase {
+            name: "oversized head",
+            response: format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "a".repeat(70_000)).into_bytes(),
+            matches_err: |e| matches!(e, TransportError::HeadTooLarge),
+        },
+        ErrorCase {
+            name: "too many headers",
+            response: too_many.into_bytes(),
+            matches_err: |e| matches!(e, TransportError::HeadTooLarge),
+        },
     ];
-    for (name, response, matches_err) in cases {
-        let t = serve_once(response).await;
-        let err = fetch(&t).await.err().unwrap_or_else(|| panic!("{name}"));
-        assert!(matches_err(&err), "{name}: {err:?}");
+    for case in cases {
+        let t = serve_once(case.response).await;
+        let err = fetch(&t)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{}", case.name));
+        assert!((case.matches_err)(&err), "{}: {err:?}", case.name);
     }
 }
 
