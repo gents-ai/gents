@@ -67,55 +67,38 @@ async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_ref
 }
 
 #[tokio::test]
-async fn managed_call_times_out_at_request_deadline() {
-    let deadline = Utc::now() + chrono::Duration::milliseconds(10);
-    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-        Some(deadline),
+async fn managed_call_enforces_deadline_cancellation_and_fast_success() {
+    let past_scope = ToolScopeEntry::new(
+        Some(Utc::now() + chrono::Duration::milliseconds(10)),
         CancellationToken::new(),
     )
     .call();
+    assert!(matches!(
+        call_tool_managed(&PendingTool::pending(), "{}".into(), &past_scope).await,
+        ToolOutcome::TimedOut { .. }
+    ));
 
-    let outcome = call_tool_managed(&PendingTool::pending(), "{}".to_string(), &scope_call).await;
-
-    assert!(matches!(outcome, ToolOutcome::TimedOut { .. }));
-}
-
-#[tokio::test]
-async fn managed_call_cancels_before_inner_future_completes() {
-    let token = CancellationToken::new();
-    token.cancel();
-    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
-
-    let outcome = call_tool_managed(&PendingTool::pending(), "{}".to_string(), &scope_call).await;
-
-    assert_eq!(outcome, ToolOutcome::Cancelled);
-}
-
-#[tokio::test]
-async fn managed_call_preserves_fast_success() {
-    let deadline = Utc::now() + chrono::Duration::seconds(1);
-    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-        Some(deadline),
+    let future_scope = ToolScopeEntry::new(
+        Some(Utc::now() + chrono::Duration::seconds(1)),
         CancellationToken::new(),
     )
     .call();
+    assert_eq!(
+        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".into(), &future_scope).await,
+        ToolOutcome::Completed("ok".into())
+    );
 
-    let outcome =
-        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".to_string(), &scope_call).await;
-
-    assert_eq!(outcome, ToolOutcome::Completed("ok".to_string()));
-}
-
-#[tokio::test]
-async fn managed_call_prefers_fired_cancellation_over_ready_output() {
-    let token = CancellationToken::new();
-    token.cancel();
-    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
-
-    let outcome =
-        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".to_string(), &scope_call).await;
-
-    assert_eq!(outcome, ToolOutcome::Cancelled);
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let cancel_scope = ToolScopeEntry::new(None, cancelled).call();
+    assert_eq!(
+        call_tool_managed(&PendingTool::pending(), "{}".into(), &cancel_scope).await,
+        ToolOutcome::Cancelled
+    );
+    assert_eq!(
+        call_tool_managed(&FixedTool::new("fast", "ok"), "{}".into(), &cancel_scope).await,
+        ToolOutcome::Cancelled
+    );
 }
 
 #[test]
@@ -233,7 +216,7 @@ fn dispatch_classification_maps_tool_errors() {
 }
 
 #[tokio::test]
-async fn foreground_and_background_contexts_preserve_trigger_fill_context() {
+async fn foreground_and_background_contexts_preserve_session_and_trigger_fill_context() {
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("expected_total".to_string(), "4".to_string());
     let foreground = ToolScopeEntry {
@@ -269,10 +252,7 @@ async fn foreground_and_background_contexts_preserve_trigger_fill_context() {
             .map(String::as_str),
         Some("4")
     );
-}
 
-#[tokio::test]
-async fn explicit_session_survives_a_spawned_background_task_boundary() {
     let envelope = ToolScopeEntry {
         session_id: Some("background-session".into()),
         background: true,
@@ -291,7 +271,7 @@ async fn explicit_session_survives_a_spawned_background_task_boundary() {
 }
 
 #[tokio::test]
-async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
+async fn tool_execution_bounds_uses_command_timeout_and_earlier_request_deadline() {
     let before = Utc::now();
     let bounds = tool_execution_bounds(&ToolCallEnvelope::default(), Duration::from_secs(30));
     let after = Utc::now();
@@ -300,6 +280,12 @@ async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
     assert!(deadline <= after + chrono::Duration::seconds(30));
     assert!(!bounds.cancellation_token.is_cancelled());
     assert!(bounds.live_output.is_none());
+
+    let request_deadline = Utc::now() + chrono::Duration::seconds(5);
+    let scope_call = ToolScopeEntry::new(Some(request_deadline), CancellationToken::new()).call();
+    let bounded = tool_execution_bounds(&scope_call, Duration::from_secs(3600));
+    assert_eq!(bounded.deadline_at, Some(request_deadline));
+    assert!(!bounded.cancellation_token.is_cancelled());
 }
 
 #[tokio::test]
@@ -320,18 +306,6 @@ async fn tool_execution_bounds_arms_the_measurement_no_later_than_the_deadline()
         "the arming origin trails the deadline origin by {:?}, so a command stopped at its deadline would report less than its own timeout",
         wall_span - mono_span
     );
-}
-
-#[tokio::test]
-async fn tool_execution_bounds_prefers_the_earlier_request_deadline() {
-    let request_deadline = Utc::now() + chrono::Duration::seconds(5);
-    let token = CancellationToken::new();
-    let scope_call =
-        crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(Some(request_deadline), token)
-            .call();
-    let bounds = async { tool_execution_bounds(&scope_call, Duration::from_secs(3600)) }.await;
-    assert_eq!(bounds.deadline_at, Some(request_deadline));
-    assert!(!bounds.cancellation_token.is_cancelled());
 }
 
 #[test]

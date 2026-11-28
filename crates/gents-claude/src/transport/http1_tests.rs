@@ -160,11 +160,6 @@ async fn chunk_extensions_and_trailers_are_skipped() {
 #[tokio::test]
 async fn gzip_deflate_zstd_and_brotli_bodies_decode() {
     let data = big();
-    let gz = {
-        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        e.write_all(&data).unwrap();
-        e.finish().unwrap()
-    };
     let zl = {
         let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         e.write_all(&data).unwrap();
@@ -176,7 +171,7 @@ async fn gzip_deflate_zstd_and_brotli_bodies_decode() {
         0x04, 0x03, 0xa0, 0x9c, 0xce, 0xde, 0x03,
     ];
     let cases = [
-        ("gzip", gz),
+        ("gzip", gzip_of(&data)),
         ("deflate", zl),
         ("zstd", zstd::encode_all(&data[..], 3).unwrap()),
         ("br", br.to_vec()),
@@ -219,9 +214,7 @@ async fn gzip_with_every_header_field_split_into_tiny_chunks() {
 
 #[tokio::test]
 async fn corrupt_and_truncated_gzip_are_errors() {
-    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    e.write_all(&big()).unwrap();
-    let mut gz = e.finish().unwrap();
+    let mut gz = gzip_of(&big());
     let truncated = gz[..gz.len() - 4].to_vec();
     let n = gz.len();
     gz[n - 8] ^= 0xff;
@@ -236,15 +229,6 @@ async fn corrupt_and_truncated_gzip_are_errors() {
         };
         assert!(outcome.is_err(), "damaged gzip decoded cleanly");
     }
-}
-
-#[tokio::test]
-async fn unknown_content_encoding_is_rejected() {
-    let t = serve_once(with_encoding("compress", b"x")).await;
-    assert!(matches!(
-        fetch(&t).await,
-        Err(TransportError::UnsupportedEncoding)
-    ));
 }
 
 #[tokio::test]
@@ -267,11 +251,36 @@ async fn short_content_length_body_is_truncated() {
 }
 
 #[tokio::test]
-async fn conflicting_content_lengths_are_rejected() {
-    let t =
-        serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab".to_vec())
-            .await;
-    assert!(matches!(fetch(&t).await, Err(TransportError::BadFraming)));
+async fn malformed_response_heads_are_rejected() {
+    let mut too_many = String::from("HTTP/1.1 200 OK\r\n");
+    for i in 0..129 {
+        too_many.push_str(&format!("H{i}: v\r\n"));
+    }
+    too_many.push_str("\r\n");
+
+    let cases: [(&str, Vec<u8>, fn(&TransportError) -> bool); 4] = [
+        ("unknown encoding", with_encoding("compress", b"x"), |e| {
+            matches!(e, TransportError::UnsupportedEncoding)
+        }),
+        (
+            "conflicting content-length",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab".to_vec(),
+            |e| matches!(e, TransportError::BadFraming),
+        ),
+        (
+            "oversized head",
+            format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "a".repeat(70_000)).into_bytes(),
+            |e| matches!(e, TransportError::HeadTooLarge),
+        ),
+        ("too many headers", too_many.into_bytes(), |e| {
+            matches!(e, TransportError::HeadTooLarge)
+        }),
+    ];
+    for (name, response, matches_err) in cases {
+        let t = serve_once(response).await;
+        let err = fetch(&t).await.err().unwrap_or_else(|| panic!("{name}"));
+        assert!(matches_err(&err), "{name}: {err:?}");
+    }
 }
 
 async fn counting_server(accepts: Arc<AtomicUsize>, close_each: bool) -> Target {
@@ -299,56 +308,63 @@ async fn counting_server(accepts: Arc<AtomicUsize>, close_each: bool) -> Target 
 }
 
 #[tokio::test]
-async fn keep_alive_connection_is_reused() {
-    let accepts = Arc::new(AtomicUsize::new(0));
-    let t = counting_server(accepts.clone(), false).await;
-    let c = client();
-    for _ in 0..3 {
-        let mut r = c.send(&t, &head(1), b"x").await.unwrap();
-        assert_eq!(collect(&mut r.body).await, b"ok");
+async fn connection_pooling_policies() {
+    let close_head = b"POST / HTTP/1.1\r\nConnection: Close\r\nContent-Length: 0\r\n\r\n".to_vec();
+    let cases = [
+        (
+            "keep-alive reused",
+            false,
+            None,
+            head(1),
+            b"x".as_slice(),
+            3,
+            1,
+        ),
+        (
+            "server close not reused",
+            true,
+            None,
+            head(0),
+            b"".as_slice(),
+            2,
+            2,
+        ),
+        (
+            "request close not pooled",
+            false,
+            None,
+            close_head,
+            b"".as_slice(),
+            2,
+            2,
+        ),
+        (
+            "max_idle zero not pooled",
+            false,
+            Some(0),
+            head(0),
+            b"".as_slice(),
+            2,
+            2,
+        ),
+    ];
+    for (name, close_each, max_idle, req_head, req_body, count, expected_accepts) in cases {
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let t = counting_server(accepts.clone(), close_each).await;
+        let c = match max_idle {
+            Some(max_idle_per_host) => Client::new(ClientOptions {
+                max_idle_per_host,
+                ..ClientOptions::default()
+            })
+            .unwrap(),
+            None => client(),
+        };
+        for _ in 0..count {
+            let mut r = c.send(&t, &req_head, req_body).await.unwrap();
+            assert_eq!(collect(&mut r.body).await, b"ok", "{name}");
+        }
+        assert_eq!(accepts.load(Ordering::SeqCst), expected_accepts, "{name}");
     }
-    assert_eq!(accepts.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn connection_close_is_not_reused() {
-    let accepts = Arc::new(AtomicUsize::new(0));
-    let t = counting_server(accepts.clone(), true).await;
-    let c = client();
-    for _ in 0..2 {
-        let mut r = c.send(&t, &head(0), b"").await.unwrap();
-        assert_eq!(collect(&mut r.body).await, b"ok");
-    }
-    assert_eq!(accepts.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn request_connection_close_is_not_pooled() {
-    let accepts = Arc::new(AtomicUsize::new(0));
-    let t = counting_server(accepts.clone(), false).await;
-    let c = client();
-    let h = b"POST / HTTP/1.1\r\nConnection: Close\r\nContent-Length: 0\r\n\r\n";
-    for _ in 0..2 {
-        let mut r = c.send(&t, h, b"").await.unwrap();
-        collect(&mut r.body).await;
-    }
-    assert_eq!(accepts.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn pool_respects_max_idle_per_host() {
-    let accepts = Arc::new(AtomicUsize::new(0));
-    let t = counting_server(accepts.clone(), false).await;
-    let c = Client::new(ClientOptions {
-        max_idle_per_host: 0,
-        ..ClientOptions::default()
-    })
-    .unwrap();
-    for _ in 0..2 {
-        let mut r = c.send(&t, &head(0), b"").await.unwrap();
-        collect(&mut r.body).await;
-    }
-    assert_eq!(accepts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -436,24 +452,6 @@ async fn full_post_on_a_reused_connection_is_sent_once() {
         1,
         "a second connection was opened"
     );
-}
-
-#[tokio::test]
-async fn oversized_head_is_rejected() {
-    let long = format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "a".repeat(70_000));
-    let t = serve_once(long.into_bytes()).await;
-    assert!(matches!(fetch(&t).await, Err(TransportError::HeadTooLarge)));
-}
-
-#[tokio::test]
-async fn too_many_headers_are_rejected() {
-    let mut resp = String::from("HTTP/1.1 200 OK\r\n");
-    for i in 0..129 {
-        resp.push_str(&format!("H{i}: v\r\n"));
-    }
-    resp.push_str("\r\n");
-    let t = serve_once(resp.into_bytes()).await;
-    assert!(matches!(fetch(&t).await, Err(TransportError::HeadTooLarge)));
 }
 
 #[tokio::test]
@@ -634,19 +632,11 @@ async fn fresh_connection_reset_keeps_its_io_error() {
 
 #[test]
 fn classify_normalizes_only_a_dead_pooled_socket() {
-    // Pure classification: the `reused` flag is the only thing that decides
-    // whether a peer-gone error becomes `Closed`.
     let reset = || TransportError::Io(std::io::ErrorKind::ConnectionReset.into());
-    // Pooled socket, nothing read: the server closed it while idle.
     assert!(matches!(classify(reset(), true), TransportError::Closed));
-    // Fresh connection, nothing read: keep the original error.
     assert!(matches!(classify(reset(), false), TransportError::Io(_)));
-    // Pooled socket with bytes already read: keep the original error.
-    assert!(matches!(classify(reset(), false), TransportError::Io(_)));
-    // A non-peer-gone error is never normalized.
-    let malformed = TransportError::MalformedHead;
     assert!(matches!(
-        classify(malformed, true),
+        classify(TransportError::MalformedHead, true),
         TransportError::MalformedHead
     ));
 }

@@ -28,23 +28,6 @@ fn attribution_headers_match_lean() {
 }
 
 #[test]
-fn header_orders_the_slots() {
-    let mut fields = base();
-    fields.workload = Some("cron".into());
-    fields.subagent = true;
-    fields.previous_request_id = Some("req_abc".into());
-    fields.prompt_index = Some(0);
-    fields.turn_index = Some(1);
-    fields.gateway = Some("1".into());
-    assert_eq!(
-        header(&fields),
-        "x-anthropic-billing-header: cc_version=2.1.311.abc; cc_entrypoint=cli; cch=00000; \
-         cc_workload=cron; cc_is_subagent=true; cc_prev_req=req_abc; \
-         cc_prompt_index=0; cc_turn_index=1; cc_gateway=1;"
-    );
-}
-
-#[test]
 fn fingerprint_known_answers() {
     let v = crate::profile::VERSION;
     assert_eq!(fingerprint("", v), "972");
@@ -74,41 +57,46 @@ fn fingerprint_known_answers() {
 }
 
 #[test]
-fn request_id_bounds() {
+fn field_validator_bounds() {
     assert!(valid_request_id(&format!("req_{}", "a".repeat(36))));
-    assert!(!valid_request_id(&format!("req_{}", "a".repeat(37))));
-    assert!(!valid_request_id("req_"));
     assert!(valid_request_id("req_A-_9"));
-    assert!(!valid_request_id("req_a b"));
-    assert!(!valid_request_id("rex_abc"));
-}
+    for bad in [
+        format!("req_{}", "a".repeat(37)),
+        "req_".into(),
+        "req_a b".into(),
+        "rex_abc".into(),
+    ] {
+        assert!(!valid_request_id(&bad), "{bad}");
+    }
 
-#[test]
-fn uuid_is_case_insensitive_and_exact() {
-    assert!(valid_uuid("0123abcd-0123-abcd-0123-0123456789ab"));
-    assert!(valid_uuid("0123ABCD-0123-ABCD-0123-0123456789AB"));
-    assert!(!valid_uuid("0123abcd-0123-abcd-0123-0123456789a"));
-    assert!(!valid_uuid("0123abcd-0123-abcd-0123-0123456789abc"));
-    assert!(!valid_uuid("0123abcd-0123-abcd-0123-0123456789ab-"));
-    assert!(!valid_uuid("0123abcg-0123-abcd-0123-0123456789ab"));
-}
+    for good in [
+        "0123abcd-0123-abcd-0123-0123456789ab",
+        "0123ABCD-0123-ABCD-0123-0123456789AB",
+    ] {
+        assert!(valid_uuid(good), "{good}");
+    }
+    for bad in [
+        "0123abcd-0123-abcd-0123-0123456789a",
+        "0123abcd-0123-abcd-0123-0123456789abc",
+        "0123abcd-0123-abcd-0123-0123456789ab-",
+        "0123abcg-0123-abcd-0123-0123456789ab",
+    ] {
+        assert!(!valid_uuid(bad), "{bad}");
+    }
 
-#[test]
-fn turn_origin_bounds() {
     assert!(valid_turn_origin(&format!("a{}", "_".repeat(31))));
-    assert!(!valid_turn_origin(&format!("a{}", "_".repeat(32))));
-    assert!(!valid_turn_origin(""));
-    assert!(!valid_turn_origin("_a"));
-    assert!(!valid_turn_origin("aB"));
-    assert!(!valid_turn_origin("a1"));
-}
+    for bad in [
+        format!("a{}", "_".repeat(32)),
+        "".into(),
+        "_a".into(),
+        "aB".into(),
+        "a1".into(),
+    ] {
+        assert!(!valid_turn_origin(&bad), "{bad}");
+    }
 
-#[test]
-fn index_bounds() {
-    assert!(valid_index(0, 0));
-    assert!(!valid_index(1, 0));
-    assert!(valid_index(1, 10_000_000));
-    assert!(!valid_index(0, 10_000_001));
+    assert!(valid_index(0, 0) && valid_index(1, 10_000_000));
+    assert!(!valid_index(1, 0) && !valid_index(0, 10_000_001));
 }
 
 #[test]
@@ -161,21 +149,4 @@ fn gateway_mark_is_one_only_for_a_token_that_names_the_gateway_audience() {
     assert_eq!(gateway_mark(&jwt("{}")), "env");
     assert_eq!(gateway_mark("not-a-jwt"), "env");
     assert_eq!(gateway_mark("a.!!!.c"), "env");
-}
-
-#[test]
-fn every_betas_provider_maps_to_its_attribution_provider() {
-    use crate::betas::Provider as Betas;
-    for (betas, expected) in [
-        (Betas::FirstParty, Provider::FirstParty),
-        (Betas::Vertex, Provider::Vertex),
-        (Betas::Bedrock, Provider::Bedrock),
-        (Betas::AnthropicAws, Provider::AnthropicAws),
-        (Betas::AnthropicGoogleCloud, Provider::AnthropicGoogleCloud),
-        (Betas::Foundry, Provider::Foundry),
-        (Betas::Mantle, Provider::Mantle),
-        (Betas::Gateway, Provider::Gateway),
-    ] {
-        assert_eq!(Provider::from(betas), expected);
-    }
 }

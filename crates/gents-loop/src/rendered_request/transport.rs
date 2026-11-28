@@ -479,22 +479,31 @@ mod tests {
     use super::*;
     use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
     use crate::rendered_request::{
-        AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
-        RenderedRequestContext, RenderedRequestError,
+        RenderedCompletionRequest, RenderedRequestCaptureSink, RenderedRequestContext,
+        RenderedRequestError,
     };
+    use crate::test_support::doubles::{empty_trace as trace, test_capture_context};
 
     fn context() -> RenderedRequestContext {
-        RenderedRequestContext {
-            request_doc_id: "doc-1".to_string(),
-            request_commit_cid: "bafy-request-commit".to_string(),
-            request_id: "req-1".to_string(),
-            node_did: "did:key:agent".to_string(),
-            requester_did: "did:key:requester".to_string(),
-            agent_did: "behavior".to_string(),
-            session_id: "session".to_string(),
-            model_name: "configured-model".to_string(),
-            provider_family: Some("OpenAiCompatible".into()),
-        }
+        let mut ctx = test_capture_context();
+        ctx.provider_family = Some("OpenAiCompatible".into());
+        ctx
+    }
+
+    fn recording_harness() -> (
+        CountingInner,
+        RenderedRequestCapturingHttpClient<CountingInner>,
+        ProviderCall,
+        Arc<Mutex<Vec<RenderedCompletionRequest>>>,
+    ) {
+        let inner = CountingInner::default();
+        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+        let (sink, seen) = recording_sink();
+        let call = ProviderCall {
+            capture: Some(test_scope(context(), sink)),
+            ..Default::default()
+        };
+        (inner, client, call, seen)
     }
 
     fn recording_sink() -> (
@@ -521,10 +530,6 @@ mod tests {
                 ))
             })
         })
-    }
-
-    fn trace() -> AssemblyTrace {
-        AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new())
     }
 
     fn responses_request(body: serde_json::Value) -> Request<Bytes> {
@@ -659,40 +664,29 @@ mod tests {
 
     #[tokio::test]
     async fn captures_the_body_the_inner_client_receives() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                3,
-                1,
-                trace(),
-            )
-            .expect("armed");
-            let _ = Transport::send_streaming(
-                &client,
-                &call,
-                responses_request(json!({
-                    "model": "wire-model",
-                    "instructions": "hoisted",
-                    "input": [{"role": "user", "content": "hi"}],
-                    "store": false,
-                    "stream": true,
-                    "tools": [{"type": "function", "name": "read", "strict": false}],
-                })),
-            )
-            .await
-            .expect("send");
-        }
-        .await;
+        let (inner, client, call, seen) = recording_harness();
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            3,
+            1,
+            trace(),
+        )
+        .expect("armed");
+        let _ = Transport::send_streaming(
+            &client,
+            &call,
+            responses_request(json!({
+                "model": "wire-model",
+                "instructions": "hoisted",
+                "input": [{"role": "user", "content": "hi"}],
+                "store": false,
+                "stream": true,
+                "tools": [{"type": "function", "name": "read", "strict": false}],
+            })),
+        )
+        .await
+        .expect("send");
 
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1);
@@ -850,100 +844,65 @@ mod tests {
     async fn a_failed_capture_issues_no_http_call() {
         let inner = CountingInner::default();
         let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let scope = test_scope(context(), failing_sink());
-
-        let error = async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                0,
-                0,
-                trace(),
-            )
-            .expect("armed");
+        let call = ProviderCall {
+            capture: Some(test_scope(context(), failing_sink())),
+            ..Default::default()
+        };
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            0,
+            0,
+            trace(),
+        )
+        .expect("armed");
+        let error =
             Transport::send_streaming(&client, &call, responses_request(json!({"input": []})))
                 .await
                 .err()
-                .expect("send must fail when capture fails")
-        }
-        .await;
+                .expect("send must fail when capture fails");
 
-        assert!(
-            error.to_string().contains("was not issued"),
-            "error should say the call was refused: {error}"
-        );
-        assert_eq!(
-            inner.sends.load(Ordering::SeqCst),
-            0,
-            "no HTTP request may be issued when the capture fails"
-        );
+        assert!(error.to_string().contains("was not issued"), "{error}");
+        assert_eq!(inner.sends.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn non_completion_paths_pass_through_without_consuming_the_arm() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                0,
-                0,
-                trace(),
-            )
-            .expect("armed");
-            let req = Request::builder()
-                .method("GET")
-                .uri("https://example.test/v1/models")
-                .body(Bytes::from_static(b"{}"))
-                .expect("request");
-            let _ = Transport::send(&client, &call, req)
-                .await
-                .expect("models listing succeeds");
-            assert!(
-                crate::rendered_request::scope::pending_is_armed(call.capture.as_ref()),
-                "a models listing must leave the completion's capture armed"
-            );
-        }
-        .await;
-
+        let (inner, client, call, seen) = recording_harness();
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            0,
+            0,
+            trace(),
+        )
+        .expect("armed");
+        let req = Request::builder()
+            .method("GET")
+            .uri("https://example.test/v1/models")
+            .body(Bytes::from_static(b"{}"))
+            .expect("request");
+        let _ = Transport::send(&client, &call, req)
+            .await
+            .expect("models listing succeeds");
+        assert!(crate::rendered_request::scope::pending_is_armed(
+            call.capture.as_ref()
+        ));
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
         assert!(seen.lock().expect("seen").is_empty());
     }
 
     #[tokio::test]
     async fn a_completion_inside_a_scope_that_never_armed_is_refused() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        let error = async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            Transport::send_streaming(
-                &client,
-                &call,
-                responses_request(json!({"input": [{"role": "user", "content": "hi"}]})),
-            )
-            .await
-            .err()
-            .expect("an unarmed completion inside a request must be refused")
-        }
-        .await;
+        let (inner, client, call, seen) = recording_harness();
+        let error = Transport::send_streaming(
+            &client,
+            &call,
+            responses_request(json!({"input": [{"role": "user", "content": "hi"}]})),
+        )
+        .await
+        .err()
+        .expect("an unarmed completion inside a request must be refused");
 
         assert!(
             matches!(
@@ -954,45 +913,30 @@ mod tests {
                         Some(TransportError::UnexplainedSend { .. })
                     )
             ),
-            "the refusal must name its cause: {error:?}"
+            "{error:?}"
         );
-        assert_eq!(
-            inner.sends.load(Ordering::SeqCst),
-            0,
-            "no HTTP request may be issued for a completion nothing can name"
-        );
+        assert_eq!(inner.sends.load(Ordering::SeqCst), 0);
         assert!(seen.lock().expect("seen").is_empty());
     }
 
     #[tokio::test]
     async fn a_transport_resend_reuses_the_durable_capture_rather_than_being_refused() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                2,
-                1,
-                trace(),
-            )
-            .expect("armed");
-            let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            let _ = Transport::send_streaming(&client, &call, responses_request(body.clone()))
-                .await
-                .expect("first send");
-            let _ = Transport::send_streaming(&client, &call, responses_request(body))
-                .await
-                .expect("reconnect send");
-        }
-        .await;
+        let (inner, client, call, seen) = recording_harness();
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            2,
+            1,
+            trace(),
+        )
+        .expect("armed");
+        let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
+        let _ = Transport::send_streaming(&client, &call, responses_request(body.clone()))
+            .await
+            .expect("first send");
+        let _ = Transport::send_streaming(&client, &call, responses_request(body))
+            .await
+            .expect("reconnect send");
 
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1);
@@ -1002,38 +946,27 @@ mod tests {
 
     #[tokio::test]
     async fn an_identical_body_to_a_changed_destination_cannot_reuse_capture() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                2,
-                1,
-                trace(),
-            )
-            .expect("armed");
-            let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            Transport::send_streaming(&client, &call, responses_request(body.clone()))
-                .await
-                .expect("first send");
-            let changed = Request::builder()
-                .method("POST")
-                .uri("https://example.test/proxy/v1/responses")
-                .body(Bytes::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap();
-            Transport::send_streaming(&client, &call, changed)
-                .await
-                .expect("recording sink accepts changed test destination");
-        }
-        .await;
+        let (inner, client, call, seen) = recording_harness();
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            2,
+            1,
+            trace(),
+        )
+        .expect("armed");
+        let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
+        Transport::send_streaming(&client, &call, responses_request(body.clone()))
+            .await
+            .expect("first send");
+        let changed = Request::builder()
+            .method("POST")
+            .uri("https://example.test/proxy/v1/responses")
+            .body(Bytes::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        Transport::send_streaming(&client, &call, changed)
+            .await
+            .expect("recording sink accepts changed test destination");
 
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 2);
@@ -1043,40 +976,29 @@ mod tests {
 
     #[tokio::test]
     async fn chat_completions_bodies_index_the_messages_field() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner);
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        async {
-            let call = ProviderCall {
-                capture: Some(scope),
-                ..Default::default()
-            };
-            arm(
-                call.capture.as_ref(),
-                CaptureScopeKind::Inference,
-                0,
-                0,
-                trace(),
-            )
-            .expect("armed");
-            let req = Request::builder()
-                .method("POST")
-                .uri("https://example.test/v1/chat/completions")
-                .body(Bytes::from(
-                    serde_json::to_vec(&json!({
-                        "model": "m",
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "max_tokens": 512,
-                        "temperature": 0.2,
-                    }))
-                    .expect("body"),
-                ))
-                .expect("request");
-            let _ = Transport::send(&client, &call, req).await.expect("send");
-        }
-        .await;
+        let (_inner, client, call, seen) = recording_harness();
+        arm(
+            call.capture.as_ref(),
+            CaptureScopeKind::Inference,
+            0,
+            0,
+            trace(),
+        )
+        .expect("armed");
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://example.test/v1/chat/completions")
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "model": "m",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 512,
+                    "temperature": 0.2,
+                }))
+                .expect("body"),
+            ))
+            .expect("request");
+        let _ = Transport::send(&client, &call, req).await.expect("send");
 
         let seen = seen.lock().expect("seen");
         assert_eq!(seen[0].source, RenderedRequestSource::OpenAiChatCompletions);

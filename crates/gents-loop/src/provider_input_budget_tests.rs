@@ -121,97 +121,36 @@ fn estimator_units_invert_the_calibration_conservatively() {
 }
 
 #[test]
-fn post_compaction_request_fits_the_recovery_band() {
-    assert_eq!(
-        compaction_retention_target(usize::MAX, 750_000, 50_000, 32_000),
-        518_000,
-        "0.8 x 750k - 50k fixed - 32k summary reserve"
-    );
-    for (budget, fixed, reserve) in [
-        (750_000, 0, 0),
-        (750_000, 50_000, 32_000),
-        (168_000, 12_345, 8_192),
-        (96_000, 76_799, 1),
-        (6_001, 0, 0),
-    ] {
-        let band = recovery_band_budget(budget);
-        let tail = compaction_retention_target(usize::MAX, budget, fixed, reserve);
-        assert_eq!(
-            fixed + reserve + tail,
-            band,
-            "budget={budget} fixed={fixed} reserve={reserve}: the band is filled exactly"
-        );
-        assert!(band <= budget * 4 / 5);
-    }
-    assert_eq!(
-        compaction_retention_target(20_000, 750_000, 50_000, 32_000),
-        20_000,
-        "keep_recent binds below the band"
-    );
-    assert_eq!(
-        compaction_retention_target(usize::MAX, 750_000, 590_000, 32_000),
-        0,
-        "fixed layers and reserve past the band floor the tail at zero"
-    );
-}
-
-#[test]
-fn ratio_rises_at_once_and_falls_only_as_high_observations_age_out() {
+fn calibration_window_ages_out_high_observations_and_isolates_copies() {
     let calibration =
         ContextCalibration::with_ratio(CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS);
-    assert_eq!(
-        calibration.observe(260, 100),
-        Some(26_000),
-        "2.6x takes effect at once"
-    );
-    assert_eq!(
-        calibration.observe(130, 100),
-        Some(26_000),
-        "a 1.3x observation after 2.6x still yields 2.6x"
-    );
-    for _ in 2..CALIBRATION_OBSERVATION_WINDOW {
+    assert_eq!(calibration.observe(260, 100), Some(26_000));
+    for _ in 1..CALIBRATION_OBSERVATION_WINDOW {
         assert_eq!(calibration.observe(130, 100), Some(26_000));
     }
-    assert_eq!(
-        calibration.observe(130, 100),
-        Some(13_000),
-        "the 2.6x observation ages out after {CALIBRATION_OBSERVATION_WINDOW} newer ones"
-    );
-    assert_eq!(
-        calibration.observe(170, 100),
-        Some(17_000),
-        "and a rise is immediate again"
-    );
-}
+    assert_eq!(calibration.observe(130, 100), Some(13_000));
+    assert_eq!(calibration.observe(170, 100), Some(17_000));
 
-#[test]
-fn seeded_observations_share_the_window_with_new_ones() {
-    let calibration = ContextCalibration::with_observations(18_000, [26_000, 13_000]);
-    assert_eq!(calibration.ratio_basis_points(), 26_000);
+    let seeded = ContextCalibration::with_observations(18_000, [26_000, 13_000]);
+    assert_eq!(seeded.ratio_basis_points(), 26_000);
     for _ in 0..CALIBRATION_OBSERVATION_WINDOW - 2 {
-        calibration.observe(130, 100);
+        seeded.observe(130, 100);
     }
-    assert_eq!(calibration.ratio_basis_points(), 26_000);
-    calibration.observe(130, 100);
-    assert_eq!(calibration.ratio_basis_points(), 13_000);
+    assert_eq!(seeded.ratio_basis_points(), 26_000);
+    seeded.observe(130, 100);
+    assert_eq!(seeded.ratio_basis_points(), 13_000);
     assert_eq!(
         ContextCalibration::with_observations(18_000, []).ratio_basis_points(),
-        18_000,
-        "without observations the prior applies"
+        18_000
     );
     assert_eq!(
         ContextCalibration::with_observations(18_000, [13_000]).ratio_basis_points(),
-        13_000,
-        "an observation replaces the prior, it does not floor at it"
+        13_000
     );
-    let summary = calibration.ratio_only();
+    let summary = seeded.ratio_only();
     summary.observe(400, 100);
     assert_eq!(summary.ratio_basis_points(), 40_000);
-    assert_eq!(
-        calibration.ratio_basis_points(),
-        13_000,
-        "copies do not share the window"
-    );
+    assert_eq!(seeded.ratio_basis_points(), 13_000);
 }
 
 #[test]

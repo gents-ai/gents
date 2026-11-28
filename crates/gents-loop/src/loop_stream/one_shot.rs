@@ -623,15 +623,14 @@ mod tests {
         arm, claim_pending, current_audit_sender, flush_received_auxiliary_partial,
         CaptureScopeKind, RequestCaptureScope,
     };
-    use crate::rendered_request::{
-        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
-    };
+    use crate::test_support::doubles::{empty_trace, noop_capture_sink, test_capture_context};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    #[tokio::test]
-    async fn failed_auxiliary_deadline_flush_drains_received_signature() {
-        let captured: Arc<Mutex<Vec<AuxiliaryOutputEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    fn recording_auxiliary_sink(
+        flush_fails: bool,
+    ) -> (AuxiliaryOutputSink, Arc<Mutex<Vec<AuxiliaryOutputEvent>>>) {
+        let captured = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&captured);
         let sink = AuxiliaryOutputSink {
             observe: Arc::new(move |observation| {
@@ -641,201 +640,150 @@ mod tests {
                     .push(observation.event);
                 Box::pin(async { Ok(()) })
             }),
-            next_flush_deadline: Arc::new(|_, _, _| {
-                Box::pin(async { Ok(Some(tokio::time::Instant::now())) })
+            next_flush_deadline: Arc::new(move |_, _, _| {
+                let deadline = flush_fails.then(tokio::time::Instant::now);
+                Box::pin(async move { Ok(deadline) })
             }),
-            flush_pending: Arc::new(|_, _, _| {
-                Box::pin(async {
-                    Err(AuxiliaryOutputError::Sink {
-                        source: "mock flush failure".into(),
-                    })
+            flush_pending: Arc::new(move |_, _, _| {
+                Box::pin(async move {
+                    if flush_fails {
+                        Err(AuxiliaryOutputError::Sink {
+                            source: "mock flush failure".into(),
+                        })
+                    } else {
+                        Ok(())
+                    }
                 })
             }),
         };
-        let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-        let mut scope = RequestCaptureScope::new(
-            RenderedRequestContext {
-                request_doc_id: "doc-aux".into(),
-                request_commit_cid: "bafy-aux".into(),
-                request_id: "req-aux".into(),
-                node_did: "did:key:agent".into(),
-                requester_did: String::new(),
-                agent_did: "behavior".into(),
-                session_id: "session".into(),
-                model_name: "claude".into(),
-                provider_family: None,
-            },
-            capture_sink,
-        );
-        scope.set_auxiliary_output_sink(sink.clone());
-        async {
-            let capture_scope = Arc::new(scope);
-            let capture = Some(&capture_scope);
-            let label = arm(
-                capture,
-                CaptureScopeKind::Compaction,
-                0,
-                0,
-                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
-            )
-            .unwrap();
-            claim_pending(capture).expect("armed auxiliary attempt");
-            let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
-                .await
-                .unwrap();
-            let sender = current_audit_sender(capture).expect("claimed audit sender");
-            let mut reservation = sender.reserve().await.expect("audit capacity");
-            reservation
-                .emit(ClaudeAuditEvent::BlockStart {
-                    index: 0,
-                    kind: ClaudeBlockKind::Thinking,
-                })
-                .unwrap();
-            reservation
-                .emit(ClaudeAuditEvent::Signature {
-                    index: 0,
-                    fragment: "received".into(),
-                })
-                .unwrap();
-            drop(reservation);
+        (sink, captured)
+    }
 
-            let (result, item) = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                flush_auxiliary_at_deadline(&sink, identity, std::future::pending::<Option<()>>()),
-            )
+    async fn armed_auxiliary_scope(
+        sink: AuxiliaryOutputSink,
+    ) -> (Arc<RequestCaptureScope>, (CaptureScope, usize, u32)) {
+        let mut scope = RequestCaptureScope::new(test_capture_context(), noop_capture_sink());
+        scope.set_auxiliary_output_sink(sink);
+        let capture_scope = Arc::new(scope);
+        let capture = Some(&capture_scope);
+        let label = arm(capture, CaptureScopeKind::Compaction, 0, 0, empty_trace()).unwrap();
+        claim_pending(capture).expect("armed auxiliary attempt");
+        let identity = (label.parse().expect("capture scope"), 0, 0);
+        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
             .await
-            .expect("bounded flush failure cleanup");
-            assert!(item.is_none());
-            let error = close_received_auxiliary_after_error(
-                capture,
-                result.expect_err("mock flush fails"),
-            )
-            .await;
-            assert!(ErrorChain(&error)
-                .to_string()
-                .contains("mock flush failure"));
-            assert!(error.is_persistence_failure());
-            {
-                let events = captured
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
-                assert!(matches!(
-                    events[1],
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-                ));
-                assert!(matches!(
-                    events[2],
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
-                ));
-                assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
-            }
-            assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
+            .unwrap();
+        (capture_scope, identity)
+    }
+
+    #[tokio::test]
+    async fn failed_auxiliary_deadline_flush_drains_received_signature() {
+        let (sink, captured) = recording_auxiliary_sink(true);
+        let (capture_scope, identity) = armed_auxiliary_scope(sink.clone()).await;
+        let capture = Some(&capture_scope);
+        let sender = current_audit_sender(capture).expect("claimed audit sender");
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::BlockStart {
+                index: 0,
+                kind: ClaudeBlockKind::Thinking,
+            })
+            .unwrap();
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 0,
+                fragment: "received".into(),
+            })
+            .unwrap();
+        drop(reservation);
+
+        let (result, item) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            flush_auxiliary_at_deadline(&sink, identity, std::future::pending::<Option<()>>()),
+        )
+        .await
+        .expect("bounded flush failure cleanup");
+        assert!(item.is_none());
+        let error =
+            close_received_auxiliary_after_error(capture, result.expect_err("mock flush fails"))
+                .await;
+        assert!(ErrorChain(&error)
+            .to_string()
+            .contains("mock flush failure"));
+        assert!(error.is_persistence_failure());
+        {
+            let events = captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
+            assert!(matches!(
+                events[1],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+            ));
+            assert!(matches!(
+                events[2],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
+            ));
+            assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
         }
-        .await;
+        assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
     }
 
     #[tokio::test]
     async fn changed_audit_identity_closes_received_prefix_before_error() {
-        let captured: Arc<Mutex<Vec<AuxiliaryOutputEvent>>> = Arc::new(Mutex::new(Vec::new()));
-        let observed = Arc::clone(&captured);
-        let sink = AuxiliaryOutputSink {
-            observe: Arc::new(move |observation| {
-                observed
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .push(observation.event);
-                Box::pin(async { Ok(()) })
-            }),
-            next_flush_deadline: Arc::new(|_, _, _| Box::pin(async { Ok(None) })),
-            flush_pending: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
-        };
-        let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-        let mut scope = RequestCaptureScope::new(
-            RenderedRequestContext {
-                request_doc_id: "doc-identity".into(),
-                request_commit_cid: "bafy-identity".into(),
-                request_id: "req-identity".into(),
-                node_did: "did:key:agent".into(),
-                requester_did: String::new(),
-                agent_did: "behavior".into(),
-                session_id: "session".into(),
-                model_name: "claude".into(),
-                provider_family: None,
-            },
-            capture_sink,
-        );
-        scope.set_auxiliary_output_sink(sink);
-        async {
-            let capture_scope = Arc::new(scope);
-            let capture = Some(&capture_scope);
-            let label = arm(
-                capture,
-                CaptureScopeKind::Compaction,
-                0,
-                0,
-                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
-            )
+        let (sink, captured) = recording_auxiliary_sink(false);
+        let (capture_scope, identity) = armed_auxiliary_scope(sink).await;
+        let capture = Some(&capture_scope);
+        let sender = current_audit_sender(capture).expect("claimed audit sender");
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::BlockStart {
+                index: 0,
+                kind: ClaudeBlockKind::Thinking,
+            })
             .unwrap();
-            claim_pending(capture).expect("armed auxiliary attempt");
-            let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
-                .await
-                .unwrap();
-            let sender = current_audit_sender(capture).expect("claimed audit sender");
-            let mut reservation = sender.reserve().await.expect("audit capacity");
-            reservation
-                .emit(ClaudeAuditEvent::BlockStart {
-                    index: 0,
-                    kind: ClaudeBlockKind::Thinking,
-                })
-                .unwrap();
-            reservation
-                .emit(ClaudeAuditEvent::ThinkingText {
-                    index: 0,
-                    fragment: "reasoning".into(),
-                })
-                .unwrap();
-            reservation
-                .emit(ClaudeAuditEvent::Signature {
-                    index: 0,
-                    fragment: "received".into(),
-                })
-                .unwrap();
-            drop(reservation);
+        reservation
+            .emit(ClaudeAuditEvent::ThinkingText {
+                index: 0,
+                fragment: "reasoning".into(),
+            })
+            .unwrap();
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 0,
+                fragment: "received".into(),
+            })
+            .unwrap();
+        drop(reservation);
 
-            let error = ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1))
-                .expect_err("changed identity must fail closed");
-            let error = finish_one_shot_result::<String>(capture, Err(error))
-                .await
-                .expect_err("identity error must remain visible");
-            assert!(error.to_string().contains("auxiliary audit changed source"));
-            {
-                let events = captured
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
-                assert!(matches!(
-                    events[1],
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-                ));
-                assert!(matches!(
-                    &events[2],
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::ThinkingText { fragment, .. })
-                        if fragment == "reasoning"
-                ));
-                assert!(matches!(
-                    &events[3],
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { fragment, .. })
-                        if fragment == "received"
-                ));
-                assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
-                assert_eq!(events.len(), 5);
-            }
-            assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
+        let error = ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1))
+            .expect_err("changed identity must fail closed");
+        let error = finish_one_shot_result::<String>(capture, Err(error))
+            .await
+            .expect_err("identity error must remain visible");
+        assert!(error.to_string().contains("auxiliary audit changed source"));
+        {
+            let events = captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
+            assert!(matches!(
+                events[1],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+            ));
+            assert!(matches!(
+                &events[2],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::ThinkingText { fragment, .. })
+                    if fragment == "reasoning"
+            ));
+            assert!(matches!(
+                &events[3],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { fragment, .. })
+                    if fragment == "received"
+            ));
+            assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
+            assert_eq!(events.len(), 5);
         }
-        .await;
+        assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
     }
 
     #[test]
@@ -912,79 +860,47 @@ mod tests {
             next_flush_deadline: Arc::new(|_, _, _| Box::pin(async { Ok(None) })),
             flush_pending: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
         };
-        let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-        let mut scope = RequestCaptureScope::new(
-            RenderedRequestContext {
-                request_doc_id: "doc-cleanup".into(),
-                request_commit_cid: "bafy-cleanup".into(),
-                request_id: "req-cleanup".into(),
-                node_did: "did:key:agent".into(),
-                requester_did: String::new(),
-                agent_did: "behavior".into(),
-                session_id: "session".into(),
-                model_name: "claude".into(),
-                provider_family: None,
-            },
-            capture_sink,
-        );
-        scope.set_auxiliary_output_sink(sink);
-        async {
-            let capture_scope = Arc::new(scope);
-            let capture = Some(&capture_scope);
-            let label = arm(
-                capture,
-                CaptureScopeKind::Compaction,
-                0,
-                0,
-                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
-            )
-            .unwrap();
-            claim_pending(capture).expect("armed auxiliary attempt");
-            let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
+        let (capture_scope, identity) = armed_auxiliary_scope(sink).await;
+        let capture = Some(&capture_scope);
+        let error = match case {
+            CleanupCase::ProviderError => {
+                close_received_auxiliary_after_error(
+                    capture,
+                    missing_final_failure(Some(InferenceError::TransientFailure {
+                        reason: "provider failed".into(),
+                    })),
+                )
                 .await
-                .unwrap();
-            let error = match case {
-                CleanupCase::ProviderError => {
-                    close_received_auxiliary_after_error(
-                        capture,
-                        missing_final_failure(Some(InferenceError::TransientFailure {
-                            reason: "provider failed".into(),
-                        })),
-                    )
+            }
+            CleanupCase::NoVisibleOutput => {
+                let no_visible = crate::rig_compat::loop_verdict_error(
+                    crate::error::LoopVerdict::NoVisibleOutput,
+                    format!(
+                        "{}transport retry budget exhausted after 0 attempt(s)",
+                        super::super::NO_VISIBLE_OUTPUT_PREFIX
+                    ),
+                );
+                close_received_auxiliary_after_error(capture, stream_failure(no_visible, None))
                     .await
-                }
-                CleanupCase::NoVisibleOutput => {
-                    let no_visible = crate::rig_compat::loop_verdict_error(
-                        crate::error::LoopVerdict::NoVisibleOutput,
-                        format!(
-                            "{}transport retry budget exhausted after 0 attempt(s)",
-                            super::super::NO_VISIBLE_OUTPUT_PREFIX
-                        ),
-                    );
-                    close_received_auxiliary_after_error(capture, stream_failure(no_visible, None))
-                        .await
-                }
-                CleanupCase::IdentityError => {
-                    let identity_error =
-                        ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1)).unwrap_err();
-                    finish_one_shot_result::<String>(capture, Err(identity_error))
-                        .await
-                        .expect_err("cleanup failure must dominate identity error")
-                }
-            };
-            assert!(error.is_persistence_failure());
-            assert!(ErrorChain(&error)
-                .to_string()
-                .contains("mock close failure"));
-            assert_eq!(closes.load(Ordering::SeqCst), 1);
-            let error = finish_one_shot_result::<String>(capture, Err(error))
-                .await
-                .expect_err("persistence failure remains fatal");
-            assert!(error.is_persistence_failure());
-            assert_eq!(closes.load(Ordering::SeqCst), 1);
-        }
-        .await;
+            }
+            CleanupCase::IdentityError => {
+                let identity_error =
+                    ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1)).unwrap_err();
+                finish_one_shot_result::<String>(capture, Err(identity_error))
+                    .await
+                    .expect_err("cleanup failure must dominate identity error")
+            }
+        };
+        assert!(error.is_persistence_failure());
+        assert!(ErrorChain(&error)
+            .to_string()
+            .contains("mock close failure"));
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        let error = finish_one_shot_result::<String>(capture, Err(error))
+            .await
+            .expect_err("persistence failure remains fatal");
+        assert!(error.is_persistence_failure());
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

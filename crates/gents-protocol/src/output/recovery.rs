@@ -342,48 +342,43 @@ mod tests {
         }
     }
 
-    fn declaration(stream: u32, bytes: u32, payload: StreamPayload) -> SegmentRun {
+    fn decl(stream: u32, bytes: u32, block_index: u32, payload: StreamPayload) -> SegmentRun {
         SegmentRun {
             stream,
             bytes,
             declaration: Some(StreamDeclaration {
-                block_index: 0,
+                block_index,
                 part_index: 0,
                 payload,
             }),
         }
     }
 
+    fn obs(record: &OutputSegment) -> [ObservedSegment<'_>; 1] {
+        [ObservedSegment {
+            doc_id: "segment",
+            segment: record,
+        }]
+    }
+
     #[test]
     fn stopped_reasoning_retains_body_and_exact_signature() {
         let record = segment(
             vec![
-                declaration(0, 1, StreamPayload::Reasoning),
-                declaration(1, 1, StreamPayload::ReasoningSignature),
-                declaration(2, 0, StreamPayload::ReasoningStop),
+                decl(0, 1, 0, StreamPayload::Reasoning),
+                decl(1, 1, 0, StreamPayload::ReasoningSignature),
+                decl(2, 0, 0, StreamPayload::ReasoningStop),
             ],
             "AS",
         );
-        let writer = record.writer.clone();
-        let plan = plan_recovery_prefix(
-            &[ObservedSegment {
-                doc_id: "segment",
-                segment: &record,
-            }],
-            "request",
-            &source(),
-            &writer,
-        )
-        .unwrap();
+        let plan =
+            plan_recovery_prefix(&obs(&record), "request", &source(), &record.writer).unwrap();
         assert_eq!(plan.retained_streams, [0]);
         let extent = super::super::extent::inspect_open_source(
-            &[ObservedSegment {
-                doc_id: "segment",
-                segment: &record,
-            }],
+            &obs(&record),
             "request",
             &source(),
-            &writer,
+            &record.writer,
         )
         .unwrap();
         assert_eq!(
@@ -415,22 +410,18 @@ mod tests {
 
     #[test]
     fn recovery_positions_preserve_gaps_from_unfinished_blocks() {
-        let mut unfinished = declaration(0, 1, StreamPayload::Reasoning);
-        unfinished.declaration.as_mut().unwrap().block_index = 1;
-        let mut body = declaration(1, 1, StreamPayload::Reasoning);
-        body.declaration.as_mut().unwrap().block_index = 3;
-        let mut signature = declaration(2, 1, StreamPayload::ReasoningSignature);
-        signature.declaration.as_mut().unwrap().block_index = 3;
-        let mut stop = declaration(3, 0, StreamPayload::ReasoningStop);
-        stop.declaration.as_mut().unwrap().block_index = 3;
-        let mut text = declaration(4, 1, StreamPayload::Text);
-        text.declaration.as_mut().unwrap().block_index = 5;
-        let record = segment(vec![unfinished, body, signature, stop, text], "ABSC");
+        let record = segment(
+            vec![
+                decl(0, 1, 1, StreamPayload::Reasoning),
+                decl(1, 1, 3, StreamPayload::Reasoning),
+                decl(2, 1, 3, StreamPayload::ReasoningSignature),
+                decl(3, 0, 3, StreamPayload::ReasoningStop),
+                decl(4, 1, 5, StreamPayload::Text),
+            ],
+            "ABSC",
+        );
         let extent = super::super::extent::inspect_open_source(
-            &[ObservedSegment {
-                doc_id: "segment",
-                segment: &record,
-            }],
+            &obs(&record),
             "request",
             &source(),
             &record.writer,
@@ -449,66 +440,38 @@ mod tests {
     }
 
     #[test]
-    fn signature_without_stop_is_not_recovered() {
-        let record = segment(
+    fn incomplete_or_malformed_reasoning_recovery() {
+        let unstopped = segment(
             vec![
-                declaration(0, 1, StreamPayload::Reasoning),
-                declaration(1, 1, StreamPayload::ReasoningSignature),
+                decl(0, 1, 0, StreamPayload::Reasoning),
+                decl(1, 1, 0, StreamPayload::ReasoningSignature),
             ],
             "AS",
         );
-        let plan = plan_recovery_prefix(
-            &[ObservedSegment {
-                doc_id: "segment",
-                segment: &record,
-            }],
-            "request",
-            &source(),
-            &record.writer,
-        )
-        .unwrap();
+        let plan = plan_recovery_prefix(&obs(&unstopped), "request", &source(), &unstopped.writer)
+            .unwrap();
         assert!(plan.retained_blocks("close").unwrap().is_empty());
-    }
 
-    #[test]
-    fn stop_without_body_or_later_signature_bytes_is_invalid() {
-        let missing = segment(vec![declaration(0, 0, StreamPayload::ReasoningStop)], "");
-        assert_eq!(
-            plan_recovery_prefix(
-                &[ObservedSegment {
-                    doc_id: "segment",
-                    segment: &missing
-                }],
-                "request",
-                &source(),
-                &missing.writer
+        for malformed in [
+            segment(vec![decl(0, 0, 0, StreamPayload::ReasoningStop)], ""),
+            segment(
+                vec![
+                    decl(0, 1, 0, StreamPayload::Reasoning),
+                    decl(1, 1, 0, StreamPayload::ReasoningSignature),
+                    decl(2, 0, 0, StreamPayload::ReasoningStop),
+                    SegmentRun {
+                        stream: 1,
+                        bytes: 1,
+                        declaration: None,
+                    },
+                ],
+                "AST",
             ),
-            Err(RecoveryPlanError::MalformedExtent)
-        );
-        let late = segment(
-            vec![
-                declaration(0, 1, StreamPayload::Reasoning),
-                declaration(1, 1, StreamPayload::ReasoningSignature),
-                declaration(2, 0, StreamPayload::ReasoningStop),
-                SegmentRun {
-                    stream: 1,
-                    bytes: 1,
-                    declaration: None,
-                },
-            ],
-            "AST",
-        );
-        assert_eq!(
-            plan_recovery_prefix(
-                &[ObservedSegment {
-                    doc_id: "segment",
-                    segment: &late
-                }],
-                "request",
-                &source(),
-                &late.writer
-            ),
-            Err(RecoveryPlanError::MalformedExtent)
-        );
+        ] {
+            assert_eq!(
+                plan_recovery_prefix(&obs(&malformed), "request", &source(), &malformed.writer),
+                Err(RecoveryPlanError::MalformedExtent)
+            );
+        }
     }
 }

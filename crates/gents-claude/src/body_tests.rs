@@ -110,6 +110,14 @@ fn per_turn_row_placement_matches_lean() {
             assert_eq!(messages.len(), i.is_user.len() + 1);
             assert_eq!(messages[index].role, Role::System);
             assert_eq!(
+                messages[index]
+                    .output_config
+                    .as_ref()
+                    .and_then(|c| c.effort.as_deref()),
+                Some("medium")
+            );
+            assert!(matches!(&messages[index].content, MessageContent::Blocks(b) if b.is_empty()));
+            assert_eq!(
                 messages.iter().filter(|m| m.role == Role::System).count(),
                 1
             );
@@ -119,60 +127,74 @@ fn per_turn_row_placement_matches_lean() {
 }
 
 #[test]
-fn opus_5_5_facts() {
-    let f = facts_of("claude-opus-5-5");
-    assert!(f.adaptive && f.always_thinks && f.rejects_disabled && f.thinking_supported);
-    assert!(!f.accepts_temperature);
-    assert!(f.effort_capable && f.max_effort && f.xhigh_effort && f.per_turn_effort);
-    assert!(!f.caps_effort_when_disabled);
-    assert_eq!((f.output_default, f.output_upper), (128_000, 128_000));
-    assert_eq!(f.default_effort, Some(Effort::Medium));
-}
+fn catalog_model_facts() {
+    let opus55 = facts_of("claude-opus-5-5");
+    assert!(
+        opus55.adaptive
+            && opus55.always_thinks
+            && opus55.rejects_disabled
+            && opus55.thinking_supported
+            && !opus55.accepts_temperature
+            && opus55.effort_capable
+            && opus55.max_effort
+            && opus55.xhigh_effort
+            && opus55.per_turn_effort
+            && !opus55.caps_effort_when_disabled
+    );
+    assert_eq!(
+        (
+            opus55.output_default,
+            opus55.output_upper,
+            opus55.default_effort
+        ),
+        (128_000, 128_000, Some(Effort::Medium))
+    );
 
-#[test]
-fn haiku_4_5_facts() {
-    let f = facts_of("claude-haiku-4-5");
-    assert!(!f.adaptive && !f.always_thinks && !f.rejects_disabled && f.thinking_supported);
-    assert!(f.accepts_temperature);
-    assert!(!f.effort_capable && !f.per_turn_effort);
-    assert_eq!((f.output_default, f.output_upper), (32_000, 64_000));
-}
+    let haiku = facts_of("claude-haiku-4-5");
+    assert!(
+        !haiku.adaptive
+            && !haiku.always_thinks
+            && !haiku.rejects_disabled
+            && haiku.thinking_supported
+            && haiku.accepts_temperature
+            && !haiku.effort_capable
+            && !haiku.per_turn_effort
+    );
+    assert_eq!((haiku.output_default, haiku.output_upper), (32_000, 64_000));
 
-#[test]
-fn sonnet_4_6_facts() {
-    let f = facts_of("claude-sonnet-4-6");
-    assert!(f.adaptive && !f.always_thinks && !f.rejects_disabled);
-    assert!(f.accepts_temperature);
-    assert!(f.effort_capable && f.max_effort && !f.xhigh_effort);
-    assert_eq!(f.default_effort, None);
-}
+    let sonnet = facts_of("claude-sonnet-4-6");
+    assert!(
+        sonnet.adaptive
+            && !sonnet.always_thinks
+            && !sonnet.rejects_disabled
+            && sonnet.accepts_temperature
+            && sonnet.effort_capable
+            && sonnet.max_effort
+            && !sonnet.xhigh_effort
+    );
+    assert_eq!(sonnet.default_effort, None);
 
-#[test]
-fn opus_5_caps_effort_when_thinking_is_off() {
-    let f = facts_of("claude-opus-5");
-    assert!(f.caps_effort_when_disabled && !f.rejects_disabled);
-    let request = Request {
+    let opus5 = facts_of("claude-opus-5");
+    assert!(opus5.caps_effort_when_disabled && !opus5.rejects_disabled);
+    let capped = Request {
         thinking: ThinkingConfig::Disabled { mechanical: false },
         first_party: true,
         requested_effort: Some("max"),
         ..Request::default()
     };
-    assert_eq!(thinking(&f, &request), Some(Thinking::Disabled));
-    assert_eq!(effort(&f, &request), Some(Effort::High));
-}
+    assert_eq!(thinking(&opus5, &capped), Some(Thinking::Disabled));
+    assert_eq!(effort(&opus5, &capped), Some(Effort::High));
 
-#[test]
-fn claude_3_has_no_thinking_and_takes_temperature() {
-    let f = facts_of("claude-3-5-haiku");
-    assert!(!f.thinking_supported && f.accepts_temperature && !f.adaptive);
-    let request = Request {
+    let c3 = facts_of("claude-3-5-haiku");
+    assert!(!c3.thinking_supported && c3.accepts_temperature && !c3.adaptive);
+    let enabled = Request {
         thinking: ThinkingConfig::Enabled { budget: Some(2000) },
         first_party: true,
         ..Request::default()
     };
-    assert_eq!(thinking(&f, &request), None);
-    assert_eq!(temperature(&f, &request), None);
-    assert_eq!(max_tokens(&f, &request), 8192);
+    assert_eq!(thinking(&c3, &enabled), None);
+    assert_eq!(temperature(&c3, &enabled), None);
+    assert_eq!(max_tokens(&c3, &enabled), 8192);
 }
 
 #[test]
@@ -198,41 +220,6 @@ fn catalog_capabilities_agree_with_the_derived_facts() {
             model.id
         );
     }
-}
-
-#[test]
-fn per_turn_row_is_inserted_after_the_first_user_run() {
-    let mut messages = vec![
-        message(Role::User),
-        message(Role::User),
-        message(Role::Assistant),
-        message(Role::User),
-    ];
-    assert!(insert_per_turn_row(&mut messages, Effort::Xhigh));
-    let roles: Vec<Role> = messages.iter().map(|m| m.role).collect();
-    assert_eq!(
-        roles,
-        [
-            Role::User,
-            Role::User,
-            Role::System,
-            Role::Assistant,
-            Role::User
-        ]
-    );
-    assert_eq!(
-        messages[2]
-            .output_config
-            .as_ref()
-            .unwrap()
-            .effort
-            .as_deref(),
-        Some("xhigh")
-    );
-    assert!(matches!(&messages[2].content, MessageContent::Blocks(b) if b.is_empty()));
-    let mut none = vec![message(Role::Assistant)];
-    assert!(!insert_per_turn_row(&mut none, Effort::Low));
-    assert_eq!(none.len(), 1);
 }
 
 #[test]

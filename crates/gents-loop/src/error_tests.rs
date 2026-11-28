@@ -4,131 +4,87 @@ fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceErr
     crate::rig_compat::classify_completion_error(error).error
 }
 
-#[test]
-fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
-    let error = rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
-        "missing_tool".into(),
-    ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "tool failures stay permanent until tools expose retry-safe health/idempotency metadata"
-    );
+fn http_error(status: &str, body: &str) -> rig::agent::StreamingError {
+    rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+        rig::http_client::Error::InvalidStatusCodeWithMessage(
+            status.parse().expect("valid status"),
+            body.into(),
+        ),
+    ))
 }
 
 #[test]
-fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Http client error: error sending request for url \
-             (http://127.0.0.1:4000/v1/chat/completions)"
-                .into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::TransientFailure { .. }
-    ));
-    assert!(
-        classified.is_retryable(),
-        "transport send failures should retry even when the URL contains 400-like digits"
-    );
-}
-
-#[test]
-fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "InvalidStatusCodeWithMessage(400, \"duplicate field `max_tokens`\")".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "precise provider 400 statuses are still permanent request-shape failures"
-    );
-}
-
-#[test]
-fn vllm_tool_call_invalid_escape_400_is_retryable() {
-    // The `Invalid \escape` variant — the wire body double-escapes the backslash, which
-    // is why the matcher keys off the line/column/(char ...) signature, not the phrase.
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
-             \"Invalid \\\\escape: line 1 column 34 (char 33)\",\"type\":\"BadRequestError\"}}"
-                .into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::TransientFailure { .. }
-    ));
-    assert!(classified.is_retryable());
-}
-
-#[test]
-fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "upstream worker closed after writing 400 bytes".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::TransientFailure { .. }
-    ));
-    assert!(
-        classified.is_retryable(),
-        "plain numeric substrings must not be treated as HTTP status codes"
-    );
-}
-
-#[test]
-fn openai_compatible_http_400_is_permanent_bad_request() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "400".parse().expect("valid status"),
-                "duplicate field `max_tokens`".into(),
+fn streaming_error_retryability_classification() {
+    let permanent = [
+        (
+            "tool not found",
+            rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
+                "missing_tool".into(),
+            )),
+        ),
+        (
+            "precise provider 400",
+            provider_error("InvalidStatusCodeWithMessage(400, \"duplicate field `max_tokens`\")"),
+        ),
+        (
+            "http 400 bad request",
+            http_error("400", "duplicate field `max_tokens`"),
+        ),
+        (
+            "model refusal",
+            provider_error(
+                "the model declined to respond (stop_reason: refusal) (request-id req_abc)",
             ),
-        ));
+        ),
+    ];
+    for (name, error) in permanent {
+        let classified = classify_completion_error(&error);
+        assert!(
+            matches!(classified, InferenceError::PermanentFailure { .. })
+                && !classified.is_retryable(),
+            "{name}: {classified:?}"
+        );
+    }
 
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "bad OpenAI-compatible request bodies should fail fast instead of retrying"
-    );
+    let transient = [
+        (
+            "transport send failure with 400-like port",
+            provider_error(
+                "Http client error: error sending request for url \
+                 (http://127.0.0.1:4000/v1/chat/completions)",
+            ),
+        ),
+        (
+            "vllm invalid escape 400",
+            provider_error(
+                "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
+                 \"Invalid \\\\escape: line 1 column 34 (char 33)\",\"type\":\"BadRequestError\"}}",
+            ),
+        ),
+        (
+            "loose 400 bytes text",
+            provider_error("upstream worker closed after writing 400 bytes"),
+        ),
+        (
+            "http 503 overrides body 400 text",
+            http_error("503", "upstream relayed: Invalid status code 400"),
+        ),
+    ];
+    for (name, error) in transient {
+        let classified = classify_completion_error(&error);
+        assert!(
+            matches!(classified, InferenceError::TransientFailure { .. })
+                && classified.is_retryable(),
+            "{name}: {classified:?}"
+        );
+    }
 }
 
 #[test]
 fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#.into(),
-        ));
+    let error = provider_error(
+        r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#,
+    );
 
     let classified = classify_completion_error(&error);
 
@@ -141,14 +97,7 @@ fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
 }
 
 fn http_402(body: String) -> crate::error::ClassifiedFailure {
-    crate::rig_compat::classify_completion_error(&rig::agent::StreamingError::Completion(
-        rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "402".parse().expect("valid status"),
-                body,
-            ),
-        ),
-    ))
+    crate::rig_compat::classify_completion_error(&http_error("402", &body))
 }
 
 #[test]
@@ -193,44 +142,6 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
         other => panic!("expected throttle, got {other:?}"),
     }
     assert_eq!(failure_class(&failure), FailureClass::Transport);
-}
-
-#[test]
-fn model_refusal_is_a_non_retryable_permanent_failure() {
-    // The Claude Messages parser surfaces a content-free refusal as a provider
-    // error carrying the "stop_reason: refusal" marker. Resending the identical
-    // body earns the identical refusal, so the loop must fail fast rather than
-    // resample and burn the subscription's quota.
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "the model declined to respond (stop_reason: refusal) (request-id req_abc)".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "a model refusal is deterministic and must not be resampled"
-    );
-}
-
-#[test]
-fn http_status_rig_carries_decides_over_status_text() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "503".parse().expect("valid status"),
-                "upstream relayed: Invalid status code 400".into(),
-            ),
-        ));
-    assert!(matches!(
-        classify_completion_error(&error),
-        InferenceError::TransientFailure { .. }
-    ));
 }
 
 #[test]
@@ -336,40 +247,27 @@ fn openai_and_xai_context_overflows_are_classified_with_their_counts() {
 }
 
 #[test]
-fn ordinary_invalid_requests_are_not_context_overflows() {
-    for text in [
-        r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content: tool_use ids must be unique"}}"#,
-        r#"Invalid status code 400 Bad Request with message: {"error":{"message":"Invalid value for 'max_tokens': must be at least 1.","type":"invalid_request_error","code":"invalid_value"}}"#,
-        "max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens",
-    ] {
-        let classified = crate::rig_compat::classify_completion_error(&provider_error(text));
-        assert_eq!(classified.report.context_overflow, None, "{text}");
-        assert!(
-            !matches!(
-                classified.error,
-                InferenceError::ContextLengthExceeded { .. }
-            ),
-            "{text}: {:?}",
-            classified.error
-        );
-    }
-}
-
-#[test]
-fn payload_too_large_413_is_not_a_context_overflow() {
+fn non_overflow_invalid_and_413_requests_are_not_context_overflows() {
     for error in [
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "413".parse().expect("valid status"),
-                r#"{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}"#.into(),
-            ),
-        )),
+        provider_error(
+            r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content: tool_use ids must be unique"}}"#,
+        ),
+        provider_error(
+            r#"Invalid status code 400 Bad Request with message: {"error":{"message":"Invalid value for 'max_tokens': must be at least 1.","type":"invalid_request_error","code":"invalid_value"}}"#,
+        ),
+        provider_error(
+            "max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens",
+        ),
+        http_error(
+            "413",
+            r#"{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}"#,
+        ),
         provider_error(
             r#"Claude Messages HTTP 413 Payload Too Large (request-id -) body={"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}"#,
         ),
     ] {
         let classified = crate::rig_compat::classify_completion_error(&error);
-        assert_eq!(classified.report.context_overflow, None);
+        assert_eq!(classified.report.context_overflow, None, "{error:?}");
         assert!(
             !matches!(
                 classified.error,
