@@ -1,6 +1,6 @@
-import { cleanup, renderHook, screen, within } from "@testing-library/react";
+import { act, cleanup, renderHook, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { NavNodes } from "../src/ui/app/NavNodes";
@@ -9,6 +9,7 @@ import { useNodeConfigReadOnly } from "../src/ui/hooks/useClient";
 import { pageConnection } from "../src/ui/lib/nodeConnection";
 import { AutomationsScreen } from "../src/ui/screens/AutomationsScreen";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
+import { STALE_NOTICE_AFTER_MS } from "../src/ui/screens/NodeConnectionState";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { AgentsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
 import type { NodeView } from "../src/hooks/fleetStore";
@@ -170,12 +171,20 @@ const states = (
     expect(screen.queryByText(empty, { exact: false })).toBeNull();
   });
 
-  it("keeps what a lost connection left, marked as possibly out of date", () => {
-    show("disconnected", true);
-    expect(screen.getByText(shown)).toBeVisible();
-    expect(screen.getByTestId("node-connection-stale")).toHaveTextContent(
-      "Reconnecting to Forge. This may be out of date.",
-    );
+  it("keeps what a lost connection left, marked as possibly out of date once it has been so a while", () => {
+    vi.useFakeTimers();
+    try {
+      show("disconnected", true);
+      expect(screen.getByText(shown)).toBeVisible();
+      /* a moment out of date is not announced */
+      expect(screen.queryByTestId("node-connection-stale")).toBeNull();
+      act(() => vi.advanceTimersByTime(STALE_NOTICE_AFTER_MS));
+      expect(screen.getByTestId("node-connection-stale")).toHaveTextContent(
+        "Reconnecting to Forge. This may be out of date.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 };
 

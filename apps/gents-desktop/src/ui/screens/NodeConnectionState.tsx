@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { connectionLine, type PageConnection } from "@/lib/nodeConnection";
@@ -31,6 +32,9 @@ export function ConnectionPlaceholder({
   );
 }
 
+/** How long a page must stay out of date before it says so. */
+export const STALE_NOTICE_AFTER_MS = 3_000;
+
 export function StaleNotice({
   state,
   className,
@@ -38,6 +42,16 @@ export function StaleNotice({
   state: PageConnection;
   className?: string;
 }) {
+  /* a connection that is only catching up (a launch drawn from the cache
+     before the node answers) passes unannounced: the line shows once the
+     page has been out of date this long, so it does not push the page down
+     and back up in the first second */
+  const [due, setDue] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setDue(true), STALE_NOTICE_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!due) return null;
   return (
     <p
       role="status"
