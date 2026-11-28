@@ -110,7 +110,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
     ("batch", "ordered config calls"),
 ];
 
-const HELP_GRAMMAR: &str = "Config resources: list, get, create, update, delete. target_id names the resource; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
+const HELP_GRAMMAR: &str = "Config resources: list, get, create, update, delete. target_id names the resource; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options (including required options.profile) instead of set and allocates its ID and Context/Tools.
 Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Application data uses query, write and schema.";
 
 #[derive(Debug, thiserror::Error)]
@@ -196,6 +196,10 @@ impl ConfigCommandParams {
                 ["tools", ..] => bail!(
                     "target_id is not accepted by tools; omit it and select the owning agent with options.agent, e.g. {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_DID\"}}}}"
                 ),
+                ["pack", "export", ..] => return Err(CommandGuidance {
+                    message: "target_id is not accepted by \"pack export\"; pass the snake_case pack NAME in argv as [\"pack\",\"export\",\"NAME\"] with options.dir (default NAME), optional options.version (semver), and document selectors in options. See [\"pack\",\"export\",\"--help\"].".into(),
+                    next_call: json!({"argv":["pack","export","--help"]}),
+                }.into()),
                 _ => bail!(
                     "target_id is not accepted by {:?}; see the command's --help for its parameters",
                     words.join(" ")
@@ -425,7 +429,7 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
                     "target_id": {"type":"string", "description":"Exact document ID; alternatively put it after the verb in argv. agent create allocates its ID."},
                     "set": {"type":"object", "additionalProperties":true, "description":"Fields to write, as native JSON. Each replaces the whole field."},
                     "clear": {"type":"array", "items":{"type":"string"}, "description":"Optional fields to remove."},
-                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Object options stay JSON objects."}
+                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Object options stay JSON objects. agent create/clone take options (including required options.profile), not set."}
                 },
                 "required": ["argv"],
                 "additionalProperties": false

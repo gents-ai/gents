@@ -2480,4 +2480,122 @@ async fn missing_tools_id_and_missing_root_and_unpublished_profile_return_action
     .await;
 }
 
+#[tokio::test]
+async fn self_config_top_friction_v2_recoveries_replay_cleanly() {
+    let parse_refused = |raw: &str| -> Value {
+        serde_json::from_str(raw.strip_prefix("tool call error: ").unwrap_or(raw))
+            .unwrap_or_else(|error| panic!("{error}: {raw}"))
+    };
+    let (fixture, tools) =
+        authenticated_setup("top-friction-v2", &["node", "tools", "profile"]).await;
+    fixture.grant_node_administration().await;
+    let admitted_root = fixture.admitted_workspace_root().await;
+    let profile = format!("{}:inference", fixture.agent_did());
+
+    let missing_root = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["tools", "update"],
+                "set": {"host": {"files": {"mode": "ReadOnly"}}}
+            }),
+        )
+        .await,
+    );
+    let root_msg = missing_root["error"].as_str().unwrap();
+    assert!(
+        root_msg.contains("set.host.root") && root_msg.contains(&admitted_root),
+        "{missing_root}"
+    );
+    assert_eq!(
+        missing_root["recovery"]["next_call"],
+        json!({"argv": ["tools", "get"]}),
+        "{missing_root}"
+    );
+    ok(&tools, missing_root["recovery"]["next_call"].clone()).await;
+
+    let set_profile = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["agent", "create"],
+                "set": {"profile": profile},
+                "options": {"display-name": "MovedProfile", "system-prompt": "Work."}
+            }),
+        )
+        .await,
+    );
+    let created = ok(&tools, set_profile["recovery"]["next_call"].clone()).await;
+    let helper_did = created["agent_did"].as_str().unwrap().to_owned();
+    let expected_tools_id = format!("{helper_did}:tools");
+    let expected_context_id = format!("{helper_did}:context");
+
+    let missing_profile_set = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["agent", "create"],
+                "set": {"display_name": "MissingProfile", "system_prompt": "Work."}
+            }),
+        )
+        .await,
+    );
+    assert_eq!(
+        missing_profile_set["recovery"]["next_call"],
+        json!({"argv": ["profile", "list"]}),
+        "{missing_profile_set}"
+    );
+    ok(&tools, missing_profile_set["recovery"]["next_call"].clone()).await;
+
+    for (label, call, expected_id) in [
+        (
+            "tools get",
+            json!({"argv": ["tools", "get"], "target_id": helper_did}),
+            &expected_tools_id,
+        ),
+        (
+            "tools preview update",
+            json!({"argv": ["tools", "preview", "update"], "target_id": helper_did, "set": {"display_name": "Helper Tools"}}),
+            &expected_tools_id,
+        ),
+        (
+            "tools update",
+            json!({"argv": ["tools", "update"], "target_id": helper_did, "set": {"display_name": "Helper Tools"}}),
+            &expected_tools_id,
+        ),
+        (
+            "context get",
+            json!({"argv": ["context", "get"], "target_id": helper_did}),
+            &expected_context_id,
+        ),
+        (
+            "context preview update",
+            json!({"argv": ["context", "preview", "update"], "target_id": helper_did, "set": {"display_name": "Helper Context"}}),
+            &expected_context_id,
+        ),
+        (
+            "context update",
+            json!({"argv": ["context", "update"], "target_id": helper_did, "set": {"display_name": "Helper Context"}}),
+            &expected_context_id,
+        ),
+    ] {
+        let bare_err = parse_refused(&refused(&tools, call).await);
+        let bare_msg = bare_err["error"].as_str().unwrap();
+        assert!(
+            bare_msg.contains(expected_id.as_str()),
+            "{label}: {bare_err}"
+        );
+        assert_eq!(
+            bare_err["recovery"]["next_call"]["target_id"],
+            json!(expected_id),
+            "{label}: {bare_err}"
+        );
+        let replayed = ok(&tools, bare_err["recovery"]["next_call"].clone()).await;
+        assert!(
+            replayed.get("document").is_some() || replayed["target_id"] == json!(expected_id),
+            "{label} replay: {replayed}"
+        );
+    }
+}
+
 const HELP_INDEX_CEILING: usize = 1_900;

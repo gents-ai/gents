@@ -582,26 +582,56 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
     let node = seeded_node().await;
     let tool = DefraQueryTool::new(node, CollectionScope::all());
 
-    let err = Tool::call(
-        &tool,
-        DefraQueryParams {
-            collection: "AgentRequest".to_string(),
-            filter: None,
-            fields: vec!["request_id".to_string(), "*".to_string()],
-            limit: None,
-        }
-        .into(),
-        &gents_loop::tool::ToolCallEnvelope::default(),
-    )
-    .await
-    .expect_err("mixed wildcard must fail");
+    let definition = Tool::definition(&tool, String::new()).await;
+    let fields_desc = definition.parameters["properties"]["options"]["properties"]["fields"]
+        ["description"]
+        .as_str()
+        .expect("fields description");
     assert!(
-        serde_json::from_str::<serde_json::Value>(&err.to_string()).unwrap()["error"]
-            .as_str()
-            .unwrap()
-            .contains("[\"*\"]"),
-        "{err}"
+        fields_desc.contains("\"*\"") && fields_desc.contains("sole entry"),
+        "{fields_desc}"
     );
+
+    for bad_fields in [
+        vec!["request_id".to_string(), "*".to_string()],
+        vec!["*".to_string()],
+    ] {
+        let err = Tool::call(
+            &tool,
+            QueryParams {
+                argv: vec!["find".to_string()],
+                collection: Some("AgentRequest".to_string()),
+                options: serde_json::from_value(json!({"fields": bad_fields})).unwrap(),
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .expect_err("wildcard in find options.fields must fail");
+        let parsed: serde_json::Value = serde_json::from_str(&err.to_string()).unwrap();
+        let message = parsed["error"].as_str().unwrap();
+        assert!(
+            message.contains("[\"*\"]") && message.contains("must be the only entry"),
+            "{parsed}"
+        );
+        assert_eq!(
+            parsed["recovery"],
+            json!({"tool": "query", "args": {"argv": ["fields"], "collection": "AgentRequest"}}),
+            "{parsed}"
+        );
+        let replayed = Tool::call(
+            &tool,
+            serde_json::from_value(parsed["recovery"]["args"].clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .expect("wildcard recovery call must replay cleanly");
+        let discovered: serde_json::Value = serde_json::from_str(&replayed).unwrap();
+        assert_eq!(discovered["collection"], "AgentRequest");
+        assert_eq!(discovered["discovery"], true);
+        assert!(discovered["fields"]
+            .as_array()
+            .is_some_and(|f| !f.is_empty()));
+    }
 }
 
 #[tokio::test]

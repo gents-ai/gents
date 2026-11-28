@@ -33,6 +33,25 @@ impl ConfigCommandTool {
                 enabled.join(", ")
             );
         }
+        if matches!(requested, "write" | "query" | "schema" | "script") {
+            let grant_note = match requested {
+                "write" => "Enable via Tools.datastore.write_collections.",
+                "query" => {
+                    "Enable via Tools.datastore.enable_defra_query and defra_query_collections."
+                }
+                "schema" => "Enable via Tools.built_ins.enable_schema_tool.",
+                "script" => "Select the script plugin in Tools.integrations.plugins.",
+                _ => unreachable!(),
+            };
+            return Err(CommandGuidance {
+                message: format!(
+                    "{requested:?} is a standalone tool, not a config resource; call {requested} directly with {{\"argv\":[\"help\"]}}. {grant_note} Granted config resources: {}.",
+                    enabled.join(", ")
+                ),
+                next_call: json!({"tool": requested, "args": {"argv": ["help"]}}),
+            }
+            .into());
+        }
         let resource = help_resource(requested);
         let granted = resource == "get"
             || enabled
@@ -395,7 +414,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "tools" => Page {
             what: "an agent's Tools: what it may use, in groups (tools grant).",
             commands: &["tools get|update|preview update  options.agent (default: the invoking agent); set/clear: groups"],
-            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash. When WorkspaceRoot policy is configured, selecting host file, shell or LSP tools and a root does not grant the selected Agent access to a published WorkspaceRoot covering that path. Only a User (the Node owner or an administrator) grants it, from their own client: gents config workspace-root grant-reader --path PUBLISHED_ROOT --agent-did AGENT_DID, where PUBLISHED_ROOT is the published root's path, not a descendant. No config or policy call grants it; agent create returns host_root_access with the exact command to give the User. A set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. The acknowledgement waives only the sharing refusal: a shared edit still needs the agent catalog grant (category node). host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy: [\"tools\",\"update\",\"--help\",\"integrations\"]; native document authorization governs updates.",
+            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. Under WorkspaceRoot policy, enabling host tools (host.files, host.bash, host.cli, or integrations.lsp) requires setting set.host.root to an admitted absolute workspace path (a sibling of host.files and host.bash, never inside host.files; inspect your own tools get for an admitted root). Selecting host tools and a root does not grant the selected Agent access to a published WorkspaceRoot covering that path. Only a User (the Node owner or an administrator) grants it, from their own client: gents config workspace-root grant-reader --path PUBLISHED_ROOT --agent-did AGENT_DID, where PUBLISHED_ROOT is the published root's path, not a descendant. No config or policy call grants it; agent create returns host_root_access with the exact command to give the User. A set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. The acknowledgement waives only the sharing refusal: a shared edit still needs the agent catalog grant (category node). host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy: [\"tools\",\"update\",\"--help\",\"integrations\"]; native document authorization governs updates.",
             next: "verify saved Tools restrictions and runtime_effective with agent get, then test in a fresh session of that agent.",
         },
         "profile" => Page {
@@ -750,7 +769,7 @@ fn crud_page(
     let mut out = format!("{resource}: {}\n", page.what);
     writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
     if resource == "agent" {
-        out = out.replace("create ID", "create (options.display-name, profile, plus system-prompt/preset or context-id; allocates ID)");
+        out = out.replace("create ID", "create (options.display-name, options.profile from [\"profile\",\"list\"], plus system-prompt/preset or context-id; allocates ID)");
         out = out.replace(
             "agent preview create|update|delete ID",
             "agent preview create (same options) | update|delete ID",

@@ -157,7 +157,7 @@ impl Tool for DefraQueryTool {
                             "fields": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Required for find, search, explain: field names to return (e.g. [\"name\", \"relation.field\"]). Discover with argv:[\"fields\"]."
+                                "description": "Required for find, search, explain: explicit field names to return (e.g. [\"name\", \"relation.field\"]). Wildcard \"*\" cannot be mixed with other fields or selected in find/search/explain (legacy fields:[\"*\"] must be the sole entry); use argv:[\"fields\"] to discover queryable fields."
                             },
                             "filter": {
                                 "type": "object",
