@@ -485,7 +485,7 @@ function StoppedNotice({
   );
 }
 
-function Reply({
+export function Reply({
   item,
   worked,
 }: {
@@ -494,6 +494,17 @@ function Reply({
 }) {
   const live = item.kind === "liveAssistant";
   const ready = item.kind === "liveAssistant" || item.reconstruction.state === "ready";
+  /* a reply that streamed in keeps typing after its saved message lands; its
+     copy button and time wait for the last character, so they are not pushed
+     down line by line. The length shown is compared with the text's own, so
+     a saved message longer than the live text waits from its first frame */
+  const [typing, setTyping] = useState(live);
+  const [revealed, setRevealed] = useState<number | null>(null);
+  const settled =
+    !live &&
+    ready &&
+    Boolean(item.content) &&
+    (!typing || revealed === item.content?.length);
   return (
     /* the space under a reply sits below its actions, so the copy button
        and time stay with the text they belong to */
@@ -503,14 +514,8 @@ function Reply({
     >
       <AssistantMessage
         className={item.content ? "pt-4" : undefined}
-        actions={
-          !live && ready && item.content
-            ? copyActions(writtenText(item.content ?? "", []))
-            : false
-        }
-        meta={
-          !live && ready && item.content ? sentAt(item.timestamp, worked) : undefined
-        }
+        actions={settled ? copyActions(writtenText(item.content ?? "", [])) : false}
+        meta={settled ? sentAt(item.timestamp, worked) : undefined}
       >
         {ready && readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -534,17 +539,34 @@ function Reply({
                 : "Message could not be reconstructed."}
           </p>
         ) : item.content ? (
-          <ReplyText content={item.content} live={live} />
+          <ReplyText
+            content={item.content}
+            live={live}
+            onTyping={setTyping}
+            onRevealed={setRevealed}
+          />
         ) : null}
       </AssistantMessage>
     </div>
   );
 }
 
-function ReplyText({ content, live }: { content: string; live: boolean }) {
+function ReplyText({
+  content,
+  live,
+  onTyping,
+  onRevealed,
+}: {
+  content: string;
+  live: boolean;
+  /** told whether this text types itself out */
+  onTyping: (typing: boolean) => void;
+  onRevealed: (length: number | null) => void;
+}) {
   const [revealing] = useState(live);
+  useEffect(() => onTyping(revealing), [revealing, onTyping]);
   if (!revealing) return <Markdown directives>{content}</Markdown>;
-  return <StreamText text={content} directives />;
+  return <StreamText text={content} directives onRevealed={onRevealed} />;
 }
 
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };

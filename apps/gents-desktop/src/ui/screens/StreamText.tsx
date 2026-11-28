@@ -19,10 +19,14 @@ function smoothingOn() {
 export function StreamText({
   text,
   directives = false,
+  onRevealed,
 }: {
   text: string;
   /** as Markdown's: the caller says whether this is the model's own reply */
   directives?: boolean;
+  /** told the length of `text` once every character of it is shown, and
+      null while some are not */
+  onRevealed?: (length: number | null) => void;
 }) {
   const [enabled] = useState(smoothingOn);
   const [initial] = useState(() =>
@@ -36,6 +40,12 @@ export function StreamText({
   const target = useRef(text);
   target.current = text;
   const running = enabled && visible < text.length;
+  const report = useRef(onRevealed);
+  report.current = onRevealed;
+  useEffect(
+    () => report.current?.(running ? null : text.length),
+    [running, text.length],
+  );
 
   useEffect(() => {
     if (!running) return;
