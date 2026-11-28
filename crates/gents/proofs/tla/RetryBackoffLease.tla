@@ -1,8 +1,8 @@
 ---- MODULE RetryBackoffLease ----
 \* lean: RequestExecutionLease.retryWakeDispatches
 \* crates: gents, gents-loop, gents-session
-\* traces: violates
 \* models: RequestExecutionLease.renewalDue
+\* traces: violates
 \* One request's execution lease while its owner backs off a failed provider
 \* call, and the e2e test `retry_backoff_cannot_renew_an_expired_execution_lease`
 \* that stands in for the lease running out.

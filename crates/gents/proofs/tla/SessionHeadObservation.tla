@@ -1,8 +1,8 @@
 ---- MODULE SessionHeadObservation ----
 \* lean: AgentSession.newerByKeys
 \* crates: gents-session, gents-observe
-\* traces: violates
 \* models: AgentSession.advance, AgentSession.refresh, ClientDataPublication.uncached_request_event_rejects_old_read
+\* traces: violates
 \* A session's observed request head and the client that projects it on
 \* reopen (#3604).
 \*

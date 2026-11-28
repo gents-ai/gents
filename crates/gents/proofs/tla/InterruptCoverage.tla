@@ -1,8 +1,8 @@
 ---- MODULE InterruptCoverage ----
 \* lean: none
 \* crates: gents-session
-\* traces: violates
 \* models: SessionQueue.InterruptGeneration.bump, SessionQueue.InterruptGeneration.runningInterrupted, SessionQueue.InterruptGeneration.wakeAtClaim, SessionQueue.InterruptGeneration.only_another_interrupt_aborts_an_interrupt, SessionQueue.InterruptGeneration.an_interrupt_lost_to_another_is_passed_by_it, TransactionFence.fencedAgainst
+\* traces: violates
 \* An interrupt of a session racing the claim of its pending request, the
 \* wakes published into it, and the writes a running turn makes.
 \*
