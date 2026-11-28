@@ -55,48 +55,52 @@ fn suite_expected(signature: &str) -> String {
 }
 
 #[test]
-fn the_published_get_vanilla_case_signs() {
-    assert_eq!(
-        suite_case("GET", "/", &[], b""),
-        suite_expected("5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31")
+fn published_aws_sigv4_suite_cases() {
+    type SuiteCase<'a> = (
+        &'static str,
+        &'static str,
+        &'a [(&'a str, &'a str)],
+        &'static str,
     );
-}
-
-#[test]
-fn the_published_post_vanilla_case_signs() {
-    assert_eq!(
-        suite_case("POST", "/", &[], b""),
-        suite_expected("5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b")
-    );
-}
-
-#[test]
-fn the_published_query_order_key_case_signs() {
-    assert_eq!(
-        suite_case(
+    let cases: [SuiteCase<'_>; 5] = [
+        (
+            "GET",
+            "/",
+            &[],
+            "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+        ),
+        (
+            "POST",
+            "/",
+            &[],
+            "5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b",
+        ),
+        (
             "GET",
             "/",
             &[("Param2", "value2"), ("Param1", "value1")],
-            b""
+            "b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500",
         ),
-        suite_expected("b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500")
-    );
-}
-
-#[test]
-fn the_published_empty_query_key_case_signs() {
-    assert_eq!(
-        suite_case("GET", "/", &[("Param1", "value1")], b""),
-        suite_expected("a67d582fa61cc504c4bae71f336f98b97f1ea3c7a6bfe1b6e45aec72011b9aeb")
-    );
-}
-
-#[test]
-fn the_published_relative_path_case_normalizes_to_the_root() {
-    assert_eq!(
-        suite_case("GET", "/example/..", &[], b""),
-        suite_expected("5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31")
-    );
+        (
+            "GET",
+            "/",
+            &[("Param1", "value1")],
+            "a67d582fa61cc504c4bae71f336f98b97f1ea3c7a6bfe1b6e45aec72011b9aeb",
+        ),
+        (
+            "GET",
+            "/example/..",
+            &[],
+            "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+        ),
+    ];
+    for (method, path, query, sig) in cases {
+        assert_eq!(
+            suite_case(method, path, query, b""),
+            suite_expected(sig),
+            "{method} {path} {query:?}"
+        );
+    }
 }
 
 const CLAUDE_TIME: u64 = 1_793_448_000;

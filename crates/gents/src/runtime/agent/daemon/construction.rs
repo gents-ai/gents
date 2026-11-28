@@ -36,7 +36,7 @@ where
             0,
             gents_inference::rendered_request::CaptureScopeKind::Compaction,
         );
-        compaction_config.max_turns = 0;
+        compaction_config.max_turns = 1;
         let compactor = Arc::new(ProviderReductionEngine::new(
             model.clone(),
             compaction_config,

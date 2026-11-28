@@ -92,21 +92,23 @@ async fn while_polling_buffers_one_item_and_flushes_before_returning_it() {
 }
 
 #[tokio::test]
-async fn while_polling_preserves_end_of_stream_after_flush() {
-    let (release_flush, wait_for_release) = oneshot::channel();
-    let flush = async move {
-        wait_for_release.await.expect("flush release");
-        "flushed"
+async fn while_polling_preserves_end_of_stream_and_buffered_errors_after_flush() {
+    let run = |item: Option<Result<(), &'static str>>| async move {
+        let (release_flush, wait_for_release) = oneshot::channel();
+        let flush = async move {
+            wait_for_release.await.expect("flush release");
+            "flushed"
+        };
+        let mut combined = Box::pin(while_polling(flush, futures::future::ready(item)));
+        assert!(poll_once(combined.as_mut()).is_pending());
+        release_flush.send(()).expect("release the flush");
+        combined.await
     };
-    let end_of_stream = futures::future::ready(None::<()>);
-    let mut combined = Box::pin(while_polling(flush, end_of_stream));
-
-    assert!(poll_once(combined.as_mut()).is_pending());
-    release_flush.send(()).expect("release the flush");
-    let (flushed, item) = combined.await;
-
-    assert_eq!(flushed, "flushed");
-    assert_eq!(item, Some(None));
+    assert_eq!(run(None).await, ("flushed", Some(None)));
+    assert_eq!(
+        run(Some(Err("provider failed"))).await,
+        ("flushed", Some(Some(Err("provider failed"))))
+    );
 }
 
 #[tokio::test]
@@ -127,24 +129,6 @@ async fn dropping_the_generator_cancels_its_queued_gate_waiter() {
 
     let mut flush = Box::pin(gate.lock());
     assert!(poll_once(flush.as_mut()).is_ready());
-}
-
-#[tokio::test]
-async fn while_polling_returns_a_buffered_stream_error_after_flush() {
-    let (release_flush, wait_for_release) = oneshot::channel();
-    let flush = async move {
-        wait_for_release.await.expect("flush release");
-        "flushed"
-    };
-    let stream_error = futures::future::ready(Some(Err::<(), _>("provider failed")));
-    let mut combined = Box::pin(while_polling(flush, stream_error));
-
-    assert!(poll_once(combined.as_mut()).is_pending());
-    release_flush.send(()).expect("release the flush");
-    let (flushed, item) = combined.await;
-
-    assert_eq!(flushed, "flushed");
-    assert_eq!(item, Some(Some(Err("provider failed"))));
 }
 
 #[tokio::test]

@@ -1,0 +1,8 @@
+[
+  {
+    "config": "MCInterruptPartialOutputSuspendedHandoff",
+    "reason": "The broken handoff suspends after receiving a provider chunk and before yielding it. The real loop yields in the same poll. The cooperative-budget test observes that boundary directly.",
+    "source": "crates/gents-loop/src/end_to_end_test.rs",
+    "test": "a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent"
+  }
+]

@@ -46,7 +46,7 @@ const TEST_SLEEPS: &[(&str, usize, &str)] = &[
     ("gents-client-host", 2, "cross-process IPC/HTTP readiness where no OS notification seam exists (local listener connect and Windows ConPTY runtime status)"),
     ("gents-fs-runner", 2, "cross-process file-gate polling and wall-budget pause in the synchronous fs-runner"),
     ("gents-lean-contract", 1, "cross-process file-lock contention hold"),
-    ("gents-loop", 9, "virtual-time start_paused timers, Utc::now() deadline regression polls, and ScriptedProvider Delay/Repeat steps"),
+    ("gents-loop", 8, "virtual-time start_paused timers, Utc::now() deadline regression polls, and ScriptedProvider Delay/Repeat steps"),
     ("gents-store", 8, "bounded child/stdout polling, cross-process marker files, JWT real-clock second/expiry boundaries, and paused virtual-clock tests"),
     ("gents-tools", 2, "JWT real-clock expiry boundary waits across single transactions against VeraRsProvider::caller_of_* in embedded_vera_tests"),
 ];

@@ -34,6 +34,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::executor::evidence::{session_requests_with_access, SessionRequest};
 use super::inspect::read_retained_home;
 use crate::runner::TrialLocator;
 
@@ -88,8 +89,9 @@ pub struct StageTranscript {
     pub usage: TokenUsage,
     pub tool_calls: ToolCallCounts,
     pub context: ContextReductions,
-    /// Requests this one caused: a background tool's completion, which
-    /// continues this session, or a delegated agent's request in its own.
+    /// Requests this stage caused or continued into: a background tool's
+    /// completion, an in-stage follow-up prod in this session, or a delegated
+    /// agent's request in its own session.
     pub child_requests: Vec<ChildRequest>,
     pub calls: Vec<ProviderCall>,
     /// Every assistant message the request recorded, in session sequence order.
@@ -186,6 +188,7 @@ pub async fn export_retained_transcript(
     stage_request_ids: Vec<String>,
     options: TranscriptOptions,
 ) -> Result<TrialTranscript> {
+    let session_id = locator.session_id.clone();
     read_retained_home(
         runtime,
         runs_dir,
@@ -194,8 +197,52 @@ pub async fn export_retained_transcript(
         move |access, node_did| async move {
             let backends = trial_backends(&access, &node_did).await?;
             let mut stages = Vec::with_capacity(stage_request_ids.len());
+            let mut exported_ids = rapidhash::RapidHashSet::default();
             for request_id in &stage_request_ids {
-                stages.push(request_transcript(&access, request_id, &backends, options).await?);
+                let transcript =
+                    request_transcript(&access, request_id, &backends, options).await?;
+                collect_exported_request_ids(&transcript, &mut exported_ids);
+                stages.push(transcript);
+            }
+            let session_requests = session_requests_with_access(&access, &session_id).await?;
+            let follow_ups =
+                stage_follow_up_requests(&stage_request_ids, &session_requests, &exported_ids);
+            for (stage, stage_follow_ups) in stages.iter_mut().zip(follow_ups) {
+                for (request_id, lifecycle_state) in stage_follow_ups {
+                    if !exported_ids.insert(request_id.clone()) {
+                        continue;
+                    }
+                    let fallback_state = (!lifecycle_state.is_empty()).then_some(lifecycle_state);
+                    match request_transcript(&access, &request_id, &backends, options).await {
+                        Ok(exported) => {
+                            collect_exported_request_ids(&exported, &mut exported_ids);
+                            stage.child_requests.push(ChildRequest {
+                                request_id,
+                                session_id: exported
+                                    .session_id
+                                    .clone()
+                                    .or_else(|| Some(session_id.clone())),
+                                lifecycle_state: exported
+                                    .lifecycle_state
+                                    .clone()
+                                    .or(fallback_state),
+                                caused_by_tool_call_id: None,
+                                transcript: Some(Box::new(exported)),
+                                transcript_error: None,
+                            });
+                        }
+                        Err(error) => {
+                            stage.child_requests.push(ChildRequest {
+                                request_id,
+                                session_id: Some(session_id.clone()),
+                                lifecycle_state: fallback_state,
+                                caused_by_tool_call_id: None,
+                                transcript: None,
+                                transcript_error: Some(format!("{error:#}")),
+                            });
+                        }
+                    }
+                }
             }
             Ok(TrialTranscript {
                 usage: TokenUsage::sum(&trial_inference_calls(&access).await?),
@@ -205,6 +252,50 @@ pub async fn export_retained_transcript(
     )
     .await
     .context("exporting retained trial transcripts")
+}
+
+fn collect_exported_request_ids(
+    transcript: &StageTranscript,
+    seen: &mut rapidhash::RapidHashSet<String>,
+) {
+    seen.insert(transcript.request_id.clone());
+    for child in &transcript.child_requests {
+        seen.insert(child.request_id.clone());
+        if let Some(child_transcript) = child.transcript.as_deref() {
+            collect_exported_request_ids(child_transcript, seen);
+        }
+    }
+}
+
+/// Public requests of the trial session that followed a stage's initial request
+/// before the next stage began (such as `continue_until_done` follow-up prods)
+/// and were not already exported as a stage or causal child request.
+fn stage_follow_up_requests(
+    stage_request_ids: &[String],
+    session_requests: &[SessionRequest],
+    already_exported: &rapidhash::RapidHashSet<String>,
+) -> Vec<Vec<(String, String)>> {
+    let mut per_stage = vec![Vec::new(); stage_request_ids.len()];
+    let stage_positions: rapidhash::RapidHashMap<&str, usize> = stage_request_ids
+        .iter()
+        .enumerate()
+        .map(|(index, request_id)| (request_id.as_str(), index))
+        .collect();
+    let mut current_stage = None;
+    for request in session_requests {
+        if let Some(&stage_index) = stage_positions.get(request.request_id.as_str()) {
+            current_stage = Some(stage_index);
+            continue;
+        }
+        if already_exported.contains(&request.request_id) {
+            continue;
+        }
+        if let Some(stage_index) = current_stage {
+            per_stage[stage_index]
+                .push((request.request_id.clone(), request.lifecycle_state.clone()));
+        }
+    }
+    per_stage
 }
 
 /// One request's transcript, with every request it caused exported in turn.
@@ -785,5 +876,49 @@ mod tests {
 
         let authored = assistant_row(doc_id, format!("authored:{doc_id}:prompt"), 6);
         assert_eq!(message_turn_coordinate(&authored, doc_id), None);
+    }
+
+    #[test]
+    fn stage_follow_up_requests_attach_unexported_session_requests_to_their_preceding_stage() {
+        let session_req = |id: &str| SessionRequest {
+            request_id: id.into(),
+            lifecycle_state: "completed".into(),
+        };
+        let stage_ids = vec![
+            "stage-0".into(),
+            "stage-1-delegated-session".into(),
+            "stage-2".into(),
+        ];
+        let session_requests = vec![
+            session_req("before-stages"),
+            session_req("stage-0"),
+            session_req("stage-0-causal-child"),
+            session_req("stage-0-prod-1"),
+            session_req("stage-0-prod-2"),
+            session_req("stage-2"),
+            session_req("stage-2-prod-1"),
+        ];
+        let mut already_exported = rapidhash::RapidHashSet::default();
+        for id in [
+            "stage-0",
+            "stage-0-causal-child",
+            "stage-1-delegated-session",
+            "stage-2",
+        ] {
+            already_exported.insert(id.to_string());
+        }
+
+        let follow_ups = stage_follow_up_requests(&stage_ids, &session_requests, &already_exported);
+        assert_eq!(
+            follow_ups,
+            vec![
+                vec![
+                    ("stage-0-prod-1".into(), "completed".into()),
+                    ("stage-0-prod-2".into(), "completed".into()),
+                ],
+                vec![],
+                vec![("stage-2-prod-1".into(), "completed".into())],
+            ]
+        );
     }
 }

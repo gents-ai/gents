@@ -898,6 +898,10 @@ pub fn admit_authored_root(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set host.root to an admitted absolute workspace path (a sibling of host.files and host.bash). In config, read tools get first, then tools update with set.host preserving its other fields; do not put root inside host.files. For agent create, omit --preset (options.preset) for database/plugin-only agents or pass --root <path> (options.root)")]
+pub struct ExplicitHostRootRequired;
+
 /// Validate and canonicalize the existing `Tools.host.root` field against a
 /// published policy. `stored_root` is the `host.root` value the document held
 /// before this write; the containing-grant tolerance applies only when the
@@ -918,10 +922,9 @@ pub fn canonicalize_tools_root(
         .filter(|root| !root.is_empty());
 
     let Some(authored_root) = authored_root else {
-        anyhow::ensure!(
-            !policy.configured || !requires_root,
-            "active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set host.root to an admitted absolute workspace path (a sibling of host.files and host.bash). In config, read tools get first, then tools update with set.host preserving its other fields; do not put root inside host.files"
-        );
+        if policy.configured && requires_root {
+            return Err(ExplicitHostRootRequired.into());
+        }
         if let Some(host) = tools.host.as_mut() {
             host.root = None;
         }
@@ -1121,7 +1124,12 @@ mod tests {
         };
         let error = canonicalize_tools_root(&mut tools, &policy, None)
             .expect_err("CLI uses the shared root and cannot inherit cwd under explicit policy");
-        assert!(error.to_string().contains("require an explicit root"));
+        let message = error.to_string();
+        assert!(message.contains("require an explicit root"), "{message}");
+        assert!(
+            message.contains("omit --preset") && message.contains("pass --root"),
+            "{message}"
+        );
     }
 
     #[test]

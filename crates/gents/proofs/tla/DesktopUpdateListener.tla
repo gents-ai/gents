@@ -2,6 +2,7 @@
 \* lean: none
 \* crates: gents-desktop-bridge
 \* paths: apps/gents-desktop/src/hooks/clientObservation.ts, apps/gents-desktop/src/hooks/projectionController.ts, apps/gents-desktop/src/hooks/sessionReads.ts
+\* traces: violates
 (***************************************************************************)
 (* The last leg of the desktop's event path: the bridge emitter, Tauri     *)
 (* delivery, the frontend's listener registration, its projection drain    *)

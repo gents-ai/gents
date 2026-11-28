@@ -171,7 +171,7 @@ impl ClientRuntime {
                 }
                 signatures.remove(&cache_key);
                 if !fence_accepted {
-                    store.request_resync();
+                    // `RequestPatchPublication.FreshReadAction.rejectCandidate`.
                     return Ok(None);
                 }
             }
@@ -198,7 +198,6 @@ impl ClientRuntime {
         }
         let (rows, bytes, _hash) = signature;
         let Some(version) = store.merge_chat_patch_at_read(&captured, patch) else {
-            store.request_resync();
             return Ok(None);
         };
         let mut signatures = self.request_patch_signatures.lock().await;

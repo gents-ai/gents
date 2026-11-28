@@ -7,7 +7,8 @@ mod trap_handler;
 use super::test_fixtures::filled_output_wat;
 #[cfg(test)]
 use super::test_fixtures::{
-    build_plugin_afb, build_plugin_pack, ECHO_WAT, IMPORTING_WAT, PLUGIN_ARTIFACT,
+    build_plugin_afb, build_plugin_pack, plugin_named, source_only_afb, ECHO_WAT, IMPORTING_WAT,
+    PLUGIN_ARTIFACT,
 };
 #[cfg(test)]
 use super::*;
@@ -302,65 +303,6 @@ fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     assert_eq!(runner.manifold, Manifold::sealed());
 }
 
-#[cfg(test)]
-fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<u8> {
-    use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
-    use afterburner_afb::pack::Builder;
-
-    let manifest = Manifest {
-        format: Format {
-            version: afterburner_afb::reader_format_version(),
-            min_reader: None,
-        },
-        package: Package {
-            name: name.into(),
-            namespace: "test".into(),
-            version: "0.1.0".into(),
-            language: language.into(),
-            entry: entry.into(),
-            description: None,
-            homepage: None,
-            license: None,
-            keywords: vec![],
-        },
-        runtime: Runtime {
-            min: afterburner_core::VERSION.to_owned(),
-            target: None,
-        },
-        dependencies: Default::default(),
-        npm: Default::default(),
-        pip: Default::default(),
-        gem: Default::default(),
-        signature: None,
-        metadata: Default::default(),
-        extra: Default::default(),
-    };
-    let (bytes, _digest) = Builder::new(manifest, Manifold::sealed())
-        .source(entry, body.to_vec())
-        .build()
-        .expect("build a source-only fixture .afb");
-    bytes
-}
-
-#[cfg(test)]
-fn plugin_named(name: &str, language: &str) -> PackPlugin {
-    PackPlugin {
-        name: name.to_owned(),
-        description: format!("a {language} plugin"),
-        artifact: PLUGIN_ARTIFACT.to_owned(),
-        source: None,
-        language: language.to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
-        manifold: None,
-        instructions: None,
-        bind_dir: None,
-        limits: None,
-        model_slot: None,
-        service: None,
-        ..Default::default()
-    }
-}
-
 #[test]
 fn a_ruby_source_plugin_is_refused_at_admission_not_silently_run() {
     let afb_bytes = source_only_afb("rb_plugin", "ruby", "source/main.rb", b"puts 'hello'");
@@ -556,21 +498,7 @@ fn a_python_plugin_is_admitted_because_its_bounds_are_enforced() {
 
 #[test]
 fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
-    let plugin = PackPlugin {
-        name: "broken".to_owned(),
-        description: "not a real afb".to_owned(),
-        artifact: PLUGIN_ARTIFACT.to_owned(),
-        source: None,
-        language: "rust".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
-        manifold: None,
-        instructions: None,
-        bind_dir: None,
-        limits: None,
-        model_slot: None,
-        service: None,
-        ..Default::default()
-    };
+    let plugin = plugin_named("broken", "rust");
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
 }

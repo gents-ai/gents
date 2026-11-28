@@ -1,0 +1,356 @@
+{
+  "config": "MCDesktopUpdateListenerSupersededMismatch",
+  "constants": {
+    "FullAfterListen": true,
+    "InitialRead": true,
+    "ListenFailures": 1,
+    "MaxVersion": 2,
+    "MismatchExit": false,
+    "Mismatches": 1,
+    "PendingReread": true,
+    "Relisten": true,
+    "RereadBudget": 2,
+    "Selections": 1
+  },
+  "expect": "violates NoStuckPending",
+  "spec": "DesktopUpdateListener",
+  "steps": [
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 1,
+        "selected": 1,
+        "selections": 1,
+        "startup": true,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 0,
+        "selected": 1,
+        "selections": 1,
+        "startup": true,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "ArriveWithNotice",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": true,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 1,
+        "selected": 1,
+        "selections": 1,
+        "startup": true,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "ListenResolves",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": true,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": true,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "Select",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": true,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": true,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "StartRead",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 2,
+        "mismatches": 1,
+        "phase": "loading",
+        "queued": false,
+        "reading": {
+          "s": 2,
+          "v": 2
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": true,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "FinishMismatch",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 2,
+        "mismatches": 0,
+        "phase": "loading",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 2,
+        "mismatches": 1,
+        "phase": "loading",
+        "queued": false,
+        "reading": {
+          "s": 2,
+          "v": 2
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "Stutter",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 2,
+        "mismatches": 0,
+        "phase": "loading",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "backToState": 7,
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "ready",
+        "load": 2,
+        "mismatches": 0,
+        "phase": "loading",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": true,
+        "rust": 2,
+        "selected": 2,
+        "selections": 0,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    }
+  ]
+}

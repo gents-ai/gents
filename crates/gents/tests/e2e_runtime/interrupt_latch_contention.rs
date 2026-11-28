@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use gents::operations::request::interrupt;
-use gents::test_support::tla_trace::{Action, Red, SpecTraceMap, Trace};
+use gents::test_support::tla_trace::{Action, SpecTraceMap};
+use gents_lean_vocab::tla::replay::{Red, Trace};
 use gents_protocol::document_query::{
     fields::agent_request as fields, Filter, Input, Query, Selection, Update,
 };

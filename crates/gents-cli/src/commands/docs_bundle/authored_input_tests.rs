@@ -686,6 +686,27 @@ fn surface_entry_kinds_validate_exactly_as_the_deserializer_reads_them() {
     );
 }
 
+#[test]
+fn surface_entry_key_fields_validate_exactly_as_the_deserializer_reads_them() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    let dir = Path::new(".");
+    for kind in ["create", "upsert"] {
+        for key_fields in [None, Some(json!(null)), Some(json!(["name"]))] {
+            let mut config = surface_entry(json!(kind));
+            if let Some(key_fields) = &key_fields {
+                config["datastore_tool_surfaces"][0]["entries"][0]["key_fields"] =
+                    key_fields.clone();
+            }
+            assert_eq!(
+                decodes(&config, dir, None),
+                validator.is_valid(&config),
+                "the loader and the schema disagree on {config}"
+            );
+        }
+    }
+}
+
 /// schemars generates no `pattern` of its own, so every patterned member of
 /// an authored schema is a helper beside the canonical values, and the
 /// reference folds it by its note.

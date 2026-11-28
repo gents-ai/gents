@@ -262,7 +262,7 @@ where
                 .unwrap_or(&self.config.context_calibration)
                 .ratio_only();
             summary_config.replay = crate::loop_stream::LoopReplayInput::default();
-            summary_config.max_turns = 0;
+            summary_config.max_turns = 1;
             let summary_max_output_tokens = self.summary_max_output_tokens(options, context_window);
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();

@@ -595,7 +595,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
 }
 
 #[tokio::test]
-async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work() {
+async fn runtime_http_routes_enforce_authentication_and_host_authority() {
     let f = Fixture::start().await;
     let authorization = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
         .runtime_authorization()
@@ -639,7 +639,6 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
             );
         }
     }
-    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
     let invalid = f
         .get("/sessions")
         .bearer_auth("invalid")
@@ -647,39 +646,25 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
         .await
         .unwrap();
     assert_eq!(invalid.status(), StatusCode::FORBIDDEN);
-    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
-}
 
-#[tokio::test]
-async fn a_plugin_record_is_served_only_to_the_node_or_a_native_admin() {
-    let f = Fixture::start().await;
-    let path = format!(
+    let plugin_path = format!(
         "{}?plugin=acme/tool",
         gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH
     );
-    let other = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
-        .runtime_authorization()
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        f.get(&path).send().await.unwrap().status(),
+        f.get(&plugin_path).send().await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        f.get(&path)
-            .header(header::AUTHORIZATION, &other)
+        f.get(&plugin_path)
+            .header(header::AUTHORIZATION, &authorization)
             .send()
             .await
             .unwrap()
             .status(),
         StatusCode::FORBIDDEN
     );
-}
 
-#[tokio::test]
-async fn foreign_host_is_refused_on_public_private_and_independently_authenticated_routes() {
-    let f = Fixture::start().await;
     for path in [
         "/version",
         "/status",
@@ -710,6 +695,60 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
             .unwrap();
         assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST, "{path}");
     }
+
+    let install_body = serde_json::json!({
+        "node_did": f.owner.did(), "root": "", "dependencies": [],
+        "inference_slots": [], "overwrite": false, "keep": false,
+        "preview": false, "force_rebind": false, "grant_authority": false,
+        "explicit": true, "wire": []
+    });
+    // An authenticated caller reaches request decoding, which refuses this
+    // archive-less body before any database work.
+    for (identity, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(&f.other), StatusCode::BAD_REQUEST),
+        (Some(&f.owner), StatusCode::BAD_REQUEST),
+    ] {
+        let mut request = f
+            .client
+            .post(format!("{}/packs/install", f.endpoint))
+            .json(&install_body);
+        if let Some(identity) = identity {
+            request = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
+                .authorize_runtime(request)
+                .await
+                .unwrap();
+        }
+        assert_eq!(request.send().await.unwrap().status(), expected);
+    }
+
+    let identity_url = format!(
+        "{}{}",
+        f.endpoint,
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH
+    );
+    let unsigned = f
+        .client
+        .post(&identity_url)
+        .json(&serde_json::json!({"node_did": f.owner.did()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+    let endpoint = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.owner);
+    let response = endpoint
+        .authorize_runtime(
+            f.client
+                .post(&identity_url)
+                .json(&serde_json::json!({"node_did": "different-node"})),
+        )
+        .await
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 /// The desktop's managed-runtime status check reads as the User through the
@@ -876,70 +915,6 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
             "a key that is not the home's admin reads only the public body: {key}"
         );
     }
-}
-
-#[tokio::test]
-async fn remote_pack_install_requires_authenticated_client_before_work() {
-    let fixture = Fixture::start().await;
-    let body = serde_json::json!({
-        "node_did": fixture.owner.did(), "root": "", "dependencies": [],
-        "inference_slots": [], "overwrite": false, "keep": false,
-        "preview": false, "force_rebind": false, "grant_authority": false,
-        "explicit": true, "wire": []
-    });
-    // An authenticated caller reaches request decoding, which refuses this
-    // archive-less body before any database work.
-    for (identity, expected) in [
-        (None, StatusCode::UNAUTHORIZED),
-        (Some(&fixture.other), StatusCode::BAD_REQUEST),
-        (Some(&fixture.owner), StatusCode::BAD_REQUEST),
-    ] {
-        let mut request = fixture
-            .client
-            .post(format!("{}/packs/install", fixture.endpoint))
-            .json(&body);
-        if let Some(identity) = identity {
-            request = principal_endpoint(format!("{}/api/v0/graphql", fixture.endpoint), identity)
-                .authorize_runtime(request)
-                .await
-                .unwrap();
-        }
-        let response = request.send().await.unwrap();
-        assert_eq!(response.status(), expected);
-    }
-    assert_eq!(fixture.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn agent_identity_provisioning_requires_client_authentication_and_writes_no_config() {
-    let f = Fixture::start().await;
-    let url = format!(
-        "{}{}",
-        f.endpoint,
-        gents_protocol::agent_identity::AGENT_IDENTITY_PATH
-    );
-    let unsigned = f
-        .client
-        .post(&url)
-        .json(&serde_json::json!({"node_did":f.owner.did()}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
-    let endpoint = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.owner);
-    let response = endpoint
-        .authorize_runtime(
-            f.client
-                .post(&url)
-                .json(&serde_json::json!({"node_did":"different-node"})),
-        )
-        .await
-        .unwrap()
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[test]

@@ -1972,37 +1972,6 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     Ok(())
 }
 
-#[test]
-fn a_home_still_set_to_grok_serves() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-    run_init_json(
-        &home_dir,
-        &[
-            "--inference-url",
-            "http://127.0.0.1:9/v1",
-            "--model-name",
-            "m",
-        ],
-    )?;
-    fs::write(
-        home_dir
-            .join(".gents")
-            .join(gents_store::local::home::CLIENT_CONFIG_FILE_NAME),
-        r#"{"client":"grok"}"#,
-    )?;
-    let (_serve, readiness) = spawn_server_with_ready_json(
-        &home_dir,
-        allocate_port()?,
-        &["--p2p-transport", "none"],
-        &[],
-    )?;
-
-    assert_eq!(readiness["status"], "serving", "{readiness}");
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

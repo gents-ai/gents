@@ -9,16 +9,6 @@ use super::command_args::{
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 use crate::native::{CommandPolicyDenial, DenialReason};
 
-#[cfg(test)]
-pub(crate) fn validate_read_only_command(
-    command: &str,
-    args: &[String],
-    allowlist: &[String],
-) -> std::result::Result<(), ToolError> {
-    let policy = CommandExecutionPolicy::read_only(allowlist.to_vec());
-    validate_command_policy(command, args, &policy)
-}
-
 pub fn validate_command_policy(
     command: &str,
     args: &[String],

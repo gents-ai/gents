@@ -43,49 +43,8 @@ fn original_for(client: &str, node: &str, agent: &str) -> Value {
 }
 
 #[tokio::test]
-async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<()> {
-    let (core, _home) = crate::tests::support::boot_core().await;
-    let result = async {
-        let client = core.node_identity().did().to_owned();
-        let query = GoalSubmissionQuery {
-            client_did:client.clone(), node_did:"did:fixture:runtime".into(), command_id:"original-command".into(),
-        };
-        core.stores().ensure("did:fixture:runtime").set_focused_request_id(Some("another-chat".into()));
-        let recovered = serde_json::to_value(recover_goal_submission(&core, query.clone()).await?)?;
-        assert_eq!(recovered,json!({"kind":"unconfirmed","nodeDid":query.node_did,"commandId":query.command_id}));
-        let mut foreign = query;
-        foreign.client_did = "another-native-client".into();
-        assert!(recover_goal_submission(&core, foreign).await.is_err());
-        for (client_did, command_id, session_id) in [
-            (Some(client.as_str()),Some("original-command"),None),
-            (Some("another-native-client"),Some("original-command"),Some("session")),
-            (None,Some("original-command"),Some("session")),
-        ] {
-            let request = serde_json::from_value(json!({
-                "clientDid":client_did,"commandId":command_id,"sessionId":session_id,
-                "nodeDid":"did:fixture:runtime","sessionDocId":null,"expected":null,
-                "agentDid":"fixture-agent","cwd":null,"action": {"kind":"create","objective":"Retain this Goal","tokenBudget":null},
-            }))?;
-            assert!(super::super::goal::control_goal(&core, request).await.is_err());
-        }
-        let request: crate::types::GoalControlRequest = serde_json::from_value(original(&client, "node"))?;
-        let mut receipt = submission()["receipt"].clone();
-        receipt["clientDid"] = json!(client);
-        let error = resume_goal_submission(&core, request, serde_json::from_value(receipt)?).await.unwrap_err();
-        assert!(error.to_string().contains("preparation is unavailable"), "{error}");
-        assert_eq!(core.stores().ensure("did:fixture:runtime").focused_request_id().as_deref(),Some("another-chat"));
-        let rows=ConfigAccess::local(core.node_arc()).execute("{ClientAuthoredSubmission {submission_id} PendingChatSubmission {request_id}}").await?;
-        for name in ["ClientAuthoredSubmission","PendingChatSubmission"] {
-            assert_eq!(rows["data"][name],json!([]),"{name}");
-        }
-        Ok::<_, anyhow::Error>(())
-    }.await;
-    core.shutdown().await?;
-    result
-}
-
-#[tokio::test]
-async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparation() -> Result<()> {
+async fn goal_resume_refuses_missing_or_reauthored_input_without_replacing_signed_preparation(
+) -> Result<()> {
     use gents_store::client_journal::paths::DesktopPaths;
     use std::sync::Arc;
     use std::time::Duration;
@@ -98,6 +57,71 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         )
         .await?,
     );
+    // Missing Goal preparation never allocates or resubmits work.
+    {
+        let client = core.node_identity().did().to_owned();
+        let query = GoalSubmissionQuery {
+            client_did: client.clone(),
+            node_did: "did:fixture:runtime".into(),
+            command_id: "original-command".into(),
+        };
+        core.stores()
+            .ensure("did:fixture:runtime")
+            .set_focused_request_id(Some("another-chat".into()));
+        let recovered = serde_json::to_value(recover_goal_submission(&core, query.clone()).await?)?;
+        assert_eq!(
+            recovered,
+            json!({"kind":"unconfirmed","nodeDid":query.node_did,"commandId":query.command_id})
+        );
+        let mut foreign = query;
+        foreign.client_did = "another-native-client".into();
+        assert!(recover_goal_submission(&core, foreign).await.is_err());
+        for (client_did, command_id, session_id) in [
+            (Some(client.as_str()), Some("original-command"), None),
+            (
+                Some("another-native-client"),
+                Some("original-command"),
+                Some("session"),
+            ),
+            (None, Some("original-command"), Some("session")),
+        ] {
+            let request = serde_json::from_value(json!({
+                "clientDid":client_did,"commandId":command_id,"sessionId":session_id,
+                "nodeDid":"did:fixture:runtime","sessionDocId":null,"expected":null,
+                "agentDid":"fixture-agent","cwd":null,"action": {"kind":"create","objective":"Retain this Goal","tokenBudget":null},
+            }))?;
+            assert!(super::super::goal::control_goal(&core, request)
+                .await
+                .is_err());
+        }
+        let request: crate::types::GoalControlRequest =
+            serde_json::from_value(original(&client, "node"))?;
+        let mut receipt = submission()["receipt"].clone();
+        receipt["clientDid"] = json!(client);
+        let error = resume_goal_submission(&core, request, serde_json::from_value(receipt)?)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("preparation is unavailable"),
+            "{error}"
+        );
+        assert_eq!(
+            core.stores()
+                .ensure("did:fixture:runtime")
+                .focused_request_id()
+                .as_deref(),
+            Some("another-chat")
+        );
+        let rows = ConfigAccess::local(core.node_arc())
+            .execute(
+                "{ClientAuthoredSubmission {submission_id} PendingChatSubmission {request_id}}",
+            )
+            .await?;
+        for name in ["ClientAuthoredSubmission", "PendingChatSubmission"] {
+            assert_eq!(rows["data"][name], json!([]), "{name}");
+        }
+    }
+
     // The desktop's client key is the User of a served runtime it routes to.
     let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
         core.node_identity().clone(),

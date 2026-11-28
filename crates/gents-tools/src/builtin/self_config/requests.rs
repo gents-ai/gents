@@ -25,9 +25,25 @@ pub fn anchored_request(
 ) -> ApplyRequest<'static> {
     let mut request = ApplyRequest::new(target, patch);
     request.resolve_unique = Box::new(move |anchor| {
-        anchor
-            .ref_id(field)
-            .ok_or_else(|| anyhow!("bound {field} is missing"))
+        if let Some(id) = anchor.ref_id(field) {
+            return Ok(id);
+        }
+        if field == "tools_id" {
+            let agent_did = anchor
+                .doc
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .unwrap_or("<AGENT_DID>");
+            let suggested_id = format!("{agent_did}:tools");
+            return Err(command::CommandGuidance {
+                message: format!(
+                    "bound tools_id is missing on agent {agent_did:?}'s context; create a Tools document with {{\"argv\":[\"tools\",\"create\"],\"target_id\":{suggested_id:?}}} and attach it with {{\"argv\":[\"context\",\"update\"],\"options\":{{\"agent\":{agent_did:?}}},\"set\":{{\"tools_id\":{suggested_id:?}}}}}, then retry tools update"
+                ),
+                next_call: json!({"argv":["tools","create"],"target_id":suggested_id}),
+            }
+            .into());
+        }
+        Err(anyhow!("bound {field} is missing"))
     });
     request
 }

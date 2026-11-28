@@ -18,19 +18,13 @@ fn test_node_did() -> String {
 
 const TEST_BACKEND_ID: &str = "backend-order";
 
-async fn test_node() -> Arc<EmbeddedNode> {
-    // The node runs under the fixture root with native ACP enabled, so
-    // request rows are authorized by their creator and working Agent, as in
-    // production. The managed Agent signer bound by `test_lifecycle` names
-    // this node.
+async fn test_node() -> (gents_store::test_support::TestStore, Arc<EmbeddedNode>) {
     let db = crate::triggers::callback::test_node_builder("test-node").await;
     let node = db.node.clone();
     crate::triggers::callback::seed_test_agent(&node, &test_node_did()).await;
-    node
+    (db, node)
 }
 
-/// The runtime root's access: it creates request rows and grants their
-/// working Agent, as the creating owner does in production.
 fn root_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAccess {
     gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
@@ -38,8 +32,6 @@ fn root_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAc
     )
 }
 
-/// The fixture Agent's managed access, used for every lifecycle write a
-/// request performs (claim, begin, goal and requeue writes).
 async fn load_agent_goal(
     node: &Arc<EmbeddedNode>,
     session: &str,
@@ -53,7 +45,6 @@ async fn load_agent_goal(
         .await
 }
 
-/// The working Agent owns the sessions its claims and goals observe.
 async fn ensure_agent_session(
     node: &Arc<EmbeddedNode>,
     session: &str,
@@ -104,7 +95,7 @@ fn test_lifecycle(
 }
 
 async fn insert_pending_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
     created_at: &str,
@@ -124,7 +115,7 @@ async fn insert_pending_request(
 }
 
 async fn insert_pending_request_for_owner(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     request_id: &str,
     session_id: &str,
@@ -187,630 +178,67 @@ async fn insert_pending_request_for_owner(
         .unwrap()
 }
 
+async fn seed_trigger_fires(node: &Arc<EmbeddedNode>, receipts: Vec<serde_json::Value>) {
+    fixture_agent_access(node, FIXTURE_AGENT_NONCE)
+        .transact_write("test.seed_trigger_fires", |txn| {
+            let receipts = receipts.clone();
+            Box::pin(async move {
+                for receipt in receipts {
+                    txn.execute_with_variables(
+                        "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
+                        &serde_json::json!({"input": receipt}),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 async fn durable_request_row(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
 ) -> gents_protocol::row::AgentRequestRow {
     let doc_id = escape_graphql_string(doc_id);
     let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-                gents_protocol::row::AGENT_REQUEST_FIELDS,
-            ))
-            .await
-            .unwrap();
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
     serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
 }
 
-#[tokio::test]
-async fn durable_claim_and_begin_use_real_owners_without_arming_local_renewal() {
-    let node = test_node().await;
-    let request = insert_pending_request(
-        &node,
-        "durable-claim",
-        "durable-session",
-        "2023-11-14T22:13:25Z",
-        None,
-        "interactive",
-    )
-    .await;
-    let doc_id = request.doc_id.clone();
-    let mut lifecycle = test_lifecycle(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        TEST_BACKEND_ID,
-    );
-    lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(5));
-    let now = chrono::DateTime::parse_from_rfc3339("2023-11-14T22:13:25Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let outcome = lifecycle
-        .claim_pending_durable_with_inputs(|| now, || (now, "lean-generation-7".into()))
-        .await
-        .unwrap();
-    let DurableClaimOutcome::Claimed(receipt) = outcome else {
-        panic!("fresh request was not durably claimed")
-    };
-    assert_eq!(receipt.request.doc_id, doc_id);
-    assert_eq!(receipt.execution_generation, "lean-generation-7");
-    assert_eq!(receipt.lease_ms, 5_000);
-    assert_eq!(lifecycle.state, LocalLifecycleState::Pending);
-    assert!(!lifecycle.holds_execution_lease());
-    assert!(!lifecycle.holds_renewal_task());
-
-    let claimed = durable_request_row(&node, &doc_id).await;
-    assert_eq!(
-        claimed.lifecycle_state,
-        Some(RequestLifecycleState::Claimed)
-    );
-    assert_eq!(
-        claimed.execution_generation.as_deref(),
-        Some("lean-generation-7")
-    );
-    assert_eq!(
-        claimed.execution_lease_expires_at.as_deref(),
-        Some("2023-11-14T22:13:30+00:00")
-    );
-    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
-    RequestLifecycle::begin_owned_execution_at_with_access(
-        &agent,
-        &doc_id,
-        "lean-generation-7",
-        || now,
-    )
-    .await
-    .unwrap();
-    RequestLifecycle::begin_owned_execution_at_with_access(
-        &agent,
-        &doc_id,
-        "lean-generation-7",
-        || now + chrono::Duration::seconds(1),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        durable_request_row(&node, &doc_id).await.lifecycle_state,
-        Some(RequestLifecycleState::Processing)
-    );
-    assert!(
-        RequestLifecycle::begin_owned_execution_at_with_access(
-            &agent,
-            &doc_id,
-            "lean-generation-7",
-            || now + chrono::Duration::seconds(6),
-        )
-        .await
-        .is_err(),
-        "expired replay must not acknowledge ownership"
-    );
-}
-
-#[tokio::test]
-async fn claim_queue_uses_arrival_order_and_scopes_sessions_to_owner() {
-    let node = test_node().await;
-    let _foreign = insert_pending_request_for_owner(
-        &node,
-        "did:test:foreign-owner",
-        "foreign-first",
-        "shared-session-id",
-        "2025-01-01T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    let first = insert_pending_request(
-        &node,
-        "z-first",
-        "shared-session-id",
-        "2026-01-02T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    let second = insert_pending_request(
-        &node,
-        "a-second",
-        "shared-session-id",
-        "2026-01-01T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    for index in 0..63 {
-        insert_pending_request(
-            &node,
-            &format!("session-later-{index}"),
-            "shared-session-id",
-            "2026-01-01T00:00:02Z",
-            None,
-            "interactive",
-        )
-        .await;
-    }
-    for (request, expected) in [(&first, true), (&second, false)] {
-        let allowed = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
-            .transact_write("test.claim_queue_arrival_order", |txn| {
-                Box::pin(async move {
-                    gents_session::request::lifecycle::query::claim_queue_allows(txn, request).await
-                })
-            })
-            .await
-            .unwrap();
-        assert_eq!(allowed, expected);
-    }
-}
-
-#[tokio::test]
-async fn serial_claim_considers_active_owner_requests_across_pages() {
-    for case in gents_lean_vocab::families::trigger_delivery_queue_paged_claims::cases() {
-        let node = test_node().await;
-        let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
-            owner_did: test_node_did(),
-            trigger_id: "serial-trigger".into(),
-            source_collection: "Work".into(),
-            source_doc_id: source_doc_id.into(),
-        };
-        let first_identity = identity("serial-first-source");
-        let next_identity = identity("serial-next-source");
-        let mut cohort = vec![
-            (first_identity.clone(), "serial-first-session".to_owned()),
-            (next_identity.clone(), "serial-next-session".to_owned()),
-        ];
-        cohort.extend((0..63).map(|index| {
-            (
-                identity(&format!("serial-later-source-{index}")),
-                format!("serial-later-session-{index}"),
-            )
-        }));
-        let first_request_id = first_identity.request_id();
-        let next_request_id = next_identity.request_id();
-        let first = insert_pending_request(
-            &node,
-            &first_request_id,
-            "serial-first-session",
-            "2026-01-01T00:00:00Z",
-            None,
-            "scheduled",
-        )
-        .await;
-        let next = insert_pending_request(
-            &node,
-            &next_request_id,
-            "serial-next-session",
-            "2026-01-01T00:00:01Z",
-            None,
-            "scheduled",
-        )
-        .await;
-        for (identity, session_id) in cohort.iter().skip(2) {
-            let request_id = identity.request_id();
-            insert_pending_request(
-                &node,
-                &request_id,
-                session_id,
-                "2026-01-01T00:00:02Z",
-                None,
-                "scheduled",
-            )
-            .await;
-        }
-        let receipts = cohort
-            .iter()
-            .map(|(identity, session_id)| {
-                let fire_key = identity.fire_key();
-                let request_id = identity.request_id();
-                serde_json::json!({
-                    "fire_key": fire_key,
-                    "owner_did": identity.owner_did.as_str(),
-                    "trigger_id": identity.trigger_id.as_str(),
-                    "source_collection": identity.source_collection.as_str(),
-                    "source_doc_id": identity.source_doc_id.as_str(),
-                    "request_id": request_id,
-                    "session_id": session_id,
-                    "task_id": "serial-task",
-                    "queued_serial": true,
-                    "emit_outcome": false,
-                    "created_at": "2026-01-01T00:00:00Z"
-                })
-            })
-            .collect::<Vec<_>>();
-        // The firing Agent stages each receipt beside the request it creates.
-        fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write(
-                "test.seed_serial_claim_receipts",
-                |txn| {
-                    let receipts = receipts.clone();
-                    Box::pin(async move {
-                        for receipt in receipts {
-                            txn.execute_with_variables(
-                                "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-                                &serde_json::json!({"input": receipt}),
-                            )
-                            .await?;
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    })
-                },
-            )
-            .await
-            .unwrap();
-
-        let request = match case.input.identity.source_doc_id.as_str() {
-            "a" => &first,
-            "b" => &next,
-            other => panic!("the serial cohort has no fire for modeled document {other}"),
-        };
-        let allowed = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
-            .transact_write("test.serial_claim_trigger_cohort", |txn| {
-                Box::pin(async move {
-                    gents_session::request::lifecycle::query::claim_queue_allows(txn, request).await
-                })
-            })
-            .await
-            .unwrap();
-        case.check(
-            gents_lean_vocab::families::trigger_delivery_queue_paged_claims::QueueClaimOutput {
-                can_claim: allowed,
-            },
-        );
-    }
-}
-
-#[tokio::test]
-async fn queued_task_goal_changes_only_when_its_request_claims() {
-    for stopped in [false, true] {
-        for task_budget in [None, Some(50)] {
-            let node = test_node().await;
-            let session = "task-goal-session";
-            ensure_agent_session(&node, session, &test_node_did(), None)
-                .await
-                .unwrap();
-            let original = crate::goal::seed_goal_from_access(
-                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
-                &test_node_did(),
-                session,
-                Some("finish original work"),
-                Some(gents_protocol::goal_status::GoalStatus::Active),
-                Some(Some(100)),
-                None,
-            )
-            .await
-            .unwrap();
-            let first = insert_pending_request(
-                &node,
-                "prior-request",
-                session,
-                "2026-01-01T00:00:00Z",
-                None,
-                "interactive",
-            )
-            .await;
-            let first_doc_id = first.doc_id.clone();
-            let second = insert_pending_request(
-                &node,
-                "task-request",
-                session,
-                "2026-01-01T00:00:01Z",
-                None,
-                "interactive",
-            )
-            .await;
-            let assigned_doc_id = second.doc_id.clone();
-            let receipt = serde_json::json!({
-                "fire_key": "task-goal-fire", "owner_did": test_node_did(),
-                "task_id": "goal-task", "created_at": "2026-01-01T00:00:01Z",
-                "trigger_id": "task-goal-trigger", "source_collection": "Work",
-                "source_doc_id": "assignment", "request_id": second.request_id,
-                "session_id": session, "queued_serial": true, "emit_outcome": false,
-                "goal_id": original.goal_id, "goal_objective": "perform next assignment",
-                "goal_token_budget": task_budget, "goal_assignment_applied": false,
-            });
-            fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write("test.task_assignment", |txn| {
-            let receipt = receipt.clone();
+async fn create_fixture_request(
+    access: &gents_store::config_client::ConfigAccess,
+    mutation: &str,
+) -> String {
+    access
+        .transact_write("test.fixture_signed_request", |txn| {
             Box::pin(async move {
-                txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-                    &serde_json::json!({"input": receipt})).await?;
-                Ok::<_, anyhow::Error>(())
+                let response = txn.execute(mutation).await?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "working_agent",
+                    &identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE))?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
             })
-        }).await.unwrap();
-            let mut first_lifecycle = test_lifecycle(
-                node.clone(),
-                first,
-                60,
-                ExecutionOrigin::Interactive,
-                TEST_BACKEND_ID,
-            );
-            let mut second_lifecycle = test_lifecycle(
-                node.clone(),
-                second,
-                60,
-                ExecutionOrigin::Interactive,
-                TEST_BACKEND_ID,
-            );
-            let now = chrono::Utc::now();
-            assert!(first_lifecycle
-                .claim_pending_durable_with_inputs(|| now, || (now, "first".into()))
-                .await
-                .unwrap()
-                .was_claimed());
-            assert!(matches!(
-                second_lifecycle
-                    .claim_pending_durable_with_inputs(|| now, || (now, "second".into()))
-                    .await
-                    .unwrap(),
-                DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
-            ));
-            let unchanged = load_agent_goal(&node, session).await.unwrap().unwrap();
-            assert_eq!(unchanged.objective, original.objective);
-            assert_eq!(
-                unchanged.continuation_sequence(),
-                original.continuation_sequence()
-            );
-            let finish = format!(
-                r#"mutation {{
-            update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}
-            create_InferenceCall(input: {{call_id: "prior-usage", request_doc_id: "{}", request_id: "prior-request", node_did: "{}", backend_id: "test-backend", call_state: "completed", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
-        }}"#,
-                escape_graphql_string(&first_doc_id),
-                escape_graphql_string(&first_doc_id),
-                test_node_did(),
-            );
-            fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
-                .transact_write("test.finish_prior_assignment", |txn| {
-                    let finish = &finish;
-                    Box::pin(async move {
-                        txn.execute(finish).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                })
-                .await
-                .unwrap();
-            if stopped {
-                crate::goal::seed_goal_from_access(
-                    &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
-                    &test_node_did(),
-                    session,
-                    None,
-                    Some(gents_protocol::goal_status::GoalStatus::Complete),
-                    None,
-                    None,
-                )
-                .await
-                .unwrap();
-            }
-            assert!(second_lifecycle
-                .claim_pending_durable_with_inputs(|| now, || (now, "second".into()))
-                .await
-                .unwrap()
-                .was_claimed());
-            let assigned = load_agent_goal(&node, session).await.unwrap().unwrap();
-            assert_eq!(assigned.objective, "perform next assignment");
-            assert_eq!(
-                assigned.assignment_root_request_doc_id.as_deref(),
-                Some(assigned_doc_id.as_str())
-            );
-            assert_eq!(assigned.token_budget, task_budget);
-            assert_eq!(
-                assigned.parsed_status(),
-                Some(gents_protocol::goal_status::GoalStatus::Active)
-            );
-            assert_eq!(
-                assigned.continuation_sequence(),
-                original.continuation_sequence() + 1
-            );
-            assert_eq!(
-                assigned.token_usage_baseline.unwrap_or_default(),
-                if stopped { 100 } else { 0 }
-            );
-            assert_eq!(
-                crate::goal::refresh_goal_usage_from_access(
-                    &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
-                    &assigned
-                )
-                .await
-                .unwrap(),
-                if stopped { 0 } else { 100 }
-            );
-            assert!(!crate::goal::update_goal_fields_if_status_from_access(
-                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
-                &original,
-                gents_protocol::goal_status::GoalStatus::Active,
-                "objective: \"stale controller\""
-            )
-            .await
-            .unwrap());
-        }
-    }
+        })
+        .await
+        .unwrap()
 }
 
-#[tokio::test]
-async fn concurrent_serial_claims_follow_durable_arrival_order() {
-    let node = test_node().await;
-    let first = insert_pending_request(
-        &node,
-        "z-first",
-        "first-session",
-        "2026-01-02T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    let second = insert_pending_request(
-        &node,
-        "a-second",
-        "second-session",
-        "2026-01-01T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    for request in [&first, &second] {
-        let input = serde_json::json!({
-            "fire_key": format!("test-fire:{}", request.request_id),
-            "owner_did": test_node_did(),
-            "trigger_id": "queued-serial-trigger",
-            "source_collection": "Work",
-            "source_doc_id": request.request_id,
-            "request_id": request.request_id,
-            "session_id": request.session_id,
-            "queued_serial": true,
-            "goal_assignment_applied": false,
-        });
-        fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write(
-                "test.serial_claim_receipt", |txn| {
-                    let input = input.clone();
-                    Box::pin(async move {
-                        txn.execute_with_variables(
-                            "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-                            &serde_json::json!({"input": input}),
-                        ).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                },
-            ).await.unwrap();
-    }
-    let first_doc_id = first.doc_id.clone();
-    let second_doc_id = second.doc_id.clone();
-    let mut first_lifecycle = test_lifecycle(
-        node.clone(),
-        first,
-        60,
-        ExecutionOrigin::Interactive,
-        TEST_BACKEND_ID,
-    );
-    let mut second_lifecycle = test_lifecycle(
-        node.clone(),
-        second,
-        60,
-        ExecutionOrigin::Interactive,
-        TEST_BACKEND_ID,
-    );
-    let now = chrono::Utc::now();
-    let (second_result, first_result) = tokio::join!(
-        second_lifecycle
-            .claim_pending_durable_with_inputs(|| now, || (now, "second-generation".into())),
-        first_lifecycle
-            .claim_pending_durable_with_inputs(|| now, || (now, "first-generation".into())),
-    );
-    assert!(matches!(
-        second_result.unwrap(),
-        DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
-    ));
-    assert!(first_result.unwrap().was_claimed());
-    assert_eq!(
-        durable_request_row(&node, &first_doc_id)
-            .await
-            .lifecycle_state,
-        Some(RequestLifecycleState::Claimed)
-    );
-    assert_eq!(
-        durable_request_row(&node, &second_doc_id)
-            .await
-            .lifecycle_state,
-        Some(RequestLifecycleState::Pending)
-    );
-    assert!(matches!(
-        second_lifecycle
-            .claim_pending_durable_with_inputs(|| now, || (now, "second-generation".into()))
-            .await
-            .unwrap(),
-        DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
-    ));
-}
-
-#[tokio::test]
-async fn claim_preserves_same_session_ordering() {
-    let node = test_node().await;
-    let first = insert_pending_request(
-        &node,
-        "same-session-request-1",
-        "same-session",
-        "2026-01-01T00:00:00Z",
-        None,
-        "interactive",
-    )
-    .await;
-    let first_doc_id = first.doc_id.clone();
-    let refresh = format!(
-        r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{first_doc_id}" }} }},
-                    input: {{ content: "refreshed before claim" }}
-                ) {{ _docID }}
-            }}"#
-    );
-    let refresh_response = node.execute(&refresh).await;
-    assert!(
-        refresh_response.has_errors(),
-        "immutable request content changed"
-    );
-    let second = insert_pending_request(
-        &node,
-        "same-session-request-2",
-        "same-session",
-        "2026-01-01T00:00:01Z",
-        None,
-        "interactive",
-    )
-    .await;
-
-    let mut first_lifecycle = test_lifecycle(
-        node.clone(),
-        first,
-        60,
-        ExecutionOrigin::Interactive,
-        TEST_BACKEND_ID,
-    );
-    let mut second_lifecycle = test_lifecycle(
-        node.clone(),
-        second,
-        60,
-        ExecutionOrigin::Interactive,
-        TEST_BACKEND_ID,
-    );
-
-    assert_eq!(
-        first_lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    assert_eq!(
-        first_lifecycle.request().content,
-        "same-session request",
-        "claim must preserve immutable request semantics"
-    );
-    let claimed_cid = first_lifecycle
-        .request_commit_cid()
-        .expect("successful claim records its exact DefraDB commit")
-        .to_string();
-
-    let commits = gents_store::graphql::composite_commits(
-        node.as_ref(),
-        &first_doc_id,
-        "verify_exact_claim_version",
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        commits.first().map(|commit| commit.cid.as_str()),
-        Some(claimed_cid.as_str()),
-        "the recorded claim CID must remain the latest durable request version"
-    );
-    assert!(
-        commits.iter().any(|commit| commit.cid == claimed_cid),
-        "the recorded claim CID must be a real composite commit"
-    );
-    assert_eq!(
-        second_lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Queued
-    );
-}
-
-/// Agent-authored background work: the managed Agent signs both its prior
-/// request and the local-control wake, as the runtime does.
 async fn signed_background_claim_fixture(
     node: &Arc<EmbeddedNode>,
     session: &str,
+    prefix: &str,
 ) -> (AgentRequest, String) {
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
@@ -826,7 +254,7 @@ async fn signed_background_claim_fixture(
         .unwrap();
     let mut parent = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        "snapshot-parent",
+        format!("{prefix}-parent"),
         RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Prior work",
         "interactive",
@@ -837,10 +265,19 @@ async fn signed_background_claim_fixture(
         .await
         .unwrap();
     let parent_doc = create_fixture_request(&access, &parent.graphql_mutation().unwrap()).await;
-    agent.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
+    agent
+        .write(
+            "test.snapshot_finished_parent",
+            &format!(
+                "mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",
+                escape_graphql_string(&parent_doc)
+            ),
+        )
+        .await
+        .unwrap();
     let mut wake = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        "snapshot-wake",
+        format!("{prefix}-wake"),
         RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Review background results",
         "scheduled",
@@ -877,148 +314,116 @@ async fn signed_background_claim_fixture(
     (row.try_into().unwrap(), parent_doc)
 }
 
-/// Creates a signed request as its runtime owner and grants the request's
-/// working Agent, the relationship every request row carries in production.
-async fn create_fixture_request(
-    access: &gents_store::config_client::ConfigAccess,
-    mutation: &str,
-) -> String {
-    access
-        .transact_write("test.fixture_signed_request", |txn| {
-            Box::pin(async move {
-                let response = txn.execute(mutation).await?;
-                let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
-                txn.add_actor_relationship(
-                    "AgentRequest",
-                    &doc,
-                    "working_agent",
-                    &identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE))?,
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(doc)
-            })
-        })
-        .await
-        .unwrap()
-}
-
 #[tokio::test]
-async fn background_claim_snapshots_transcript_before_successor_input() {
-    let node = test_node().await;
-    let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
-    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
-    let session_id = "background-claim-snapshot";
-    let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
-    gents_session::session::import_history_observation_as(
-        &agent,
-        gents_session::session::HistoryObservation {
-            request_id: &source_doc,
-            session_id,
-            node_did: &node_did,
-            requester_did: Some(&agent_did),
-            text: "first notification",
-            message_key_suffix: "background-completion-notification:child-1:agent",
-            sequence: 1,
-            tool_call: None,
-        },
-    )
-    .await;
-    gents_session::session::import_history_observation_as(
-        &agent,
-        gents_session::session::HistoryObservation {
-            request_id: &source_doc,
-            session_id,
-            node_did: &node_did,
-            requester_did: Some(&agent_did),
-            text: "prior context",
-            message_key_suffix: "prior-context",
-            sequence: 2,
-            tool_call: None,
-        },
-    )
-    .await;
-
-    let request_doc_id = request.doc_id.clone();
-    let mut lifecycle = test_lifecycle(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Scheduled,
-        TEST_BACKEND_ID,
-    );
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    assert_eq!(
-        lifecycle.background_completion_input_through_sequence(),
-        Some(2)
-    );
-    let snapshot = agent
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-                    background_completion_input_through_sequence
-                    background_completion_notification_keys_json
-                }} }}"#,
-            escape_graphql_string(&request_doc_id)
-        ))
-        .await
-        .unwrap();
-    let row = &snapshot["data"]["AgentRequest"][0];
-    assert_eq!(
-        row["background_completion_input_through_sequence"].as_i64(),
-        Some(2)
-    );
-    assert_eq!(
-        serde_json::from_str::<Vec<String>>(
-            row["background_completion_notification_keys_json"]
-                .as_str()
-                .unwrap()
+async fn serial_claim_considers_active_owner_requests_across_pages() {
+    let (_db, node) = test_node().await;
+    for (case_idx, case) in gents_lean_vocab::families::trigger_delivery_queue_paged_claims::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let trigger_id = format!("serial-trigger-{case_idx}");
+        let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: test_node_did(),
+            trigger_id: trigger_id.clone(),
+            source_collection: "Work".into(),
+            source_doc_id: source_doc_id.into(),
+        };
+        let first_identity = identity(&format!("serial-first-source-{case_idx}"));
+        let next_identity = identity(&format!("serial-next-source-{case_idx}"));
+        let mut cohort = vec![
+            (
+                first_identity.clone(),
+                format!("serial-first-session-{case_idx}"),
+            ),
+            (
+                next_identity.clone(),
+                format!("serial-next-session-{case_idx}"),
+            ),
+        ];
+        cohort.extend((0..63).map(|index| {
+            (
+                identity(&format!("serial-later-source-{case_idx}-{index}")),
+                format!("serial-later-session-{case_idx}-{index}"),
+            )
+        }));
+        let first = insert_pending_request(
+            &node,
+            &first_identity.request_id(),
+            &format!("serial-first-session-{case_idx}"),
+            "2026-01-01T00:00:00Z",
+            None,
+            "scheduled",
         )
-        .unwrap(),
-        vec!["background-completion-notification:child-1:agent"]
-    );
+        .await;
+        let next = insert_pending_request(
+            &node,
+            &next_identity.request_id(),
+            &format!("serial-next-session-{case_idx}"),
+            "2026-01-01T00:00:01Z",
+            None,
+            "scheduled",
+        )
+        .await;
+        for (identity, session_id) in cohort.iter().skip(2) {
+            insert_pending_request(
+                &node,
+                &identity.request_id(),
+                session_id,
+                "2026-01-01T00:00:02Z",
+                None,
+                "scheduled",
+            )
+            .await;
+        }
+        let receipts = cohort
+            .iter()
+            .map(|(identity, session_id)| {
+                serde_json::json!({
+                    "fire_key": identity.fire_key(),
+                    "owner_did": identity.owner_did.as_str(),
+                    "trigger_id": identity.trigger_id.as_str(),
+                    "source_collection": identity.source_collection.as_str(),
+                    "source_doc_id": identity.source_doc_id.as_str(),
+                    "request_id": identity.request_id(),
+                    "session_id": session_id,
+                    "task_id": "serial-task",
+                    "queued_serial": true,
+                    "emit_outcome": false,
+                    "created_at": "2026-01-01T00:00:00Z"
+                })
+            })
+            .collect::<Vec<_>>();
+        seed_trigger_fires(&node, receipts).await;
 
-    gents_session::session::import_history_observation_as(
-        &agent,
-        gents_session::session::HistoryObservation {
-            request_id: &source_doc,
-            session_id,
-            node_did: &node_did,
-            requester_did: Some(&agent_did),
-            text: "successor notification",
-            message_key_suffix: "background-completion-notification:child-2:agent",
-            sequence: 3,
-            tool_call: None,
-        },
-    )
-    .await;
-    let history = gents_session::session::load_sequenced_history_projection_on(
-        &agent,
-        session_id,
-        &node_did,
-        Some(&agent_did),
-        lifecycle.background_completion_input_through_sequence(),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        history.len(),
-        2,
-        "successor input must stay out of this attempt"
-    );
+        let request = match case.input.identity.source_doc_id.as_str() {
+            "a" => &first,
+            "b" => &next,
+            other => panic!("the serial cohort has no fire for modeled document {other}"),
+        };
+        let allowed = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
+            .transact_write("test.serial_claim_trigger_cohort", |txn| {
+                Box::pin(async move {
+                    gents_session::request::lifecycle::query::claim_queue_allows(txn, request).await
+                })
+            })
+            .await
+            .unwrap();
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_queue_paged_claims::QueueClaimOutput {
+                can_claim: allowed,
+            },
+        );
+    }
 }
 
 #[tokio::test]
 async fn background_claim_keeps_fork_imports_out_of_notification_input() {
-    let node = test_node().await;
+    let (_db, node) = test_node().await;
     let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
     let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
     let session_id = "background-import-snapshot";
     let origin_key = "background-completion-notification:owned:tool";
-    let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
+    let (request, source_doc) = signed_background_claim_fixture(&node, session_id, "import").await;
     gents_session::session::import_history_observation_as(
         &agent,
         gents_session::session::HistoryObservation {
@@ -1033,8 +438,7 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         },
     )
     .await;
-    let access = &agent;
-    let response = access
+    let response = agent
         .execute(&format!(
             "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
             escape_graphql_string(origin_key),
@@ -1053,7 +457,7 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         origin_message_doc_id: origin.doc_id,
     };
     imported.sequence = 2;
-    access
+    agent
         .transact_write("test.claim.import", |txn| {
             let imported = imported.clone();
             Box::pin(async move {
@@ -1082,7 +486,13 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let response = access.execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ background_completion_notification_keys_json }} }}", escape_graphql_string(&doc_id))).await.unwrap();
+    let response = agent
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ background_completion_notification_keys_json }} }}",
+            escape_graphql_string(&doc_id)
+        ))
+        .await
+        .unwrap();
     let keys: Vec<String> = serde_json::from_str(
         response["data"]["AgentRequest"][0]["background_completion_notification_keys_json"]
             .as_str()
@@ -1120,13 +530,589 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
 }
 
 #[tokio::test]
-async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() {
+async fn session_claim_ordering_goal_assignment_and_budget_scenarios() {
+    let (_db, node) = test_node().await;
+    let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
+    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
+
+    // Durable claim and begin use real owners without arming local renewal.
+    {
+        let request = insert_pending_request(
+            &node,
+            "durable-claim",
+            "durable-session",
+            "2023-11-14T22:13:25Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let doc_id = request.doc_id.clone();
+        let mut lifecycle = test_lifecycle(
+            node.clone(),
+            request,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(5));
+        let now = chrono::DateTime::parse_from_rfc3339("2023-11-14T22:13:25Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let DurableClaimOutcome::Claimed(receipt) = lifecycle
+            .claim_pending_durable_with_inputs(|| now, || (now, "lean-generation-7".into()))
+            .await
+            .unwrap()
+        else {
+            panic!("fresh request was not durably claimed")
+        };
+        assert_eq!(receipt.request.doc_id, doc_id);
+        assert_eq!(receipt.execution_generation, "lean-generation-7");
+        assert_eq!(receipt.lease_ms, 5_000);
+        assert_eq!(lifecycle.state, LocalLifecycleState::Pending);
+        assert!(!lifecycle.holds_execution_lease());
+        assert!(!lifecycle.holds_renewal_task());
+
+        let claimed = durable_request_row(&node, &doc_id).await;
+        assert_eq!(
+            claimed.lifecycle_state,
+            Some(RequestLifecycleState::Claimed)
+        );
+        assert_eq!(
+            claimed.execution_generation.as_deref(),
+            Some("lean-generation-7")
+        );
+        assert_eq!(
+            claimed.execution_lease_expires_at.as_deref(),
+            Some("2023-11-14T22:13:30+00:00")
+        );
+        RequestLifecycle::begin_owned_execution_at_with_access(
+            &agent,
+            &doc_id,
+            "lean-generation-7",
+            || now,
+        )
+        .await
+        .unwrap();
+        RequestLifecycle::begin_owned_execution_at_with_access(
+            &agent,
+            &doc_id,
+            "lean-generation-7",
+            || now + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            durable_request_row(&node, &doc_id).await.lifecycle_state,
+            Some(RequestLifecycleState::Processing)
+        );
+        assert!(
+            RequestLifecycle::begin_owned_execution_at_with_access(
+                &agent,
+                &doc_id,
+                "lean-generation-7",
+                || now + chrono::Duration::seconds(6),
+            )
+            .await
+            .is_err(),
+            "expired replay must not acknowledge ownership"
+        );
+    }
+
+    // Claim queue uses arrival order and scopes sessions to owner.
+    {
+        let _foreign = insert_pending_request_for_owner(
+            &node,
+            "did:test:foreign-owner",
+            "foreign-first",
+            "shared-session-id",
+            "2025-01-01T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let first = insert_pending_request(
+            &node,
+            "z-first",
+            "shared-session-id",
+            "2026-01-02T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let second = insert_pending_request(
+            &node,
+            "a-second",
+            "shared-session-id",
+            "2026-01-01T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        for index in 0..63 {
+            insert_pending_request(
+                &node,
+                &format!("session-later-{index}"),
+                "shared-session-id",
+                "2026-01-01T00:00:02Z",
+                None,
+                "interactive",
+            )
+            .await;
+        }
+        for (request, expected) in [(&first, true), (&second, false)] {
+            let allowed = agent
+                .transact_write("test.claim_queue_arrival_order", |txn| {
+                    Box::pin(async move {
+                        gents_session::request::lifecycle::query::claim_queue_allows(txn, request)
+                            .await
+                    })
+                })
+                .await
+                .unwrap();
+            assert_eq!(allowed, expected);
+        }
+    }
+
+    // Queued task goal changes only when its request claims.
+    for (variant, (stopped, task_budget)) in [
+        (false, None),
+        (false, Some(50)),
+        (true, None),
+        (true, Some(50)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session = format!("task-goal-session-{variant}");
+        ensure_agent_session(&node, &session, &node_did, None)
+            .await
+            .unwrap();
+        let original = crate::goal::seed_goal_from_access(
+            &agent,
+            &node_did,
+            &session,
+            Some("finish original work"),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
+            Some(Some(100)),
+            None,
+        )
+        .await
+        .unwrap();
+        let first = insert_pending_request(
+            &node,
+            &format!("prior-request-{variant}"),
+            &session,
+            "2026-01-01T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let first_doc_id = first.doc_id.clone();
+        let second = insert_pending_request(
+            &node,
+            &format!("task-request-{variant}"),
+            &session,
+            "2026-01-01T00:00:01Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let assigned_doc_id = second.doc_id.clone();
+        seed_trigger_fires(
+            &node,
+            vec![serde_json::json!({
+                "fire_key": format!("task-goal-fire-{variant}"), "owner_did": node_did,
+                "task_id": "goal-task", "created_at": "2026-01-01T00:00:01Z",
+                "trigger_id": format!("task-goal-trigger-{variant}"), "source_collection": "Work",
+                "source_doc_id": format!("assignment-{variant}"), "request_id": second.request_id,
+                "session_id": session, "queued_serial": true, "emit_outcome": false,
+                "goal_id": original.goal_id, "goal_objective": "perform next assignment",
+                "goal_token_budget": task_budget, "goal_assignment_applied": false,
+            })],
+        )
+        .await;
+        let mut first_lifecycle = test_lifecycle(
+            node.clone(),
+            first,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let mut second_lifecycle = test_lifecycle(
+            node.clone(),
+            second,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let now = chrono::Utc::now();
+        assert!(first_lifecycle
+            .claim_pending_durable_with_inputs(|| now, || (now, "first".into()))
+            .await
+            .unwrap()
+            .was_claimed());
+        assert!(matches!(
+            second_lifecycle
+                .claim_pending_durable_with_inputs(|| now, || (now, "second".into()))
+                .await
+                .unwrap(),
+            DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
+        ));
+        let unchanged = load_agent_goal(&node, &session).await.unwrap().unwrap();
+        assert_eq!(unchanged.objective, original.objective);
+        assert_eq!(
+            unchanged.continuation_sequence(),
+            original.continuation_sequence()
+        );
+        let finish = format!(
+            r#"mutation {{
+            update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}
+            create_InferenceCall(input: {{call_id: "prior-usage-{variant}", request_doc_id: "{}", request_id: "prior-request-{variant}", node_did: "{}", backend_id: "test-backend", call_state: "completed", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
+        }}"#,
+            escape_graphql_string(&first_doc_id),
+            escape_graphql_string(&first_doc_id),
+            node_did,
+        );
+        agent
+            .transact_write("test.finish_prior_assignment", |txn| {
+                let finish = &finish;
+                Box::pin(async move {
+                    txn.execute(finish).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        if stopped {
+            crate::goal::seed_goal_from_access(
+                &agent,
+                &node_did,
+                &session,
+                None,
+                Some(gents_protocol::goal_status::GoalStatus::Complete),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        assert!(second_lifecycle
+            .claim_pending_durable_with_inputs(|| now, || (now, "second".into()))
+            .await
+            .unwrap()
+            .was_claimed());
+        let assigned = load_agent_goal(&node, &session).await.unwrap().unwrap();
+        assert_eq!(assigned.objective, "perform next assignment");
+        assert_eq!(
+            assigned.assignment_root_request_doc_id.as_deref(),
+            Some(assigned_doc_id.as_str())
+        );
+        assert_eq!(assigned.token_budget, task_budget);
+        assert_eq!(
+            assigned.parsed_status(),
+            Some(gents_protocol::goal_status::GoalStatus::Active)
+        );
+        assert_eq!(
+            assigned.continuation_sequence(),
+            original.continuation_sequence() + 1
+        );
+        assert_eq!(
+            assigned.token_usage_baseline.unwrap_or_default(),
+            if stopped { 100 } else { 0 }
+        );
+        assert_eq!(
+            crate::goal::refresh_goal_usage_from_access(&agent, &assigned)
+                .await
+                .unwrap(),
+            if stopped { 0 } else { 100 }
+        );
+        assert!(!crate::goal::update_goal_fields_if_status_from_access(
+            &agent,
+            &original,
+            gents_protocol::goal_status::GoalStatus::Active,
+            "objective: \"stale controller\""
+        )
+        .await
+        .unwrap());
+    }
+
+    // Concurrent serial claims follow durable arrival order.
+    {
+        let first = insert_pending_request(
+            &node,
+            "z-serial-first",
+            "first-serial-session",
+            "2026-01-02T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let second = insert_pending_request(
+            &node,
+            "a-serial-second",
+            "second-serial-session",
+            "2026-01-01T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        seed_trigger_fires(
+            &node,
+            [&first, &second]
+                .into_iter()
+                .map(|request| {
+                    serde_json::json!({
+                        "fire_key": format!("test-fire:{}", request.request_id),
+                        "owner_did": node_did,
+                        "trigger_id": "queued-serial-trigger",
+                        "source_collection": "Work",
+                        "source_doc_id": request.request_id,
+                        "request_id": request.request_id,
+                        "session_id": request.session_id,
+                        "queued_serial": true,
+                        "goal_assignment_applied": false,
+                    })
+                })
+                .collect(),
+        )
+        .await;
+        let first_doc_id = first.doc_id.clone();
+        let second_doc_id = second.doc_id.clone();
+        let mut first_lifecycle = test_lifecycle(
+            node.clone(),
+            first,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let mut second_lifecycle = test_lifecycle(
+            node.clone(),
+            second,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let now = chrono::Utc::now();
+        let (second_result, first_result) = tokio::join!(
+            second_lifecycle
+                .claim_pending_durable_with_inputs(|| now, || (now, "second-generation".into())),
+            first_lifecycle
+                .claim_pending_durable_with_inputs(|| now, || (now, "first-generation".into())),
+        );
+        assert!(matches!(
+            second_result.unwrap(),
+            DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
+        ));
+        assert!(first_result.unwrap().was_claimed());
+        assert_eq!(
+            durable_request_row(&node, &first_doc_id)
+                .await
+                .lifecycle_state,
+            Some(RequestLifecycleState::Claimed)
+        );
+        assert_eq!(
+            durable_request_row(&node, &second_doc_id)
+                .await
+                .lifecycle_state,
+            Some(RequestLifecycleState::Pending)
+        );
+        assert!(matches!(
+            second_lifecycle
+                .claim_pending_durable_with_inputs(|| now, || (now, "second-generation".into()))
+                .await
+                .unwrap(),
+            DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
+        ));
+    }
+
+    // Claim preserves same-session ordering and immutable request semantics.
+    {
+        let first = insert_pending_request(
+            &node,
+            "same-session-request-1",
+            "same-session",
+            "2026-01-01T00:00:00Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let first_doc_id = first.doc_id.clone();
+        let refresh = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{first_doc_id}" }} }},
+                    input: {{ content: "refreshed before claim" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        assert!(
+            node.execute(&refresh).await.has_errors(),
+            "immutable request content changed"
+        );
+        let second = insert_pending_request(
+            &node,
+            "same-session-request-2",
+            "same-session",
+            "2026-01-01T00:00:01Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let mut first_lifecycle = test_lifecycle(
+            node.clone(),
+            first,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let mut second_lifecycle = test_lifecycle(
+            node.clone(),
+            second,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        assert_eq!(
+            first_lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            first_lifecycle.request().content,
+            "same-session request",
+            "claim must preserve immutable request semantics"
+        );
+        let claimed_cid = first_lifecycle
+            .request_commit_cid()
+            .expect("successful claim records its exact DefraDB commit")
+            .to_string();
+        let commits = gents_store::graphql::composite_commits(
+            node.as_ref(),
+            &first_doc_id,
+            "verify_exact_claim_version",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            commits.first().map(|commit| commit.cid.as_str()),
+            Some(claimed_cid.as_str()),
+            "the recorded claim CID must remain the latest durable request version"
+        );
+        assert!(
+            commits.iter().any(|commit| commit.cid == claimed_cid),
+            "the recorded claim CID must be a real composite commit"
+        );
+        assert_eq!(
+            second_lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Queued
+        );
+    }
+
+    // Background claim snapshots transcript before successor input.
+    {
+        let session_id = "background-claim-snapshot";
+        let (request, source_doc) =
+            signed_background_claim_fixture(&node, session_id, "snapshot").await;
+        for (sequence, text, suffix) in [
+            (
+                1,
+                "first notification",
+                "background-completion-notification:child-1:agent",
+            ),
+            (2, "prior context", "prior-context"),
+        ] {
+            gents_session::session::import_history_observation_as(
+                &agent,
+                gents_session::session::HistoryObservation {
+                    request_id: &source_doc,
+                    session_id,
+                    node_did: &node_did,
+                    requester_did: Some(&agent_did),
+                    text,
+                    message_key_suffix: suffix,
+                    sequence,
+                    tool_call: None,
+                },
+            )
+            .await;
+        }
+        let request_doc_id = request.doc_id.clone();
+        let mut lifecycle = test_lifecycle(
+            node.clone(),
+            request,
+            60,
+            ExecutionOrigin::Scheduled,
+            TEST_BACKEND_ID,
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            lifecycle.background_completion_input_through_sequence(),
+            Some(2)
+        );
+        let snapshot = agent
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                    background_completion_input_through_sequence
+                    background_completion_notification_keys_json
+                }} }}"#,
+                escape_graphql_string(&request_doc_id)
+            ))
+            .await
+            .unwrap();
+        let row = &snapshot["data"]["AgentRequest"][0];
+        assert_eq!(
+            row["background_completion_input_through_sequence"].as_i64(),
+            Some(2)
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(
+                row["background_completion_notification_keys_json"]
+                    .as_str()
+                    .unwrap()
+            )
+            .unwrap(),
+            vec!["background-completion-notification:child-1:agent"]
+        );
+        gents_session::session::import_history_observation_as(
+            &agent,
+            gents_session::session::HistoryObservation {
+                request_id: &source_doc,
+                session_id,
+                node_did: &node_did,
+                requester_did: Some(&agent_did),
+                text: "successor notification",
+                message_key_suffix: "background-completion-notification:child-2:agent",
+                sequence: 3,
+                tool_call: None,
+            },
+        )
+        .await;
+        let history = gents_session::session::load_sequenced_history_projection_on(
+            &agent,
+            session_id,
+            &node_did,
+            Some(&agent_did),
+            lifecycle.background_completion_input_through_sequence(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            history.len(),
+            2,
+            "successor input must stay out of this attempt"
+        );
+    }
+
+    // Claim pins configured budget and reclaim preserves unlimited or zero.
     for (index, configured, durable_override) in [
         (0, Some(50_u64), None),
         (1, None, None),
         (2, Some(1_u64), Some(0_i64)),
     ] {
-        let node = test_node().await;
         let mut request = insert_pending_request(
             &node,
             &format!("budget-{index}"),
@@ -1162,7 +1148,7 @@ async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() 
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending"{budget_patch} }}) {{ _docID }} }}"#,
             escape_graphql_string(&resumed_request.doc_id)
         );
-        fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
+        agent
             .transact_write("test.requeue_budget", |txn| {
                 let mutation = &mutation;
                 Box::pin(async move {

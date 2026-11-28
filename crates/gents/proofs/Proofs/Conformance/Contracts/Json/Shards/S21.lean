@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AgentViews
+import Proofs.Conformance.ClientChatReadinessCases
+import Proofs.Conformance.ContractCases.DurableReduction
+import Proofs.Conformance.Contracts.Json.ToolExecution
+import Proofs.Conformance.Contracts.Json.ToolPolicy
+import Proofs.Conformance.EventDeliveryCooldown
+import Proofs.Conformance.Functions.Tools
+import Proofs.Conformance.GoalClaimedPublication
+import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.Identity.CallbackParent
+import Proofs.Conformance.Identity.Conformance
+import Proofs.Conformance.Identity.SessionInputEdit
+import Proofs.Conformance.Identity.WorkspaceRootAccess
+import Proofs.Conformance.NativeCompletion
+import Proofs.Conformance.NativeRoute
+import Proofs.Conformance.PluginPublication
+import Proofs.Conformance.Recovery.PeriodicRegistry
+import Proofs.Conformance.SchemaArgumentRepairFamily
+import Proofs.Conformance.SubscriptionStream
+
+namespace Conformance.Contracts.Shards.S21
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S21

@@ -1,6 +1,7 @@
 ---- MODULE SharedOwnerHotCounter ----
 \* lean: none
 \* crates: gents-store
+\* traces: violates
 \* models: TransactionReplay.disposition
 \* Concurrent read-modify-write increments of one document through the shared
 \* transaction owner (`ConfigAccess::transact_write` on an embedded node), as
@@ -60,6 +61,8 @@
 \* `Native` is one round of raw single-attempt transactions without the owner
 \* (`RoundProgress`); `NativeAbortOnOpenWriter` removes first-committer-wins
 \* from it and a round can end with no commit.
+\* trace actors: ReadLatest, Begin, Park, Wake, Read, Commit, CommitTimeout, Retry => pc
+\* trace actors: MutualAbort => pc{2}
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS

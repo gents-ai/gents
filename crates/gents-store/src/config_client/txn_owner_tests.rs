@@ -206,20 +206,24 @@ async fn http_transaction_cursors_keep_all_pages() {
 
 #[tokio::test]
 async fn config_access_entry_admission_matches_lean() {
-    for case in gents_lean_vocab::families::storage_write_gate_admission_entry::cases::<String>() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ConfigAccess::local(Arc::clone(&node))
-            .add_collection("type ReadGateProbe { value: String }")
-            .await
-            .unwrap();
-        ConfigAccess::write_local(
-            &node,
-            "test.read_gate_seed",
-            r#"mutation { create_ReadGateProbe(input: {value: "ready"}) {_docID} }"#,
-        )
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection("type ReadGateProbe { value: String }")
         .await
         .unwrap();
-        let gate = super::mutation_write_gate(&node);
+    ConfigAccess::write_local(
+        &node,
+        "test.read_gate_seed",
+        r#"mutation { create_ReadGateProbe(input: {value: "ready"}) {_docID} }"#,
+    )
+    .await
+    .unwrap();
+    let gate = super::mutation_write_gate(&node);
+    for (case_index, case) in
+        gents_lean_vocab::families::storage_write_gate_admission_entry::cases::<String>()
+            .into_iter()
+            .enumerate()
+    {
         let mut held = Vec::new();
         for _ in 0..case.input.held {
             held.push(
@@ -244,7 +248,12 @@ async fn config_access_entry_admission_matches_lean() {
                 let access = ConfigAccess::local(operation_node);
                 access
                     .transact_readonly("test.config_access_readonly", |txn| {
-                        Box::pin(async move { txn.execute("{ ReadGateProbe { value } }").await })
+                        Box::pin(async move {
+                            txn.execute(
+                                r#"{ ReadGateProbe(filter: {value: {_eq: "ready"}}) { value } }"#,
+                            )
+                            .await
+                        })
                     })
                     .await
                     .map(|response| response["data"]["ReadGateProbe"][0]["value"] == "ready")
@@ -253,7 +262,9 @@ async fn config_access_entry_admission_matches_lean() {
                 ConfigAccess::write_local(
                     &operation_node,
                     "test.config_access_entry_write",
-                    r#"mutation { create_ReadGateProbe(input: {value: "next"}) {_docID} }"#,
+                    &format!(
+                        r#"mutation {{ create_ReadGateProbe(input: {{value: "next-{case_index}"}}) {{_docID}} }}"#
+                    ),
                 )
                 .await
                 .map(|_| true)
@@ -272,8 +283,8 @@ async fn config_access_entry_admission_matches_lean() {
             assert!(operation.await.unwrap().unwrap(), "{:?}", case.input);
         }
         case.check(proceeded);
-        node.shutdown().await.expect("node shutdown");
     }
+    node.shutdown().await.expect("node shutdown");
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1206,12 +1217,7 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
         response.data.unwrap()["NestedWriteProbe"][0]["value"],
         "committed"
     );
-    node.shutdown().await.expect("node shutdown");
-}
 
-#[tokio::test]
-async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let outer_attempts = Arc::new(AtomicUsize::new(0));
     let inner_attempts = Arc::new(AtomicUsize::new(0));
     let outer_attempts_for_callback = Arc::clone(&outer_attempts);
@@ -2924,18 +2930,24 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
 async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outcome() {
     use super::EmbeddedFinalizationBoundary::{AfterCommit, BeforeCommit, BeforeRollback};
 
-    for boundary in [BeforeCommit, BeforeRollback, AfterCommit] {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ConfigAccess::local(Arc::clone(&node))
-            .add_collection("type FinalizationCancellationProbe { value: String }")
-            .await
-            .unwrap();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection("type FinalizationCancellationProbe { tag: String value: String }")
+        .await
+        .unwrap();
+    let gate = super::mutation_write_gate(&node);
+    for (tag, boundary) in [
+        ("before-commit", BeforeCommit),
+        ("before-rollback", BeforeRollback),
+        ("after-commit", AfterCommit),
+    ] {
         let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-        txn.execute(r#"mutation { create_FinalizationCancellationProbe(input: {value: "original"}) {_docID} }"#)
-            .await
-            .unwrap();
+        txn.execute(&format!(
+            r#"mutation {{ create_FinalizationCancellationProbe(input: {{tag: "{tag}", value: "original"}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
         let handle = transaction_handle(&txn);
-        let gate = super::mutation_write_gate(&node);
         let reached = Arc::new(Notify::new());
         let mut finalization = Box::pin(super::EMBEDDED_FINALIZATION_PAUSE.scope(
             (boundary, Arc::clone(&reached)),
@@ -2966,7 +2978,9 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         );
         assert_native_transaction_abandoned(&node, &handle).await;
         let response = ConfigAccess::local(Arc::clone(&node))
-            .execute("{ FinalizationCancellationProbe { value } }")
+            .execute(&format!(
+                r#"{{ FinalizationCancellationProbe(filter: {{tag: {{_eq: "{tag}"}}}}) {{ value }} }}"#
+            ))
             .await
             .unwrap();
         let expected = if boundary == AfterCommit {
@@ -2978,12 +2992,14 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         ConfigAccess::write_local(
             &node,
             "test.write_after_cancelled_finalizer",
-            r#"mutation { create_FinalizationCancellationProbe(input: {value: "next"}) {_docID} }"#,
+            &format!(
+                r#"mutation {{ create_FinalizationCancellationProbe(input: {{tag: "{tag}", value: "next"}}) {{_docID}} }}"#
+            ),
         )
         .await
         .unwrap();
-        node.shutdown().await.expect("node shutdown");
     }
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// Premise evidence for the ledger rows `boundary.plugin-data.transaction`

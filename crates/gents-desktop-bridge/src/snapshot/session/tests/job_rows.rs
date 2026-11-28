@@ -1,31 +1,12 @@
 use super::*;
 use crate::tests::support::{
-    seed_served_job_row, seed_served_tool_call, served_desktop, ServedDesktop,
+    fixture_job_progress, seed_served_job_row, seed_served_tool_call, served_desktop, ServedDesktop,
 };
 use crate::types::RenderedToolCallView;
-use gents_protocol::job::{
-    JobBudget, JobOrigin, JobOutcome, JobPauseReason, JobProgress, JobState,
-};
+use gents_protocol::job::{JobOrigin, JobOutcome, JobPauseReason, JobProgress, JobState};
 
 fn progress(state: JobState, pause_reason: Option<JobPauseReason>) -> JobProgress {
-    JobProgress {
-        title: "Job".into(),
-        state,
-        pause_reason,
-        phases: Vec::new(),
-        active: Vec::new(),
-        spawned: 2,
-        budget: JobBudget {
-            total: 4,
-            spent: 2,
-            remaining: 2,
-        },
-        last_event: "seeded".into(),
-        last_event_at: None,
-        question: None,
-        observed_terminal_children: 0,
-        revision: 1,
-    }
+    fixture_job_progress("Job", state, pause_reason)
 }
 
 async fn snapshot_of(
@@ -110,8 +91,10 @@ fn flat<'a>(snapshot: &'a DesktopSessionSnapshot, call: &str) -> &'a ToolCallVie
 }
 
 #[tokio::test]
-async fn job_row_projects_progress_handle_state_and_outcome() {
+async fn job_rows_project_progress_paused_non_job_and_omitted_step_state() {
     let served = served_desktop().await;
+
+    // Failed and cancelled job rows project progress, handle, state, outcome, and next calls.
     let failed = progress(JobState::Failed, None);
     seed_served_job_row(
         &served,
@@ -131,14 +114,12 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         None,
     )
     .await;
-
     let snapshot = snapshot_of(
         &served,
         "sess-job",
         &["req-call-failed", "req-call-cancelled"],
     )
     .await;
-
     let outcome = JobOutcome {
         code: "engine_boom".into(),
         message: "boom".into(),
@@ -167,7 +148,6 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         assert_eq!(job_outcome.as_ref(), Some(&outcome));
         assert_eq!(next_calls, &next);
     }
-
     let cancelled = rendered(&snapshot, "call-cancelled");
     assert_eq!(cancelled.job_state, Some(JobState::Cancelled));
     assert_eq!(cancelled.job_outcome, None);
@@ -176,12 +156,8 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         Some(JobState::Cancelled)
     );
     assert_eq!(flat(&snapshot, "call-cancelled").job_outcome, None);
-    served.shutdown().await;
-}
 
-#[tokio::test]
-async fn paused_job_row_has_state_paused_and_no_outcome() {
-    let served = served_desktop().await;
+    // Paused job row has state Paused and no outcome.
     let paused = progress(JobState::Paused, Some(JobPauseReason::BudgetExceeded));
     seed_served_job_row(
         &served,
@@ -192,25 +168,19 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
         None,
     )
     .await;
+    let paused_snapshot = snapshot_of(&served, "sess-pause", &["req-call-paused"]).await;
+    let paused_next = gents_server::jobs::next_calls(JobState::Paused, "sess-pause:call-paused");
+    let paused_wire = rendered(&paused_snapshot, "call-paused");
+    assert_eq!(paused_wire.job_state, Some(JobState::Paused));
+    assert_eq!(paused_wire.job_origin, Some(JobOrigin::Installed));
+    assert_eq!(paused_wire.job_outcome, None);
+    assert_eq!(paused_wire.job_next_calls, paused_next);
+    let paused_flat = flat(&paused_snapshot, "call-paused");
+    assert_eq!(paused_flat.job_state, Some(JobState::Paused));
+    assert_eq!(paused_flat.job_outcome, None);
+    assert_eq!(paused_flat.job_next_calls, paused_next);
 
-    let snapshot = snapshot_of(&served, "sess-pause", &["req-call-paused"]).await;
-
-    let next = gents_server::jobs::next_calls(JobState::Paused, "sess-pause:call-paused");
-    let wire = rendered(&snapshot, "call-paused");
-    assert_eq!(wire.job_state, Some(JobState::Paused));
-    assert_eq!(wire.job_origin, Some(JobOrigin::Installed));
-    assert_eq!(wire.job_outcome, None);
-    assert_eq!(wire.job_next_calls, next);
-    let flat_row = flat(&snapshot, "call-paused");
-    assert_eq!(flat_row.job_state, Some(JobState::Paused));
-    assert_eq!(flat_row.job_outcome, None);
-    assert_eq!(flat_row.job_next_calls, next);
-    served.shutdown().await;
-}
-
-#[tokio::test]
-async fn non_job_row_has_no_job_fields() {
-    let served = served_desktop().await;
+    // Plain tool call beside a job row carries no job fields, and jobStepState is not projected.
     seed_served_job_row(
         &served,
         "sess_parent",
@@ -228,20 +198,18 @@ async fn non_job_row_has_no_job_fields() {
         "read_file",
     )
     .await;
-
-    let snapshot = snapshot_of(&served, "sess_parent", &["req-call-job"]).await;
-
-    let wire = rendered(&snapshot, "call-plain");
-    assert_eq!(wire.job_progress, None);
-    assert_eq!(wire.job_handle, None);
-    assert_eq!(wire.job_state, None);
-    assert_eq!(wire.job_outcome, None);
-    assert!(wire.job_next_calls.is_empty());
-    let flat_row = flat(&snapshot, "call-plain");
-    assert_eq!(flat_row.job_progress, None);
-    assert_eq!(flat_row.job_state, None);
-    assert!(flat_row.job_next_calls.is_empty());
-    let value = serde_json::to_value(wire).expect("serialize rendered tool");
+    let mixed = snapshot_of(&served, "sess_parent", &["req-call-job"]).await;
+    let plain_wire = rendered(&mixed, "call-plain");
+    assert_eq!(plain_wire.job_progress, None);
+    assert_eq!(plain_wire.job_handle, None);
+    assert_eq!(plain_wire.job_state, None);
+    assert_eq!(plain_wire.job_outcome, None);
+    assert!(plain_wire.job_next_calls.is_empty());
+    let plain_flat = flat(&mixed, "call-plain");
+    assert_eq!(plain_flat.job_progress, None);
+    assert_eq!(plain_flat.job_state, None);
+    assert!(plain_flat.job_next_calls.is_empty());
+    let plain_value = serde_json::to_value(plain_wire).expect("serialize rendered tool");
     for key in [
         "jobProgress",
         "jobHandle",
@@ -250,28 +218,14 @@ async fn non_job_row_has_no_job_fields() {
         "jobOutcome",
         "jobNextCalls",
     ] {
-        assert!(value.get(key).is_none(), "{key} on a non-job row: {value}");
+        assert!(
+            plain_value.get(key).is_none(),
+            "{key} on a non-job row: {plain_value}"
+        );
     }
-    served.shutdown().await;
-}
+    let job_value = serde_json::to_value(rendered(&mixed, "call-job")).expect("serialize");
+    assert!(job_value.get("jobStepState").is_none(), "{job_value}");
+    assert!(job_value.get("jobState").is_some(), "{job_value}");
 
-#[tokio::test]
-async fn job_step_state_is_not_projected() {
-    let served = served_desktop().await;
-    seed_served_job_row(
-        &served,
-        "sess-step",
-        "call-step",
-        "completed",
-        &progress(JobState::Completed, None),
-        None,
-    )
-    .await;
-
-    let snapshot = snapshot_of(&served, "sess-step", &["req-call-step"]).await;
-
-    let value = serde_json::to_value(rendered(&snapshot, "call-step")).expect("serialize");
-    assert!(value.get("jobStepState").is_none(), "{value}");
-    assert!(value.get("jobState").is_some(), "{value}");
     served.shutdown().await;
 }

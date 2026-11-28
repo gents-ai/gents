@@ -11,7 +11,6 @@ pub(super) struct SuccessfulMutationFault {
     receipt_operation: Option<&'static str>,
     receipt_fired: AtomicBool,
     pause: Option<SuccessfulMutationPause>,
-    pub(super) write_gate_observation: Option<Arc<WriteGateObservation>>,
     pub(super) read_storage_failure: Option<&'static str>,
     pub(super) read_pause: Option<(&'static str, Arc<tokio::sync::Notify>)>,
     pub(super) native_pause: Option<Arc<NativeOperationPause>>,
@@ -115,6 +114,7 @@ pub(super) struct WriteGateObservation {
 }
 
 tokio::task_local! {
+    pub(super) static WRITE_GATE_OBSERVATION: Arc<WriteGateObservation>;
     pub(super) static SUCCESSFUL_MUTATION_FAULT: Arc<SuccessfulMutationFault>;
 }
 
@@ -318,6 +318,34 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
+    /// The commit never reaches storage and the discard receipt arrives after
+    /// its deadline, so neither operation confirms the outcome to the caller.
+    pub async fn with_unlanded_commit_timeout<F>(
+        committing: Arc<tokio::sync::Notify>,
+        discarded: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        let held = |reached| {
+            Some(BoundaryPause {
+                reached,
+                release: Default::default(),
+            })
+        };
+        EMBEDDED_FINALIZATION_LIFECYCLE
+            .scope(
+                Arc::new(EmbeddedFinalizationLifecycle {
+                    before_commit: held(committing),
+                    after_rollback: held(discarded),
+                    ..Default::default()
+                }),
+                future,
+            )
+            .await
+    }
+
     pub async fn with_embedded_commit_ack_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         future: F,
@@ -410,7 +438,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
             native_pause: None,
@@ -497,7 +524,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: operation,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
             native_pause: None,
@@ -609,7 +635,6 @@ impl ConfigApplyTxn<'_> {
                 release,
                 fired: AtomicBool::new(false),
             }),
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
             native_pause: None,
@@ -640,26 +665,16 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
-        let fault = Arc::new(SuccessfulMutationFault {
-            fail_after: None,
-            count: AtomicUsize::new(0),
-            lose_receipt: false,
-            receipt_operation: None,
-            receipt_fired: AtomicBool::new(false),
-            pause: None,
-            write_gate_observation: Some(Arc::new(WriteGateObservation {
-                queued,
-                acquired,
-                queued_fired: AtomicBool::new(false),
-            })),
-            read_storage_failure: None,
-            read_pause: None,
-            native_pause: None,
-            fail_rollback: false,
-            retry_backoff_reached: None,
-            cleanup_scheduled: None,
-        });
-        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+        WRITE_GATE_OBSERVATION
+            .scope(
+                Arc::new(WriteGateObservation {
+                    queued,
+                    acquired,
+                    queued_fired: AtomicBool::new(false),
+                }),
+                future,
+            )
+            .await
     }
 
     pub async fn with_read_storage_failure<F>(marker: &'static str, future: F) -> F::Output
@@ -673,7 +688,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: Some(marker),
             read_pause: None,
             native_pause: None,
@@ -699,7 +713,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: Some((marker, reached)),
             native_pause: None,
@@ -751,7 +764,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
             native_pause: Some(Arc::new(NativeOperationPause {
@@ -781,7 +793,6 @@ impl ConfigApplyTxn<'_> {
             receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
-            write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
             native_pause: None,

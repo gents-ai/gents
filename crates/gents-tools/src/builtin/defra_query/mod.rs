@@ -131,7 +131,86 @@ impl Tool for DefraQueryTool {
     type Args = QueryParams;
     type Output = String;
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
+        ToolDefinition {
+            name: Self::NAME.into(),
+            description: "Read application and runtime documents. Pass only the verb in argv ([\"fields\"], [\"find\"], [\"count\"], [\"search\"], [\"explain\"], or [\"help\",COMMAND]) and put the collection name in collection (never in argv). Count aggregates every matching row; find returns a bounded ordered page; search ranks by BM25 (options.text + options.search_fields) or vector (options.vector + options.vector_field). Explain inspects a native plan; executing it requires options.mode:\"execute\". Configuration uses config, definitions use schema.".into(),
+            parameters: json!({
+                "type": "object",
+                "required": ["argv"],
+                "additionalProperties": false,
+                "properties": {
+                    "argv": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "Verb only: [\"fields\"], [\"find\"], [\"count\"], [\"search\"], [\"explain\"], or [\"help\"] / [\"help\",COMMAND]. Never put the collection name in argv; pass it in collection."
+                    },
+                    "collection": {
+                        "type": "string",
+                        "description": "GraphQL collection name (required for fields, find, count, search, explain; omit for help). Discover with schema collection list. Surface IDs belong to config datastore get."
+                    },
+                    "options": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "Command options. find/search/explain require fields; count accepts only filter; fields takes no options.",
+                        "properties": {
+                            "fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Required for find, search, explain: field names to return (e.g. [\"name\", \"relation.field\"]). Discover with argv:[\"fields\"]."
+                            },
+                            "filter": {
+                                "type": "object",
+                                "description": "Native DefraDB filter object using _eq, _neq, _gt, _geq, _lt, _leq, _in, _nin, _like, _ilike, _and, _or, _not."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Max rows to return (find default 50, search default 10, max 1000)."
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Row offset for find/explain (0–100000)."
+                            },
+                            "order": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "description": "Sort order for find/search/explain, e.g. [{\"priority\":\"ASC\"}] (ASC or DESC)."
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "For search (BM25): nonempty keyword query string (pair with search_fields; not \"query\" or \"keywords\")."
+                            },
+                            "search_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "For search (BM25): String field names to score against options.text."
+                            },
+                            "vector_field": {
+                                "type": "string",
+                                "description": "For search (vector): numeric list field name (pair with vector)."
+                            },
+                            "vector": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "For search (vector): query vector numbers matching vector_field dimensions."
+                            },
+                            "mode": {
+                                "type": "string",
+                                "description": "For explain: \"simple\" (default) or \"execute\"."
+                            },
+                            "field_page": {
+                                "type": "object",
+                                "description": "For find: read a truncated string page ({doc_id, field, offset_bytes, expected_hash})."
+                            },
+                            "signer": {
+                                "type": "boolean",
+                                "description": "For find: set true to include _signer provenance."
+                            }
+                        }
+                    }
+                }
+            }),
+        }
     }
     async fn call(
         &self,

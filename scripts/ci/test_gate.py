@@ -330,13 +330,20 @@ class Shards(unittest.TestCase):
     def test_the_build_jobs_slice_splits_into_the_roles_partitions_on_any_runner(self):
         count = ROLES["portable"]["partitions"]
         archives = sharded(1, everything=True)["archives"]
-        self.assertEqual([(entry["partition"], entry["partitions"]) for entry in archives],
+        slices = [entry for entry in archives if entry.get("partition") != "vera"]
+        vera_entries = [entry for entry in archives if entry.get("partition") == "vera"]
+        self.assertEqual([(entry["partition"], entry["partitions"]) for entry in slices],
                          [(index, count) for index in range(1, count + 1)])
-        self.assertEqual([entry["runs_on"] for entry in archives], [ROLES["portable"]["labels"]] * count)
-        for entry in archives:
+        self.assertEqual([entry["runs_on"] for entry in archives], [ROLES["portable"]["labels"]] * len(archives))
+        for entry in slices:
             self.assertEqual(entry["packages"].split(), self.PORTABLE)
+            self.assertEqual(entry["vera"], "")
             self.assertEqual(gate.partition_arguments(entry),
                              ["--partition", f"hash:{entry['partition']}/{count}"])
+        self.assertEqual(len(vera_entries), 1)
+        self.assertEqual(vera_entries[0]["packages"], "")
+        self.assertEqual(vera_entries[0]["vera"], "gents-store gents-tools gents-toolcalls gents-cli")
+        self.assertEqual(vera_entries[0]["unit"], "build:portable:vera")
 
     def test_forks_and_fallbacks_build_one_partition(self):
         self.assertEqual(gate.partitions("portable", fork=True, fallback=False), 1)
@@ -442,11 +449,23 @@ class Shards(unittest.TestCase):
                 os.environ.pop("GITHUB_ACTIONS", None)
                 gate.run(selection, "build:portable:1")
             if built:
-                # The archive's run, then the Vera builds' beside it.
-                self.assertEqual((events[:3], events[-1]), (["list", "wait", "run"], "stop"))
-                self.assertEqual(set(events[3:-1]), {"run"})
+                # Partition 1 runs only its archive slice; Vera runs in its own parallel partition.
+                self.assertEqual(events, ["list", "wait", "run", "stop"])
             else:
                 self.assertEqual(events, ["list", "wait", "stop"])
+            events.clear()
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": directory}), \
+                    mock.patch.object(gate, "nextest", lambda arguments, **options: events.append(arguments[0]) or True), \
+                    mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: contract)):
+                os.environ.pop("GITHUB_ACTIONS", None)
+                gate.run(selection, "build:portable:vera")
+            if built:
+                self.assertEqual((events[0], events[-1]), ("wait", "stop"))
+                self.assertEqual(set(events[1:-1]), {"run"})
+                self.assertTrue(len(events) >= 3)
+            else:
+                self.assertEqual(events, ["wait", "stop"])
         workflow = workflow_jobs(CI)["build"]
         self.assertIn("lean-contract: deferred", workflow)
 
@@ -572,24 +591,48 @@ class VeraTests(unittest.TestCase):
         self.assertEqual(set(vera.values()), {""})
 
     def test_the_archive_runs_the_vera_tests_of_the_crates_it_holds(self):
-        for count in (1, 3):
-            selection = with_event("merge_group", lambda: sharded(count, everything=True))
-            self.assertEqual(selection["archives"][0]["vera"],
-                             "gents-store gents-tools gents-toolcalls gents-cli")
+        expected = "gents-store gents-tools gents-toolcalls gents-cli"
+        partitioned = with_event("merge_group", lambda: sharded(1, everything=True))
+        vera_entry = next(entry for entry in partitioned["archives"] if entry.get("partition") == "vera")
+        self.assertEqual(vera_entry["vera"], expected)
+        self.assertTrue(all(entry["vera"] == "" for entry in partitioned["archives"]
+                            if entry.get("partition") != "vera"))
+        multi = with_event("merge_group", lambda: sharded(3, everything=True))
+        self.assertEqual(multi["archives"][0]["vera"], expected)
         draft = with_event("push", lambda: sharded(1, "crates/gents-store/src/graphql.rs", tier="draft"))
         self.assertEqual(draft["archives"][0]["vera"], "gents-store")
         client = with_event("push", lambda: sharded(1, "crates/gents-cli/src/lib.rs"))
-        self.assertEqual(client["archives"][0]["vera"], "gents-cli")
+        client_vera = " ".join(entry["vera"] for entry in client["archives"] if entry["vera"])
+        self.assertEqual(client_vera, "gents-cli")
 
     def test_a_pull_request_runs_them_too(self):
-        self.assertEqual(with_event("pull_request", lambda: sharded(1, everything=True))["archives"][0]["vera"],
-                         sharded(1, everything=True)["archives"][0]["vera"])
+        pr_vera = [entry["vera"] for entry in with_event("pull_request", lambda: sharded(1, everything=True))["archives"]
+                   if entry["vera"]]
+        push_vera = [entry["vera"] for entry in sharded(1, everything=True)["archives"] if entry["vera"]]
+        self.assertEqual(pr_vera, push_vera)
         selection = with_event("pull_request", lambda: select(everything=True))
         vera = {entry["job"]: entry["vera"] for entry in selection["matrix"]}
         self.assertEqual(vera.pop("test:store"), "gents-store")
         self.assertEqual(vera.pop("test:session"), "gents-tools gents-toolcalls")
         self.assertEqual(vera.pop("test:cli"), "gents-cli")
         self.assertEqual(set(vera.values()), {""})
+
+    def test_vera_partition_runs_only_vera_tests_against_warm_side_tree(self):
+        selection = sharded(1, everything=True)
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}), \
+                mock.patch.object(gate, "ROOT", Path(directory)), \
+                mock.patch.object(gate, "nextest", lambda arguments, **options: calls.append((arguments, options)) or True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
+            gate.run(selection, "build:portable:vera")
+        self.assertEqual(len(calls), 2)
+        for arguments, options in calls:
+            self.assertEqual(arguments[0], "run")
+            self.assertEqual(arguments[arguments.index("--target-dir") + 1], "/cache/runner-a/vera")
+            self.assertEqual(options["extra_env"], {"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+            self.assertEqual(options["drop_env"], ("CARGO_TARGET_DIR",))
 
     def test_the_build_job_runs_them_in_their_own_nextest_build(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
@@ -720,8 +763,10 @@ class RepositoryVariables(unittest.TestCase):
         self.assertFalse(portable & set(outputs["jobs"]))
         self.assertFalse(portable & {entry["job"] for entry in outputs["matrix"]["include"]})
         archives = outputs["archives"]["include"]
-        self.assertEqual([archive.get("partition") for archive in archives],
-                         list(range(1, ROLES["portable"]["partitions"] + 1)))
+        expected_partitions = list(range(1, ROLES["portable"]["partitions"] + 1))
+        if any(archive.get("vera") for archive in archives):
+            expected_partitions.append("vera")
+        self.assertEqual([archive.get("partition") for archive in archives], expected_partitions)
         for archive in archives:
             self.assertTrue(archive["run"])
         self.assertEqual(outputs["shards"]["include"], [])
@@ -781,8 +826,11 @@ class NativeNextest(unittest.TestCase):
 
     def test_the_filterset_names_each_binary_and_filter(self):
         filterset = gate.macos_filterset(["gents", "gents-cli"])
-        self.assertIn("(binary_id(=gents-cli::plugin_build_sandbox))", filterset)
+        self.assertIn("binary_id(=gents-cli)", filterset)
+        self.assertIn("test(~committed_job_fixture_artifact_matches_its_source)", filterset)
         self.assertIn("test(~a_skipped_gate_releases_the_bound_workspace)", filterset)
+        with mock.patch.object(gate, "macos_only_tests", return_value={("--test", "whole_target"): []}):
+            self.assertEqual(gate.macos_filterset(["gents-cli"]), "(binary_id(=gents-cli::whole_target))")
         self.assertEqual(gate.binary_id("gents-client-host", ("--bin", "gents-client-host")),
                          "gents-client-host::bin/gents-client-host")
         self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
@@ -1102,8 +1150,10 @@ class MacosOnlyTests(unittest.TestCase):
             self.assertEqual(whole, {""})
 
     def test_the_repository_gated_tests_are_found(self):
-        # A whole-file gate runs the whole target.
-        self.assertEqual(gate.macos_only_tests("gents-cli")[("--test", "plugin_build_sandbox")], [])
+        # `plugin_build_sandbox` runs under macOS Seatbelt and Linux Landlock: not macOS-only.
+        self.assertNotIn(("--test", "plugin_build_sandbox"), gate.macos_only_tests("gents-cli"))
+        self.assertIn("committed_job_fixture_artifact_matches_its_source",
+                      gate.macos_only_tests("gents-cli")[("--lib",)])
         self.assertIn("a_skipped_gate_releases_the_bound_workspace", gate.macos_only_tests("gents")[("--lib",)])
         # Compiled on both platforms, or on neither with the gate's features: not macOS-only.
         self.assertEqual(gate.macos_only_tests("gents-host"), {})
@@ -1422,13 +1472,106 @@ class ContractBuilds(unittest.TestCase):
         for profile, expected in (("", ["--profile", "test"]), ("fast-dev", ["--profile", "fast-dev"])):
             with mock.patch.object(gate, "sh", return_value=True) as sh, \
                     mock.patch.object(gate, "cargo_test", return_value=True) as cargo_test, \
+                    mock.patch.object(gate, "emit_contract_snapshot", return_value=True) as emit, \
                     mock.patch.dict(os.environ, {"PROFILE": profile}):
                 gate.run_contract(selection)
+            emit.assert_called_once()
             example = next(call.args[0] for call in sh.call_args_list
                            if isinstance(call.args[0], list) and "regenerate_household_policy" in call.args[0])
             self.assertEqual(example[2:6], [*expected, "-p", "gents-lean-vocab"], profile)
             tested = [call.args for call in cargo_test.call_args_list if call.args[0] == "gents-lean-vocab"]
             self.assertEqual(tested, [("gents-lean-vocab", ["-p", "gents-lean-vocab", "--lib", "--examples"])])
+
+    def test_run_contract_shares_one_snapshot_across_checks_and_ts_lean(self):
+        selection = {"contract": {"ratchets": False, "ts_lean": True, "tla": []}}
+        seen_env = []
+        commands = []
+
+        def fake_sh(command, cwd=gate.ROOT, env=None):
+            commands.append(command)
+            seen_env.append(os.environ.get("GENTS_LEAN_CONTRACT_FILE"))
+            return True
+
+        def fake_cargo_test(label, arguments, **kwargs):
+            seen_env.append(os.environ.get("GENTS_LEAN_CONTRACT_FILE"))
+            return True
+
+        with mock.patch.object(gate, "sh", side_effect=fake_sh), \
+                mock.patch.object(gate, "cargo_test", side_effect=fake_cargo_test), \
+                mock.patch.object(gate, "emit_contract_snapshot", return_value=True) as emit, \
+                mock.patch.dict(os.environ, {"PROFILE": "fast-dev"}):
+            os.environ.pop("GENTS_LEAN_CONTRACT_FILE", None)
+            gate.run_contract(selection)
+            self.assertIsNone(os.environ.get("GENTS_LEAN_CONTRACT_FILE"))
+
+        snapshot_arg = str(emit.call_args.args[2])
+        map_cmd = next(c for c in commands if isinstance(c, str) and "check-canonical-output-map.py" in c)
+        dec_cmd = next(c for c in commands if isinstance(c, str) and "check-lean-rust-decoders.py" in c)
+        self.assertIn(f"--contract {snapshot_arg}", map_cmd)
+        self.assertIn(f"--contract {snapshot_arg}", dec_cmd)
+        self.assertIn(["cargo", "build", "--profile", "fast-dev", "-p", "gents-lean-contract", "--bin",
+                       "gents-lean-generator"], commands)
+        # All commands after emit_contract_snapshot receive GENTS_LEAN_CONTRACT_FILE.
+        self.assertTrue(any(val == snapshot_arg for val in seen_env))
+
+    def test_emit_contract_snapshot_falls_back_to_interpreter_when_exe_fails(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            proofs = Path(scratch)
+            snapshot = proofs / "out.snapshot"
+            calls = []
+
+            def fake_run(cmd, cwd=None, env=None, stdout=None, check=False, **kwargs):
+                calls.append(cmd)
+                if cmd[:2] == ["lake", "build"]:
+                    return subprocess.CompletedProcess(cmd, 1)
+                if stdout is not None:
+                    stdout.write(gate.CONTRACT_JSON_BEGIN + b"\n{}\n" + gate.CONTRACT_JSON_END + b"\n")
+                return subprocess.CompletedProcess(cmd, 0)
+
+            before = len(gate.results)
+            try:
+                with mock.patch.object(gate, "lean_exe_env", return_value={}), \
+                        mock.patch.object(gate.subprocess, "run", side_effect=fake_run):
+                    self.assertTrue(gate.emit_contract_snapshot(proofs, "lake", snapshot))
+            finally:
+                del gate.results[before:]
+            self.assertEqual(calls[0], ["lake", "build", "contracts"])
+            self.assertEqual(calls[1], ["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"])
+
+    def test_lean_contract_skips_lake_build_when_persistent_cache_is_fresh(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            proofs = root / gate.PROOFS
+            olean_dir = proofs / ".lake/build/lib/lean/Proofs/Conformance"
+            olean_dir.mkdir(parents=True)
+            (proofs / "lean-toolchain").write_text("leanprover/lean4:v4.18.0\n")
+            (proofs / "lakefile.lean").write_text("package proofs\n")
+            (proofs / "Proofs").mkdir()
+            (proofs / "Proofs/Sample.lean").write_text("def x : Nat := 1\n")
+            (olean_dir / "Contracts.olean").write_bytes(b"olean")
+            (olean_dir / "Contracts.trace").write_text('{"depHash":"abc123"}')
+            snap = root / "snap.txt"
+            snap.write_bytes(gate.CONTRACT_JSON_BEGIN + b"\n{\"ok\":true}\n" + gate.CONTRACT_JSON_END + b"\n")
+            self.assertFalse(gate.contract_cache_fresh(proofs))
+            self.assertTrue(gate.write_contract_cache(proofs, snap))
+            self.assertTrue(gate.contract_cache_fresh(proofs))
+
+            before = len(gate.results)
+            try:
+                with mock.patch.object(gate, "ROOT", root), \
+                        mock.patch.object(gate.shutil, "which", return_value="/usr/bin/lake"), \
+                        mock.patch.object(gate.subprocess, "Popen", side_effect=AssertionError("lake must not run")):
+                    contract = gate.LeanContract.start()
+                    self.assertIsNotNone(contract)
+                    self.assertTrue(contract.cached)
+                    self.assertTrue(contract.wait())
+                    contract.stop()
+            finally:
+                del gate.results[before:]
+
+            # Mutating any Lean file invalidates the cache immediately.
+            (proofs / "Proofs/Sample.lean").write_text("def x : Nat := 2\n")
+            self.assertFalse(gate.contract_cache_fresh(proofs))
 
 
 class TlaStructure(unittest.TestCase):

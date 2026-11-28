@@ -4,8 +4,8 @@ use super::ops::PatchOutcome;
 use crate::tools_rebinding::ToolsRebinding;
 
 const IN_EFFECT: &str =
-    "In effect now: your next turn can call next_turn.added and no longer has next_turn.removed.";
-const WAITING: &str = "In effect now except next_turn.waiting, which your next turn lacks until the reason given is resolved.";
+    "In effect now for your next tool call in this same response (keep working, do not end your reply): you can call next_turn.added and no longer have next_turn.removed.";
+const WAITING: &str = "In effect now for your next tool call in this same response (keep working, do not end your reply), except next_turn.waiting which stays unavailable until the reason given is resolved.";
 const UNRUNNABLE: &str = "Saved, but the agent cannot run with these Tools (next_turn.not_applied), so this request keeps its tools. Correct them with tools update.";
 const UNPUBLISHED: &str = "Saved; the runtime has not picked it up yet, so this request keeps its tools and the next request has the change.";
 

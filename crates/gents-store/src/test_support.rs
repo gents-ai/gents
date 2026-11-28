@@ -1,7 +1,9 @@
 pub mod acp_policies;
+pub mod blocking_steps;
 pub mod bounded_process;
 #[cfg(test)]
 pub(crate) mod doubles;
+pub mod embedded_conductor;
 #[cfg(unix)]
 mod executable_script;
 pub mod relationships;
@@ -9,6 +11,7 @@ pub mod snapshot_reader;
 pub mod template_pool;
 mod test_store;
 pub mod wire_database;
+pub mod writer_counter;
 
 #[cfg(unix)]
 pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};

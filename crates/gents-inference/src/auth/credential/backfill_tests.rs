@@ -18,10 +18,29 @@ fn token_response(access_claims: Value) -> &'static str {
     Box::leak(body.to_string().into_boxed_str())
 }
 
+async fn remove_grok(access: &ConfigAccess, did: &str) {
+    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+    access
+        .transact_write("test.remove", |txn| {
+            let credential_id = credential_id.clone();
+            Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+        })
+        .await
+        .unwrap();
+}
+
 async fn seed_expired_grok(access: &ConfigAccess, did: &str, key: Option<&str>) {
+    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+    if lookup_oauth_credential_by_id_on(access, &credential_id)
+        .await
+        .unwrap()
+        .is_some()
+    {
+        remove_grok(access, did).await;
+    }
     let credential = OAuthCredential {
         doc_id: None,
-        credential_id: oauth_credential_id(did, XAI_OAUTH_PROVIDER),
+        credential_id,
         node_did: did.to_string(),
         provider: XAI_OAUTH_PROVIDER.to_string(),
         access_token: "access-TEST".into(),
@@ -75,66 +94,6 @@ async fn refresh_once(
         .expect("stored row")
 }
 
-#[tokio::test]
-async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
-    let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
-    assert_eq!(stored.refresh_token, "refresh-rotated");
-    assert_eq!(
-        stored.provider_account_key.as_deref(),
-        Some("user:principal-1")
-    );
-}
-
-#[tokio::test]
-async fn refresh_never_changes_a_present_key() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, Some("user:principal-old")).await;
-    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
-    let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
-    assert_eq!(stored.refresh_token, "refresh-rotated");
-    assert_eq!(
-        stored.provider_account_key.as_deref(),
-        Some("user:principal-old")
-    );
-}
-
-#[tokio::test]
-async fn refresh_leaves_the_key_empty_without_the_claim() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let body = token_response(json!({ "sub": "user-a" }));
-    let stored = refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
-    assert_eq!(stored.refresh_token, "refresh-rotated");
-    assert_eq!(stored.provider_account_key, None);
-}
-
 async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F) -> DbCredentialBearer
 where
     F: std::future::Future<Output = ()>,
@@ -162,213 +121,6 @@ where
     handle.await.expect("server");
     refreshed.expect("the owner still serves its refreshed token");
     bearer
-}
-
-#[tokio::test]
-async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&signed_home).await;
-    let (db, _user, _user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    refresh_racing(&node, did, async {
-        access
-            .transact_write("test.remove", |txn| {
-                let credential_id = credential_id.clone();
-                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
-            })
-            .await
-            .unwrap();
-    })
-    .await;
-    assert_eq!(
-        lookup_oauth_credential_by_id(&node, &credential_id)
-            .await
-            .unwrap(),
-        None
-    );
-}
-
-#[tokio::test]
-async fn a_refresh_racing_a_disable_keeps_it_disabled() {
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&signed_home).await;
-    let (db, _user, user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    refresh_racing(&node, did, async {
-        set_account_enabled(&user_access, did, &credential_id, false)
-            .await
-            .unwrap();
-    })
-    .await;
-    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
-        .await
-        .unwrap()
-        .expect("stored row");
-    assert!(!stored.enabled);
-    assert_eq!(stored.refresh_token, "refresh-rotated");
-    assert_eq!(
-        stored.provider_account_key.as_deref(),
-        Some("user:principal-1")
-    );
-}
-
-#[tokio::test]
-async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    let sign_in = crate::auth::xai_login::credential_from_login_tokens(
-        did,
-        XAI_OAUTH_PROVIDER,
-        &crate::auth::xai_login::XaiLoginTokens {
-            access_token: unsigned_jwt(
-                json!({ "principal_type": "user", "principal_id": "principal-1" }),
-            ),
-            refresh_token: "refresh-signed-in".into(),
-            id_token: None,
-            expires_in: Some(900),
-        },
-        Utc::now(),
-    );
-    let bearer = refresh_racing(&node, did, async {
-        let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
-        assert_eq!(signed.result, SignInResult::Refreshed);
-    })
-    .await;
-    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
-        .await
-        .unwrap()
-        .expect("stored row");
-    assert_eq!(stored.refresh_token, "refresh-signed-in");
-    assert_eq!(stored.access_token, sign_in.access_token);
-    assert_eq!(
-        stored.provider_account_key.as_deref(),
-        Some("user:principal-1")
-    );
-
-    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
-    let (url, handle) = one_shot_token_server(200, body).await;
-    let bearer = bearer.with_token_url(url);
-    bearer.invalidate().await;
-    let refreshed = bearer.current_bearer().await;
-    let request = handle.await.expect("server");
-    refreshed.expect("second refresh");
-    assert!(request.contains("refresh-signed-in"), "{request}");
-}
-
-#[tokio::test]
-async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
-    let signed_home = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&signed_home).await;
-    let (db, _user, _user_access) = signed_home.into_parts();
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    let sign_in = crate::auth::xai_login::credential_from_login_tokens(
-        did,
-        XAI_OAUTH_PROVIDER,
-        &crate::auth::xai_login::XaiLoginTokens {
-            access_token: unsigned_jwt(
-                json!({ "principal_type": "user", "principal_id": "principal-2" }),
-            ),
-            refresh_token: "refresh-replaced".into(),
-            id_token: None,
-            expires_in: Some(900),
-        },
-        Utc::now(),
-    );
-    refresh_racing(&node, did, async {
-        access
-            .transact_write("test.remove", |txn| {
-                let credential_id = credential_id.clone();
-                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
-            })
-            .await
-            .unwrap();
-        let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
-        assert_eq!(signed.result, SignInResult::Added);
-        assert_eq!(signed.credential.credential_id, credential_id);
-    })
-    .await;
-    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
-        .await
-        .unwrap()
-        .expect("stored row");
-    assert_eq!(stored.refresh_token, "refresh-replaced");
-    assert_eq!(stored.access_token, sign_in.access_token);
-    assert_eq!(
-        stored.provider_account_key.as_deref(),
-        Some("user:principal-2")
-    );
-}
-
-#[tokio::test]
-async fn a_refresh_adopts_a_replaced_document() {
-    let db = gents_documents::test_support::SignedHome::start(
-        "credential-refresh",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let _binding = crate::test_support::default_agent(&db).await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let access = super::rows::runtime_credential_access(&node, did).unwrap();
-    seed_expired_grok(&access, did, None).await;
-    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    let mut removed = lookup_oauth_credential_by_id(&node, &credential_id)
-        .await
-        .unwrap()
-        .expect("stored row");
-    removed.doc_id = Some("doc-removed".into());
-    removed.refresh_token = "refresh-removed".into();
-    removed.access_token_expires_at = Utc::now() - Duration::seconds(30);
-    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
-    let (url, handle) = one_shot_token_server(200, body).await;
-    let bearer = DbCredentialBearer::new(
-        node.clone(),
-        did,
-        XAI_OAUTH_PROVIDER,
-        credential_id,
-        true,
-        OAuthRefreshKind::Xai,
-        XAI_OAUTH_PRODUCT,
-    )
-    .with_cache_seed(removed)
-    .with_token_url(url);
-    let refreshed = bearer.current_bearer().await;
-    let request = handle.await.expect("server");
-    refreshed.expect("refresh");
-    assert!(request.contains("refresh-TEST"), "{request}");
 }
 
 async fn seed_upgraded_row(
@@ -407,16 +159,176 @@ async fn seed_upgraded_row(
 }
 
 #[tokio::test]
-async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
-    let db = gents_documents::test_support::SignedHome::start(
+async fn credential_refresh_backfill_and_race_scenarios() {
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "credential-refresh",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let _binding = crate::test_support::default_agent(&db).await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
+    let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+
+    // Refresh fills an empty key, preserves a present key, and leaves key empty without the claim.
+    for (initial, claims, expected) in [
+        (
+            None,
+            json!({ "principal_type": "user", "principal_id": "principal-1" }),
+            Some("user:principal-1"),
+        ),
+        (
+            Some("user:principal-old"),
+            json!({ "principal_type": "user", "principal_id": "principal-1" }),
+            Some("user:principal-old"),
+        ),
+        (None, json!({ "sub": "user-a" }), None),
+    ] {
+        seed_expired_grok(&access, did, initial).await;
+        let stored = refresh_once(
+            &node,
+            did,
+            XAI_OAUTH_PROVIDER,
+            OAuthRefreshKind::Xai,
+            token_response(claims),
+        )
+        .await;
+        assert_eq!(stored.refresh_token, "refresh-rotated");
+        assert_eq!(stored.provider_account_key.as_deref(), expected);
+    }
+
+    // Refresh racing a remove does not revive the row.
+    seed_expired_grok(&access, did, None).await;
+    refresh_racing(&node, did, remove_grok(&access, did)).await;
+    assert_eq!(
+        lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap(),
+        None
+    );
+
+    // Refresh racing a disable keeps it disabled.
+    seed_expired_grok(&access, did, None).await;
+    refresh_racing(&node, did, async {
+        set_account_enabled(&user_access, did, &credential_id, false)
+            .await
+            .unwrap();
+    })
+    .await;
+    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+        .await
+        .unwrap()
+        .expect("stored row");
+    assert!(!stored.enabled);
+    assert_eq!(stored.refresh_token, "refresh-rotated");
+    assert_eq!(
+        stored.provider_account_key.as_deref(),
+        Some("user:principal-1")
+    );
+
+    // Refresh racing a sign-in keeps the sign-in.
+    seed_expired_grok(&access, did, None).await;
+    let sign_in = crate::auth::xai_login::credential_from_login_tokens(
+        did,
+        XAI_OAUTH_PROVIDER,
+        &crate::auth::xai_login::XaiLoginTokens {
+            access_token: unsigned_jwt(
+                json!({ "principal_type": "user", "principal_id": "principal-1" }),
+            ),
+            refresh_token: "refresh-signed-in".into(),
+            id_token: None,
+            expires_in: Some(900),
+        },
+        Utc::now(),
+    );
+    let bearer = refresh_racing(&node, did, async {
+        let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
+        assert_eq!(signed.result, SignInResult::Refreshed);
+    })
+    .await;
+    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+        .await
+        .unwrap()
+        .expect("stored row");
+    assert_eq!(stored.refresh_token, "refresh-signed-in");
+    assert_eq!(stored.access_token, sign_in.access_token);
+    assert_eq!(
+        stored.provider_account_key.as_deref(),
+        Some("user:principal-1")
+    );
+    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+    let (url, handle) = one_shot_token_server(200, body).await;
+    let bearer = bearer.with_token_url(url);
+    bearer.invalidate().await;
+    let refreshed = bearer.current_bearer().await;
+    let request = handle.await.expect("server");
+    refreshed.expect("second refresh");
+    assert!(request.contains("refresh-signed-in"), "{request}");
+
+    // Refresh racing a replaced sign-in keeps the new row.
+    seed_expired_grok(&access, did, None).await;
+    let sign_in = crate::auth::xai_login::credential_from_login_tokens(
+        did,
+        XAI_OAUTH_PROVIDER,
+        &crate::auth::xai_login::XaiLoginTokens {
+            access_token: unsigned_jwt(
+                json!({ "principal_type": "user", "principal_id": "principal-2" }),
+            ),
+            refresh_token: "refresh-replaced".into(),
+            id_token: None,
+            expires_in: Some(900),
+        },
+        Utc::now(),
+    );
+    refresh_racing(&node, did, async {
+        remove_grok(&access, did).await;
+        let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
+        assert_eq!(signed.result, SignInResult::Added);
+        assert_eq!(signed.credential.credential_id, credential_id);
+    })
+    .await;
+    let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+        .await
+        .unwrap()
+        .expect("stored row");
+    assert_eq!(stored.refresh_token, "refresh-replaced");
+    assert_eq!(stored.access_token, sign_in.access_token);
+    assert_eq!(
+        stored.provider_account_key.as_deref(),
+        Some("user:principal-2")
+    );
+
+    // Refresh adopts a replaced document.
+    seed_expired_grok(&access, did, None).await;
+    let mut removed = lookup_oauth_credential_by_id(&node, &credential_id)
+        .await
+        .unwrap()
+        .expect("stored row");
+    removed.doc_id = Some("doc-removed".into());
+    removed.refresh_token = "refresh-removed".into();
+    removed.access_token_expires_at = Utc::now() - Duration::seconds(30);
+    let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+    let (url, handle) = one_shot_token_server(200, body).await;
+    let bearer = DbCredentialBearer::new(
+        node.clone(),
+        did,
+        XAI_OAUTH_PROVIDER,
+        credential_id.clone(),
+        true,
+        OAuthRefreshKind::Xai,
+        XAI_OAUTH_PRODUCT,
+    )
+    .with_cache_seed(removed)
+    .with_token_url(url);
+    let refreshed = bearer.current_bearer().await;
+    let request = handle.await.expect("server");
+    refreshed.expect("refresh");
+    assert!(request.contains("refresh-TEST"), "{request}");
+
+    // Upgraded rows keep their identity and fill the key on first refresh.
+    remove_grok(&access, did).await;
     seed_upgraded_row(&access, did, CHATGPT_CODEX_PROVIDER, Some("acct-ws")).await;
     seed_upgraded_row(&access, did, XAI_OAUTH_PROVIDER, None).await;
     let cases = [

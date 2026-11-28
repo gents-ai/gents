@@ -4,18 +4,6 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn session_observing(newest: &str, state: RequestLifecycleState) -> AgentSession {
     AgentSession {
-        session_id: "sess-1".into(),
-        node_did: "did:test:amy".into(),
-        requester_did: None,
-        agent_did: "default".into(),
-        created_at: "2026-04-21T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
         observation: Some(SessionObservation {
             reply_preview: None,
             last_activity_at: "2026-04-21T12:00:09Z".into(),
@@ -26,22 +14,14 @@ fn session_observing(newest: &str, state: RequestLifecycleState) -> AgentSession
                 lifecycle_state: state,
             }),
         }),
+        ..fixture_session("sess-1", "did:test:amy")
     }
 }
 
 fn request(id: &str, state: RequestLifecycleState, second: u32) -> AgentRequestRow {
     AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some(format!("doc-{id}")),
-        request_id: id.into(),
-        node_did: Some("did:test:amy".into()),
-        agent_did: Some("default".into()),
-        session_id: Some("sess-1".into()),
-        content: Some(format!("{id} text")),
-        lifecycle_state: Some(state),
-        execution_origin: Some("interactive".into()),
         created_at: Some(format!("2026-04-21T12:00:{second:02}Z")),
-        ..Default::default()
+        ..fixture_request(id, "sess-1", state)
     }
 }
 

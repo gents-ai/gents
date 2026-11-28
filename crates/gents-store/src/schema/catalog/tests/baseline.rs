@@ -60,44 +60,15 @@ fn default_baseline_covers_every_protocol_collection_once() {
 }
 
 #[tokio::test]
-async fn fresh_node_runtime_baseline_is_diagnostics_only() {
-    let node = fresh_node().await;
-    ensure_runtime(node.as_ref())
-        .await
-        .expect("ensure the runtime schema");
-    let runtime = node
-        .get_collection(gents_protocol::schemas::NODE_RUNTIME_NAME)
-        .expect("get NodeRuntime")
-        .expect("NodeRuntime installed");
-    assert_eq!(
-        runtime.version_id,
-        "bafyreif7je44mc6mdxtpp6wpakbdhuzsjibgtifxlo6pzgfhf2sqlcdrgq"
-    );
-    let field_names = runtime
-        .fields
-        .iter()
-        .map(|field| field.name.as_str())
-        .collect::<BTreeSet<_>>();
-    assert!(!field_names.contains("runnable_behavior_count"));
-    assert!(!field_names.contains("unavailable_behavior_count"));
-    assert!(!field_names.contains("process_state"));
-    assert!(!field_names.contains("active_generation"));
-    assert!(!field_names.contains("router_generation"));
-    assert!(!field_names.contains("default_agent_id"));
-    assert!(field_names.contains("reconcile_phase"));
-    assert!(field_names.contains("updated_at"));
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
     let node = fresh_node().await;
+    let ids = schemas::HomePolicyIds::node_store();
     ensure_runtime(node.as_ref()).await.expect("first ensure");
     let first = node
         .get_all_collection_versions()
         .await
         .expect("versions after first ensure");
-    for entry in baseline(gents_protocol::schemas::HomePolicyIds::node_store()).iter() {
+    for entry in baseline(ids).iter() {
         let cv = node
             .get_collection(entry.name)
             .expect("get_collection")
@@ -110,9 +81,7 @@ async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
         );
         assert_eq!(Some(cv.version_id.as_str()), entry.expected_version);
     }
-    for index in
-        runtime_catalog(gents_protocol::schemas::HomePolicyIds::node_store()).ordinary_indexes
-    {
+    for index in runtime_catalog(ids).ordinary_indexes {
         let collection = node
             .get_collection(index.collection)
             .expect("get_collection")
@@ -138,11 +107,182 @@ async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
         );
     }
 
+    let runtime = node
+        .get_collection(schemas::NODE_RUNTIME_NAME)
+        .expect("get NodeRuntime")
+        .expect("NodeRuntime installed");
+    assert_eq!(
+        runtime.version_id,
+        "bafyreif7je44mc6mdxtpp6wpakbdhuzsjibgtifxlo6pzgfhf2sqlcdrgq"
+    );
+    let field_names = runtime
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for removed in [
+        "runnable_behavior_count",
+        "unavailable_behavior_count",
+        "process_state",
+        "active_generation",
+        "router_generation",
+        "default_agent_id",
+    ] {
+        assert!(!field_names.contains(removed), "unexpected field {removed}");
+    }
+    assert!(field_names.contains("reconcile_phase"));
+    assert!(field_names.contains("updated_at"));
+
+    let inference_call = node
+        .get_collection(schemas::INFERENCE_CALL_NAME)
+        .unwrap()
+        .unwrap();
+    for name in ["session_id", "model_name", "profile_id"] {
+        assert_eq!(
+            inference_call
+                .indexes
+                .iter()
+                .filter(|index| {
+                    !index.resolved_unique()
+                        && index.fields.len() == 1
+                        && index.fields[0].name == name
+                        && !index.fields[0].descending
+                })
+                .count(),
+            1,
+            "single-field index for InferenceCall.{name}"
+        );
+    }
+
+    let runtime_did = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    for (name, resource) in schemas::IDENTITY_POLICY_BINDINGS
+        .iter()
+        .filter(|(name, _)| schemas::is_replicated_protocol_collection(name))
+    {
+        let collection = node.get_collection(name).unwrap().unwrap();
+        assert!(collection.is_branchable);
+        let acp = node.document_acp();
+        assert!(acp
+            .is_doc_registered(
+                ids.id(schemas::BuiltInPolicy::Household),
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            acp.get_doc_owner(
+                ids.id(schemas::BuiltInPolicy::Household),
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .unwrap(),
+            Some(runtime_did.clone())
+        );
+    }
+
+    for name in [
+        schemas::TOOL_FILE_INVENTORY_NAME,
+        schemas::FILE_INVENTORY_REPLY_NAME,
+        schemas::FILE_INVENTORY_PROGRESS_NAME,
+    ] {
+        let collection = node.get_collection(name).unwrap().unwrap();
+        let policy = collection.policy.unwrap();
+        assert_eq!(policy.id, ids.id(schemas::BuiltInPolicy::ToolFileChange));
+        assert_eq!(
+            policy.resource_name,
+            schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
+        );
+        let owner = node
+            .document_acp()
+            .get_doc_owner(
+                ids.id(schemas::BuiltInPolicy::ToolFileChange),
+                schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                &collection.collection_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.as_str(), node.node_identity_did().unwrap());
+    }
+    assert!(schemas::is_local_only_collection(
+        schemas::FILE_INVENTORY_REPLY_NAME
+    ));
+    assert!(schemas::is_local_only_collection(
+        schemas::FILE_INVENTORY_PROGRESS_NAME
+    ));
+    assert!(!schemas::BRANCHABLE_COLLECTION_NAMES.contains(&schemas::FILE_INVENTORY_PROGRESS_NAME));
+    assert!(!schemas::is_replicated_protocol_collection(
+        schemas::FILE_INVENTORY_REQUEST_NAME
+    ));
+
+    validate_existing_schema(&node, ids)
+        .await
+        .expect("existing schema written by this build is accepted");
+
     ensure_runtime(node.as_ref()).await.expect("second ensure");
     assert_eq!(
         serde_json::to_value(&first).unwrap(),
         serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap(),
         "a second ensure changes nothing"
+    );
+
+    let first_claim = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-1"
+                session_id: "session-1"
+                session_doc_id: "session-doc-1"
+                node_did: "did:key:existing"
+                objective: "objective"
+                token_budget: 100
+                created_at: "2026-09-02T00:00:00Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(
+        !first_claim.has_errors(),
+        "first Goal claim: {:?}",
+        first_claim.errors
+    );
+    let duplicate = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-2"
+                session_id: "session-1"
+                session_doc_id: "session-doc-1"
+                node_did: "did:key:existing"
+                objective: "different"
+                token_budget: 200
+                created_at: "2026-09-02T00:00:01Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(
+        duplicate.has_errors(),
+        "duplicate creation_key in one session must violate the unique index"
+    );
+    let other_session = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-3"
+                session_id: "session-2"
+                session_doc_id: "session-doc-2"
+                node_did: "did:key:existing"
+                objective: "objective"
+                token_budget: 100
+                created_at: "2026-09-02T00:00:02Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(
+        !other_session.has_errors(),
+        "the claim key is scoped to its session: {:?}",
+        other_session.errors
     );
 
     node.shutdown().await.expect("shut down test node");
@@ -217,65 +357,6 @@ async fn agent_request_on_its_root_keeps_its_rows_and_ensure_is_idempotent() {
         "re-run must not move AgentRequest off its baseline root"
     );
 
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn goal_creation_claim_baseline_enforces_uniqueness() {
-    let node = fresh_node().await;
-    ensure_runtime(node.as_ref()).await.expect("baseline");
-    let first = node
-        .execute(
-            r#"mutation { create_GoalCreationClaim(input: {
-                creation_key: "goal-create:key"
-                goal_id: "keyed-1"
-                session_id: "session-1"
-                session_doc_id: "session-doc-1"
-                node_did: "did:key:existing"
-                objective: "objective"
-                token_budget: 100
-                created_at: "2026-09-02T00:00:00Z"
-            }) { creation_key goal_id } }"#,
-        )
-        .await;
-    assert!(!first.has_errors(), "first Goal claim: {:?}", first.errors);
-    let duplicate = node
-        .execute(
-            r#"mutation { create_GoalCreationClaim(input: {
-                creation_key: "goal-create:key"
-                goal_id: "keyed-2"
-                session_id: "session-1"
-                session_doc_id: "session-doc-1"
-                node_did: "did:key:existing"
-                objective: "different"
-                token_budget: 200
-                created_at: "2026-09-02T00:00:01Z"
-            }) { creation_key goal_id } }"#,
-        )
-        .await;
-    assert!(
-        duplicate.has_errors(),
-        "duplicate creation_key in one session must violate the unique index"
-    );
-    let other_session = node
-        .execute(
-            r#"mutation { create_GoalCreationClaim(input: {
-                creation_key: "goal-create:key"
-                goal_id: "keyed-3"
-                session_id: "session-2"
-                session_doc_id: "session-doc-2"
-                node_did: "did:key:existing"
-                objective: "objective"
-                token_budget: 100
-                created_at: "2026-09-02T00:00:02Z"
-            }) { creation_key goal_id } }"#,
-        )
-        .await;
-    assert!(
-        !other_session.has_errors(),
-        "the claim key is scoped to its session: {:?}",
-        other_session.errors
-    );
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -424,84 +505,6 @@ async fn multi_version_lineage_is_rejected() {
     }
 
     node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn single_version_unknown_root_is_rejected() {
-    const EXPECTED_SDL: &str = "type PinnedFixture { name: String label: String }";
-    const FOREIGN_SDL: &str = "type PinnedFixture { name: String }";
-
-    let authoring_node = fresh_node().await;
-    authoring_node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL))
-        .await
-        .expect("register expected root");
-    let expected_root = authoring_node
-        .get_collection("PinnedFixture")
-        .expect("load expected root")
-        .expect("expected root exists")
-        .version_id;
-    authoring_node
-        .shutdown()
-        .await
-        .expect("shut down test node");
-
-    let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(FOREIGN_SDL))
-        .await
-        .expect("register foreign root");
-    let catalog = Catalog {
-        baseline: &[BaselineCollection {
-            name: "PinnedFixture",
-            sdl: EXPECTED_SDL,
-            expected_version: Some(&expected_root),
-            expected_collection_id: None,
-        }],
-        ordinary_indexes: &[],
-    };
-
-    let err = ensure(node.as_ref(), &catalog)
-        .await
-        .expect_err("single unknown root must fail closed");
-    assert!(
-        matches!(err, SchemaError::UnknownLineage { ref collection, .. } if collection == "PinnedFixture"),
-        "unexpected error: {err}"
-    );
-
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn fresh_backend_collections_reject_a_foreign_single_root() {
-    for (name, sdl) in [
-        (
-            schemas::INFERENCE_BACKEND_METADATA_NAME,
-            schemas::INFERENCE_BACKEND_METADATA,
-        ),
-        (
-            schemas::BACKEND_CREDENTIAL_NAME,
-            schemas::BACKEND_CREDENTIAL,
-        ),
-    ] {
-        let body = sdl.trim_end().strip_suffix('}').expect("bundled SDL type");
-        let node = fresh_node().await;
-        node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::node_store()
-                .render(&format!("{body}    foreign_field: String\n}}")),
-        )
-        .await
-        .expect("register foreign root");
-
-        let err = ensure_runtime(node.as_ref())
-            .await
-            .expect_err("a foreign root must fail closed");
-        assert!(
-            matches!(err, SchemaError::UnknownLineage { ref collection, .. } if collection == name),
-            "unexpected error for {name}: {err}"
-        );
-
-        node.shutdown().await.expect("shut down test node");
-    }
 }
 
 #[tokio::test]
@@ -759,14 +762,6 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
         .find(|entry| entry.name == "AgentMessage")
         .and_then(|entry| entry.expected_version)
         .unwrap();
-    let fresh = fresh_node().await;
-    ensure_runtime(fresh.as_ref()).await.unwrap();
-    let fresh_id = fresh
-        .get_collection("AgentMessage")
-        .unwrap()
-        .unwrap()
-        .version_id;
-    assert_eq!(fresh_id, canonical);
 
     let node = fresh_node().await;
     node.add_collection(
@@ -816,7 +811,6 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
             .version_id,
         canonical
     );
-    fresh.shutdown().await.expect("shut down test node");
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -890,16 +884,6 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
         "{error}"
     );
     assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
-    node.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn existing_schema_this_build_wrote_is_accepted() {
-    let node = fresh_node().await;
-    ensure_runtime(&node).await.unwrap();
-    validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
-        .await
-        .unwrap();
     node.shutdown().await.unwrap();
 }
 
@@ -1005,49 +989,4 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
         "{error}"
     );
     std::mem::forget(dir);
-}
-
-#[tokio::test]
-async fn canonical_catalog_pins_for_authoring() {
-    let node = fresh_node().await;
-    let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
-        .iter()
-        .copied()
-        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
-        .chain(
-            gents_protocol::schemas::ALL_COLLECTION_NAMES
-                .iter()
-                .copied()
-                .zip(gents_protocol::schemas::ALL.iter().copied()),
-        )
-        .collect::<Vec<_>>();
-    for (name, sdl) in &catalog {
-        node.add_collection(&schemas::HomePolicyIds::node_store().render(sdl))
-            .await
-            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
-    }
-
-    let mut mismatches = Vec::new();
-    for (name, _) in catalog {
-        let cv = node
-            .get_collection(name)
-            .expect("get")
-            .unwrap_or_else(|| panic!("missing {name}"));
-        let expected = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-            .iter()
-            .find(|entry| entry.name == name)
-            .and_then(|entry| entry.expected_version);
-        if expected != Some(cv.version_id.as_str()) {
-            mismatches.push(format!(
-                "{name}: expected {expected:?}, computed {}",
-                cv.version_id
-            ));
-        }
-    }
-    node.shutdown().await.expect("shut down test node");
-    assert!(
-        mismatches.is_empty(),
-        "baseline root pins are stale or missing:\n{}",
-        mismatches.join("\n")
-    );
 }

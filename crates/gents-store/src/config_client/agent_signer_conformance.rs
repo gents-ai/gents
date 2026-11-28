@@ -143,15 +143,30 @@ async fn managed_signing_selection_conforms_to_lean() {
 }
 
 #[tokio::test]
-async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
+async fn managed_agent_signing_leases_relationships_and_loopback_routing() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     let directory = tempfile::tempdir().unwrap();
     let root = KeyIdentity::load_or_create(directory.path().join("node"), None).unwrap();
     let user = KeyIdentity::load_or_create(directory.path().join("user"), None).unwrap();
+    let other_user = KeyIdentity::load_or_create(directory.path().join("other"), None).unwrap();
     let binding = crate::identity::provision_agent_identity(&root).unwrap();
+    let other_binding = crate::identity::provision_agent_identity(&root).unwrap();
     let agent = crate::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let other_agent = crate::identity::resolve_agent_identity(&root, &other_binding).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    let foreign_node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(user.did())
             .build()
             .await
             .unwrap(),
@@ -159,7 +174,10 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
     node.add_collection("type SigningFact { value: String }")
         .await
         .unwrap();
+
     let actor = identity::Did::new(agent.did()).unwrap();
+    let user_did = identity::Did::new(user.did()).unwrap();
+    let root_did = identity::Did::new(root.did()).unwrap();
     let unsigned_agent = ConfigAccess::local_as(node.clone(), actor.clone());
     assert!(matches!(
         unsigned_agent
@@ -169,7 +187,7 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
             .await,
         Err(super::ConfigClientError::ManagedAgentSignerRequired)
     ));
-    let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+    let user_access = ConfigAccess::local_as(node.clone(), user_did.clone());
     assert!(matches!(
         user_access
             .write(
@@ -193,9 +211,9 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
         })
         .await
         .unwrap();
+
     let offline_client =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
-            .with_client_signed_configuration();
+        ConfigAccess::local_as(node.clone(), user_did.clone()).with_client_signed_configuration();
     assert!(matches!(
         offline_client
             .write(
@@ -205,25 +223,20 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
             .await,
         Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
     ));
-    let entered = std::sync::atomic::AtomicBool::new(false);
+    let entered_flag = AtomicBool::new(false);
     assert!(matches!(
         offline_client
             .transact_write("test.offline_client_txn", |_txn| {
-                entered.store(true, std::sync::atomic::Ordering::SeqCst);
+                entered_flag.store(true, Ordering::SeqCst);
                 Box::pin(async { Ok::<_, super::ConfigClientError>(()) })
             })
             .await,
         Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
     ));
-    assert!(!entered.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!entered_flag.load(Ordering::SeqCst));
     assert!(matches!(
         offline_client
-            .add_actor_relationship(
-                "SigningFact",
-                "any-doc",
-                "reader",
-                &identity::Did::new(user.did()).unwrap(),
-            )
+            .add_actor_relationship("SigningFact", "any-doc", "reader", &user_did)
             .await,
         Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
     ));
@@ -234,8 +247,7 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
         .await
         .unwrap();
     let runtime_as_client =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap())
-            .with_client_signed_configuration();
+        ConfigAccess::local_as(node.clone(), root_did.clone()).with_client_signed_configuration();
     assert!(matches!(
         runtime_as_client
             .write(
@@ -245,6 +257,7 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
             .await,
         Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
     ));
+
     ConfigAccess::local(node.clone())
         .write(
             "test.default_node",
@@ -264,14 +277,14 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
         })
         .await
         .unwrap();
-    ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap())
+    ConfigAccess::local_as(node.clone(), root_did.clone())
         .write(
             "test.explicit_node",
             "mutation { add_SigningFact(input: {value: \"node-explicit\"}) { _docID } }",
         )
         .await
         .unwrap();
-    ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap())
+    ConfigAccess::local_as(node.clone(), root_did.clone())
         .transact_write("test.explicit_node_txn", |txn| {
             Box::pin(async move {
                 txn.execute("mutation { add_SigningFact(input: {value: \"node-txn\"}) { _docID } }")
@@ -281,27 +294,17 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
         })
         .await
         .unwrap();
-    let foreign_node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(user.did())
-            .build()
-            .await
-            .unwrap(),
-    );
+
     assert!(
         ConfigAccess::local_managed_agent(foreign_node.clone(), actor.clone(), agent.as_ref())
             .is_err()
     );
-    foreign_node.shutdown().await.unwrap();
     let access =
         ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent.as_ref()).unwrap();
     assert!(ConfigAccess::local_managed_agent(node.clone(), actor.clone(), &user).is_err());
-    assert!(ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(user.did()).unwrap(),
-        agent.as_ref()
-    )
-    .is_err());
+    assert!(
+        ConfigAccess::local_managed_agent(node.clone(), user_did.clone(), agent.as_ref()).is_err()
+    );
     let automatic = access
         .write(
             "test.managed_agent_autocommit",
@@ -346,47 +349,17 @@ async fn managed_agent_signs_native_autocommit_and_transaction_blocks() {
             .as_ref()
             .is_some_and(|signature| signature.identity == node_signer)));
     }
-    node.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn direct_lease_transaction_rejects_foreign_or_mismatched_signing_capability() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let directory = tempfile::tempdir().unwrap();
-    let root = KeyIdentity::load_or_create(directory.path().join("root"), None).unwrap();
-    let foreign = KeyIdentity::load_or_create(directory.path().join("foreign"), None).unwrap();
-    let binding = crate::identity::provision_agent_identity(&root).unwrap();
-    let other_binding = crate::identity::provision_agent_identity(&root).unwrap();
-    let agent = crate::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let other = crate::identity::resolve_agent_identity(&root, &other_binding).unwrap();
     let signer = agent.managed_agent_signer().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    let foreign_node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(foreign.did())
-            .build()
-            .await
-            .unwrap(),
-    );
     let entered = AtomicUsize::new(0);
-    for (selected_node, actor) in [
-        (
-            &foreign_node,
-            Some(identity::Did::new(agent.did()).unwrap()),
-        ),
-        (&node, Some(identity::Did::new(other.did()).unwrap())),
+    for (selected_node, lease_actor) in [
+        (&foreign_node, Some(actor.clone())),
+        (&node, Some(identity::Did::new(other_agent.did()).unwrap())),
         (&node, None),
     ] {
         let result = ConfigAccess::renew_execution_lease_with_signer(
             selected_node,
-            actor,
+            lease_actor,
             Some(signer.clone()),
             |_txn| {
                 entered.fetch_add(1, Ordering::SeqCst);
@@ -406,7 +379,7 @@ async fn direct_lease_transaction_rejects_foreign_or_mismatched_signing_capabili
     );
     ConfigAccess::renew_execution_lease_with_signer(
         &node,
-        Some(identity::Did::new(agent.did()).unwrap()),
+        Some(actor.clone()),
         Some(signer),
         |_txn| {
             entered.fetch_add(1, Ordering::SeqCst);
@@ -416,35 +389,18 @@ async fn direct_lease_transaction_rejects_foreign_or_mismatched_signing_capabili
     .await
     .unwrap();
     assert_eq!(entered.load(Ordering::SeqCst), 1);
-    node.shutdown().await.unwrap();
-    foreign_node.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn direct_relationship_changes_require_actor_signing_capability() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = KeyIdentity::load_or_create(directory.path().join("root"), None).unwrap();
-    let user = KeyIdentity::load_or_create(directory.path().join("user"), None).unwrap();
-    let binding = crate::identity::provision_agent_identity(&root).unwrap();
-    let agent = crate::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    let target = identity::Did::new(user.did()).unwrap();
-    for actor in [agent.did(), user.did()] {
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(actor).unwrap());
+    for rel_actor in [agent.did(), user.did()] {
+        let rel_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(rel_actor).unwrap());
         for delete in [false, true] {
             let result = if delete {
-                access
-                    .delete_actor_relationship("SigningFact", "missing", "reader", &target)
+                rel_access
+                    .delete_actor_relationship("PolicySigningFact", "missing", "reader", &user_did)
                     .await
             } else {
-                access
-                    .add_actor_relationship("SigningFact", "missing", "reader", &target)
+                rel_access
+                    .add_actor_relationship("PolicySigningFact", "missing", "reader", &user_did)
                     .await
             };
             assert!(matches!(
@@ -457,110 +413,71 @@ async fn direct_relationship_changes_require_actor_signing_capability() {
     let policy = node.add_dac_policy_as(&context, "name: SigningFactPolicy\nresources:\n  - name: facts\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(
         &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
-            "type SigningFact @policy(id: \"{policy}\", resource: \"facts\") {{ value: String }}"
+            "type PolicySigningFact @policy(id: \"{policy}\", resource: \"facts\") {{ value: String }}"
         )),
     )
     .await
     .unwrap();
     let accesses = [
-        ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap()),
-        ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap(),
+        ConfigAccess::local_as(node.clone(), root_did.clone()),
+        access,
     ];
-    for access in &accesses {
-        let created = access
+    for rel_access in &accesses {
+        let created = rel_access
             .write(
                 "test.relationship_owner",
-                "mutation { add_SigningFact(input: {value: \"owned\"}) { _docID } }",
+                "mutation { add_PolicySigningFact(input: {value: \"owned\"}) { _docID } }",
             )
             .await
             .unwrap();
-        let doc = created["data"]["add_SigningFact"][0]["_docID"]
+        let doc = created["data"]["add_PolicySigningFact"][0]["_docID"]
             .as_str()
             .unwrap();
-        access
-            .add_actor_relationship("SigningFact", doc, "reader", &target)
+        rel_access
+            .add_actor_relationship("PolicySigningFact", doc, "reader", &user_did)
             .await
             .unwrap();
-        let visible = ConfigAccess::local_as(node.clone(), target.clone())
-            .execute("{ SigningFact { _docID } }")
+        let visible = ConfigAccess::local_as(node.clone(), user_did.clone())
+            .execute("{ PolicySigningFact { _docID } }")
             .await
             .unwrap();
-        assert!(visible["data"]["SigningFact"]
+        assert!(visible["data"]["PolicySigningFact"]
             .as_array()
             .unwrap()
             .iter()
             .any(|row| row["_docID"] == doc));
-        access
-            .delete_actor_relationship("SigningFact", doc, "reader", &target)
+        rel_access
+            .delete_actor_relationship("PolicySigningFact", doc, "reader", &user_did)
             .await
             .unwrap();
-        let hidden = ConfigAccess::local_as(node.clone(), target.clone())
-            .execute("{ SigningFact { _docID } }")
+        let hidden = ConfigAccess::local_as(node.clone(), user_did.clone())
+            .execute("{ PolicySigningFact { _docID } }")
             .await
             .unwrap();
-        assert!(!hidden["data"]["SigningFact"]
+        assert!(!hidden["data"]["PolicySigningFact"]
             .as_array()
             .unwrap()
             .iter()
             .any(|row| row["_docID"] == doc));
     }
-    node.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn offline_client_writes_travel_signed_through_the_held_loopback_endpoint() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = KeyIdentity::load_or_create(directory.path().join("node"), None).unwrap();
-    let user = KeyIdentity::load_or_create(directory.path().join("user"), None).unwrap();
-    let other = KeyIdentity::load_or_create(directory.path().join("other"), None).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    node.add_collection("type SigningFact { value: String }")
-        .await
-        .unwrap();
     let endpoint = |identity: &KeyIdentity| {
         super::GraphqlEndpoint::as_principal(&url, identity.did())
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap()
     };
-    let offline = || {
-        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
-            .with_client_signed_configuration()
-    };
     assert!(matches!(
-        offline()
-            .write(
-                "test.offline_unrouted",
-                "mutation { add_SigningFact(input: {value: \"unrouted\"}) { _docID } }"
-            )
-            .await,
-        Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
-    ));
-    assert!(matches!(
-        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
-            .with_client_signed_writes_through(endpoint(&other)),
+        ConfigAccess::local_as(node.clone(), user_did.clone())
+            .with_client_signed_writes_through(endpoint(&other_user)),
         Err(super::ConfigClientError::ClientSignerMismatch)
     ));
-    let routed = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
+    let routed = ConfigAccess::local_as(node.clone(), user_did)
         .with_client_signed_writes_through(endpoint(&user))
         .unwrap();
     routed
         .write(
             "test.offline_routed",
-            "mutation { add_SigningFact(input: {value: \"autocommit\"}) { _docID } }",
+            "mutation { add_SigningFact(input: {value: \"loopback-auto\"}) { _docID } }",
         )
         .await
         .unwrap();
@@ -568,7 +485,7 @@ async fn offline_client_writes_travel_signed_through_the_held_loopback_endpoint(
         .transact_write("test.offline_routed_txn", |txn| {
             Box::pin(async move {
                 txn.execute(
-                    "mutation { add_SigningFact(input: {value: \"transaction\"}) { _docID } }",
+                    "mutation { add_SigningFact(input: {value: \"loopback-txn\"}) { _docID } }",
                 )
                 .await
                 .map(|_| ())
@@ -577,16 +494,20 @@ async fn offline_client_writes_travel_signed_through_the_held_loopback_endpoint(
         .await
         .unwrap();
     let read = routed
-        .execute("{ SigningFact(order: {value: ASC}) { value } }")
+        .execute(
+            "{ SigningFact(filter: {value: {_in: [\"loopback-auto\", \"loopback-txn\"]}}, order: {value: ASC}) { value } }",
+        )
         .await
         .unwrap();
     assert_eq!(
         read["data"]["SigningFact"],
-        serde_json::json!([{"value": "autocommit"}, {"value": "transaction"}])
+        serde_json::json!([{"value": "loopback-auto"}, {"value": "loopback-txn"}])
     );
     assert!(
         routed.local_node().is_some(),
         "reads stay on the owned node"
     );
+
     node.shutdown().await.unwrap();
+    foreign_node.shutdown().await.unwrap();
 }

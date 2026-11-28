@@ -621,30 +621,10 @@ mod tests {
         recv_one, try_recv_one, AuxiliaryOutputEvent, AuxiliaryOutputSink, ClaudeAuditEvent,
         ClaudeBlockKind,
     };
-    use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace};
+    use crate::test_support::doubles::{
+        empty_trace as trace, noop_capture_sink as noop_sink, test_capture_context as context,
+    };
     use futures::FutureExt;
-
-    fn context() -> RenderedRequestContext {
-        RenderedRequestContext {
-            request_doc_id: "doc-1".to_string(),
-            request_commit_cid: "bafy-request-commit".to_string(),
-            request_id: "req-1".to_string(),
-            node_did: "did:key:agent".to_string(),
-            requester_did: String::new(),
-            agent_did: "behavior".to_string(),
-            session_id: "session".to_string(),
-            model_name: "test-model".to_string(),
-            provider_family: None,
-        }
-    }
-
-    fn trace() -> AssemblyTrace {
-        AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new())
-    }
-
-    fn noop_sink() -> RenderedRequestCaptureSink {
-        Arc::new(|_| Box::pin(async { Ok(()) }))
-    }
 
     #[test]
     fn restored_capture_scope_allocation_matches_the_generated_model() {

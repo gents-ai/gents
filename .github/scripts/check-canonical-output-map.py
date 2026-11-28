@@ -3,6 +3,7 @@
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -217,11 +218,35 @@ def check_execution_export(payload):
                 raise ValueError(f"{name}: native script has a missing decision observation")
 
 
+BEGIN, END = "---BEGIN GENTS LEAN CONTRACT JSON---", "---END GENTS LEAN CONTRACT JSON---"
+
+
+def extract_contract(raw):
+    if BEGIN in raw:
+        raw = raw.split(BEGIN, 1)[1].split(END, 1)[0]
+    return json.loads(raw)
+
+
+def load_exported_contract(proofs_dir, contract_path=None):
+    source = contract_path
+    if source is None:
+        env_path = os.environ.get("GENTS_LEAN_CONTRACT_FILE", "").strip()
+        if env_path:
+            source = Path(env_path)
+    if source is not None:
+        return extract_contract(Path(source).read_text())
+    result = subprocess.run(["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
+                            cwd=proofs_dir, check=True, capture_output=True, text=True)
+    return extract_contract(result.stdout)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--check-export", action="store_true",
                         help="after lake build, validate groups against actual generated JSON")
+    parser.add_argument("--contract", type=Path,
+                        help="saved generator stdout or JSON; defaults to GENTS_LEAN_CONTRACT_FILE or lake env lean --run")
     args = parser.parse_args()
     try:
         entries = []
@@ -252,11 +277,7 @@ def main():
                        for name in constructors((args.root / PROOFS / "Proofs" / file).read_text(), decl)}
             if actual != scanned:
                 raise ValueError(f"constructor scanner differs from Lean: {sorted(actual ^ scanned)}")
-            result = subprocess.run(["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
-                                    cwd=args.root / PROOFS, check=True, capture_output=True, text=True)
-            payload = result.stdout.split("---BEGIN GENTS LEAN CONTRACT JSON---", 1)[1].split(
-                "---END GENTS LEAN CONTRACT JSON---", 1)[0]
-            exported = json.loads(payload)
+            exported = load_exported_contract(args.root / PROOFS, args.contract)
             check_execution_export(exported)
             groups = set(exported)
         errors = check(args.root, entries, groups)

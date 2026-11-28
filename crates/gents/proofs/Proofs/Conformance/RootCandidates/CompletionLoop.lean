@@ -23,19 +23,19 @@ private def cases : List Input :=
    { calls := [{ reasoning := ["still thinking"] }, done] },
    { calls := [{ failure "transport" with tool := true }, done] },
    { calls := [{ failure "transport" with tool := true }], transport := 0, resample := 0, repair := false },
-   { calls := [{ tool := true }, failure "parse", failure "parse", done], context := true, maxTurns := 4 },
-   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 1 },
-   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 2 },
+   { calls := [{ tool := true }, failure "parse", failure "parse", done], context := true, maxTurns := 6 },
+   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 3 },
+   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 4 },
    { calls := [{ tool := true }, { tool := true }, done] },
-   { calls := [{ tool := true }, { tool := true }, { tool := true }, done], maxTurns := 1 },
-   { calls := [{ tool := true }, { tool := true }, { tool := true }, done], maxTurns := 2 },
+   { calls := [{ tool := true }, { tool := true }, { tool := true }, done], maxTurns := 3 },
+   { calls := [{ tool := true }, { tool := true }, { tool := true }, done], maxTurns := 4 },
    { calls := [{ reasoning := ["thinking"] }, { reasoning := ["again"] }] },
    { calls := [failure "rate_limit", failure "connection", failure "transport", done] },
    { calls := [failure "parse", failure "parse", done], initialDirty := true },
    { calls := [done], context := true },
    { calls := [done], missingCapture := true },
    { calls := [{}], missingCapture := true },
-   { calls := [{ tool := true }, failure "parse", failure "parse", { tool := true, poison := false }, done], maxTurns := 4 }] ++
+   { calls := [{ tool := true }, failure "parse", failure "parse", { tool := true, poison := false }, done], maxTurns := 6 }] ++
   [{ calls := [{ tool := true, usage := some ⟨1000, 1000, 2000⟩ }, chargedDone], limit := some 5000 },
    { calls := [{ chargedDone with usage := some ⟨2500, 2500, 5000⟩ }], limit := some 5000 },
    { calls := [{ tool := true, usage := some ⟨2500, 2500, 5000⟩ }], limit := some 5000 },
@@ -52,16 +52,23 @@ private def cases : List Input :=
    { calls := [failure "overflow"] },
    { calls := [failure "overflow", failure "overflow"], compactor := true },
    { calls := [failure "overflow", { tool := true, poison := false }, { tool := true, poison := false },
-               failure "overflow", done], compactor := true, maxTurns := 4 },
-   { calls := [{ tool := true, poison := false }, failure "overflow"], maxTurns := 4 }] ++
+               failure "overflow", done], compactor := true, maxTurns := 6 },
+   { calls := [{ tool := true, poison := false }, failure "overflow"], maxTurns := 6 }] ++
   [{ calls := [{ tool := true, poison := false }, done], rebindAt := some 0 },
    { calls := [{ tool := true, poison := false }, failure "transport", done], rebindAt := some 0 },
    { calls := [{ failure "transport" with tool := true }, { tool := true, poison := false },
-               { tool := true, poison := false }, done], rebindAt := some 0, maxTurns := 4 },
+               { tool := true, poison := false }, done], rebindAt := some 0, maxTurns := 6 },
    { calls := [{ tool := true, poison := false }, { tool := true, poison := false }, done],
-     rebindAt := some 1, maxTurns := 4 }] ++
+     rebindAt := some 1, maxTurns := 6 }] ++
   [0, 1, 2, 3].flatMap (fun transport => [false, true].map fun repair =>
-    { calls := [failure "transport", failure "parse", failure "reasoning", done], transport, repair })
+    { calls := [failure "transport", failure "parse", failure "reasoning", done], transport, repair }) ++
+  [{ calls := [done], maxTurns := 0 },
+   { calls := [done], maxTurns := 1 },
+   { calls := [{ tool := true }, done], maxTurns := 1 },
+   { calls := [{ tool := true }, done], maxTurns := 2 },
+   { calls := [{ tool := true }, failure "transport", { tool := true }, done], maxTurns := 2 }] ++
+  [{ calls := [done], maxTurns := 2, priorTurns := 2 },
+   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 3, priorTurns := 1 }]
 
 @[conformance_family]
 def stream : Conformance.Family Input Observation := ⟨cases, run⟩

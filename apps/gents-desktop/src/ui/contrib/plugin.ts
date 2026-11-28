@@ -63,7 +63,7 @@ export interface UxShell {
     alone, so what a plugin may do is what this interface lists. */
 /** one data call's answer, as the bridge gives it */
 export interface UxDataCallResult {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   output: unknown;
 }
 

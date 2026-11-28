@@ -322,41 +322,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn requested_app_schema_is_local_and_fails_for_missing_collections() {
+    async fn replicated_schema_reads_require_registered_collections() {
         let node = std::sync::Arc::new(
             gents_store::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
+        let missing_client = read_client_replicated_schema(node.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            missing_client.to_string().contains("is not registered"),
+            "{missing_client:#}"
+        );
+
         gents_store::config_client::ConfigAccess::local(node.clone())
             .add_collection("type GameState @branchable { turn: String }")
             .await
             .unwrap();
-        let schema = read_replicated_schema(node.clone(), &["GameState"])
+        let app_schema = read_replicated_schema(node.clone(), &["GameState"])
             .await
             .unwrap();
-        assert_eq!(schema.len(), 1);
-        assert!(schema["GameState"].branchable);
-        assert!(!schema["GameState"].version_id.is_empty());
-        let error = read_replicated_schema(node, &["GameState", "MissingGame"])
+        assert_eq!(app_schema.len(), 1);
+        assert!(app_schema["GameState"].branchable);
+        assert!(!app_schema["GameState"].version_id.is_empty());
+        let missing_app = read_replicated_schema(node.clone(), &["GameState", "MissingGame"])
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("MissingGame"));
-    }
-
-    #[tokio::test]
-    async fn client_schema_is_unreadable_until_migrations_register_every_collection() {
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        let error = read_client_replicated_schema(node.clone())
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("is not registered"), "{error:#}");
+        assert!(missing_app.to_string().contains("MissingGame"));
 
         gents_store::schema::catalog::ensure_runtime_owned(node.clone())
             .await

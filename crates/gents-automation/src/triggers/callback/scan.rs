@@ -26,7 +26,18 @@ use gents_documents::CallbackBinding as CallbackBindingDoc;
 
 use crate::triggers::engine::event_delivery::source_scan::{load_doc_ids, load_source_rows};
 
-const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(30);
+const NON_RETRYABLE_FAILED_CACHE_LIMIT: usize = 4096;
+
+pub(super) const CALLBACK_CONFIG_COLLECTIONS: &[&str] =
+    &["CallbackBinding", "Callback", "EventSource"];
+pub(super) const CALLBACK_LIFECYCLE_COLLECTIONS: &[&str] = &[
+    "CallbackBinding",
+    "CallbackInvocation",
+    "CallbackResult",
+    "Callback",
+    "EventSource",
+];
 
 use crate::triggers::engine::event_delivery::{self, Delivery, GroupOutcome};
 pub(super) use crate::triggers::engine::event_source::SourceSchemaCache;
@@ -62,7 +73,10 @@ impl CallbackEngine {
             plugins: Arc::default(),
             subscription_source: subs,
             subscription: None,
+            lifecycle_subscription: None,
+            config_collection_ids: RapidHashSet::new(),
             desired_collections: RapidHashSet::new(),
+            active_binding_agents: RapidHashSet::new(),
             seen_docs: RapidHashMap::new(),
             cursor_bindings: RapidHashMap::new(),
             group_collections: RapidHashSet::new(),
@@ -70,10 +84,88 @@ impl CallbackEngine {
             collection_id_to_name: RapidHashMap::new(),
             group_page_cursors: RapidHashMap::new(),
             group_recovery_cursor: 0,
+            non_retryable_failed: RapidHashSet::new(),
+            recovery_has_open_work: true,
+            next_retry_at: None,
             rescan_tick: rescan_tick(),
             cancel,
             workers: None,
         }
+    }
+
+    pub(super) fn ensure_lifecycle_subscription(&mut self) {
+        if self.lifecycle_subscription.is_some() {
+            return;
+        }
+        let collection_ids = gents_store::subscription_source::collection_ids(
+            &self.node,
+            CALLBACK_LIFECYCLE_COLLECTIONS.iter().copied(),
+        )
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "callback engine lifecycle subscription unavailable; falling back to interval rescans");
+            Vec::new()
+        });
+        if collection_ids.is_empty() {
+            return;
+        }
+        self.config_collection_ids = gents_store::subscription_source::collection_ids(
+            &self.node,
+            CALLBACK_CONFIG_COLLECTIONS.iter().copied(),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+        self.lifecycle_subscription =
+            Some(self.subscription_source.subscribe_changes(collection_ids));
+    }
+
+    pub(super) fn is_non_retryable_failed(&self, key: &(String, i64, String)) -> bool {
+        self.non_retryable_failed.contains(key)
+    }
+
+    pub(super) fn mark_non_retryable_failed(&mut self, key: (String, i64, String)) {
+        if self.non_retryable_failed.len() >= NON_RETRYABLE_FAILED_CACHE_LIMIT {
+            self.non_retryable_failed.clear();
+        }
+        self.non_retryable_failed.insert(key);
+    }
+
+    pub(super) fn clear_non_retryable_failed(&mut self) {
+        self.non_retryable_failed.clear();
+    }
+
+    /// Enabled configured agents with locally verified signing identities
+    /// (`EventDelivery.Watcher.scanActors`): excludes `AgentDisabled` and
+    /// unresolved agents.
+    pub(super) fn watcher_agent_accesses(&self) -> Result<Vec<(String, ConfigAccess)>> {
+        let snapshots = self
+            .snapshots
+            .as_ref()
+            .context("callback Agent snapshot unavailable")?;
+        let snapshot = snapshots.borrow();
+        let identities = snapshot.watcher_identities()?;
+        let mut seen = RapidHashSet::new();
+        let mut accesses = Vec::with_capacity(identities.len());
+        for identity in identities {
+            let agent_did = identity.did().to_owned();
+            if snapshot.unavailable_agents.get(&agent_did).is_some_and(|u| {
+                u.public_reason
+                    == gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
+            }) {
+                continue;
+            }
+            if !seen.insert(agent_did.clone()) {
+                continue;
+            }
+            let access = ConfigAccess::local_managed_agent(
+                self.node.clone(),
+                identity::Did::new(&agent_did)?,
+                identity.as_ref(),
+            )?;
+            accesses.push((agent_did, access));
+        }
+        accesses.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(accesses)
     }
 
     pub(super) fn access_for_agent(&self, agent_did: &str) -> Result<ConfigAccess> {
@@ -102,10 +194,12 @@ impl CallbackEngine {
             }
         };
         let mut desired = RapidHashSet::new();
+        let mut active_binding_agents = RapidHashSet::new();
         let mut cursor_bindings = RapidHashMap::new();
         let mut group_collections = RapidHashSet::new();
         let mut group_actors: RapidHashMap<String, RapidHashSet<String>> = RapidHashMap::new();
         for binding in &bindings {
+            active_binding_agents.insert(binding.agent_did.clone());
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
                     if source.group.is_none() {
@@ -154,6 +248,7 @@ impl CallbackEngine {
             }
         }
         self.desired_collections = desired;
+        self.active_binding_agents = active_binding_agents;
         self.cursor_bindings = cursor_bindings;
         self.seen_docs
             .retain(|collection, _| group_collections.contains(collection));

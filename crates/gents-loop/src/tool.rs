@@ -694,38 +694,41 @@ mod tests {
         findings: Vec<String>,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct SingleField {
+        note: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DescribeToolArgs {
+        tool_name: String,
+    }
+
     #[test]
-    fn repair_preserves_valid_escapes_and_only_fixes_lone_backslashes() {
-        let raw = r#"{"body":"line\nwith \d and a quote \" here"}"#;
-        let repaired = repair_tool_arguments(raw).expect("should repair the lone backslashes");
-        let value: serde_json::Value =
-            serde_json::from_str(&repaired).expect("repaired payload must parse");
+    fn repair_fixes_lone_backslashes_and_control_chars_without_closing_truncation() {
+        let repaired = repair_tool_arguments(r#"{"body":"line\nwith \d and a quote \" here"}"#)
+            .expect("should repair lone backslashes");
+        let value: serde_json::Value = serde_json::from_str(&repaired).unwrap();
         let body = value["body"].as_str().unwrap();
-        assert!(
-            body.contains('\n'),
-            "legal \\n escape must survive as a newline"
-        );
-        assert!(
-            body.contains("\\d"),
-            "raw \\d must become a literal backslash-d"
-        );
-        assert!(
-            body.contains('"'),
-            "legal \\\" escape must survive as a quote"
-        );
+        assert!(body.contains('\n') && body.contains("\\d") && body.contains('"'));
+
+        let salvaged = repair_tool_arguments(test_support::CORRUPT_TOOL_ARGS_589)
+            .expect("repair control chars");
+        let salvaged: serde_json::Value = serde_json::from_str(&salvaged).unwrap();
+        assert_eq!(salvaged["tool_name"], "list_hosts");
+        let parsed: DescribeToolArgs =
+            parse_tool_args(test_support::CORRUPT_TOOL_ARGS_589).expect("salvage typed args");
+        assert_eq!(parsed.tool_name, "list_hosts");
+
+        assert!(repair_tool_arguments("{\n  \"a\": 1\n}").is_none());
+        assert!(repair_tool_arguments(
+            r#"{"report_type":"steward","body":"partial body that got cut"#
+        )
+        .is_none());
     }
 
     #[test]
-    fn repair_does_not_close_truncation() {
-        let raw = r#"{"report_type":"steward","body":"partial body that got cut"#;
-        assert!(
-            repair_tool_arguments(raw).is_none(),
-            "truncation must not be repaired into valid JSON"
-        );
-    }
-
-    #[test]
-    fn parse_tool_args_distinguishes_unknown_and_missing_fields() {
+    fn parse_tool_args_classifies_schema_errors_and_rejects_truncation() {
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Args {
@@ -749,98 +752,57 @@ mod tests {
             ));
         }
 
-        let error = parse_tool_args::<Args>(r#"{"argv":"credential-like-value"}"#)
-            .expect_err("wrong type must reject");
-        let ToolError::UnparseableArgs { kind, reason } = error else {
+        let ToolError::UnparseableArgs { kind, reason } =
+            parse_tool_args::<Args>(r#"{"argv":"credential-like-value"}"#).unwrap_err()
+        else {
             panic!("typed schema error required")
         };
         assert_eq!(kind, UnparseableArgsKind::WrongType);
-        assert!(reason.contains("expected a sequence"), "{reason}");
-        assert!(!reason.contains("credential-like-value"), "{reason}");
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct SingleField {
-        note: String,
-    }
-
-    #[test]
-    fn parse_tool_args_truncation_in_last_field_is_not_run() {
-        let raw = r#"{"note":"a long note that got cut o"#;
-        let closed = parse_tool_args::<SingleField>(&format!("{raw}\"}}"))
-            .expect("the payload type-checks once closed");
-        assert_eq!(closed.note, "a long note that got cut o");
-        let error = parse_tool_args::<SingleField>(raw)
-            .expect_err("a truncated-but-would-type-check payload must NOT run");
-        assert!(matches!(
-            error,
-            ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Malformed,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn repair_escapes_control_characters_inside_strings() {
-        let raw = test_support::CORRUPT_TOOL_ARGS_589;
-        let repaired =
-            repair_tool_arguments(raw).expect("control characters in strings must be repaired");
-        let value: serde_json::Value =
-            serde_json::from_str(&repaired).expect("repaired #589 payload must parse");
-        assert!(value.is_object(), "salvage must recover an object");
-        assert_eq!(
-            value["tool_name"], "list_hosts",
-            "the intended call must survive the salvage"
+        assert!(
+            reason.contains("expected a sequence") && !reason.contains("credential-like-value")
         );
-    }
 
-    #[test]
-    fn repair_leaves_inter_token_whitespace_untouched() {
-        let raw = "{\n  \"a\": 1\n}";
-        assert!(repair_tool_arguments(raw).is_none());
-    }
+        let cut = r#"{"note":"a long note that got cut o"#;
+        assert_eq!(
+            parse_tool_args::<SingleField>(&format!("{cut}\"}}"))
+                .unwrap()
+                .note,
+            "a long note that got cut o"
+        );
+        for truncated in [cut, "{\"note\":\"line one\nline two that got cut"] {
+            assert!(matches!(
+                parse_tool_args::<SingleField>(truncated),
+                Err(ToolError::UnparseableArgs {
+                    kind: UnparseableArgsKind::Malformed,
+                    ..
+                })
+            ));
+        }
 
-    #[test]
-    fn repair_control_chars_still_does_not_close_truncation() {
-        let raw = "{\"note\":\"line one\nline two that got cut";
-        let error = parse_tool_args::<SingleField>(raw)
-            .expect_err("truncated payload must not run even after control-char repair");
+        let escaped_cut =
+            r#"{"report_type":"steward C:\drive","body":"the cluster is healthy, node C is"#;
+        assert_ne!(
+            serde_json::from_str::<Sample>(escaped_cut)
+                .unwrap_err()
+                .classify(),
+            serde_json::error::Category::Eof
+        );
         assert!(matches!(
-            error,
-            ToolError::UnparseableArgs {
+            parse_tool_args::<Sample>(escaped_cut),
+            Err(ToolError::UnparseableArgs {
                 kind: UnparseableArgsKind::Malformed,
                 ..
-            }
+            })
         ));
     }
 
-    #[derive(Debug, Deserialize)]
-    struct DescribeToolArgs {
-        tool_name: String,
-    }
-
     #[test]
-    fn parse_tool_args_salvages_589_contamination_to_typed_args() {
-        let parsed: DescribeToolArgs = parse_tool_args(test_support::CORRUPT_TOOL_ARGS_589)
-            .expect("the #589 payload must salvage into typed args");
-        assert_eq!(parsed.tool_name, "list_hosts");
-    }
+    fn normalize_salvages_corrupt_strings_coerces_non_objects_and_is_idempotent() {
+        let normalize = |v: &serde_json::Value| normalize_tool_call_arguments("test", "echo", v);
+        let corrupt = serde_json::Value::String(test_support::CORRUPT_TOOL_ARGS_589.into());
+        let salvaged = normalize(&corrupt);
+        assert!(salvaged.is_object() && salvaged["tool_name"] == "list_hosts");
 
-    fn normalize(value: &serde_json::Value) -> serde_json::Value {
-        normalize_tool_call_arguments("test", "echo", value)
-    }
-
-    #[test]
-    fn normalize_salvages_589_corrupt_string_payload() {
-        let poison = serde_json::Value::String(test_support::CORRUPT_TOOL_ARGS_589.into());
-        let normalized = normalize(&poison);
-        assert!(normalized.is_object());
-        assert_eq!(normalized["tool_name"], "list_hosts");
-    }
-
-    #[test]
-    fn normalize_coerces_non_object_shapes_to_empty_object() {
         for poison in [
             serde_json::json!("[]"),
             serde_json::json!("[1,2]"),
@@ -855,45 +817,19 @@ mod tests {
             serde_json::json!(123),
             serde_json::json!(true),
         ] {
-            assert_eq!(
-                normalize(&poison),
-                serde_json::json!({}),
-                "non-object arguments {poison:?} must coerce to {{}}"
-            );
+            assert_eq!(normalize(&poison), serde_json::json!({}), "{poison:?}");
         }
-    }
 
-    #[test]
-    fn normalize_is_idempotent() {
         for value in [
             serde_json::json!({"city": "NYC"}),
             serde_json::json!("[]"),
             serde_json::json!("{\"a\": 1}"),
             serde_json::Value::Null,
             serde_json::json!([1]),
-            serde_json::Value::String(test_support::CORRUPT_TOOL_ARGS_589.into()),
+            corrupt,
         ] {
             let once = normalize(&value);
-            assert_eq!(normalize(&once), once, "normalize must be idempotent");
+            assert_eq!(normalize(&once), once);
         }
-    }
-
-    #[test]
-    fn parse_tool_args_lone_backslash_then_truncation_is_not_run() {
-        let raw = r#"{"report_type":"steward C:\drive","body":"the cluster is healthy, node C is"#;
-        let first = serde_json::from_str::<Sample>(raw).expect_err("must not parse");
-        assert_ne!(first.classify(), serde_json::error::Category::Eof);
-        let error = parse_tool_args::<Sample>(raw)
-            .expect_err("malformed-early + truncated-late must NOT run");
-        assert!(
-            matches!(
-                error,
-                ToolError::UnparseableArgs {
-                    kind: UnparseableArgsKind::Malformed,
-                    ..
-                }
-            ),
-            "post-escape reparse remains malformed without a provider reason, got: {error:?}"
-        );
     }
 }

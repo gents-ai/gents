@@ -1302,3 +1302,202 @@ async fn vector_search_ranks_by_the_fields_index_metric() {
     }
     node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn definition_documents_verb_only_argv_and_option_properties() {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let tool = DefraQueryTool::new(node.clone(), CollectionScope::all());
+    let def = Tool::definition(&tool, String::new()).await;
+
+    assert_eq!(def.name, "query");
+    assert!(
+        def.description.contains("never in argv"),
+        "{}",
+        def.description
+    );
+    let props = &def.parameters["properties"];
+    let argv_desc = props["argv"]["description"].as_str().unwrap();
+    assert!(argv_desc.contains("collection"), "{argv_desc}");
+    assert!(argv_desc.contains("Never put the collection name in argv"));
+
+    let option_props = props["options"]["properties"].as_object().unwrap();
+    for key in [
+        "fields",
+        "filter",
+        "limit",
+        "offset",
+        "order",
+        "text",
+        "search_fields",
+        "vector_field",
+        "vector",
+        "mode",
+        "field_page",
+        "signer",
+    ] {
+        let entry = option_props
+            .get(key)
+            .unwrap_or_else(|| panic!("missing options.{key} in definition"));
+        assert!(
+            entry["type"].is_string(),
+            "options.{key} must declare a JSON Schema type: {entry}"
+        );
+        assert!(
+            entry["description"].as_str().is_some_and(|s| !s.is_empty()),
+            "options.{key} must have a description: {entry}"
+        );
+    }
+    assert!(
+        option_props["fields"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Required for find"),
+        "{}",
+        option_props["fields"]
+    );
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn positional_collection_help_and_option_mistakes_return_actionable_recovery() {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    node.add_collection("type Reports { duty: String @fulltext rank: String }")
+        .await
+        .unwrap();
+    gents_store::config_client::ConfigAccess::write_local(
+        &node,
+        "seed_ux_query",
+        r#"mutation { add_Reports(input: {duty: "Coordinate crew duty", rank: "Captain"}) {_docID} }"#,
+    )
+    .await
+    .unwrap();
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["Reports".into()]),
+    );
+
+    let err = run_query(&tool, json!({"argv": ["fields", "Reports"]}))
+        .await
+        .unwrap_err();
+    let msg = err["error"].as_str().unwrap();
+    assert!(
+        msg.contains("[\"fields\"]") && msg.contains("collection"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["fields"], "collection": "Reports"}})
+    );
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["collection"], "Reports");
+
+    let err = run_query(
+        &tool,
+        json!({"argv": ["find", "Reports"], "options": {"fields": ["duty"]}}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["find"], "collection": "Reports", "options": {"fields": ["duty"]}}})
+    );
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["returned_count"], 1);
+
+    let err = run_query(&tool, json!({"argv": ["find", "Reports"]}))
+        .await
+        .unwrap_err();
+    assert!(
+        err["error"].as_str().unwrap().contains("options.fields"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["find"], "collection": "Reports"}})
+    );
+
+    let err = run_query(&tool, json!({"argv": ["find"], "collection": "Reports"}))
+        .await
+        .unwrap_err();
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("options.fields is required"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["fields"], "collection": "Reports"}})
+    );
+    assert_eq!(
+        run_query(&tool, err["recovery"]["args"].clone())
+            .await
+            .unwrap()["collection"],
+        "Reports"
+    );
+
+    for help_args in [
+        json!({"argv": ["help"], "collection": "Reports"}),
+        json!({"argv": ["help", "find"], "collection": "Reports"}),
+        json!({"argv": ["find", "--help"], "collection": "Reports", "options": {"fields": ["duty"]}}),
+    ] {
+        let ok = run_query(&tool, help_args.clone()).await.unwrap();
+        assert!(
+            ok["help"].as_str().is_some_and(|s| !s.is_empty()),
+            "{help_args}: {ok}"
+        );
+    }
+    let err = run_query(
+        &tool,
+        json!({"argv": ["help"], "options": {"fields": ["duty"]}}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["help"]}})
+    );
+
+    let err = run_query(
+        &tool,
+        json!({"argv": ["search"], "collection": "Reports", "options": {"fields": ["duty"], "search_fields": ["duty"], "query": "crew duty"}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err["error"].as_str().unwrap().contains("options.text")
+            && err["error"]
+                .as_str()
+                .unwrap()
+                .contains("options.search_fields"),
+        "{err}"
+    );
+    assert_eq!(err["recovery"]["args"]["options"]["text"], "crew duty");
+    assert!(err["recovery"]["args"]["options"].get("query").is_none());
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["ranking"], "bm25");
+
+    let err = run_query(
+        &tool,
+        json!({"argv": ["search"], "collection": "Reports", "options": {"fields": ["duty"], "keywords": "crew"}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err["error"].as_str().unwrap().contains("options.text"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "query", "args": {"argv": ["help", "search"]}})
+    );
+
+    node.shutdown().await.expect("shut down test node");
+}

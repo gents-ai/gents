@@ -17,11 +17,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
-use tokio::sync::{watch, Barrier, Semaphore};
+use tokio::sync::{watch, Barrier};
 use tokio::task::JoinSet;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
+use crate::test_support::writer_counter;
 
 const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
@@ -121,109 +122,6 @@ fn write_right(label: &str, amount: i64) -> String {
         escape_graphql_string(label),
         amount
     )
-}
-
-#[tokio::test]
-async fn committed_transaction_persists_both_writes() -> Result<()> {
-    let node = disposable_node().await?;
-
-    let (left, right) = ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "txn_atomicity_commit",
-        |txn: &ConfigApplyTxn<'_>| {
-            Box::pin(async move {
-                let left = ensure_no_errors(txn.execute(&write_left("commit", 1)).await?)?;
-                let right = ensure_no_errors(txn.execute(&write_right("commit", 2)).await?)?;
-                Ok::<_, anyhow::Error>((left, right))
-            })
-        },
-    )
-    .await?;
-
-    assert_acknowledged(&left, "TxnAtomicityLeft")?;
-    assert_acknowledged(&right, "TxnAtomicityRight")?;
-    assert_eq!(
-        counts(&node).await?,
-        (1, 1),
-        "commit must persist both documents"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn injected_error_after_first_write_persists_neither() -> Result<()> {
-    let node = disposable_node().await?;
-
-    let outcome: Result<()> = ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "txn_atomicity_injected_rollback",
-        |txn: &ConfigApplyTxn<'_>| {
-            Box::pin(async move {
-                let first = ensure_no_errors(txn.execute(&write_left("rollback", 3)).await?)?;
-                assert_acknowledged(&first, "TxnAtomicityLeft")?;
-                Err(anyhow::anyhow!("injected failure after first write"))
-            })
-        },
-    )
-    .await;
-
-    assert!(
-        outcome.is_err(),
-        "the adapter must surface the injected error"
-    );
-    assert!(outcome
-        .unwrap_err()
-        .to_string()
-        .contains("injected failure after first write"));
-    assert_eq!(
-        counts(&node).await?,
-        (0, 0),
-        "rollback after the first write must persist neither document"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()> {
-    let node = disposable_node().await?;
-
-    let outcome: Result<()> = ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "txn_atomicity_second_failure",
-        |txn: &ConfigApplyTxn<'_>| {
-            Box::pin(async move {
-                let first = ensure_no_errors(txn.execute(&write_left("second-failure", 5)).await?)?;
-                assert_acknowledged(&first, "TxnAtomicityLeft")?;
-                ensure_no_errors(
-                    txn.execute(
-                        r#"mutation { create_TxnAtomicityMissing(input: { label: "x", amount: 1 }) { _docID } }"#,
-                    )
-                    .await?,
-                )?;
-                Ok(())
-            })
-        },
-    )
-    .await;
-
-    assert!(
-        outcome.is_err(),
-        "propagating the failed second mutation must fail the transaction: {outcome:?}"
-    );
-    let error = format!("{:#}", outcome.unwrap_err());
-    assert!(
-        error.contains("TxnAtomicityMissing"),
-        "unexpected failure: {error}"
-    );
-    assert_eq!(
-        counts(&node).await?,
-        (0, 0),
-        "a failed second mutation must persist neither document"
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -339,19 +237,67 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
     Ok(true)
 }
 
-/// Premise for read-then-insert with a unique index as the backstop, on the
-/// DefraDB rev pinned in the workspace `Cargo.toml`
-/// (`013c3441e5d6`): a duplicate insert of a
-/// unique-indexed key errors with "violates unique index", and the error,
-/// propagated out of `transact_local_write`, rolls back the whole transaction, so
-/// neither the duplicate nor an earlier write in it persists. DefraDB rejects
-/// the insert; the rollback comes from propagating the error, not from
-/// DefraDB aborting the transaction itself.
+/// Commit, rollback, and unique-index backstop premises on the DefraDB rev
+/// pinned in workspace `Cargo.toml` (`013c3441e5d6`), verified on one shared
+/// disposable node:
+/// - Injected errors, failed second mutations, and single-field or composite
+///   unique-index violations roll back earlier writes in the transaction.
+/// - Two concurrent read-then-insert transactions on one unique key leave one
+///   row (`tla/SharedOwnerHotCounter.tla`).
+/// - Reading an existing unique key skips insert while committing another write.
 #[tokio::test]
-async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+async fn transaction_atomicity_rollback_and_unique_index_premises() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local_write(
+    let injected: Result<()> = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_injected_rollback",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                let first = ensure_no_errors(txn.execute(&write_left("rollback", 3)).await?)?;
+                assert_acknowledged(&first, "TxnAtomicityLeft")?;
+                Err(anyhow::anyhow!("injected failure after first write"))
+            })
+        },
+    )
+    .await;
+    assert!(injected
+        .expect_err("the adapter must surface the injected error")
+        .to_string()
+        .contains("injected failure after first write"));
+    assert_eq!(counts(&node).await?, (0, 0));
+
+    let failed_second: Result<()> = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_second_failure",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                let first = ensure_no_errors(txn.execute(&write_left("second-failure", 5)).await?)?;
+                assert_acknowledged(&first, "TxnAtomicityLeft")?;
+                ensure_no_errors(
+                    txn.execute(
+                        r#"mutation { create_TxnAtomicityMissing(input: { label: "x", amount: 1 }) { _docID } }"#,
+                    )
+                    .await?,
+                )?;
+                Ok(())
+            })
+        },
+    )
+    .await;
+    let error = format!(
+        "{:#}",
+        failed_second.expect_err("propagating the failed second mutation must fail")
+    );
+    assert!(
+        error.contains("TxnAtomicityMissing"),
+        "unexpected failure: {error}"
+    );
+    assert_eq!(counts(&node).await?, (0, 0));
+
+    let unique_abort: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_unique_violation",
@@ -365,10 +311,9 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
         },
     )
     .await;
-
     let error = format!(
         "{:#}",
-        outcome.expect_err("a duplicate unique-key insert must fail")
+        unique_abort.expect_err("a duplicate unique-key insert must fail")
     );
     assert!(
         error.contains("violates unique index"),
@@ -376,18 +321,6 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
     );
     assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 0);
-    Ok(())
-}
-
-/// The composite form of the premise above, on the same pinned DefraDB rev:
-/// a duplicate insert on the composite `(chain_root_doc_id, note_id)` unique
-/// index errors with "violates unique index", and the error, propagated out
-/// of `transact_local_write`, rolls back the transaction, so neither its earlier
-/// writes nor the duplicate persists. Rows that share only one of the two
-/// fields are accepted.
-#[tokio::test]
-async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> Result<()> {
-    let node = disposable_node().await?;
 
     ConfigAccess::transact_local_write(
         &node,
@@ -405,7 +338,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
     .await?;
     assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
 
-    let outcome: Result<()> = ConfigAccess::transact_local_write(
+    let composite_abort: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_composite_violation",
@@ -425,10 +358,9 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
         },
     )
     .await;
-
     let error = format!(
         "{:#}",
-        outcome.expect_err("a duplicate composite-key insert must fail")
+        composite_abort.expect_err("a duplicate composite-key insert must fail")
     );
     assert!(
         error.contains("violates unique index"),
@@ -436,19 +368,24 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
     );
     assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
     assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
-    Ok(())
-}
 
-/// Two concurrent read-then-insert transactions on one unique key leave one
-/// row. The per-node mutation gate admits both at once (it has
-/// `MUTATION_WRITE_GATE_CAPACITY` permits), so both may read the key absent;
-/// the later commit then aborts on the conflict and the owner reruns its
-/// callback, whose read finds the committed row (`tla/SharedOwnerHotCounter
-/// .tla`). Same pinned DefraDB rev as
-/// `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
-#[tokio::test]
-async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
-    let node = disposable_node().await?;
+    let (left, right) = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_commit",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                let left = ensure_no_errors(txn.execute(&write_left("commit", 1)).await?)?;
+                let right = ensure_no_errors(txn.execute(&write_right("commit", 2)).await?)?;
+                Ok::<_, anyhow::Error>((left, right))
+            })
+        },
+    )
+    .await?;
+    assert_acknowledged(&left, "TxnAtomicityLeft")?;
+    assert_acknowledged(&right, "TxnAtomicityRight")?;
+    assert_eq!(counts(&node).await?, (1, 1));
+
     let attempt = || {
         ConfigAccess::transact_local_write(
             &node,
@@ -459,13 +396,11 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
             },
         )
     };
-
     let (first, second) = tokio::time::timeout(Duration::from_secs(15), async {
         tokio::join!(attempt(), attempt())
     })
     .await
     .context("concurrent read-then-insert timed out")?;
-
     let inserted = [first?, second?];
     assert_eq!(
         inserted.iter().filter(|inserted| **inserted).count(),
@@ -473,44 +408,27 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
         "exactly one transaction inserts: {inserted:?}"
     );
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
-    Ok(())
-}
 
-/// A read-then-insert of an existing key inserts nothing, so the other write
-/// in the same transaction commits. Same pinned DefraDB rev as above.
-#[tokio::test]
-async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()> {
-    let node = disposable_node().await?;
-    ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "txn_atomicity_seed_existing_key",
-        |txn: &ConfigApplyTxn<'_>| {
-            Box::pin(async move {
-                ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
-                Ok::<_, anyhow::Error>(())
-            })
-        },
-    )
-    .await?;
-
-    let inserted = ConfigAccess::transact_local_write(
+    let inserted_existing = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_existing_key",
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
-                let inserted = read_then_insert_unique(txn, "existing").await?;
+                let inserted = read_then_insert_unique(txn, "contended").await?;
                 ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
                 Ok::<_, anyhow::Error>(inserted)
             })
         },
     )
     .await?;
-
-    assert!(!inserted, "the existing key must be found, not inserted");
-    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 1);
+    assert!(
+        !inserted_existing,
+        "the existing key must be found, not inserted"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 2);
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -524,9 +442,6 @@ fn report(name: &str, value: Value) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA: &str = "type WriterCounter { key: String @index(unique: true) value: Int }
-type WriterReceipt { writer: Int iteration: Int }";
-
 async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
     let home = tempfile::tempdir()?;
     let node = Arc::new(
@@ -536,7 +451,9 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
             .await?,
     );
     ConfigAccess::local(node.clone())
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SCHEMA))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(writer_counter::SCHEMA),
+        )
         .await?;
     Ok((home, node))
 }
@@ -551,12 +468,7 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
 async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
     let (_home, node) = node().await?;
     let access = ConfigAccess::local(node.clone());
-    access
-        .write(
-            "writer_probe.seed",
-            r#"mutation { create_WriterCounter(input: {key: "hot", value: 0}) {_docID} }"#,
-        )
-        .await?;
+    writer_counter::seed(&access).await?;
     let mut measurements = Vec::new();
     let mut committed = BTreeSet::new();
     let mut next_writer = 0i64;
@@ -573,19 +485,25 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
                 let mut observations = Vec::new();
                 for iteration in 0..8 {
                     let started = Instant::now();
-                    let result = access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
-                        let row = txn.execute("{ WriterCounter {value} }").await?;
-                        let value = row["data"]["WriterCounter"][0]["value"].as_i64().context("counter absent")?;
-                        tokio::task::yield_now().await;
-                        txn.execute(&format!(r#"mutation {{ update_WriterCounter(filter: {{key: {{_eq: "hot"}}}}, input: {{value: {}}}) {{_docID}} create_WriterReceipt(input: {{writer: {writer}, iteration: {iteration}}}) {{_docID}} }}"#, value + 1)).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })).await;
+                    let result = access
+                        .transact_write("writer_probe.increment", |txn| {
+                            Box::pin(async move {
+                                let value = writer_counter::read(txn).await?;
+                                tokio::task::yield_now().await;
+                                writer_counter::increment(txn, value, writer, iteration).await
+                            })
+                        })
+                        .await;
                     let accepted = match result {
                         Ok(()) => true,
                         Err(error) if error.to_string() == "DefraDB transaction conflict" => false,
                         Err(error) => return Err(error),
                     };
-                    observations.push(((writer, iteration), accepted, started.elapsed().as_secs_f64() * 1000.0));
+                    observations.push((
+                        (writer, iteration),
+                        accepted,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    ));
                 }
                 Ok::<_, anyhow::Error>(observations)
             });
@@ -599,9 +517,7 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         let accepted = observations.iter().filter(|row| row.1).count();
         assert!(accepted > 0, "at least one hot-counter update commits");
         committed.extend(observations.iter().filter(|row| row.1).map(|row| row.0));
-        let after = access
-            .execute("{ WriterCounter {value} WriterReceipt {writer iteration} }")
-            .await?;
+        let after = access.execute(writer_counter::OBSERVE).await?;
         assert_eq!(
             after["data"]["WriterCounter"][0]["value"],
             committed.len() as i64
@@ -705,162 +621,5 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         json!({"concurrency":64,"committed":committed.len(),"typed_conflicts":64-committed.len(),"max_open_transactions":maximum.load(Ordering::SeqCst),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )?;
     node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "persistent encrypted admission experiment; emits optional JSON measurements"]
-async fn encrypted_branchable_writers_at_varying_admission_widths() -> Result<()> {
-    measure_encrypted_admission(64, &[1, 2, 4, 8, 16, 32, 64], "native-admission-sweep").await
-}
-
-async fn measure_encrypted_admission(
-    writers: usize,
-    capacities: &[usize],
-    report_name: &str,
-) -> Result<()> {
-    const ITERATIONS: usize = 4;
-    let mut measurements = Vec::new();
-    for &capacity in capacities {
-        let home = tempfile::tempdir()?;
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(home.path().join("db"))
-                .with_at_rest_encryption_key([0x29; 32])
-                .build()
-                .await?,
-        );
-        ConfigAccess::local(node.clone())
-            .add_collection("type AdmissionDocument @branchable { writer: Int @immutable iteration: Int @immutable body: String @immutable }")
-            .await?;
-        let admission = Arc::new(Semaphore::new(capacity));
-        let barrier = Arc::new(Barrier::new(writers));
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let mut workers = JoinSet::new();
-        let started = Instant::now();
-        for writer in 0..writers {
-            let node = node.clone();
-            let admission = admission.clone();
-            let barrier = barrier.clone();
-            let active = active.clone();
-            let maximum = maximum.clone();
-            workers.spawn(async move {
-                barrier.wait().await;
-                let mut observations = Vec::new();
-                for iteration in 0..ITERATIONS {
-                    let requested = Instant::now();
-                    let permit = admission.acquire().await?;
-                    let admitted = Instant::now();
-                    let transaction = node.new_txn(false).await?;
-                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
-                    maximum.fetch_max(count, Ordering::SeqCst);
-                    tokio::task::yield_now().await;
-                    let body = crate::graphql::escape_graphql_string(&"x".repeat(1024));
-                    let response = transaction
-                        .execute(&format!(
-                            "mutation {{ create_AdmissionDocument(input: {{writer: {writer}, iteration: {iteration}, body: \"{body}\"}}) {{_docID}} }}"
-                        ))
-                        .await;
-                    let committed = if response.is_transaction_conflict() {
-                        drop(transaction);
-                        false
-                    } else {
-                        anyhow::ensure!(!response.has_errors(), "native execute: {:?}", response.errors);
-                        match transaction.commit().await {
-                            Ok(()) => true,
-                            Err(defra_node::Error::TransactionConflict(_)) => false,
-                            Err(error) => return Err(error.into()),
-                        }
-                    };
-                    active.fetch_sub(1, Ordering::SeqCst);
-                    let service_ms = admitted.elapsed().as_secs_f64() * 1000.0;
-                    drop(permit);
-                    observations.push((
-                        (writer as i64, iteration as i64),
-                        committed,
-                        requested.elapsed().as_secs_f64() * 1000.0,
-                        service_ms,
-                    ));
-                }
-                Ok::<_, anyhow::Error>(observations)
-            });
-        }
-        let observations = tokio::time::timeout(Duration::from_secs(120), async {
-            let mut all = Vec::new();
-            while let Some(worker) = workers.join_next().await {
-                all.extend(worker??);
-            }
-            Ok::<_, anyhow::Error>(all)
-        })
-        .await
-        .context("admitted native writers stalled")??;
-        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let committed: BTreeSet<_> = observations
-            .iter()
-            .filter(|row| row.1)
-            .map(|row| row.0)
-            .collect();
-        let rows = ConfigAccess::local(node.clone())
-            .execute("{ AdmissionDocument {writer iteration} }")
-            .await?;
-        let rows = rows["data"]["AdmissionDocument"]
-            .as_array()
-            .context("documents missing")?;
-        let durable: BTreeSet<_> = rows
-            .iter()
-            .map(|row| {
-                Ok((
-                    row["writer"].as_i64().context("writer missing")?,
-                    row["iteration"].as_i64().context("iteration missing")?,
-                ))
-            })
-            .collect::<Result<_>>()?;
-        assert_eq!(observations.len(), writers * ITERATIONS);
-        assert_eq!(
-            durable, committed,
-            "durable identities at admission {capacity}"
-        );
-        assert_eq!(
-            rows.len(),
-            committed.len(),
-            "duplicate or partial commits at admission {capacity}"
-        );
-        assert!(!committed.is_empty(), "no commits at admission {capacity}");
-        let overlap = maximum.load(Ordering::SeqCst);
-        assert!(overlap <= capacity);
-        if capacity == 1 {
-            assert_eq!(overlap, 1);
-        } else {
-            assert!(
-                overlap > 1,
-                "admission {capacity} did not overlap transactions"
-            );
-        }
-        let mut latency: Vec<_> = observations.iter().map(|row| row.2).collect();
-        let mut service: Vec<_> = observations.iter().map(|row| row.3).collect();
-        latency.sort_by(f64::total_cmp);
-        service.sort_by(f64::total_cmp);
-        measurements.push(json!({
-            "admission": capacity,
-            "workers": writers,
-            "attempts": observations.len(),
-            "committed": committed.len(),
-            "typed_conflicts": observations.len() - committed.len(),
-            "elapsed_ms": elapsed_ms,
-            "commits_per_second": committed.len() as f64 * 1000.0 / elapsed_ms,
-            "p50_total_ms": latency[latency.len()/2],
-            "p95_total_ms": latency[(latency.len()-1)*95/100],
-            "p50_service_ms": service[service.len()/2],
-            "p95_service_ms": service[(service.len()-1)*95/100],
-            "max_open_transactions": overlap,
-            "durable_identity_set_matches_commits": true
-        }));
-        report(
-            report_name,
-            json!({"measurements": measurements, "retries": false}),
-        )?;
-        node.shutdown().await.expect("node shutdown");
-    }
     Ok(())
 }

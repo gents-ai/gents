@@ -740,10 +740,14 @@ impl Home {
         Ok(())
     }
 
-    async fn withdraw_denial_as_node(&self, member: &identity::Did) -> anyhow::Result<()> {
+    async fn withdraw_denial_as_node(
+        &self,
+        request: &str,
+        member: &identity::Did,
+    ) -> anyhow::Result<()> {
         let runtime = self.runtime()?;
         let receipts = self.receipts(member).await?;
-        let withdrawal = EnrollmentGrantWithdrawal::plan("first", &receipts)?
+        let withdrawal = EnrollmentGrantWithdrawal::plan(request, &receipts)?
             .expect("a live receipt to withdraw");
         withdrawal.revoke_node_permissions(&runtime).await?;
         runtime
@@ -774,15 +778,15 @@ async fn enrolled_client() -> anyhow::Result<(RawIdentity, identity::Did)> {
     Ok((key, member.did().parse()?))
 }
 
-async fn a_denial_the_node_finds_due_is_owed_until_the_owner_settles(
+async fn verify_denial_owed_until_owner_settles(
+    home: &Home,
     provider: Provider,
 ) -> anyhow::Result<()> {
-    let home = home(provider).await?;
     let (_member_key, member) = enrolled_client().await?;
     home.approve("first", &member).await?;
     assert!(home.direct_permissions(&member).await? > 0, "{provider:?}");
 
-    home.withdraw_denial_as_node(&member).await?;
+    home.withdraw_denial_as_node("first", &member).await?;
     let receipts = home.receipts(&member).await?;
     assert_eq!(
         receipts
@@ -841,39 +845,37 @@ async fn a_denial_the_node_finds_due_is_owed_until_the_owner_settles(
         "{provider:?}"
     );
     drop(stranger_key);
-    home.shutdown().await
+    Ok(())
 }
 
 #[tokio::test]
 async fn a_denial_on_a_local_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_denial_the_node_finds_due_is_owed_until_the_owner_settles(Provider::Local).await
-}
-
-#[tokio::test]
-async fn a_denial_on_a_vera_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_denial_the_node_finds_due_is_owed_until_the_owner_settles(Provider::Vera).await
-}
-
-#[tokio::test]
-async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow::Result<()> {
     let home = home(Provider::Local).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    home.approve("first", &member).await?;
+    verify_denial_owed_until_owner_settles(&home, Provider::Local).await?;
+
+    let (_owed_key, owed_member) = enrolled_client().await?;
+    home.approve("second", &owed_member).await?;
     let runtime = home.runtime()?;
     let gate = crate::identity::enrollment_decision_gate(&home.node);
     let withdrawal = gate.lock().await;
-    let grant = runtime.grant_node_permission(&member, NodePermission::DocumentRead);
+    let grant = runtime.grant_node_permission(&owed_member, NodePermission::DocumentRead);
     tokio::pin!(grant);
     assert!(futures::poll!(&mut grant).is_pending());
-    home.withdraw_denial_as_node(&member).await?;
+    home.withdraw_denial_as_node("second", &owed_member).await?;
     drop(withdrawal);
-    let pending = |error: &ConfigClientError| matches!(error, ConfigClientError::AdministrationRemovalPending { member: pending } if pending == member.as_str());
+    let pending = |error: &ConfigClientError| {
+        matches!(
+            error,
+            ConfigClientError::AdministrationRemovalPending { member: pending }
+                if pending == owed_member.as_str()
+        )
+    };
     let direct = grant
         .await
         .expect_err("a direct permission waits for the owed removal");
     assert!(pending(&direct), "{direct:?}");
     let set = crate::identity::GrantSet::OperatorUser
-        .grant(&runtime, &member)
+        .grant(&runtime, &owed_member)
         .await
         .expect_err("a grant set waits for the owed removal");
     assert!(
@@ -882,7 +884,7 @@ async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow:
     );
     let remote = ConfigAccess::Graphql(home.owner_endpoint.clone());
     let refused = remote
-        .grant_node_permission(&member, NodePermission::DocumentRead)
+        .grant_node_permission(&owed_member, NodePermission::DocumentRead)
         .await
         .expect_err("an HTTP grant also waits for settlement");
     assert!(
@@ -895,23 +897,18 @@ async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow:
         ),
         "{refused:?}"
     );
-    assert_eq!(home.direct_permissions(&member).await?, 0);
+    assert_eq!(home.direct_permissions(&owed_member).await?, 0);
     home.settle_as(home.authorization().await?).await?;
     remote
-        .grant_node_permission(&member, NodePermission::DocumentRead)
+        .grant_node_permission(&owed_member, NodePermission::DocumentRead)
         .await?;
-    assert_eq!(home.direct_permissions(&member).await?, 1);
-    home.shutdown().await
-}
+    assert_eq!(home.direct_permissions(&owed_member).await?, 1);
 
-#[tokio::test]
-async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
-    let home = home(Provider::Local).await?;
-    let (_member_key, member) = enrolled_client().await?;
+    let (_dep_key, dep_member) = enrolled_client().await?;
     let node_doc = home.node_doc.clone();
     let input = json!({
         "request_id": "shared",
-        "member_did": member.as_str(),
+        "member_did": dep_member.as_str(),
         "granted_at": "2026-11-20T00:00:00Z",
         "node_doc_id": node_doc,
         "parent_linked": true,
@@ -948,7 +945,7 @@ async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyho
         "{wait:?}"
     );
     ticket.require_settled().await?;
-    let seen = load_enrollment_grant_receipts(&home.owner().await?, member.as_str()).await?;
+    let seen = load_enrollment_grant_receipts(&home.owner().await?, dep_member.as_str()).await?;
     assert!(
         seen.iter().any(|receipt| receipt.request_id == "shared"),
         "{seen:?}"
@@ -957,9 +954,10 @@ async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyho
 }
 
 #[tokio::test]
-async fn a_client_waits_over_http_for_its_own_access_changes_on_a_vera_home() -> anyhow::Result<()>
-{
+async fn a_denial_on_a_vera_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
     let home = home(Provider::Vera).await?;
+    verify_denial_owed_until_owner_settles(&home, Provider::Vera).await?;
+
     let owner = ConfigAccess::Graphql(home.owner_endpoint.clone());
     home.owner_endpoint.runtime_authorization().await?;
     let input = json!({"node_did": "did:key:z6MkOwedAwaitFixture", "enabled": true});

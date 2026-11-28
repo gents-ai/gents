@@ -325,7 +325,6 @@ impl AgentOperationError {
             | Self::AgentDidRequired
             | Self::AgentExists(_)
             | Self::DisplayNameRequired
-            | Self::ProfileNotPublished
             | Self::SystemPromptRequired
             | Self::CloneSourceNotEnabled
             | Self::UnsupportedEditField(_)
@@ -353,6 +352,9 @@ impl AgentOperationError {
             } => NextCall::List {
                 resource: "context",
             },
+            Self::ProfileNotPublished => NextCall::List {
+                resource: "profile",
+            },
             Self::MissingDocument { .. } => operation.declaration().help,
             Self::CatalogNotHeld | Self::AgentNotHeld(_) | Self::SelfDisable => {
                 NextCall::Inspect { resource: "agent" }
@@ -378,6 +380,9 @@ impl AgentOperationError {
                 ..
             } => NextCall::List {
                 resource: "context",
+            },
+            Self::ProfileNotPublished => NextCall::List {
+                resource: "profile",
             },
             _ => NextCall::VerbHelp {
                 resource: "agent",

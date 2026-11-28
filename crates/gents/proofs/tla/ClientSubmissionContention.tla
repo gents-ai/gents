@@ -1,6 +1,7 @@
 ---- MODULE ClientSubmissionContention ----
 \* lean: TransactionReplay.disposition, Identity.Configuration.clientSignedWriteMayRetry
 \* crates: gents-session, gents-store
+\* traces: violates
 \* models: TransactionFence.DeclaredFence, TransactionFence.a_bound_session_stays_bound
 \* A User's optimistic chat send racing its session's active turn.
 \*
@@ -64,6 +65,8 @@
 \* client drop the payload of an unconfirmed message, which leaves a failed
 \* message with no Retry; `BindingChanges` lets a published session's binding
 \* change, which commits a request under the binding it no longer has.
+\* trace actors: ReserveCommit, SubmitCommit, Refuse, TransportFail => wire.id
+\* trace actors: LoseReply, Receive => replies.id
 EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay,
         LeanDecision_Identity_Configuration
 

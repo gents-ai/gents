@@ -10,12 +10,12 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
-pub(super) struct SessionRequest {
-    pub(super) request_id: String,
-    pub(super) lifecycle_state: String,
+pub(in crate::runner::embedded) struct SessionRequest {
+    pub(in crate::runner::embedded) request_id: String,
+    pub(in crate::runner::embedded) lifecycle_state: String,
 }
 
-pub(super) async fn session_requests_with_access(
+pub(in crate::runner::embedded) async fn session_requests_with_access(
     access: &ConfigAccess,
     session_id: &str,
 ) -> Result<Vec<SessionRequest>> {

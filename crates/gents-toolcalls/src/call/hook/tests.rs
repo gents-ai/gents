@@ -433,8 +433,6 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 
 #[tokio::test]
 async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "hook-attaches-active-request-deadline-to",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -485,14 +483,10 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     .with_timezone(&chrono::Utc);
     assert_eq!(observed_deadline, deadline);
     assert!(observed_deadline > chrono::Utc::now());
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn claimed_authored_input_persists_context_once_before_prompt() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "claimed-authored-input-persists-context-",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -527,12 +521,10 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
         Message::User { content }
             if matches!(first_content(content), UserContent::Text(Text { text }) if text == "First request")
     ));
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn context_and_prompt_deduped_across_retry_attempts() {
-    let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "context-and-prompt-deduped-across-retry-",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -601,16 +593,10 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     assert!(rows
         .iter()
         .all(|row| row["request_doc_id"] == request_doc_id));
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn steering_input_is_published_once_when_claimed_owner_runs() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-steering-dedup-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "steering-input-is-published-once-when-cl",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -654,14 +640,10 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     assert_eq!(rows[0]["request_doc_id"], request_doc_id);
     let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history, vec![prompt]);
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "hook-maps-managed-timeout-result-to-time",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -717,14 +699,10 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         .get("result")
         .and_then(|value| value.as_str())
         .is_some_and(|result| result.contains("deadline exceeded")));
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "hook-maps-unknown-tool-dispatch-to-faile",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -787,14 +765,10 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         !persisted_result.contains("__gents_tool_lifecycle__"),
         "internal marker leaked into the persisted result: {persisted_result:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "hook-persists-exact-canonical-output-str",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -847,8 +821,6 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
         .and_then(|value| value.as_str())
         .expect("persisted tool call result");
     assert_eq!(persisted_result, full_output);
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
@@ -1018,6 +990,7 @@ async fn interruption_leaves_background_workers_running() {
                     started_notify.notify_one();
                 },
             )),
+            linux_sandbox: None,
         })
         .await
     });
@@ -1115,8 +1088,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
 
 #[tokio::test]
 async fn interrupt_cancels_native_tools_and_keeps_children_running() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "interrupt-cancels-native-tools-and-keeps",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1242,13 +1213,10 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
             .and_then(|value| value.as_str()),
         Some("interrupted")
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
-    let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "hook-can-fail-live-tool-call-without-con",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1296,13 +1264,10 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         row.get("status").and_then(|value| value.as_str()),
         Some("completed")
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
-    let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "streaming-turn-persists-full-assistant-h",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1422,16 +1387,10 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         row.get("status").and_then(|value| value.as_str()),
         Some("completed")
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-durable-reasoning-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "assistant-turn-materializes-durable-reas",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1478,16 +1437,10 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
                 [gents_inference::llm::message::ReasoningContent::Text { text, .. }]
                     if text == "First weigh the trade-offs, then answer.")
     )));
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn read_file_result_persists_raw_output() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-read-file-model-observation-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "read-file-result-persists-raw-output",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1563,16 +1516,10 @@ async fn read_file_result_persists_raw_output() {
         row.get("result").and_then(|value| value.as_str()),
         Some(raw_read_output)
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn owned_tool_result_materializes_one_transcript_row() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-tool-result-message-dedupe-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "owned-tool-result-materializes-one-trans",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1700,16 +1647,10 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         result_sequence
     );
     assert_eq!(hook_history(&hook, &session_id).await.unwrap().len(), 3);
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-tool-result-distinct-message-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "tool-result-message-dedupe-preserves-dis",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1768,14 +1709,10 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         .collect::<Vec<_>>();
 
     assert_eq!(tool_results, vec!["result-1", "result-2"]);
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "accepted-tool-turns-keep-results-bound-t",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1855,8 +1792,6 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
                 if tool_result.id == "call-2"
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "second result"))
     ));
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
@@ -2062,8 +1997,6 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
 
 #[tokio::test]
 async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-forgery-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "forged-lifecycle-sentinel-in-tool-output",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2129,15 +2062,10 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     );
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-reported-failure-{}",
-        uuid::Uuid::new_v4()
-    ));
     let node_db = gents_store::test_support::TestStore::start(
         "trusted-reported-failure-persists-typed-",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2197,13 +2125,10 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     );
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "cancelled-tool-result-persists-cancelled",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2267,13 +2192,10 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     );
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn real_bash_policy_denial_persists_typed_class_and_payload() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "real-bash-policy-denial-persists-typed-c",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2358,15 +2280,12 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         "the denial payload must persist as the model-facing result"
     );
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() {
     use gents_loop::SessionHook;
 
-    let data_path =
-        std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-requires-durable-completion",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2433,15 +2352,12 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
     .await
     .unwrap();
     assert!(!hook.effect_lifecycles.lock().await.contains_key(&child));
-    let _ = std::fs::remove_dir_all(data_path);
 }
 
 #[tokio::test]
 async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
     use gents_loop::SessionHook;
 
-    let data_path =
-        std::env::temp_dir().join(format!("plugin-child-timeout-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-timeout-is-child-terminal-a",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2527,15 +2443,12 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
         );
     }
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(data_path);
 }
 
 #[tokio::test]
 async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
     use gents_loop::SessionHook;
 
-    let data_path =
-        std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
     let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-naming-a-job-tool-reaches-i",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -2605,7 +2518,6 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
     .await
     .unwrap();
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(data_path);
 }
 
 #[tokio::test]

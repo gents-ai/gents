@@ -339,7 +339,7 @@ where
         let mut reduction_chain_keys = config.reduction_chain_keys.clone();
 
         'turns: loop {
-            if current_turn > config.max_turns + 1 {
+            if current_turn >= config.max_turns {
                 let prompt = new_messages
                     .last()
                     .map(|row| row.message.clone())

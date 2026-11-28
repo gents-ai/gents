@@ -3,36 +3,13 @@ use crate::types::RequestOriginView;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn session() -> AgentSession {
-    AgentSession {
-        session_id: "sess-1".into(),
-        node_did: "did:test:amy".into(),
-        requester_did: None,
-        agent_did: "default".into(),
-        created_at: "2026-04-21T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    }
+    fixture_session("sess-1", "did:test:amy")
 }
 
 fn request(id: &str, session_id: &str, second: u32) -> AgentRequestRow {
     AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some(format!("doc-{id}")),
-        request_id: id.into(),
-        node_did: Some("did:test:amy".into()),
-        agent_did: Some("default".into()),
-        session_id: Some(session_id.into()),
-        content: Some(format!("{id} text")),
-        lifecycle_state: Some(RequestLifecycleState::Completed),
-        execution_origin: Some("interactive".into()),
         created_at: Some(format!("2026-04-21T12:00:{second:02}Z")),
-        ..Default::default()
+        ..fixture_request(id, session_id, RequestLifecycleState::Completed)
     }
 }
 

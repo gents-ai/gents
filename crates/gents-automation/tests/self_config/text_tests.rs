@@ -806,7 +806,7 @@ async fn unsupported_surface_mutations_point_to_scoped_tools_help() {
         let help = ok(&tools, recovery).await;
         let help = help.as_str().unwrap();
         assert!(
-            help.contains("Named surface entries support create and query only"),
+            help.contains("Named surface entries are create, upsert or query"),
             "{help}"
         );
         assert!(
@@ -2236,7 +2236,10 @@ async fn receipts_stay_within_their_size_ceilings() {
         echoed["to"]["chars"].is_u64() && echoed["to"]["sha256"].is_string(),
         "a long value the caller sent is summarized: {created}"
     );
-    assert!(created.contains("from your next turn"), "{created}");
+    assert!(
+        created.contains("next tool call in this same response"),
+        "{created}"
+    );
     let read = text(&tools, json!({"argv":["datastore","get","isles"]})).await;
     assert!(
         read.contains("latest_snapshot"),
@@ -2259,20 +2262,210 @@ async fn receipts_stay_within_their_size_ceilings() {
     )
     .await;
     assert!(
-        tools_update.contains("from your next turn"),
+        tools_update.contains("next tool call in this same response"),
         "{tools_update}"
     );
     let validate = text(&tools, json!({"argv":["validate"]})).await;
     assert_sizes(&[
-        ("datastore create, three entries".into(), created.len(), 950),
+        (
+            "datastore create, three entries".into(),
+            created.len(),
+            1_050,
+        ),
         (
             "datastore update, replacing entries".into(),
             updated.len(),
             1_400,
         ),
-        ("tools update, one field".into(), tools_update.len(), 620),
+        ("tools update, one field".into(), tools_update.len(), 700),
         ("validate".into(), validate.len(), 700),
     ]);
+}
+
+#[tokio::test]
+async fn agent_create_without_preset_binds_empty_tools_and_supports_tools_update() {
+    let (fixture, tools) =
+        authenticated_setup("agent-create-empty-tools", &["node", "tools", "profile"]).await;
+    fixture.grant_node_administration().await;
+    let profile = format!("{}:inference", fixture.agent_did());
+    let created = ok(
+        &tools,
+        json!({
+            "argv": ["agent", "create"],
+            "options": {
+                "display-name": "Database Worker",
+                "system-prompt": "Process records.",
+                "profile": profile
+            }
+        }),
+    )
+    .await;
+    let agent_did = created["agent_did"].as_str().unwrap().to_owned();
+    let expected_tools_id = format!("{agent_did}:tools");
+
+    let context = ok(
+        &tools,
+        json!({"argv": ["context", "get"], "options": {"agent": agent_did}}),
+    )
+    .await;
+    assert_eq!(
+        context["document"]["tools_id"], expected_tools_id,
+        "{context}"
+    );
+
+    let tools_doc = ok(
+        &tools,
+        json!({"argv": ["tools", "get"], "options": {"agent": agent_did}}),
+    )
+    .await;
+    assert_eq!(
+        tools_doc["document"]["tools_id"], expected_tools_id,
+        "{tools_doc}"
+    );
+
+    let updated = ok(
+        &tools,
+        json!({
+            "argv": ["tools", "update"],
+            "options": {"agent": agent_did},
+            "set": {"datastore": {"enable_defra_query": true}}
+        }),
+    )
+    .await;
+    assert_eq!(updated["committed"], true, "{updated}");
+    assert_eq!(updated["target_id"], expected_tools_id, "{updated}");
+}
+
+#[tokio::test]
+async fn missing_tools_id_and_missing_root_and_unpublished_profile_return_actionable_recovery() {
+    let parse_refused = |raw: &str| -> Value {
+        serde_json::from_str(raw.strip_prefix("tool call error: ").unwrap_or(raw))
+            .unwrap_or_else(|error| panic!("{error}: {raw}"))
+    };
+    let (fixture, tools) =
+        authenticated_setup("actionable-recovery", &["node", "tools", "profile"]).await;
+    fixture.grant_node_administration().await;
+    let _root = fixture.admitted_workspace_root().await;
+    let profile = format!("{}:inference", fixture.agent_did());
+
+    let preset_without_root = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["agent", "create"],
+                "options": {
+                    "display-name": "Hostless",
+                    "system-prompt": "Work.",
+                    "preset": "readonly",
+                    "profile": profile
+                }
+            }),
+        )
+        .await,
+    );
+    let root_error = preset_without_root["error"].as_str().unwrap();
+    assert!(
+        root_error.contains("active host tools require an explicit root")
+            && root_error.contains("omit --preset")
+            && root_error.contains("pass --root"),
+        "{preset_without_root}"
+    );
+
+    let bad_profile = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["agent", "create"],
+                "options": {
+                    "display-name": "NoProfile",
+                    "system-prompt": "Work.",
+                    "profile": "missing-profile"
+                }
+            }),
+        )
+        .await,
+    );
+    assert_eq!(
+        bad_profile["recovery"]["next_call"],
+        json!({"argv": ["profile", "list"]}),
+        "{bad_profile}"
+    );
+    assert!(
+        bad_profile["error"]
+            .as_str()
+            .unwrap()
+            .contains("options.profile"),
+        "{bad_profile}"
+    );
+
+    ok(
+        &tools,
+        json!({
+            "argv": ["context", "create"],
+            "target_id": "bare-ctx",
+            "set": {"system_prompt": "Work."}
+        }),
+    )
+    .await;
+    let created = ok(
+        &tools,
+        json!({
+            "argv": ["agent", "create"],
+            "options": {
+                "display-name": "Detached",
+                "context-id": "bare-ctx",
+                "profile": profile
+            }
+        }),
+    )
+    .await;
+    let agent_did = created["agent_did"].as_str().unwrap().to_owned();
+    let missing_tools = parse_refused(
+        &refused(
+            &tools,
+            json!({
+                "argv": ["tools", "update"],
+                "options": {"agent": agent_did},
+                "set": {"display_name": "Recreated"}
+            }),
+        )
+        .await,
+    );
+    let missing_error = missing_tools["error"].as_str().unwrap();
+    let expected_tools_id = format!("{agent_did}:tools");
+    assert!(
+        missing_error.contains("bound tools_id is missing")
+            && missing_error.contains("tools")
+            && missing_error.contains("create")
+            && missing_error.contains("context")
+            && missing_error.contains("update")
+            && missing_error.contains(&agent_did),
+        "{missing_tools}"
+    );
+    assert_eq!(
+        missing_tools["recovery"]["next_call"],
+        json!({"argv": ["tools", "create"], "target_id": expected_tools_id}),
+        "{missing_tools}"
+    );
+    ok(&tools, missing_tools["recovery"]["next_call"].clone()).await;
+    ok(
+        &tools,
+        json!({
+            "argv": ["context", "update"],
+            "options": {"agent": agent_did},
+            "set": {"tools_id": expected_tools_id}
+        }),
+    )
+    .await;
+    ok(
+        &tools,
+        json!({
+            "argv": ["tools", "update"],
+            "options": {"agent": agent_did},
+            "set": {"display_name": "Recreated"}
+        }),
+    )
+    .await;
 }
 
 const HELP_INDEX_CEILING: usize = 1_900;

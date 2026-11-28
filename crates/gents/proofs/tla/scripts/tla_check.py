@@ -120,7 +120,7 @@ def cfg_sections(text):
     canonical = {"CONSTANT": "CONSTANTS", "INVARIANTS": "INVARIANT", "PROPERTIES": "PROPERTY",
                  "CONSTRAINTS": "CONSTRAINT", "ACTION_CONSTRAINTS": "ACTION_CONSTRAINT"}
     sections, current = {}, None
-    for token in strip_comments(text).split():
+    for token in re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', strip_comments(text)):
         if token in CFG_KEYWORDS:
             current = canonical.get(token, token)
             sections.setdefault(current, [])
@@ -372,7 +372,7 @@ def select(files, nodes=None, crate_for=crate_of):
             by_file.setdefault(cfg.with_suffix(".tla").name, set()).add(name)
     chosen = set()
     for path in files:
-        if path.startswith(tla + "scripts/"):
+        if path.startswith(tla + "scripts/") or path == tla + "trace-coverage.json":
             return sorted(nodes)
         chosen |= {name for name, node in nodes.items()
                    if any(within(path, modeled) for modeled in node.get("paths", []))}
@@ -746,22 +746,23 @@ def trace_bytes(tlc, spec, cfg):
 
     outcome, _, output = tlc.execute(cfg)
     expected = expectation(cfg)
+    if outcome.verdict == "violates ?":
+        named = expected.verdict.removeprefix("violates ")
+        text = cfg.read_text()
+        properties = cfg_sections(text).get("PROPERTY", [])
+        if named in properties:
+            if len(properties) > 1:
+                outcome, _, output = tlc.execute(cfg, without_checks(text, named))
+            if outcome.verdict == "violates ?":
+                outcome = Outcome(f"violates {named}", outcome.distinct)
+
     if judge(expected, outcome) != "ok":
         raise ValueError(f"{cfg.name}: expected {expected}, got {outcome}")
-    constants = cfg_sections(cfg.read_text())["CONSTANTS"]
-    bindings = {}
-    for name, equals, raw in zip(*[iter(constants)] * 3, strict=True):
-        if equals != "=" or name in bindings:
-            raise ValueError(f"{cfg.name}: unsupported constant {name} {equals} {raw}")
-        bindings[name] = tlc_trace.value(raw)
-    messages = []
-    for code, kind, body in MESSAGE.findall(output):
-        if kind == "4":
-            if code != "2217":
-                raise ValueError(f"{cfg.name}: unsupported TLC trace message {code}")
-            messages.append(body)
+    bindings = tlc_trace.constants(" ".join(cfg_sections(cfg.read_text()).get("CONSTANTS", [])))
+    selectors = tlc_trace.actor_fields((TLA / (spec + ".tla")).read_text())
+    messages = [(code, body) for code, kind, body in MESSAGE.findall(output) if kind == "4"]
     trace = dict(spec=spec, config=cfg.stem, expect=expected.verdict, constants=bindings,
-                 steps=tlc_trace.steps(messages))
+                 steps=tlc_trace.steps(messages, selectors))
     return (json.dumps(trace, indent=2, sort_keys=True) + "\n").encode()
 
 
@@ -776,8 +777,15 @@ def traces(check):
             raise ValueError(f"{cfg.name}: two TLC runs produced different traces")
         return directory / (cfg.stem + ".json"), data
 
-    configs = [(spec, cfg) for spec in ("ClientSubmissionContention", "InterruptLatchContention")
-               for cfg in nodes[spec]["configs"] if expectation(cfg).verdict.startswith("violates ")]
+    participating = {spec for spec in nodes
+                     if r"\* traces: violates" in (TLA / (spec + ".tla")).read_text().splitlines()}
+    boundaries = {entry["config"] for entry in json.loads((TLA / "trace-coverage.json").read_text())}
+    configs = [(spec, cfg) for spec, node in nodes.items() for cfg in node["configs"]
+               if (spec in participating or cfg.stem in boundaries)
+               and expectation(cfg).verdict.startswith("violates ")]
+    missing = boundaries - {cfg.stem for _, cfg in configs}
+    if missing:
+        raise ValueError(f"coverage ledger names missing counterexamples: {sorted(missing)}")
     with ThreadPoolExecutor(max_workers=int(os.getenv("TLA_JOBS", "4"))) as pool:
         outputs = dict(pool.map(generate, configs))
     obsolete = set(directory.glob("*.json")) - outputs.keys()

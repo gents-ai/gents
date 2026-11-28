@@ -1,0 +1,774 @@
+{
+  "config": "MCClientIdentityMetadataSharedStaging",
+  "constants": {
+    "CanCrash": false,
+    "RemoveBeforeRename": false,
+    "Reread": true,
+    "SingleWinnerKey": true,
+    "UniqueStaging": false,
+    "Writers": [
+      {
+        "$model": "w1"
+      },
+      {
+        "$model": "w2"
+      }
+    ]
+  },
+  "expect": "violates NoMissingFileError",
+  "spec": "ClientIdentityMetadata",
+  "steps": [
+    {
+      "action": "Read",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "create"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "start"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Create",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "fill"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "empty"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "create"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Fill",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "key"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "fill"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "empty"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Read",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "key"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "start"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "key"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Create",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "empty"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "create"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "key"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Rename",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "dest": "torn",
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "absent",
+        "installed": false,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "rename"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "empty"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Fill",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": "key",
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "rename"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "torn",
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "fill"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Rename",
+      "actor": {
+        "$model": "w2"
+      },
+      "after": {
+        "dest": "key",
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "missingFile"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      },
+      "before": {
+        "dest": "key",
+        "installed": true,
+        "okSaw": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              false
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              false
+            ]
+          ]
+        },
+        "pc": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              "decide"
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              "rename"
+            ]
+          ]
+        },
+        "stage": {
+          "$function": [
+            [
+              "principal.tmp",
+              "absent"
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

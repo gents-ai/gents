@@ -456,65 +456,77 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
 }
 
 #[tokio::test]
-async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
+async fn ordinary_indexes_backfill_and_bound_scans_on_existing_collections() {
+    use gents_protocol::schemas::{
+        HomePolicyIds, AGENT_MESSAGE, AGENT_MESSAGE_NAME, AGENT_OUTPUT_SEGMENT,
+        AGENT_OUTPUT_SEGMENT_NAME, AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME, INFERENCE_CALL,
+        INFERENCE_CALL_NAME, RENDERED_REQUEST, RENDERED_REQUEST_NAME,
+    };
+
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM))
+    let ids = HomePolicyIds::node_store();
+    let baseline_entries = baseline(ids);
+    let catalog_for = |collection: &str, index_name: &str| {
+        let entry = baseline_entries
+            .iter()
+            .find(|c| c.name == collection)
+            .unwrap();
+        let index = ORDINARY_INDEXES
+            .iter()
+            .find(|i| i.name == index_name)
+            .unwrap();
+        Catalog {
+            baseline: std::slice::from_ref(entry),
+            ordinary_indexes: std::slice::from_ref(index),
+        }
+    };
+
+    node.add_collection(&ids.render(MAILBOX_ITEM))
         .await
         .expect("register pre-index MailboxItem schema");
-    let before = node
+    let before_mailbox = node
         .get_collection(MAILBOX_ITEM_NAME)
         .expect("load pre-index MailboxItem collection")
         .expect("MailboxItem collection exists");
-    assert!(!before
+    assert!(!before_mailbox
         .indexes
         .iter()
         .any(|index| index.name == "MailboxItem_node_status_item_key"));
-
-    let catalog = catalog_with_mailbox_cursor_index();
-    ensure(node.as_ref(), &catalog)
+    let mailbox_catalog = catalog_with_mailbox_cursor_index();
+    ensure(node.as_ref(), &mailbox_catalog)
         .await
         .expect("reconcile cursor index on existing MailboxItem");
-    let after = node
+    let after_mailbox = node
         .get_collection(MAILBOX_ITEM_NAME)
         .expect("load indexed MailboxItem collection")
         .expect("MailboxItem collection exists");
-    assert_eq!(before.version_id, after.version_id);
-    assert_eq!(before.collection_id, after.collection_id);
-    let index = after
+    assert_eq!(before_mailbox.version_id, after_mailbox.version_id);
+    assert_eq!(before_mailbox.collection_id, after_mailbox.collection_id);
+    let mailbox_index = after_mailbox
         .indexes
         .iter()
         .find(|index| index.name == "MailboxItem_node_status_item_key")
         .expect("reconciled MailboxItem cursor index");
     assert_eq!(
-        index
+        mailbox_index
             .fields
             .iter()
             .map(|field| (field.name.as_str(), field.descending))
             .collect::<Vec<_>>(),
         vec![("node_did", false), ("status", false), ("item_key", false)]
     );
-
-    ensure(node.as_ref(), &catalog)
+    ensure(node.as_ref(), &mailbox_catalog)
         .await
         .expect("reconcile MailboxItem cursor index idempotently");
-    node.shutdown().await.expect("shut down test node");
-}
 
-#[tokio::test]
-async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
-    use gents_protocol::schemas::{AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME};
-
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_OUTPUT_SEGMENT),
-    )
-    .await
-    .unwrap();
-    let before = node
+    node.add_collection(&ids.render(AGENT_OUTPUT_SEGMENT))
+        .await
+        .unwrap();
+    let before_output = node
         .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap()
         .unwrap();
-    let mut inputs = (0..32)
+    let mut output_inputs = (0..32)
         .map(|turn| serde_json::json!({
             "request_doc_id": "request-a",
             "source": {"kind": "provider_turn", "scope": "inference.1", "turn_index": turn, "attempt": 0},
@@ -526,40 +538,33 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
         ("request-a", "conflict-2"),
         ("request-b", "foreign"),
     ] {
-        inputs.push(serde_json::json!({
+        output_inputs.push(serde_json::json!({
             "request_doc_id": request,
             "source": {"kind": "provider_turn", "scope": "inference.1", "turn_index": 17, "attempt": 0},
             "payload": payload,
         }));
     }
-    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(inputs)).unwrap();
+    let output_input =
+        gents_protocol::graphql::graphql_input_literal(&Value::Array(output_inputs)).unwrap();
     let created = node
         .execute(&format!(
-            "mutation {{ create_AgentOutputSegment(input: {input}) {{ _docID }} }}"
+            "mutation {{ create_AgentOutputSegment(input: {output_input}) {{ _docID }} }}"
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|entry| entry.name == AGENT_OUTPUT_SEGMENT_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
+    let output_index = ORDINARY_INDEXES
         .iter()
         .find(|index| index.collection == AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
+    let output_catalog = catalog_for(AGENT_OUTPUT_SEGMENT_NAME, output_index.name);
     for _ in 0..2 {
-        ensure(node.as_ref(), &catalog).await.unwrap();
+        ensure(node.as_ref(), &output_catalog).await.unwrap();
         let after = node
             .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
             .unwrap()
             .unwrap();
-        assert_eq!(before.version_id, after.version_id);
-        assert_eq!(before.collection_id, after.collection_id);
+        assert_eq!(before_output.version_id, after.version_id);
+        assert_eq!(before_output.collection_id, after.collection_id);
         let query = r#"query { AgentOutputSegment(filter: {
             request_doc_id: {_eq: "request-a"}, source: {turn_index: {_eq: 17}}
         }) { payload } }"#;
@@ -573,26 +578,18 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
             .collect::<Vec<_>>();
         payloads.sort();
         assert_eq!(payloads, ["conflict-1", "conflict-2", "turn-17"]);
-        assert_indexed_query(node.as_ref(), query, index.name, 3).await;
+        assert_indexed_query(node.as_ref(), query, output_index.name, 3).await;
     }
-    node.shutdown().await.expect("shut down test node");
-}
 
-#[tokio::test]
-async fn background_completion_recovery_seeks_pending_status_range() {
-    use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
-    )
-    .await
-    .unwrap();
-    let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
+    node.add_collection(&ids.render(AGENT_TOOL_CALL))
+        .await
+        .unwrap();
+    let before_tool = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
     let historical = (0..160)
         .map(|i| {
             serde_json::json!({
-                "tool_call_key": format!("old-{i}"), "node_did":"n", "await_mode":"background",
-                "lifecycle_state":"completed", "status":"completed"
+                "tool_call_key": format!("old-{i}"), "node_did": "n-bg", "await_mode": "background",
+                "lifecycle_state": "completed", "status": "completed"
             })
         })
         .collect::<Vec<_>>();
@@ -603,29 +600,24 @@ async fn background_completion_recovery_seeks_pending_status_range() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|c| c.name == AGENT_TOOL_CALL_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
-        .iter()
-        .find(|i| i.name == "AgentToolCall_node_await_status")
-        .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
-    ensure(node.as_ref(), &catalog).await.unwrap();
-    let query = r#"query { AgentToolCall(filter:{node_did:{_eq:"n"},await_mode:{_eq:"background"},lifecycle_state:{_in:["completed","failed","timedOut","cancelled"]},status:{_like:"completionPending%",_ge:"completionPending",_lt:"completionPendinh"}}){tool_call_key} }"#;
-    assert_indexed_query(node.as_ref(), query, index.name, 0).await;
+    let bg_catalog = catalog_for(AGENT_TOOL_CALL_NAME, "AgentToolCall_node_await_status");
+    ensure(node.as_ref(), &bg_catalog).await.unwrap();
+    let bg_query = r#"query { AgentToolCall(filter:{node_did:{_eq:"n-bg"},await_mode:{_eq:"background"},lifecycle_state:{_in:["completed","failed","timedOut","cancelled"]},status:{_like:"completionPending%",_ge:"completionPending",_lt:"completionPendinh"}}){tool_call_key} }"#;
+    assert_indexed_query(
+        node.as_ref(),
+        bg_query,
+        "AgentToolCall_node_await_status",
+        0,
+    )
+    .await;
     let cases = serde_json::json!([
-        {"tool_call_key":"pending","node_did":"n","await_mode":"background","lifecycle_state":"completed","status":"completionPending:success"},
-        {"tool_call_key":"bare-prefix","node_did":"n","await_mode":"background","lifecycle_state":"failed","status":"completionPending"},
-        {"tool_call_key":"unicode","node_did":"n","await_mode":"background","lifecycle_state":"cancelled","status":"completionPending:é"},
-        {"tool_call_key":"running","node_did":"n","await_mode":"background","lifecycle_state":"running","status":"completionPending:success"},
-        {"tool_call_key":"foreground","node_did":"n","await_mode":"foreground","lifecycle_state":"completed","status":"completionPending:success"},
+        {"tool_call_key":"pending","node_did":"n-bg","await_mode":"background","lifecycle_state":"completed","status":"completionPending:success"},
+        {"tool_call_key":"bare-prefix","node_did":"n-bg","await_mode":"background","lifecycle_state":"failed","status":"completionPending"},
+        {"tool_call_key":"unicode","node_did":"n-bg","await_mode":"background","lifecycle_state":"cancelled","status":"completionPending:é"},
+        {"tool_call_key":"running","node_did":"n-bg","await_mode":"background","lifecycle_state":"running","status":"completionPending:success"},
+        {"tool_call_key":"foreground","node_did":"n-bg","await_mode":"foreground","lifecycle_state":"completed","status":"completionPending:success"},
         {"tool_call_key":"foreign","node_did":"other","await_mode":"background","lifecycle_state":"completed","status":"completionPending:success"},
-        {"tool_call_key":"past-prefix","node_did":"n","await_mode":"background","lifecycle_state":"completed","status":"completionPendinh"}
+        {"tool_call_key":"past-prefix","node_did":"n-bg","await_mode":"background","lifecycle_state":"completed","status":"completionPendinh"}
     ]);
     let input = gents_protocol::graphql::graphql_input_literal(&cases).unwrap();
     let created = node
@@ -634,9 +626,9 @@ async fn background_completion_recovery_seeks_pending_status_range() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let legacy = query.replace(",_ge:\"completionPending\",_lt:\"completionPendinh\"", "");
+    let legacy = bg_query.replace(",_ge:\"completionPending\",_lt:\"completionPendinh\"", "");
     let mut observed = Vec::new();
-    for q in [query, &legacy] {
+    for q in [bg_query, &legacy] {
         let result = node.execute(q).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         let mut keys = result.data.unwrap()["AgentToolCall"]
@@ -650,112 +642,58 @@ async fn background_completion_recovery_seeks_pending_status_range() {
     }
     assert_eq!(observed[0], ["bare-prefix", "pending", "unicode"]);
     assert_eq!(observed[0], observed[1]);
-    assert_indexed_query(node.as_ref(), query, index.name, 4).await;
+    assert_indexed_query(
+        node.as_ref(),
+        bg_query,
+        "AgentToolCall_node_await_status",
+        4,
+    )
+    .await;
     assert_eq!(
-        before.version_id,
+        before_tool.version_id,
         node.get_collection(AGENT_TOOL_CALL_NAME)
             .unwrap()
             .unwrap()
             .version_id
     );
-    node.shutdown().await.expect("shut down test node");
-}
 
-#[tokio::test]
-async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
-    use gents_protocol::schemas::{AGENT_MESSAGE, AGENT_MESSAGE_NAME};
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_MESSAGE),
-    )
-    .await
-    .unwrap();
-    let before = node.get_collection(AGENT_MESSAGE_NAME).unwrap().unwrap();
-    let input=Value::Array((0..160).map(|i|serde_json::json!({"message_key":format!("message-{i}"),"node_did":"n","session_id":"s","sequence":i})).collect());
-    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
-    let created = node
-        .execute(&format!(
-            "mutation {{create_AgentMessage(input:{input}){{_docID}}}}"
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let query = r#"query {AgentMessage(filter:{session_id:{_eq:"s"}},order:[{sequence:DESC},{_docID:ASC}],limit:30){_docID sequence}}"#;
-    let original = node.execute(query).await;
-    assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|c| c.name == AGENT_MESSAGE_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
-        .iter()
-        .find(|i| i.name == "AgentMessage_session_sequence")
-        .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
-    ensure(node.as_ref(), &catalog).await.unwrap();
-    let result = node.execute(query).await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    assert_eq!(original.data, result.data);
-    assert_indexed_query(node.as_ref(), query, index.name, 31).await;
-    assert_eq!(
-        before.version_id,
-        node.get_collection(AGENT_MESSAGE_NAME)
-            .unwrap()
-            .unwrap()
-            .version_id
-    );
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn transcript_tool_page_streams_sequence_and_key_order() {
-    use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
-    )
-    .await
-    .unwrap();
-    let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
-    let rows = (0..160).map(|i| serde_json::json!({
-        "tool_call_key": format!("tool-{i:03}"),
-        "session_id": if i < 80 { "s" } else { "other-session" },
-        "node_did": "n",
-        "requester_did": "r",
-        "message_sequence": i / 2,
-    })).chain([
-        serde_json::json!({"tool_call_key":"foreign-node", "session_id":"s", "node_did":"other", "requester_did":"r", "message_sequence":100}),
-        serde_json::json!({"tool_call_key":"foreign-requester", "session_id":"s", "node_did":"n", "requester_did":"other", "message_sequence":100}),
-    ]).collect::<Vec<_>>();
-    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(rows)).unwrap();
+    let transcript_rows = (0..160)
+        .map(|i| {
+            serde_json::json!({
+                "tool_call_key": format!("tool-{i:03}"),
+                "session_id": if i < 80 { "s" } else { "other-session" },
+                "node_did": "n-transcript",
+                "requester_did": "r",
+                "message_sequence": i / 2,
+            })
+        })
+        .chain([
+            serde_json::json!({"tool_call_key":"foreign-node", "session_id":"s", "node_did":"other", "requester_did":"r", "message_sequence":100}),
+            serde_json::json!({"tool_call_key":"foreign-requester", "session_id":"s", "node_did":"n-transcript", "requester_did":"other", "message_sequence":100}),
+        ])
+        .collect::<Vec<_>>();
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&Value::Array(transcript_rows)).unwrap();
     let created = node
         .execute(&format!(
             "mutation {{ create_AgentToolCall(input:{input}) {{_docID}} }}"
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
-    let original = node.execute(query).await;
-    assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|c| c.name == AGENT_TOOL_CALL_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
-        .iter()
-        .find(|i| i.name == "AgentToolCall_session_sequence_key")
-        .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
+    let transcript_query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n-transcript"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
+    let original_transcript = node.execute(transcript_query).await;
+    assert!(
+        !original_transcript.has_errors(),
+        "{:?}",
+        original_transcript.errors
+    );
+    let transcript_catalog =
+        catalog_for(AGENT_TOOL_CALL_NAME, "AgentToolCall_session_sequence_key");
     for _ in 0..2 {
-        ensure(node.as_ref(), &catalog).await.unwrap();
-        let result = node.execute(query).await;
+        ensure(node.as_ref(), &transcript_catalog).await.unwrap();
+        let result = node.execute(transcript_query).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
-        assert_eq!(original.data, result.data);
+        assert_eq!(original_transcript.data, result.data);
         let keys = result.data.as_ref().unwrap()["AgentToolCall"]
             .as_array()
             .unwrap()
@@ -769,27 +707,66 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
                 .map(|i| format!("tool-{i:03}"))
                 .collect::<Vec<_>>()
         );
-        assert_indexed_query(node.as_ref(), query, index.name, 12).await;
+        assert_indexed_query(
+            node.as_ref(),
+            transcript_query,
+            "AgentToolCall_session_sequence_key",
+            12,
+        )
+        .await;
         assert_eq!(
-            before.version_id,
+            before_tool.version_id,
             node.get_collection(AGENT_TOOL_CALL_NAME)
                 .unwrap()
                 .unwrap()
                 .version_id
         );
     }
-    node.shutdown().await.expect("shut down test node");
-}
 
-#[tokio::test]
-async fn inference_metrics_window_seeks_recent_terminal_calls() {
-    use gents_protocol::schemas::{INFERENCE_CALL, INFERENCE_CALL_NAME};
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(INFERENCE_CALL),
+    node.add_collection(&ids.render(AGENT_MESSAGE))
+        .await
+        .unwrap();
+    let before_msg = node.get_collection(AGENT_MESSAGE_NAME).unwrap().unwrap();
+    let msg_input = Value::Array(
+        (0..160)
+            .map(|i| {
+                serde_json::json!({"message_key": format!("message-{i}"), "node_did": "n", "session_id": "s", "sequence": i})
+            })
+            .collect(),
+    );
+    let msg_input = gents_protocol::graphql::graphql_input_literal(&msg_input).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{create_AgentMessage(input:{msg_input}){{_docID}}}}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let msg_query = r#"query {AgentMessage(filter:{session_id:{_eq:"s"}},order:[{sequence:DESC},{_docID:ASC}],limit:30){_docID sequence}}"#;
+    let original_msg = node.execute(msg_query).await;
+    assert!(!original_msg.has_errors(), "{:?}", original_msg.errors);
+    let msg_catalog = catalog_for(AGENT_MESSAGE_NAME, "AgentMessage_session_sequence");
+    ensure(node.as_ref(), &msg_catalog).await.unwrap();
+    let msg_result = node.execute(msg_query).await;
+    assert!(!msg_result.has_errors(), "{:?}", msg_result.errors);
+    assert_eq!(original_msg.data, msg_result.data);
+    assert_indexed_query(
+        node.as_ref(),
+        msg_query,
+        "AgentMessage_session_sequence",
+        31,
     )
-    .await
-    .unwrap();
+    .await;
+    assert_eq!(
+        before_msg.version_id,
+        node.get_collection(AGENT_MESSAGE_NAME)
+            .unwrap()
+            .unwrap()
+            .version_id
+    );
+
+    node.add_collection(&ids.render(INFERENCE_CALL))
+        .await
+        .unwrap();
     let call = |id: String, state: &str, ended_at: &str| {
         serde_json::json!({
             "call_id": id, "call_kind": "inference", "call_state": state, "ended_at": ended_at
@@ -817,94 +794,74 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
         ),
         call("running".into(), "running", "2026-10-22T21:21:00+00:00"),
     ]);
-    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(calls)).unwrap();
+    let calls_input = gents_protocol::graphql::graphql_input_literal(&Value::Array(calls)).unwrap();
     let created = node
         .execute(&format!(
-            "mutation {{ create_InferenceCall(input:{input}) {{_docID}} }}"
+            "mutation {{ create_InferenceCall(input:{calls_input}) {{_docID}} }}"
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|c| c.name == INFERENCE_CALL_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
-        .iter()
-        .find(|i| i.name == "InferenceCall_kind_ended_at")
-        .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
-    ensure(node.as_ref(), &catalog).await.unwrap();
-    let query = r#"query { InferenceCall(
+    let call_catalog = catalog_for(INFERENCE_CALL_NAME, "InferenceCall_kind_ended_at");
+    ensure(node.as_ref(), &call_catalog).await.unwrap();
+    let call_query = r#"query { InferenceCall(
         filter: { call_kind: { _eq: "inference" }, call_state: { _in: ["completed", "failed", "cancelled"] }, ended_at: { _ge: "2026-10-22T21:15:00" } },
         order: [{ ended_at: DESC }, { call_id: DESC }], limit: 500
     ) { call_id } }"#;
-    let rows = node.execute(query).await;
+    let rows = node.execute(call_query).await;
     assert!(!rows.has_errors(), "{:?}", rows.errors);
-    let ids = rows.data.unwrap()["InferenceCall"]
+    let ids_out = rows.data.unwrap()["InferenceCall"]
         .as_array()
         .unwrap()
         .iter()
         .map(|row| row["call_id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["recent-failed", "recent"]);
-    assert_indexed_query(node.as_ref(), query, index.name, 4).await;
-    node.shutdown().await.expect("shut down test node");
-}
+    assert_eq!(ids_out, ["recent-failed", "recent"]);
+    assert_indexed_query(node.as_ref(), call_query, "InferenceCall_kind_ended_at", 4).await;
 
-#[tokio::test]
-async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
-    use gents_protocol::schemas::{RENDERED_REQUEST, RENDERED_REQUEST_NAME};
-    let node = fresh_node().await;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(RENDERED_REQUEST),
-    )
-    .await
-    .unwrap();
-    let before = node.get_collection(RENDERED_REQUEST_NAME).unwrap().unwrap();
-    let rows = (0..100)
+    node.add_collection(&ids.render(RENDERED_REQUEST))
+        .await
+        .unwrap();
+    let before_rendered = node.get_collection(RENDERED_REQUEST_NAME).unwrap().unwrap();
+    let rendered_rows = (0..100)
         .map(|turn| {
             serde_json::json!({
-                "capture_key": format!("capture-{turn}"), "request_doc_id":"physical-request",
-                "node_did":"node", "session_id":"session", "turn_index":turn,
-                "attempt":0, "capture_scope":"inference.1", "capture_version":1,
-                "source":"openai_chat_completions", "request_json":"{}", "provenance_json":"{}",
+                "capture_key": format!("capture-{turn}"), "request_doc_id": "physical-request",
+                "node_did": "node", "session_id": "session", "turn_index": turn,
+                "attempt": 0, "capture_scope": "inference.1", "capture_version": 1,
+                "source": "openai_chat_completions", "request_json": "{}", "provenance_json": "{}",
             })
         })
         .collect::<Vec<_>>();
-    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(rows)).unwrap();
+    let rendered_input =
+        gents_protocol::graphql::graphql_input_literal(&Value::Array(rendered_rows)).unwrap();
     let created = node
         .execute(&format!(
-            "mutation {{ create_RenderedRequest(input:{input}) {{_docID}} }}"
+            "mutation {{ create_RenderedRequest(input:{rendered_input}) {{_docID}} }}"
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
-        .iter()
-        .find(|c| c.name == RENDERED_REQUEST_NAME)
-        .unwrap();
-    let index = ORDINARY_INDEXES
-        .iter()
-        .find(|i| i.name == "RenderedRequest_request_node_session_turn_attempt")
-        .unwrap();
-    let catalog = Catalog {
-        baseline: std::slice::from_ref(baseline),
-        ordinary_indexes: std::slice::from_ref(index),
-    };
-    let query = r#"query { RenderedRequest(filter:{request_doc_id:{_eq:"physical-request"},node_did:{_eq:"node"},session_id:{_eq:"session"},turn_index:{_eq:73},attempt:{_eq:0},capture_scope:{_like:"inference.%"}},limit:2){capture_version source request_json provenance_json} }"#;
+    let rendered_catalog = catalog_for(
+        RENDERED_REQUEST_NAME,
+        "RenderedRequest_request_node_session_turn_attempt",
+    );
+    let rendered_query = r#"query { RenderedRequest(filter:{request_doc_id:{_eq:"physical-request"},node_did:{_eq:"node"},session_id:{_eq:"session"},turn_index:{_eq:73},attempt:{_eq:0},capture_scope:{_like:"inference.%"}},limit:2){capture_version source request_json provenance_json} }"#;
     for _ in 0..2 {
-        ensure(node.as_ref(), &catalog).await.unwrap();
-        assert_indexed_query(node.as_ref(), query, index.name, 2).await;
+        ensure(node.as_ref(), &rendered_catalog).await.unwrap();
+        assert_indexed_query(
+            node.as_ref(),
+            rendered_query,
+            "RenderedRequest_request_node_session_turn_attempt",
+            2,
+        )
+        .await;
         assert_eq!(
-            before.version_id,
+            before_rendered.version_id,
             node.get_collection(RENDERED_REQUEST_NAME)
                 .unwrap()
                 .unwrap()
                 .version_id
         );
-        let response = node.execute(query).await;
+        let response = node.execute(rendered_query).await;
         assert_eq!(
             response.data.unwrap()["RenderedRequest"]
                 .as_array()
@@ -913,5 +870,6 @@ async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
             1
         );
     }
+
     node.shutdown().await.expect("shut down test node");
 }

@@ -30,12 +30,8 @@ fn piped_run_exits_2_and_leaves_the_terminal_alone() {
 }
 
 #[test]
-fn unknown_key_set_exits_2() {
-    assert_usage_error(&run(&["--keys", "nano"]));
-    assert_usage_error(&run(&["vim"]));
-}
-
-#[test]
-fn keys_without_value_exits_2() {
-    assert_usage_error(&run(&["--keys"]));
+fn invalid_cli_args_exit_2() {
+    for args in [&["--keys", "nano"][..], &["vim"], &["--keys"]] {
+        assert_usage_error(&run(args));
+    }
 }

@@ -10,6 +10,8 @@
 //! restates without a table goes on its `\* models:` line, which this
 //! generator does not read.
 
+pub mod replay;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};

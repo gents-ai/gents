@@ -262,3 +262,179 @@ fn imported_session(
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::observe::adapter_projection::{
+        build_external_adapter_projection, validate_adapter_projection_contract, AdapterProjection,
+        ProjectionContext, ProjectionRedactionMode, ProjectionSourceVersionStatus,
+        EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID,
+    };
+    use serde_json::json;
+
+    fn multi_agent_capture() -> Value {
+        json!({
+            "source": {"system":"autogen-agentchat","package":"autogen-agentchat","package_version":"0.7.0","generator":"unit-test"},
+            "native": {"messages":[
+                {"source":"planner","content":"Plan the work."},
+                {"source":"researcher","content":"Research complete."}
+            ]},
+            "mapping": {
+                "projection":"multi_agent_task","scenario_id":"unit-test","request_id":"req-root","session_id":"session-negative",
+                "participants":[
+                    {"role":"planner","node_did":"did:test:planner"},
+                    {"role":"researcher","node_did":"did:test:researcher","request_id":"req-child"}
+                ],
+                "delegations":[{"parent_request_id":"req-root","child_request_id":"req-child","parent_tool_call_id":"tool-delegate","tool_name":"delegate_to_researcher","status":"completed"}],
+                "tool_events":[{"id":"tool-delegate","request_id":"req-root","tool_name":"delegate_to_researcher","status":"completed","child_request_id":"req-child"}]
+            }
+        })
+    }
+
+    fn langgraph_capture() -> Value {
+        json!({
+            "source":{"system":"langgraph","package":"langgraph","package_version":"0.2.0"},
+            "native":{"thread_id":"thread-missing-history"},
+            "mapping":{"projection":"langgraph_state_history","scenario_id":"missing-history","request_id":"req-langgraph"}
+        })
+    }
+
+    fn mutated_capture<F>(mutate: F) -> Value
+    where
+        F: FnOnce(&mut Value),
+    {
+        let mut capture = multi_agent_capture();
+        mutate(&mut capture);
+        capture
+    }
+
+    #[test]
+    fn external_projection_preserves_mapped_children_without_forging_native_provenance(
+    ) -> Result<()> {
+        let capture: ExternalAdapterCapture = serde_json::from_value(multi_agent_capture())?;
+        let imported = import_external_adapter_capture_to_derived_view(&capture)?;
+        assert!(imported
+            .view
+            .requests
+            .iter()
+            .all(|r| r.doc_id.is_none() && r.caused_by_parent_request_doc_id.is_none()));
+        let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
+        validate_adapter_projection_contract(&envelope)?;
+        assert_eq!(
+            envelope.provenance.source_projection_id,
+            EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
+        );
+        assert_eq!(
+            envelope.provenance.source_version_status,
+            ProjectionSourceVersionStatus::ExternalAdapterCapture
+        );
+        assert!(envelope.source_request_doc_id.is_none());
+        let projection = serde_json::to_value(&envelope)?;
+        assert_eq!(
+            projection
+                .pointer("/output/projection/messages")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            projection.pointer("/output/projection/messages/0/role"),
+            Some(&json!("planner"))
+        );
+        assert_eq!(
+            projection.pointer("/output/projection/messages/1/role"),
+            Some(&json!("researcher"))
+        );
+        assert_eq!(
+            projection.pointer("/output/projection/delegations/0/parent_tool_call_id"),
+            Some(&json!("tool-delegate"))
+        );
+        for redaction_mode in [
+            ProjectionRedactionMode::TrainingSafe,
+            ProjectionRedactionMode::Public,
+        ] {
+            let envelope = build_external_adapter_projection(
+                &capture,
+                &ProjectionContext {
+                    actor_did: None,
+                    redaction_mode,
+                },
+            )?;
+            validate_adapter_projection_contract(&envelope)?;
+            let rendered = serde_json::to_string(&envelope.output)?;
+            assert!(
+                !rendered.contains("Research complete.")
+                    && !rendered.contains("did:test:researcher")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn external_langgraph_projection_preserves_history_graph_tasks_and_redacts_values() -> Result<()>
+    {
+        let mut value = langgraph_capture();
+        value["native"]["graph"] = json!({
+            "nodes":["provider_model","research_subgraph"],
+            "edges":[{"from":"langgraph:start","to":"langgraph:node:provider_model","kind":"flow"}],
+            "subgraphs":{"research_subgraph":{"nodes":["search"]}}
+        });
+        value["native"]["history"] = json!([
+            {"config":{"configurable":{"checkpoint_id":"checkpoint-current"}},"values":{"topic":"private-topic","status":"completed","child_request_id":"req-child"}},
+            {"values":{"topic":"prior-topic"}}
+        ]);
+        let capture: ExternalAdapterCapture = serde_json::from_value(value)?;
+        let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
+        validate_adapter_projection_contract(&envelope)?;
+        let AdapterProjection::LangGraphStateHistory(projection) = &envelope.output else {
+            panic!("expected LangGraph projection");
+        };
+        assert_eq!(projection.checkpoint_id, "checkpoint-current");
+        assert_eq!(projection.values["history_checkpoint_count"], json!(2));
+        assert_eq!(projection.values["topic"], json!("private-topic"));
+        assert!(projection
+            .nodes
+            .iter()
+            .any(|n| n.id == "langgraph:subgraph:research:search"));
+        assert_eq!(projection.edges.len(), 1);
+        assert!(projection.tasks.iter().any(|t| t.name == "search"));
+        let public = build_external_adapter_projection(
+            &capture,
+            &ProjectionContext {
+                actor_did: None,
+                redaction_mode: ProjectionRedactionMode::Public,
+            },
+        )?;
+        validate_adapter_projection_contract(&public)?;
+        assert!(!serde_json::to_string(&public)?.contains("private-topic"));
+        Ok(())
+    }
+
+    #[test]
+    fn external_capture_rejects_malformed_json_and_bad_mappings() {
+        let parse_err = serde_json::from_str::<ExternalAdapterCapture>(
+            r#"{"source":{"system":"autogen-agentchat"},"mapping":"#,
+        )
+        .unwrap_err();
+        assert!(parse_err.is_eof(), "{parse_err}");
+        let wrong_envelope = json!({
+            "projection_id":"langgraph_state_history","projection_version":"v1","source_request_id":"req-root","redaction_mode":"full",
+            "provenance":{"runtime":"gents","source_projection_id":"run_timeline","source_projection_version":"v1","source_version_status":"current_state_captured_only"},
+            "output":{"adapter":"langgraph_state_history","projection":{"checkpoint_id":"checkpoint-negative","root_request_id":"req-root","values":{"request_id":"req-root"},"nodes":[{"id":"langgraph:start","kind":"start"}],"edges":[],"tasks":[]}}
+        });
+        for (name, value, expected) in [
+            ("missing participants", mutated_capture(|c| c["mapping"]["participants"] = json!([])), "must include at least one participant"),
+            ("delegation absent child", mutated_capture(|c| c["mapping"]["delegations"][0]["child_request_id"] = json!("req-missing")), "child_request_id \"req-missing\" does not reference a declared child participant"),
+            ("tool absent child", mutated_capture(|c| c["mapping"]["tool_events"][0]["child_request_id"] = json!("req-missing")), "child_request_id \"req-missing\" does not reference a declared child participant"),
+            ("unknown framework", mutated_capture(|c| c["source"]["system"] = json!("unknown-agent-framework")), "is not supported for mapped import"),
+            ("wrong envelope", mutated_capture(|c| c["envelope"] = wrong_envelope.clone()), "envelope projection langgraph_state_history does not match mapping projection multi_agent_task"),
+            ("langgraph no history", langgraph_capture(), "requires non-empty native.history"),
+        ] {
+            let capture: ExternalAdapterCapture = serde_json::from_value(value).unwrap();
+            let err = format!("{:#}", import_external_adapter_capture_to_derived_view(&capture).unwrap_err());
+            assert!(err.contains(expected), "{name}: expected {expected:?}, got {err}");
+        }
+    }
+}

@@ -557,6 +557,95 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
     }
 }
 
+pub fn fixture_job_progress(
+    title: &str,
+    state: gents_protocol::job::JobState,
+    pause_reason: Option<gents_protocol::job::JobPauseReason>,
+) -> JobProgress {
+    JobProgress {
+        title: title.into(),
+        state,
+        pause_reason,
+        phases: Vec::new(),
+        active: Vec::new(),
+        spawned: 2,
+        budget: gents_protocol::job::JobBudget {
+            total: 4,
+            spent: 2,
+            remaining: 2,
+        },
+        last_event: "seeded".into(),
+        last_event_at: None,
+        question: None,
+        observed_terminal_children: 0,
+        revision: 1,
+    }
+}
+
+pub type HostConnection =
+    tokio_util::codec::Framed<tokio::io::DuplexStream, tokio_util::codec::LengthDelimitedCodec>;
+
+pub async fn attach_host(
+    host: Arc<crate::host::ClientHost>,
+    stop: tokio_util::sync::CancellationToken,
+) -> (
+    HostConnection,
+    serde_json::Value,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(host.serve(server, stop));
+    let mut client = tokio_util::codec::LengthDelimitedCodec::builder()
+        .max_frame_length(crate::host::protocol::MAX_FRAME_BYTES)
+        .new_framed(client);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "hello",
+                "version": crate::host::protocol::PROTOCOL_VERSION,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let hello: serde_json::Value =
+        serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+    (client, hello, task)
+}
+
+pub async fn call_host(
+    client: &mut HostConnection,
+    id: u64,
+    command: serde_json::Value,
+) -> serde_json::Value {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "call",
+                "id": id,
+                "command": command,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let frame = client.next().await.unwrap().unwrap();
+            let response: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+            if response["kind"] == "response" && response["id"] == id {
+                return response;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
 pub async fn refresh_request_and_assert_fresh_projection(
     core: &ClientRuntime,
     node_did: &str,

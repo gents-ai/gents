@@ -3,18 +3,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn stale_session(state: RequestLifecycleState) -> AgentSession {
     AgentSession {
-        session_id: "session-1".into(),
-        node_did: "did:test:amy".into(),
-        requester_did: None,
         agent_did: "amy-default".into(),
-        created_at: "2026-04-21T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
         observation: Some(SessionObservation {
             reply_preview: None,
             last_activity_at: "2026-04-21T12:02:00Z".into(),
@@ -25,22 +14,16 @@ fn stale_session(state: RequestLifecycleState) -> AgentSession {
                 lifecycle_state: state,
             }),
         }),
+        ..fixture_session("session-1", "did:test:amy")
     }
 }
 
 fn stale_request(state: RequestLifecycleState) -> AgentRequestRow {
     AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
-        request_id: "req-1".into(),
-        node_did: Some("did:test:amy".into()),
         agent_did: Some("amy-default".into()),
-        session_id: Some("session-1".into()),
         content: Some("do the work".into()),
-        lifecycle_state: Some(state),
-        execution_origin: Some("interactive".into()),
-        created_at: Some("2026-04-21T12:00:00Z".into()),
-        ..Default::default()
+        ..fixture_request("req-1", "session-1", state)
     }
 }
 

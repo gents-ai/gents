@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AccessReview
+import Proofs.Conformance.ApplyReconcile.ContractCases
+import Proofs.Conformance.BackendHealthAdmission
+import Proofs.Conformance.ClientLiveDelta
+import Proofs.Conformance.Contracts.Json.WorkerCapacity
+import Proofs.Conformance.DecisionRead
+import Proofs.Conformance.GoalToolContext
+import Proofs.Conformance.Identity.HouseholdStore
+import Proofs.Conformance.Identity.MailboxAccess
+import Proofs.Conformance.Identity.ProviderUsageEvidence
+import Proofs.Conformance.Identity.ReceiverGrant
+import Proofs.Conformance.LogicalOutputObligation
+import Proofs.Conformance.PluginJobCallerInterrupt
+import Proofs.Conformance.ProcessControlTerminal
+import Proofs.Conformance.RootCandidates.EvalUsage
+import Proofs.Conformance.SessionViews
+import Proofs.Conformance.StorageWriteGateAdmission
+import Proofs.Conformance.WatcherScopedScan
+import Proofs.Store.Identity.NodeProvisioningConformance
+
+namespace Conformance.Contracts.Shards.S10
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S10

@@ -9,7 +9,7 @@ use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::test_support::doubles::{
     AdmissionGate, EchoTool, GatedModel, PendingTool, ReadEchoTool, RecordedCall, RecordingHook,
-    ResponsesTool, SettlementGate,
+    SettlementGate,
 };
 use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use crate::tool::ToolDyn;
@@ -222,63 +222,34 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
             ..Default::default()
         };
         let observed_hook = hook.clone();
-        use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
-        let scope = test_scope(
-            crate::rendered_request::RenderedRequestContext {
-                request_doc_id: "dispatch-doc".into(),
-                request_commit_cid: "dispatch-cid".into(),
-                request_id: "dispatch-request".into(),
-                node_did: "did:test:agent".into(),
-                requester_did: "did:test:requester".into(),
-                agent_did: "general".into(),
-                session_id: "dispatch-session".into(),
-                model_name: "scripted".into(),
-                provider_family: None,
-            },
-            Arc::new(|_| Box::pin(async { Ok(()) })),
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("echo hi")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
         );
-        let mut config = test_loop_config();
-        config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
-        let failure = {
-            config.provider_call.capture = Some(scope);
-            async {
-                let stream = crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("echo hi")),
-                    Vec::new(),
-                    tools,
-                    config,
-                );
-                futures::pin_mut!(stream);
-                let mut failure = None;
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply,
-                            ..
-                        })
-                        | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake {
-                            reply, ..
-                        }) => {
-                            reply
-                                .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
-                                .ok();
-                        }
-                        Err(error) => {
-                            failure = Some(error);
-                            break;
-                        }
-                        _ => {}
-                    }
+        futures::pin_mut!(stream);
+        let mut failure = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. })
+                | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
+                    reply.send(Ok(Vec::new())).unwrap();
                 }
-                failure
+                Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake { reply, .. }) => {
+                    reply
+                        .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                        .ok();
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+                _ => {}
             }
         }
-        .await;
         let recorded = observed_hook.calls();
         let elections = recorded
             .iter()
@@ -298,28 +269,11 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     }
 }
 
-fn steering_capture_scope() -> Arc<crate::rendered_request::scope::RequestCaptureScope> {
-    crate::rendered_request::scope::test_scope(
-        crate::rendered_request::RenderedRequestContext {
-            request_doc_id: "steering-doc".into(),
-            request_commit_cid: "steering-cid".into(),
-            request_id: "steering-request".into(),
-            node_did: "did:test:node".into(),
-            requester_did: "did:test:requester".into(),
-            agent_did: "general".into(),
-            session_id: "steering-session".into(),
-            model_name: "scripted".into(),
-            provider_family: None,
-        },
-        Arc::new(|_| Box::pin(async { Ok(()) })),
-    )
-}
-
 fn steering_loop_config() -> LoopConfig {
     use crate::rendered_request::scope::{arming_sink, CaptureScopeKind};
     let mut config = test_loop_config();
     config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
-    config.provider_call.capture = Some(steering_capture_scope());
+    config.provider_call.capture = Some(crate::test_support::doubles::test_capture_scope());
     config
 }
 
@@ -565,7 +519,6 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
 
 #[tokio::test]
 async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without_invoking() {
-    use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
     use futures::StreamExt;
 
     for case in gents_lean_vocab::families::admission_handoff_owned_loop::cases() {
@@ -593,69 +546,44 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 ..Default::default()
             };
             let observed = hook.clone();
-            let scope = test_scope(
-                crate::rendered_request::RenderedRequestContext {
-                    request_doc_id: "handoff-doc".into(),
-                    request_commit_cid: "handoff-cid".into(),
-                    request_id: "handoff-request".into(),
-                    node_did: "did:test:node".into(),
-                    requester_did: "did:test:user".into(),
-                    agent_did: "did:test:agent".into(),
-                    session_id: "handoff-session".into(),
-                    model_name: "scripted".into(),
-                    provider_family: None,
-                },
-                Arc::new(|_| Box::pin(async { Ok(()) })),
-            );
-            let mut config = test_loop_config();
-            config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
-            {
-                config.provider_call.capture = Some(scope);
-                async {
-                    let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                        model,
-                        Some(hook),
-                        TaggedMessage::unassociated(Message::user("work")),
-                        Vec::new(),
-                        tools,
-                        config,
-                    ));
-                    loop {
-                        match stream
-                            .next()
-                            .await
-                            .expect("stream item")
-                            .expect("stream succeeds")
-                        {
-                            crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                                reply,
-                                ..
-                            }
-                            | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                                reply.send(Ok(Vec::new())).unwrap();
-                            }
-                            crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                            _ => {}
-                        }
+            let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                model,
+                Some(hook),
+                TaggedMessage::unassociated(Message::user("work")),
+                Vec::new(),
+                tools,
+                steering_loop_config(),
+            ));
+            loop {
+                match stream
+                    .next()
+                    .await
+                    .expect("stream item")
+                    .expect("stream succeeds")
+                {
+                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
+                    | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap();
                     }
-                    assert!(
-                        !observed
-                            .calls()
-                            .iter()
-                            .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
-                        "turn publication precedes admission"
-                    );
-                    let mut next = Box::pin(stream.next());
-                    tokio::select! {
-                        () = gate.entered.notified() => {},
-                        result = &mut next => panic!("hook did not hold admission: {result:?}"),
-                    }
-                    drop(next);
-                    drop(stream);
-                    gate.release.notify_one();
+                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                    _ => {}
                 }
             }
-            .await;
+            assert!(
+                !observed
+                    .calls()
+                    .iter()
+                    .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
+                "turn publication precedes admission"
+            );
+            let mut next = Box::pin(stream.next());
+            tokio::select! {
+                () = gate.entered.notified() => {},
+                result = &mut next => panic!("hook did not hold admission: {result:?}"),
+            }
+            drop(next);
+            drop(stream);
+            gate.release.notify_one();
             invocations.push(invoked.load(std::sync::atomic::Ordering::SeqCst) != 0);
         }
         assert!(

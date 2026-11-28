@@ -540,6 +540,14 @@ async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
     )
     .await
     .unwrap_err();
+    if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        assert!(
+            error.to_string().contains("is listening to answer"),
+            "{error:#}"
+        );
+        assert!(!marker.exists());
+        return;
+    }
     assert!(
         error
             .to_string()

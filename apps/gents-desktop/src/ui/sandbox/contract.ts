@@ -59,9 +59,9 @@ export interface UxShell {
   send: (content: string) => Promise<void>;
 }
 
-/** one call's answer from a data surface: a query's rows or a create's receipt */
+/** one call's answer from a data surface: a query's rows, or a create's or an upsert's receipt */
 export interface UxDataCallResult {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   output: unknown;
 }
 
@@ -72,7 +72,7 @@ export type UxDataWatchEvent =
 
 /** one tool of a surface, as the node declares it */
 export interface UxDataToolDecl {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   tool_name: string;
   collection: string;
   description?: string;
@@ -95,7 +95,8 @@ export interface UxData {
   /** The host can reject calls when the selected runtime has changed. */
   readonly supportsExpectedNode?: boolean;
   /** run one declared tool: `args` are the tool's own (`fields`, `limit`,
-      filter values, `field_page` for a long string; a create's field values) */
+      filter values, `field_page` for a long string; a create's or an upsert's
+      field values) */
   call: (
     surface: string,
     tool: string,

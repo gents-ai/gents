@@ -443,297 +443,320 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
     lifecycle
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
-    let mut conflicting_history_cases = 0;
-    for case in
-        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>()
-    {
-        let name = case.input.name.as_str();
-        let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
-        let node = fixture.db.node.clone();
-        let access = &fixture.access;
-        let session = format!("wake-scope-{name}");
-        let make = |id: String| {
-            AgentRequestCreate::base(
-                RequestPurpose::Normal,
-                id,
-                RequestScope::new(
-                    fixture.db.node_identity.did(),
-                    fixture.user.did(),
-                    fixture.agent.did(),
-                    &session,
-                ),
-                "Source work",
-                "interactive",
-                "2026-10-21T00:00:00Z",
-                AgentRequestAdmissionRecord::client(fixture.user.did()),
-            )
-        };
-        let parent = write_request(&fixture, make("unassigned-parent".into())).await;
-        terminal_source(&fixture, &parent).await;
-        let notifications = &case.input.notifications;
-        let mut roots = BTreeMap::new();
-        let claim_scope = case
-            .input
-            .retry_parent
-            .is_none()
-            .then(|| ClaimScope::from(&case.input.claim.scope));
-        for scope in notifications
-            .iter()
-            .map(|row| ClaimScope::from(&row.scope))
-            .chain(claim_scope)
-        {
-            if scope.kind != "referenced" {
-                continue;
-            }
-            let pair = (scope.goal.unwrap(), scope.root.unwrap());
-            if roots.contains_key(&pair) {
-                continue;
-            }
-            let mut create = make(format!("opening-{}-{}", pair.0, pair.1));
-            create.input.goal_assignment = Some(GoalAssignmentInput {
-                goal_id: goal(pair.0),
-                root_request_doc_id: None,
-            });
-            let row = write_request(&fixture, create).await;
-            terminal_source(&fixture, &row).await;
-            roots.insert(pair, row);
-        }
-        let mut sources = BTreeMap::new();
-        for notification in notifications {
-            let id = notification.message;
-            let mut create = make(format!("source-{id}"));
-            create.input.goal_assignment =
-                reference(&ClaimScope::from(&notification.scope), &roots);
-            let row = write_request(&fixture, create.clone()).await;
-            if case.input.superseded_origins {
-                create.request_id = format!("source-{id}-replacement");
-                let replacement = write_request(&fixture, create).await;
-                let mutation =
-                    gents_session::request::lifecycle::queue::supersede_pending_mutation(
-                        row.doc_id.as_deref().unwrap(),
+    use futures::stream::{self, StreamExt};
+
+    let cases =
+        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>();
+    let conflicting_history_cases: usize = stream::iter(cases)
+        .map(|case| {
+            tokio::spawn(async move {
+                let name = case.input.name.as_str();
+                let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
+                let node = fixture.db.node.clone();
+                let access = &fixture.access;
+                let session = format!("wake-scope-{name}");
+                let make = |id: String| {
+                    AgentRequestCreate::base(
+                        RequestPurpose::Normal,
+                        id,
+                        RequestScope::new(
+                            fixture.db.node_identity.did(),
+                            fixture.user.did(),
+                            fixture.agent.did(),
+                            &session,
+                        ),
+                        "Source work",
+                        "interactive",
+                        "2026-10-21T00:00:00Z",
+                        AgentRequestAdmissionRecord::client(fixture.user.did()),
+                    )
+                };
+                let parent = write_request(&fixture, make("unassigned-parent".into())).await;
+                terminal_source(&fixture, &parent).await;
+                let notifications = &case.input.notifications;
+                let mut roots = BTreeMap::new();
+                let claim_scope = case
+                    .input
+                    .retry_parent
+                    .is_none()
+                    .then(|| ClaimScope::from(&case.input.claim.scope));
+                for scope in notifications
+                    .iter()
+                    .map(|row| ClaimScope::from(&row.scope))
+                    .chain(claim_scope)
+                {
+                    if scope.kind != "referenced" {
+                        continue;
+                    }
+                    let pair = (scope.goal.unwrap(), scope.root.unwrap());
+                    if roots.contains_key(&pair) {
+                        continue;
+                    }
+                    let mut create = make(format!("opening-{}-{}", pair.0, pair.1));
+                    create.input.goal_assignment = Some(GoalAssignmentInput {
+                        goal_id: goal(pair.0),
+                        root_request_doc_id: None,
+                    });
+                    let row = write_request(&fixture, create).await;
+                    terminal_source(&fixture, &row).await;
+                    roots.insert(pair, row);
+                }
+                let mut sources = BTreeMap::new();
+                for notification in notifications {
+                    let id = notification.message;
+                    let mut create = make(format!("source-{id}"));
+                    create.input.goal_assignment =
+                        reference(&ClaimScope::from(&notification.scope), &roots);
+                    let row = write_request(&fixture, create.clone()).await;
+                    if case.input.superseded_origins {
+                        create.request_id = format!("source-{id}-replacement");
+                        let replacement = write_request(&fixture, create).await;
+                        let mutation =
+                            gents_session::request::lifecycle::queue::supersede_pending_mutation(
+                                row.doc_id.as_deref().unwrap(),
+                                fixture.db.node_identity.did(),
+                                &replacement.request_id,
+                                replacement.doc_id.as_deref().unwrap(),
+                                "modeled superseded origin",
+                            )
+                            .unwrap();
+                        let result = access
+                            .write("test.wake_scope_superseded_origin", &mutation)
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            gents_store::graphql::mutation_documents(&result, "update_AgentRequest")
+                                .unwrap()
+                                .unwrap()
+                                .len(),
+                            1
+                        );
+                        terminal_source(&fixture, &replacement).await;
+                    } else {
+                        terminal_source(&fixture, &row).await;
+                    }
+                    sources.insert(id, row);
+                }
+                let mut conflicting_history = 0usize;
+                if case.input.prior.is_empty()
+                    && case.input.retry_parent.is_none()
+                    && case.input.claim.scope.kind == "referenced"
+                    && notifications
+                        .iter()
+                        .all(|notice| notice.scope.kind == "referenced")
+                {
+                    let opening = roots.values().next().unwrap().doc_id.as_deref().unwrap();
+                    access.transact_write("test.unrelated_goal_opening", |txn| {
+                        let input = serde_json::json!({
+                            "goal_id": "unrelated-goal", "node_did": fixture.db.node_identity.did(), "session_id": session,
+                            "session_doc_id": parent.session_doc_id.as_deref(), "requester_did": fixture.user.did(),
+                            "agent_did": fixture.agent.did(), "creator_did": fixture.agent.did(), "parent_linked": false,
+                            "objective": "Unreadable retained history", "status": "invalid-retained-status",
+                            "assignment_root_request_doc_id": opening,
+                            "created_at": "2026-10-21T00:00:00Z", "updated_at": "2026-10-21T00:00:00Z"
+                        });
+                        Box::pin(async move {
+                            txn.execute_with_variables(
+                                "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                                &serde_json::json!({"input": input}),
+                            ).await
+                        })
+                    }).await.unwrap();
+                    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+                        access,
                         fixture.db.node_identity.did(),
-                        &replacement.request_id,
-                        replacement.doc_id.as_deref().unwrap(),
-                        "modeled superseded origin",
+                        &identity::Did::new(fixture.agent.did()).unwrap(),
+                        &session,
                     )
-                    .unwrap();
-                let result = access
-                    .write("test.wake_scope_superseded_origin", &mutation)
                     .await
                     .unwrap();
-                assert_eq!(
-                    gents_store::graphql::mutation_documents(&result, "update_AgentRequest")
-                        .unwrap()
-                        .unwrap()
-                        .len(),
-                    1
-                );
-                terminal_source(&fixture, &replacement).await;
-            } else {
-                terminal_source(&fixture, &row).await;
-            }
-            sources.insert(id, row);
-        }
-        if case.input.prior.is_empty()
-            && case.input.retry_parent.is_none()
-            && case.input.claim.scope.kind == "referenced"
-            && notifications
-                .iter()
-                .all(|notice| notice.scope.kind == "referenced")
-        {
-            let opening = roots.values().next().unwrap().doc_id.as_deref().unwrap();
-            access.transact_write("test.unrelated_goal_opening", |txn| {
-                let input = serde_json::json!({
-                    "goal_id": "unrelated-goal", "node_did": fixture.db.node_identity.did(), "session_id": session,
-                    "session_doc_id": parent.session_doc_id.as_deref(), "requester_did": fixture.user.did(),
-                    "agent_did": fixture.agent.did(), "creator_did": fixture.agent.did(), "parent_linked": false,
-                    "objective": "Unreadable retained history", "status": "invalid-retained-status",
-                    "assignment_root_request_doc_id": opening,
-                    "created_at": "2026-10-21T00:00:00Z", "updated_at": "2026-10-21T00:00:00Z"
-                });
-                Box::pin(async move {
-                    txn.execute_with_variables(
-                        "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
-                        &serde_json::json!({"input": input}),
-                    ).await
-                })
-            }).await.unwrap();
-            gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
-                access,
-                fixture.db.node_identity.did(),
-                &identity::Did::new(fixture.agent.did()).unwrap(),
-                &session,
-            )
-            .await
-            .unwrap();
-            conflicting_history_cases += 1;
-        }
-        if case.input.prior.is_empty()
-            && case.input.retry_parent.is_none()
-            && case.input.claim.scope.kind == "referenced"
-            && notifications
-                .iter()
-                .all(|notice| notice.scope.kind == "referenced")
-        {
-            assert!(gents_automation::goal::load_request_assignment(
-                access,
-                sources.values().next().unwrap()
-            )
-            .await
-            .is_err());
-        }
-        let mut appended = 0;
-        let mut retry_parent = None;
-        for prior in &case.input.prior {
-            let prior_claim = &prior.claim;
-            append_through(
-                &fixture,
-                &session,
-                notifications,
-                &sources,
-                &mut appended,
-                prior_claim.cutoff,
-            )
-            .await;
-            let request = wake(
-                &fixture,
-                &session,
-                prior_claim.wake,
-                &ClaimScope::from(&prior_claim.scope),
-                &roots,
-                &parent,
-                None,
-            )
-            .await;
-            let doc = request.doc_id.clone();
-            let mut lifecycle = claim(&fixture, request).await;
-            if prior.create_goal {
+                    conflicting_history += 1;
+                }
+                if case.input.prior.is_empty()
+                    && case.input.retry_parent.is_none()
+                    && case.input.claim.scope.kind == "referenced"
+                    && notifications
+                        .iter()
+                        .all(|notice| notice.scope.kind == "referenced")
+                {
+                    assert!(gents_automation::goal::load_request_assignment(
+                        access,
+                        sources.values().next().unwrap()
+                    )
+                    .await
+                    .is_err());
+                }
+                let mut appended = 0;
+                let mut retry_parent = None;
+                for prior in &case.input.prior {
+                    let prior_claim = &prior.claim;
+                    append_through(
+                        &fixture,
+                        &session,
+                        notifications,
+                        &sources,
+                        &mut appended,
+                        prior_claim.cutoff,
+                    )
+                    .await;
+                    let request = wake(
+                        &fixture,
+                        &session,
+                        prior_claim.wake,
+                        &ClaimScope::from(&prior_claim.scope),
+                        &roots,
+                        &parent,
+                        None,
+                    )
+                    .await;
+                    let doc = request.doc_id.clone();
+                    let mut lifecycle = claim(&fixture, request).await;
+                    if prior.create_goal {
+                        let response = access
+                            .execute(&format!(
+                                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                                escape_graphql_string(&doc),
+                                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+                            ))
+                            .await
+                            .unwrap();
+                        let caller: AgentRequestRow = serde_json::from_value(
+                            response["data"]["AgentRequest"][0].clone(),
+                        )
+                        .unwrap();
+                        let created = gents_automation::goal::create_goal_for_request_from_access(
+                            &node,
+                            Some(access),
+                            &caller,
+                            "Goal opened during this wake",
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(
+                            created.goal().assignment_root_request_doc_id.as_deref(),
+                            Some(doc.as_str())
+                        );
+                    }
+                    let outcome = match prior.state.as_str() {
+                        "completed" => RequestTerminalOutcome::Completed,
+                        "failed" => RequestTerminalOutcome::Failed,
+                        "interrupted" => RequestTerminalOutcome::Interrupted,
+                        state => panic!("{state}"),
+                    };
+                    lifecycle
+                        .terminalize_owned(
+                            outcome,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            Some("Fixture attempt outcome"),
+                        )
+                        .await
+                        .unwrap();
+                    drop(lifecycle);
+                    if case.input.retry_parent == Some(prior_claim.wake) {
+                        let response = access
+                            .execute(&format!(
+                                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                                escape_graphql_string(&doc),
+                                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+                            ))
+                            .await
+                            .unwrap();
+                        retry_parent = Some(
+                            serde_json::from_value::<AgentRequestRow>(
+                                response["data"]["AgentRequest"][0].clone(),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
+                let current_claim = &case.input.claim;
+                append_through(
+                    &fixture,
+                    &session,
+                    notifications,
+                    &sources,
+                    &mut appended,
+                    current_claim.cutoff,
+                )
+                .await;
+                let request = wake(
+                    &fixture,
+                    &session,
+                    current_claim.wake,
+                    &ClaimScope::from(&current_claim.scope),
+                    &roots,
+                    &parent,
+                    retry_parent.as_ref(),
+                )
+                .await;
+                let lifecycle = claim(&fixture, request.clone()).await;
                 let response = access
                     .execute(&format!(
-                        "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
-                        escape_graphql_string(&doc),
-                        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+                        "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{background_completion_notification_keys_json}}}}",
+                        escape_graphql_string(&request.doc_id)
                     ))
                     .await
                     .unwrap();
-                let caller: AgentRequestRow =
-                    serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-                let created = gents_automation::goal::create_goal_for_request_from_access(
-                    &node,
-                    Some(access),
-                    &caller,
-                    "Goal opened during this wake",
-                    None,
+                let captured: Vec<String> = serde_json::from_str(
+                    response["data"]["AgentRequest"][0]
+                        ["background_completion_notification_keys_json"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                let captured = captured
+                    .iter()
+                    .map(|captured| {
+                        captured
+                            .strip_prefix("background-completion-notification:scope-")
+                            .and_then(|rest| rest.strip_suffix(":tool"))
+                            .and_then(|id| id.parse::<u64>().ok())
+                            .filter(|id| key(*id) == *captured)
+                            .unwrap_or_else(|| {
+                                panic!("{name}: captured key {captured} names no source")
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                append_through(
+                    &fixture,
+                    &session,
+                    notifications,
+                    &sources,
+                    &mut appended,
+                    u64::MAX,
+                )
+                .await;
+                let rows = load(
+                    access,
+                    &request,
+                    lifecycle.background_completion_input_through_sequence(),
                 )
                 .await
                 .unwrap();
-                assert_eq!(
-                    created.goal().assignment_root_request_doc_id.as_deref(),
-                    Some(doc.as_str())
-                );
-            }
-            let outcome = match prior.state.as_str() {
-                "completed" => RequestTerminalOutcome::Completed,
-                "failed" => RequestTerminalOutcome::Failed,
-                "interrupted" => RequestTerminalOutcome::Interrupted,
-                state => panic!("{state}"),
-            };
-            lifecycle
-                .terminalize_owned(
-                    outcome,
-                    gents_protocol::output::TerminalOutput::NoMessage,
-                    Some("Fixture attempt outcome"),
-                )
-                .await
-                .unwrap();
-            drop(lifecycle);
-            if case.input.retry_parent == Some(prior_claim.wake) {
-                let response = access
-                    .execute(&format!(
-                        "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
-                        escape_graphql_string(&doc),
-                        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-                    ))
-                    .await
-                    .unwrap();
-                retry_parent = Some(
-                    serde_json::from_value::<AgentRequestRow>(
-                        response["data"]["AgentRequest"][0].clone(),
-                    )
-                    .unwrap(),
-                );
-            }
-        }
-        let current_claim = &case.input.claim;
-        append_through(
-            &fixture,
-            &session,
-            notifications,
-            &sources,
-            &mut appended,
-            current_claim.cutoff,
-        )
-        .await;
-        let request = wake(
-            &fixture,
-            &session,
-            current_claim.wake,
-            &ClaimScope::from(&current_claim.scope),
-            &roots,
-            &parent,
-            retry_parent.as_ref(),
-        )
-        .await;
-        let lifecycle = claim(&fixture, request.clone()).await;
-        let response=access.execute(&format!("{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{background_completion_notification_keys_json}}}}",escape_graphql_string(&request.doc_id))).await.unwrap();
-        let captured: Vec<String> = serde_json::from_str(
-            response["data"]["AgentRequest"][0]["background_completion_notification_keys_json"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        let captured = captured
-            .iter()
-            .map(|captured| {
-                captured
-                    .strip_prefix("background-completion-notification:scope-")
-                    .and_then(|rest| rest.strip_suffix(":tool"))
-                    .and_then(|id| id.parse::<u64>().ok())
-                    .filter(|id| key(*id) == *captured)
-                    .unwrap_or_else(|| panic!("{name}: captured key {captured} names no source"))
+                let current = rows
+                    .iter()
+                    .map(|row| {
+                        let text = row.message.rag_text().expect("notification user text");
+                        text.strip_prefix("Notification ")
+                            .and_then(|id| id.parse::<u64>().ok())
+                            .unwrap_or_else(|| {
+                                panic!("{name}: provider input {text} is no notification")
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                drop(lifecycle);
+                node.shutdown().await.expect("node shutdown");
+                case.check(ReceiptOutput { captured, current });
+                conflicting_history
             })
-            .collect::<Vec<_>>();
-        append_through(
-            &fixture,
-            &session,
-            notifications,
-            &sources,
-            &mut appended,
-            u64::MAX,
-        )
+        })
+        .buffer_unordered(6)
+        .map(|result| result.unwrap())
+        .fold(0usize, |acc, count| async move { acc + count })
         .await;
-        let rows = load(
-            access,
-            &request,
-            lifecycle.background_completion_input_through_sequence(),
-        )
-        .await
-        .unwrap();
-        let current = rows
-            .iter()
-            .map(|row| {
-                let text = row.message.rag_text().expect("notification user text");
-                text.strip_prefix("Notification ")
-                    .and_then(|id| id.parse::<u64>().ok())
-                    .unwrap_or_else(|| panic!("{name}: provider input {text} is no notification"))
-            })
-            .collect::<Vec<_>>();
-        drop(lifecycle);
-        node.shutdown().await.expect("node shutdown");
-        case.check(ReceiptOutput { captured, current });
-    }
     assert!(conflicting_history_cases > 0);
 }
 

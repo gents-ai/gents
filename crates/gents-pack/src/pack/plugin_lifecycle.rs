@@ -69,6 +69,12 @@ pub struct PluginSlotBindings<'a> {
     pub bindings: &'a super::PackInferenceBindings,
 }
 
+pub struct PluginInstallOrigin {
+    pub installed_via: InstalledVia,
+    pub source: super::PackSource,
+    pub lease_wait: std::time::Duration,
+}
+
 /// A local publication and its node notification share one owned task.
 pub async fn install<F>(
     home: &Path,
@@ -82,13 +88,39 @@ pub async fn install<F>(
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
-    install_final(
+    install_with_lease_wait(
+        home,
+        archive,
+        consent,
+        slots,
+        PluginInstallOrigin {
+            installed_via,
+            source,
+            lease_wait: store::LEASE_WAIT,
+        },
+        notify,
+    )
+    .await
+}
+
+/// [`install`] with an explicit plugin-store lease wait budget.
+pub async fn install_with_lease_wait<F>(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+    consent: bool,
+    slots: PluginSlotBindings<'_>,
+    origin: PluginInstallOrigin,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
+where
+    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
+{
+    install_final_with_origin(
         &store::StoreWriter::Offline(home.to_owned()),
         archive,
         consent,
         slots,
-        installed_via,
-        source,
+        origin,
         notify,
     )
     .await
@@ -109,22 +141,39 @@ pub async fn install_final<F>(
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
+    install_final_with_origin(
+        writer,
+        archive,
+        consent,
+        slots,
+        PluginInstallOrigin {
+            installed_via,
+            source,
+            lease_wait: store::LEASE_WAIT,
+        },
+        notify,
+    )
+    .await
+}
+
+async fn install_final_with_origin<F>(
+    writer: &store::StoreWriter,
+    archive: &crate::pack::archive::PackArchive,
+    consent: bool,
+    slots: PluginSlotBindings<'_>,
+    origin: PluginInstallOrigin,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
+where
+    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
+{
     if !matches!(
         archive.manifest().metadata.kind,
         PackKind::Plugins | PackKind::Assets
     ) {
         return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
     }
-    install_owned(
-        writer,
-        archive,
-        consent,
-        slots,
-        installed_via,
-        source,
-        notify,
-    )
-    .await
+    install_owned(writer, archive, consent, slots, origin, notify).await
 }
 
 pub async fn install_plugin<F>(
@@ -149,8 +198,11 @@ where
             owner: None,
             bindings: &BTreeMap::new(),
         },
-        InstalledVia::Operator,
-        source,
+        PluginInstallOrigin {
+            installed_via: InstalledVia::Operator,
+            source,
+            lease_wait: store::LEASE_WAIT,
+        },
         notify,
     )
     .await
@@ -162,13 +214,17 @@ async fn install_owned<F>(
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
     slots: PluginSlotBindings<'_>,
-    installed_via: InstalledVia,
-    source: super::PackSource,
+    origin: PluginInstallOrigin,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
+    let PluginInstallOrigin {
+        installed_via,
+        source,
+        lease_wait,
+    } = origin;
     let PluginSlotBindings { owner, bindings } = slots;
     if !bindings.is_empty() && !owner.is_some_and(|owner| !owner.is_empty()) {
         return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
@@ -193,7 +249,7 @@ where
     tokio::spawn(async move {
         let _cache_lease = cache_lease;
         let home = writer.home().to_owned();
-        let stage = install::stage_pack_graph(
+        let stage = install::stage_pack_graph_with_wait(
             &writer,
             vec![install::PluginStageInput {
                 manifest: manifest.clone(),
@@ -203,6 +259,7 @@ where
             }],
             consent,
             &owner,
+            lease_wait,
         )
         .await?;
         let plugins = stage.installed.clone();

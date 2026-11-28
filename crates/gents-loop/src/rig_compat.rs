@@ -706,45 +706,36 @@ mod tests {
     #[cfg(feature = "native")]
     #[test]
     fn typed_responses_usage_preserves_missing_and_optional_details() {
+        use gents_protocol::usage::TokenUsage;
         for (name, wire, expected) in [
             (
                 "wire_chat",
                 serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":64},"output_tokens_details":{"reasoning_tokens":5}}}),
-                gents_protocol::usage::TokenUsage {
+                TokenUsage {
                     input_tokens: Some(100),
                     output_tokens: Some(20),
                     cached_input_tokens: Some(64),
-                    cache_creation_input_tokens: None,
                     reasoning_output_tokens: Some(5),
                     provider_total_tokens: Some(120),
                     final_response: true,
+                    ..Default::default()
                 },
             ),
             (
                 "wire_responses_no_details",
                 serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}),
-                gents_protocol::usage::TokenUsage {
+                TokenUsage {
                     input_tokens: Some(100),
                     output_tokens: Some(20),
-                    cached_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    reasoning_output_tokens: None,
                     provider_total_tokens: Some(120),
                     final_response: true,
+                    ..Default::default()
                 },
             ),
             (
                 "wire_missing_final",
                 serde_json::json!({"usage":null}),
-                gents_protocol::usage::TokenUsage {
-                    input_tokens: None,
-                    output_tokens: None,
-                    cached_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    reasoning_output_tokens: None,
-                    provider_total_tokens: None,
-                    final_response: false,
-                },
+                TokenUsage::default(),
             ),
         ] {
             let raw: rig::providers::openai::responses_api::streaming::StreamingCompletionResponse =
@@ -756,45 +747,35 @@ mod tests {
     #[cfg(feature = "native")]
     #[test]
     fn typed_chat_and_missing_final_usage_follow_the_executable_model() {
+        use gents_protocol::usage::TokenUsage;
         for (name, wire, expected) in [
             (
                 "wire_chat",
                 serde_json::json!({"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":5}}}),
-                gents_protocol::usage::TokenUsage {
+                TokenUsage {
                     input_tokens: Some(100),
                     output_tokens: Some(20),
                     cached_input_tokens: Some(64),
-                    cache_creation_input_tokens: None,
                     reasoning_output_tokens: Some(5),
                     provider_total_tokens: Some(120),
                     final_response: true,
+                    ..Default::default()
                 },
             ),
             (
                 "wire_chat_missing_output",
                 serde_json::json!({"usage":{"prompt_tokens":100,"total_tokens":120}}),
-                gents_protocol::usage::TokenUsage {
+                TokenUsage {
                     input_tokens: Some(100),
-                    output_tokens: None,
-                    cached_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    reasoning_output_tokens: None,
                     provider_total_tokens: Some(120),
                     final_response: true,
+                    ..Default::default()
                 },
             ),
             (
                 "wire_missing_final",
                 serde_json::json!({"usage":null}),
-                gents_protocol::usage::TokenUsage {
-                    input_tokens: None,
-                    output_tokens: None,
-                    cached_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    reasoning_output_tokens: None,
-                    provider_total_tokens: None,
-                    final_response: false,
-                },
+                TokenUsage::default(),
             ),
         ] {
             let chat: rig::providers::openai::completion::streaming::StreamingCompletionResponse =
@@ -912,38 +893,25 @@ mod tests {
         );
     }
 
-    fn max_turns_stream_failure(max_turns: usize) -> rig::agent::StreamingError {
-        rig::agent::StreamingError::Prompt(Box::new(rig::completion::PromptError::MaxTurnsError {
-            max_turns,
-            chat_history: Box::new(Vec::new()),
-            prompt: Box::new(rig::completion::Message::user("classify me")),
-        }))
-    }
-
     #[test]
-    fn turn_exhaustion_classifies_as_max_turns() {
-        assert_eq!(
-            loop_failure_cause(&max_turns_stream_failure(1_000)),
-            LoopFailureCause::MaxTurns
-        );
-    }
-
-    #[test]
-    fn provider_failure_does_not_classify_as_max_turns() {
-        let error = rig::agent::StreamingError::Completion(
-            rig::completion::CompletionError::ProviderError("boom".to_string()),
-        );
-        assert_ne!(loop_failure_cause(&error), LoopFailureCause::MaxTurns);
-    }
-
-    #[test]
-    fn a_provider_failure_echoing_max_turn_wording_still_classifies_as_other() {
-        let error = rig::agent::StreamingError::Completion(
-            rig::completion::CompletionError::ProviderError(
-                "upstream mentioned MaxTurnError: (reached max turn limit: 1000)".to_string(),
-            ),
-        );
-        assert_ne!(loop_failure_cause(&error), LoopFailureCause::MaxTurns);
+    fn max_turns_classification_uses_typed_variant_only() {
+        let max_turns = rig::agent::StreamingError::Prompt(Box::new(
+            rig::completion::PromptError::MaxTurnsError {
+                max_turns: 1_000,
+                chat_history: Box::new(Vec::new()),
+                prompt: Box::new(rig::completion::Message::user("classify me")),
+            },
+        ));
+        assert_eq!(loop_failure_cause(&max_turns), LoopFailureCause::MaxTurns);
+        for text in [
+            "boom",
+            "upstream mentioned MaxTurnError: (reached max turn limit: 1000)",
+        ] {
+            let error = rig::agent::StreamingError::Completion(
+                rig::completion::CompletionError::ProviderError(text.to_string()),
+            );
+            assert_ne!(loop_failure_cause(&error), LoopFailureCause::MaxTurns);
+        }
     }
 
     #[test]
@@ -992,61 +960,38 @@ mod tests {
     }
 
     #[test]
-    fn from_rig_tool_call_normalizes_arguments_to_object_shape() {
+    fn rig_tool_call_conversion_normalizes_arguments_on_ingress_and_egress() {
         let object = json!({"city": "NYC"});
-        assert_eq!(
-            from_rig_tool_call(&rig_tool_call(object.clone()))
+        let corrupt = Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.into());
+        for (input, expected) in [
+            (object.clone(), object.clone()),
+            (json!([]), json!({})),
+            (Value::Null, json!({})),
+        ] {
+            assert_eq!(
+                from_rig_tool_call(&rig_tool_call(input.clone()))
+                    .function
+                    .arguments,
+                expected
+            );
+            assert_eq!(
+                to_rig_tool_call(&native_tool_call(input))
+                    .function
+                    .arguments,
+                expected
+            );
+        }
+        for converted in [
+            from_rig_tool_call(&rig_tool_call(corrupt.clone()))
                 .function
                 .arguments,
-            object,
-        );
-
-        assert_eq!(
-            from_rig_tool_call(&rig_tool_call(json!([])))
+            to_rig_tool_call(&native_tool_call(corrupt))
                 .function
                 .arguments,
-            json!({}),
-        );
-
-        let salvaged = from_rig_tool_call(&rig_tool_call(Value::String(
-            crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
-        )))
-        .function
-        .arguments;
-        assert!(salvaged.is_object());
-        assert_eq!(salvaged["tool_name"], "list_hosts");
-    }
-
-    #[test]
-    fn to_rig_tool_call_normalizes_persisted_poison_on_egress() {
-        let object = json!({"city": "NYC"});
-        assert_eq!(
-            to_rig_tool_call(&native_tool_call(object.clone()))
-                .function
-                .arguments,
-            object,
-        );
-
-        assert_eq!(
-            to_rig_tool_call(&native_tool_call(json!([])))
-                .function
-                .arguments,
-            json!({}),
-        );
-        assert_eq!(
-            to_rig_tool_call(&native_tool_call(Value::Null))
-                .function
-                .arguments,
-            json!({}),
-        );
-
-        let healed = to_rig_tool_call(&native_tool_call(Value::String(
-            crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
-        )))
-        .function
-        .arguments;
-        assert!(healed.is_object());
-        assert_eq!(healed["tool_name"], "list_hosts");
+        ] {
+            assert!(converted.is_object());
+            assert_eq!(converted["tool_name"], "list_hosts");
+        }
     }
 
     #[test]

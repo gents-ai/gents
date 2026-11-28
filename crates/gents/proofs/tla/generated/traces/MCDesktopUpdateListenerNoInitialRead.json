@@ -1,0 +1,260 @@
+{
+  "config": "MCDesktopUpdateListenerNoInitialRead",
+  "constants": {
+    "FullAfterListen": true,
+    "InitialRead": false,
+    "ListenFailures": 1,
+    "MaxVersion": 2,
+    "MismatchExit": true,
+    "Mismatches": 1,
+    "PendingReread": true,
+    "Relisten": true,
+    "RereadBudget": 2,
+    "Selections": 1
+  },
+  "expect": "violates NoStuckPending",
+  "spec": "DesktopUpdateListener",
+  "steps": [
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 1,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 0,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "ArriveWithNotice",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": false,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 1,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "ListenRejects",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 0,
+        "inbox": false,
+        "listener": "failed",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 1,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "Relistens",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 0,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 0,
+        "inbox": false,
+        "listener": "failed",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    },
+    {
+      "action": "Stutter",
+      "actor": null,
+      "after": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 0,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      },
+      "backToState": 5,
+      "before": {
+        "arrived": true,
+        "budget": 2,
+        "failures": 0,
+        "inbox": false,
+        "listener": "listening",
+        "load": 0,
+        "mismatches": 1,
+        "phase": "idle",
+        "queued": false,
+        "reading": {
+          "s": 0,
+          "v": 0
+        },
+        "registered": false,
+        "rust": 2,
+        "selected": 1,
+        "selections": 1,
+        "startup": false,
+        "timer": false,
+        "view": 0
+      }
+    }
+  ]
+}

@@ -27,12 +27,6 @@ fn row(
 
 #[test]
 fn project_filters_to_background_await_mode_only() {
-    // Distinction proven (bridge-corrected.log failure): the filter is
-    // correct; this fixture previously left tc_fg's await_mode as the
-    // default "background" from row(), so two rows legitimately projected
-    // and expected==1 was wrong. tc_fg is now explicitly foreground, and
-    // the malformed-timestamp row (tc_garbage-style rows elsewhere) is
-    // covered by project_preserves_pending_and_unknown_without_relabelling.
     let foreground = ToolCallRow {
         await_mode: Some("foreground".into()),
         ..row("tc_fg", Some("running"), Some("2026-05-20T12:00:00Z"), None)
@@ -280,24 +274,31 @@ fn wait_status_future_started_at_yields_no_age() {
 
 #[test]
 fn backgrounded_tools_flag_session_starting_calls() {
-    let row = |tool_call_id: &str, tool_name: &str| ToolCallRow {
-        tool_call_doc_id: Some(format!("doc-{tool_call_id}")),
-        request_id: "req_a".into(),
-        tool_call_id: tool_call_id.into(),
-        tool_name: tool_name.into(),
-        lifecycle_state: Some("running".into()),
-        status: None,
-        started_at: Some("2026-05-20T12:00:00Z".into()),
-        completed_at: None,
-        deadline_at: None,
-        await_mode: Some("background".into()),
-        stuck_since: None,
-        job: false,
-    };
     let rows = vec![
-        row("tc_new", "agent_new"),
-        row("tc_msg", "agent_message"),
-        row("tc_grep", "grep"),
+        ToolCallRow {
+            tool_name: "agent_new".into(),
+            ..row(
+                "tc_new",
+                Some("running"),
+                Some("2026-05-20T12:00:00Z"),
+                None,
+            )
+        },
+        ToolCallRow {
+            tool_name: "agent_message".into(),
+            ..row(
+                "tc_msg",
+                Some("running"),
+                Some("2026-05-20T12:00:00Z"),
+                None,
+            )
+        },
+        row(
+            "tc_grep",
+            Some("running"),
+            Some("2026-05-20T12:00:00Z"),
+            None,
+        ),
     ];
 
     let projected = project_backgrounded_tools(&rows, &liveness_with(Vec::new(), Vec::new()));
@@ -313,21 +314,27 @@ fn backgrounded_tools_flag_session_starting_calls() {
 
 #[test]
 fn backgrounded_job_rows_are_marked_job() {
-    let row = |tool_call_id: &str, job: bool| ToolCallRow {
-        tool_call_doc_id: Some(format!("doc-{tool_call_id}")),
-        request_id: "req_a".into(),
-        tool_call_id: tool_call_id.into(),
-        tool_name: "workflow".into(),
-        lifecycle_state: Some("running".into()),
-        status: None,
-        started_at: Some("2026-05-20T12:00:00Z".into()),
-        completed_at: None,
-        deadline_at: None,
-        await_mode: Some("background".into()),
-        stuck_since: None,
-        job,
-    };
-    let rows = vec![row("tc_job", true), row("tc_plain", false)];
+    let rows = vec![
+        ToolCallRow {
+            tool_name: "workflow".into(),
+            job: true,
+            ..row(
+                "tc_job",
+                Some("running"),
+                Some("2026-05-20T12:00:00Z"),
+                None,
+            )
+        },
+        ToolCallRow {
+            tool_name: "workflow".into(),
+            ..row(
+                "tc_plain",
+                Some("running"),
+                Some("2026-05-20T12:00:00Z"),
+                None,
+            )
+        },
+    ];
 
     let projected = project_backgrounded_tools(&rows, &liveness_with(Vec::new(), Vec::new()));
     let jobs: Vec<(&str, bool)> = projected

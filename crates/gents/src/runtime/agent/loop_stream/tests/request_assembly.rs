@@ -19,7 +19,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
             TaggedMessage::unassociated(prompt.clone()),
             Vec::new(),
             Arc::new(Vec::new()),
-            owned_config_for(0, &lifecycle),
+            owned_config_for(2, &lifecycle),
         );
         let scoped_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
         let query = format!(

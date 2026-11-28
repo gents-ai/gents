@@ -145,10 +145,14 @@ fn apply_assistant_rows(
     Ok(())
 }
 
-pub(super) fn strip_all_reasoning(rows: &mut [TaggedMessage]) {
-    for row in rows {
+fn is_empty_assistant(row: &TaggedMessage) -> bool {
+    matches!(&row.message, Message::Assistant { content, .. } if content.is_empty())
+}
+
+pub(super) fn strip_all_reasoning(rows: &mut Vec<TaggedMessage>) {
+    rows.retain_mut(|row| {
         let Message::Assistant { content, .. } = &mut row.message else {
-            continue;
+            return true;
         };
         let mut indices = row.block_indices.iter();
         let mut kept_indices = Vec::new();
@@ -163,7 +167,25 @@ pub(super) fn strip_all_reasoning(rows: &mut [TaggedMessage]) {
         if !row.block_indices.is_empty() {
             row.block_indices = kept_indices;
         }
+        !content.is_empty()
+    });
+}
+
+fn drop_empty_assistants_preserving_prompt(
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+) -> Result<(), StreamingError> {
+    history.retain(|row| !is_empty_assistant(row));
+    new_messages.retain(|row| !is_empty_assistant(row));
+    if new_messages.is_empty() {
+        let prompt = history.pop().ok_or_else(|| {
+            replay_input_error(
+                "provider request has no non-empty messages after stripping reasoning",
+            )
+        })?;
+        new_messages.push(prompt);
     }
+    Ok(())
 }
 
 fn split_joined(
@@ -289,15 +311,16 @@ where
             .any(|block| matches!(block, AssistantContent::Reasoning(_)))
     });
     let selection = match (has_reasoning, profile_wire, replay.issuer.as_ref()) {
-        (false, ..) => None,
         (true, Some(wire), Some(issuer)) if replay.wire == Some(wire) => Some((wire, issuer)),
-        (true, ..) => {
-            strip_all_reasoning(&mut joined);
-            None
-        }
+        _ => None,
     };
     let Some((wire, issuer)) = selection else {
         (*history, *new_messages) = split_joined(joined, history_len);
+        if has_reasoning {
+            strip_all_reasoning(history);
+            strip_all_reasoning(new_messages);
+        }
+        drop_empty_assistants_preserving_prompt(history, new_messages)?;
         return build_core(model, history, new_messages, tools, config).await;
     };
     let tags = rows
@@ -338,7 +361,8 @@ where
         &indices,
         replay_stage(&rows, issuer, wire, resolve),
     )?;
-    let (stage_history, stage_new) = split_joined(joined.clone(), history_len);
+    let (mut stage_history, mut stage_new) = split_joined(joined.clone(), history_len);
+    drop_empty_assistants_preserving_prompt(&mut stage_history, &mut stage_new)?;
     let mut core = build_core(model, &stage_history, &stage_new, tools, config).await?;
     let body = config
         .provider_input_counter
@@ -362,6 +386,7 @@ where
         select_replay(&rows, issuer, wire, resolve, &stage_body),
     )?;
     (*history, *new_messages) = split_joined(joined, history_len);
+    drop_empty_assistants_preserving_prompt(history, new_messages)?;
     super::replace_core_chat_history(&mut core, config, history, new_messages)?;
     Ok(core)
 }

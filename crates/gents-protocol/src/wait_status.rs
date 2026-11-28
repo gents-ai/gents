@@ -177,152 +177,99 @@ mod tests {
     }
 
     #[test]
-    fn running_projection_reports_lifecycle_and_age() {
-        let p = WaitStatusProjection::from_parts(
-            Some("running"),
-            Some("2026-05-20T12:00:00Z"),
-            None,
-            ts("2026-05-20T12:00:30Z"),
-        );
-        assert_eq!(p.lifecycle, WaitLifecycle::Running);
-        assert_eq!(p.status_token(), "running");
-        assert_eq!(p.running_elapsed_seconds, Some(30));
-        assert_eq!(p.terminal_elapsed_seconds, None);
-    }
-
-    #[test]
-    fn pending_is_preserved_not_relabeled_running() {
-        let p = WaitStatusProjection::from_parts(
-            Some("pending"),
-            Some("2026-05-20T12:00:00Z"),
-            None,
-            ts("2026-05-20T12:00:05Z"),
-        );
-        assert_eq!(p.lifecycle, WaitLifecycle::Pending);
-        assert_eq!(p.status_token(), "pending");
-        assert_eq!(p.running_elapsed_seconds, Some(5));
-    }
-
-    #[test]
-    fn terminal_elapsed_is_stable_regardless_of_now() {
-        let p1 = WaitStatusProjection::from_parts(
-            Some("completed"),
-            Some("2026-05-20T12:00:00Z"),
-            Some("2026-05-20T12:01:30Z"),
-            ts("2026-05-20T12:02:00Z"),
-        );
-        let p2 = WaitStatusProjection::from_parts(
-            Some("completed"),
-            Some("2026-05-20T12:00:00Z"),
-            Some("2026-05-20T12:01:30Z"),
-            ts("2026-05-20T15:00:00Z"),
-        );
-        assert_eq!(p1.terminal_elapsed_seconds, Some(90));
-        assert_eq!(p2.terminal_elapsed_seconds, Some(90));
-        assert_eq!(p1.running_elapsed_seconds, None);
-        assert!(p1.lifecycle.is_terminal());
-    }
-
-    #[test]
-    fn terminal_states_project_without_running_age() {
-        for state in ["failed", "timedOut", "cancelled", "completed"] {
-            let p = WaitStatusProjection::from_parts(
-                Some(state),
-                Some("2026-05-20T12:00:00Z"),
+    fn lifecycle_and_elapsed_projection_cases() {
+        let start = Some("2026-05-20T12:00:00Z");
+        for (raw, end, now, lifecycle, token, running, terminal) in [
+            (
+                Some("running"),
+                None,
+                "2026-05-20T12:00:30Z",
+                WaitLifecycle::Running,
+                "running",
+                Some(30),
+                None,
+            ),
+            (
+                Some("  running "),
+                None,
+                "2026-05-20T12:00:01Z",
+                WaitLifecycle::Running,
+                "running",
+                Some(1),
+                None,
+            ),
+            (
+                Some("pending"),
+                None,
+                "2026-05-20T12:00:05Z",
+                WaitLifecycle::Pending,
+                "pending",
+                Some(5),
+                None,
+            ),
+            (
+                Some("completed"),
+                Some("2026-05-20T12:01:30Z"),
+                "2026-05-20T12:02:00Z",
+                WaitLifecycle::Completed,
+                "completed",
+                None,
+                Some(90),
+            ),
+            (
+                Some("completed"),
+                Some("2026-05-20T12:01:30Z"),
+                "2026-05-20T15:00:00Z",
+                WaitLifecycle::Completed,
+                "completed",
+                None,
+                Some(90),
+            ),
+            (
+                Some("failed"),
                 Some("2026-05-20T12:00:10Z"),
-                ts("2026-05-20T12:05:00Z"),
-            );
-            assert!(p.lifecycle.is_terminal(), "{state}");
-            assert_eq!(p.running_elapsed_seconds, None);
-            assert_eq!(p.terminal_elapsed_seconds, Some(10));
+                "2026-05-20T12:05:00Z",
+                WaitLifecycle::Failed,
+                "failed",
+                None,
+                Some(10),
+            ),
+            (
+                Some("timedOut"),
+                Some("2026-05-20T12:00:10Z"),
+                "2026-05-20T12:05:00Z",
+                WaitLifecycle::TimedOut,
+                "timedOut",
+                None,
+                Some(10),
+            ),
+            (
+                Some("cancelled"),
+                Some("2026-05-20T12:00:10Z"),
+                "2026-05-20T12:05:00Z",
+                WaitLifecycle::Cancelled,
+                "cancelled",
+                None,
+                Some(10),
+            ),
+        ] {
+            let p = WaitStatusProjection::from_parts(raw, start, end, ts(now));
+            assert_eq!(p.lifecycle, lifecycle, "{raw:?}");
+            assert_eq!(p.status_token(), token, "{raw:?}");
+            assert_eq!(p.running_elapsed_seconds, running, "{raw:?}");
+            assert_eq!(p.terminal_elapsed_seconds, terminal, "{raw:?}");
         }
-    }
-
-    #[test]
-    fn missing_state_is_unknown_not_running() {
-        let now = ts("2026-05-20T12:00:30Z");
-        for state in [None, Some(""), Some("   "), Some("garbage")] {
-            let p =
-                WaitStatusProjection::from_parts(state, Some("2026-05-20T12:00:00Z"), None, now);
-            assert_eq!(p.lifecycle, WaitLifecycle::Unknown, "{state:?}");
-            assert_eq!(p.status_token(), "unknown");
-            assert_eq!(p.running_elapsed_seconds, None);
-            assert_eq!(p.terminal_elapsed_seconds, None);
-        }
-    }
-
-    #[test]
-    fn malformed_started_at_keeps_lifecycle_but_kills_elapsed() {
-        let now = ts("2026-05-20T12:00:30Z");
-        for started in [None, Some(""), Some("   "), Some("not-a-time")] {
-            let p = WaitStatusProjection::from_parts(Some("running"), started, None, now);
-            assert_eq!(p.lifecycle, WaitLifecycle::Running, "{started:?}");
-            assert_eq!(p.status_token(), "running");
-            assert_eq!(p.started_at, None);
-            assert_eq!(p.running_elapsed_seconds, None, "{started:?}");
-        }
-    }
-
-    #[test]
-    fn malformed_terminal_timestamps_keep_terminal_lifecycle() {
-        let p = WaitStatusProjection::from_parts(
-            Some("failed"),
-            Some("not-a-time"),
-            Some("2026-05-20T12:00:10Z"),
-            ts("2026-05-20T12:05:00Z"),
-        );
-        assert!(p.lifecycle.is_terminal());
-        assert_eq!(p.terminal_elapsed_seconds, None);
-    }
-
-    #[test]
-    fn clock_behind_started_at_reports_no_negative_age() {
-        let p = WaitStatusProjection::from_parts(
-            Some("running"),
-            Some("2026-05-20T12:00:00Z"),
-            None,
-            ts("2026-05-20T11:59:00Z"),
-        );
         assert_eq!(
-            p.running_elapsed_seconds, None,
-            "skewed clock claims nothing"
+            WaitStatusProjection::from_parts(
+                Some("  running "),
+                start,
+                None,
+                ts("2026-05-20T12:00:01Z")
+            )
+            .lifecycle_state_raw
+            .as_deref(),
+            Some("running")
         );
-    }
-
-    #[test]
-    fn inverted_terminal_timestamps_report_no_duration() {
-        let p = WaitStatusProjection::from_parts(
-            Some("completed"),
-            Some("2026-05-20T12:01:30Z"),
-            Some("2026-05-20T12:00:00Z"),
-            ts("2026-05-20T12:02:00Z"),
-        );
-        assert_eq!(
-            p.terminal_elapsed_seconds, None,
-            "skewed endpoints claim nothing"
-        );
-    }
-
-    #[test]
-    fn terminal_without_completed_at_has_no_duration() {
-        let p = WaitStatusProjection::from_parts(
-            Some("failed"),
-            Some("2026-05-20T12:00:00Z"),
-            None,
-            ts("2026-05-20T12:05:00Z"),
-        );
-        assert_eq!(p.terminal_elapsed_seconds, None);
-    }
-
-    #[test]
-    fn raw_state_is_preserved_verbatim() {
-        let p = WaitStatusProjection::from_parts(
-            Some("  running "),
-            Some("2026-05-20T12:00:00Z"),
-            None,
-            ts("2026-05-20T12:00:01Z"),
-        );
-        assert_eq!(p.lifecycle_state_raw.as_deref(), Some("running"));
         let unknown = WaitStatusProjection::from_parts(
             Some("weird-state"),
             None,
@@ -331,5 +278,62 @@ mod tests {
         );
         assert_eq!(unknown.lifecycle_state_raw.as_deref(), Some("weird-state"));
         assert_eq!(unknown.lifecycle, WaitLifecycle::Unknown);
+    }
+
+    #[test]
+    fn missing_malformed_and_skewed_inputs_omit_elapsed() {
+        let now = ts("2026-05-20T12:00:30Z");
+        for state in [None, Some(""), Some("   "), Some("garbage")] {
+            let p =
+                WaitStatusProjection::from_parts(state, Some("2026-05-20T12:00:00Z"), None, now);
+            assert_eq!(
+                (p.lifecycle, p.status_token()),
+                (WaitLifecycle::Unknown, "unknown")
+            );
+            assert_eq!(
+                (p.running_elapsed_seconds, p.terminal_elapsed_seconds),
+                (None, None)
+            );
+        }
+        for started in [None, Some(""), Some("   "), Some("not-a-time")] {
+            let p = WaitStatusProjection::from_parts(Some("running"), started, None, now);
+            assert_eq!(
+                (p.lifecycle, p.started_at, p.running_elapsed_seconds),
+                (WaitLifecycle::Running, None, None)
+            );
+        }
+        for (state, started, ended, at) in [
+            (
+                "failed",
+                Some("not-a-time"),
+                Some("2026-05-20T12:00:10Z"),
+                "2026-05-20T12:05:00Z",
+            ),
+            (
+                "running",
+                Some("2026-05-20T12:00:00Z"),
+                None,
+                "2026-05-20T11:59:00Z",
+            ),
+            (
+                "completed",
+                Some("2026-05-20T12:01:30Z"),
+                Some("2026-05-20T12:00:00Z"),
+                "2026-05-20T12:02:00Z",
+            ),
+            (
+                "failed",
+                Some("2026-05-20T12:00:00Z"),
+                None,
+                "2026-05-20T12:05:00Z",
+            ),
+        ] {
+            let p = WaitStatusProjection::from_parts(Some(state), started, ended, ts(at));
+            assert_eq!(
+                (p.running_elapsed_seconds, p.terminal_elapsed_seconds),
+                (None, None),
+                "{state}"
+            );
+        }
     }
 }

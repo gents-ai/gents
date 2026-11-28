@@ -1,0 +1,26 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AssignmentReceiver
+import Proofs.Conformance.ClientSyncHealthCases
+import Proofs.Conformance.Contracts.Json.SelfConfigAgent
+import Proofs.Conformance.DesktopConnect
+import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.FileInventory
+import Proofs.Conformance.HomeRetirement
+import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
+import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.MailboxContent
+import Proofs.Conformance.ProviderInputCalibration
+import Proofs.Conformance.RequestExecutionLease
+import Proofs.Conformance.RootCandidates.SessionCalibration
+import Proofs.Conformance.StartupPublication
+import Proofs.Conformance.ToolResultThreading
+import Proofs.Conformance.Triggers.Materializer
+import Proofs.Conformance.WorkspaceCommandGrants
+import Proofs.Conformance.WorkspaceOverlayCwd
+
+namespace Conformance.Contracts.Shards.S14
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S14

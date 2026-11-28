@@ -33,37 +33,43 @@ struct NodeIdentityMetadata {
 
 impl PrincipalIdentity {
     pub async fn load_or_create(paths: &DesktopPaths) -> Result<Self> {
-        let key_path = paths.identity_key_path().to_path_buf();
+        let paths = paths.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::load_or_create_at(&paths, |step| {
+                tracing::trace!(?step, "client identity metadata")
+            })
+        })
+        .await
+        .context("joining node identity load")?
+    }
+
+    fn load_or_create_at<F>(paths: &DesktopPaths, mut observe: F) -> Result<Self>
+    where
+        F: FnMut(MetadataStep),
+    {
+        let key_path = paths.identity_key_path();
         let metadata_path = paths.principal_metadata_path();
-        let metadata_exists = match tokio::fs::symlink_metadata(metadata_path).await {
+        let identity = match std::fs::symlink_metadata(metadata_path) {
             Ok(metadata) => {
                 anyhow::ensure!(
                     metadata.file_type().is_file(),
                     "node identity metadata {} is not a regular file",
                     metadata_path.display()
                 );
-                true
+                load_file_identity(key_path)?
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                load_or_create_file_identity(key_path)?
+            }
             Err(error) => {
-                return Err(anyhow::Error::from(error)).with_context(|| {
+                return Err(error).with_context(|| {
                     format!(
                         "inspecting node identity metadata {}",
                         metadata_path.display()
                     )
-                });
+                })
             }
         };
-        let identity = tokio::task::spawn_blocking(move || {
-            if metadata_exists {
-                load_file_identity(&key_path)
-            } else {
-                load_or_create_file_identity(&key_path)
-            }
-        })
-        .await
-        .context("joining node identity load")??;
-
         let did = identity.did().map_err(anyhow::Error::from)?.to_string();
         let public_key_bytes = identity.public_key_bytes();
         let private_key_bytes = identity.private_key_bytes().to_vec();
@@ -72,7 +78,7 @@ impl PrincipalIdentity {
             public_key_bytes: public_key_bytes.clone(),
         };
 
-        validate_or_persist_metadata(metadata_path, &metadata).await?;
+        validate_or_persist_metadata(metadata_path, &metadata, &mut observe)?;
 
         Ok(Self {
             did,
@@ -232,28 +238,49 @@ fn decide_metadata(
     }
 }
 
-async fn read_and_decide(
+fn read_and_decide(
     path: &Path,
     read: MetadataRead,
     expected: &NodeIdentityMetadata,
 ) -> Result<MetadataDecision> {
     Ok(decide_metadata(
         read,
-        read_metadata(path).await?.as_ref(),
+        read_metadata(path)?.as_ref(),
         expected,
     ))
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum MetadataStep {
+    Read,
+    Create,
+    Fill,
+    Rename,
+    Decide,
 }
 
 /// Requires the stored metadata to match `expected`, installing it when
 /// absent. The second read never installs again (Lean
 /// `the_second_read_never_installs`), so this installs at most once.
-async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetadata) -> Result<()> {
+fn validate_or_persist_metadata<F>(
+    path: &Path,
+    expected: &NodeIdentityMetadata,
+    observe: &mut F,
+) -> Result<()>
+where
+    F: FnMut(MetadataStep),
+{
     let mut read = MetadataRead::First;
     loop {
-        match read_and_decide(path, read, expected).await? {
+        let decision = read_and_decide(path, read, expected)?;
+        observe(match read {
+            MetadataRead::First => MetadataStep::Read,
+            MetadataRead::AfterInstall => MetadataStep::Decide,
+        });
+        match decision {
             MetadataDecision::Accept => return Ok(()),
             MetadataDecision::Install => {
-                write_json_atomically(path, expected).await?;
+                write_json_atomically(path, expected, observe)?;
                 read = MetadataRead::AfterInstall;
             }
             MetadataDecision::Mismatch => {
@@ -267,8 +294,8 @@ async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetada
     }
 }
 
-async fn read_metadata(path: &Path) -> Result<Option<NodeIdentityMetadata>> {
-    match tokio::fs::read(path).await {
+fn read_metadata(path: &Path) -> Result<Option<NodeIdentityMetadata>> {
+    match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .with_context(|| format!("parsing node identity metadata {}", path.display())),
@@ -282,28 +309,27 @@ async fn read_metadata(path: &Path) -> Result<Option<NodeIdentityMetadata>> {
 /// Replaces `path` in one `rename`, staged under a name no other writer can
 /// pick, so concurrent writers cannot consume each other's staging file and no
 /// reader ever observes the destination missing.
-async fn write_json_atomically<T>(path: &Path, value: &T) -> Result<()>
+fn write_json_atomically<T, F>(path: &Path, value: &T, observe: &mut F) -> Result<()>
 where
     T: Serialize,
+    F: FnMut(MetadataStep),
 {
     use std::io::Write as _;
 
     let bytes = serde_json::to_vec_pretty(value)?;
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        let mut staged = tempfile::NamedTempFile::new_in(parent)
-            .with_context(|| format!("staging {}", path.display()))?;
-        staged
-            .write_all(&bytes)
-            .with_context(|| format!("writing staged {}", path.display()))?;
-        staged
-            .persist(&path)
-            .with_context(|| format!("persisting {}", path.display()))?;
-        Ok(())
-    })
-    .await
-    .context("joining node identity metadata write")?
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("staging {}", path.display()))?;
+    observe(MetadataStep::Create);
+    staged
+        .write_all(&bytes)
+        .with_context(|| format!("writing staged {}", path.display()))?;
+    observe(MetadataStep::Fill);
+    staged
+        .persist(path)
+        .with_context(|| format!("persisting {}", path.display()))?;
+    observe(MetadataStep::Rename);
+    Ok(())
 }
 
 fn abbreviate_did(did: &str) -> String {
@@ -328,8 +354,8 @@ mod tests {
 
     /// Replays Lean `ClientIdentityMetadata.decide` against a real metadata
     /// file in each modelled state.
-    #[tokio::test]
-    async fn metadata_decisions_match_the_lean_model() {
+    #[test]
+    fn metadata_decisions_match_the_lean_model() {
         let expected = NodeIdentityMetadata {
             did: "did:key:expected".to_owned(),
             public_key_bytes: vec![1, 2, 3],
@@ -349,12 +375,10 @@ mod tests {
             let path = tempdir.path().join("principal.json");
             match case.input.stored {
                 Stored::Absent => {}
-                Stored::Equal => write_json_atomically(&path, &expected).await.unwrap(),
-                Stored::Different => write_json_atomically(&path, &different).await.unwrap(),
+                Stored::Equal => write_json_atomically(&path, &expected, &mut |_| {}).unwrap(),
+                Stored::Different => write_json_atomically(&path, &different, &mut |_| {}).unwrap(),
             }
-            let decision = read_and_decide(&path, case.input.read, &expected)
-                .await
-                .unwrap();
+            let decision = read_and_decide(&path, case.input.read, &expected).unwrap();
             case.check(decision);
         }
     }
@@ -446,3 +470,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod trace_replay;

@@ -493,6 +493,9 @@ request-event epoch. -/
 def eventsAccept (s : State) (read : Read) : Bool :=
   decide (s.requestEventEpoch = read.requestEventEpoch)
 
+/-- The patch decision for the whole store: any publication and any request
+event since the capture rejects. It decides a patch with a row that names no
+session scope; `PatchFence.accepts` decides one that names them. -/
 def accepts (s : State) (read : Read) : Bool :=
   acceptsReload s read && eventsAccept s read
 
@@ -606,6 +609,211 @@ theorem provenance_invalidation_preserves_reload (s : State) :
 
 theorem provenance_invalidation_moves_lineage (s : State) :
     (provenanceInvalidation s).provenanceEpoch = s.provenanceEpoch + 1 := rfl
+
+/-! ### The patch fence, per session scope
+
+A patch merges the rows it read into the store, so it must not publish a row
+read before a change the store was told about or already shows. `accepts`
+decides that for the whole store: any request event and any publication since
+the capture rejects the patch. On a node where other sessions are active that
+rejects nearly every patch of a quiet session, although none of its rows moved.
+
+A patch carries rows of known session scopes: the scopes its sessions and
+requests name (the selected session and the scopes its request closure
+reaches). Every step that moves `accepts` is classified by what it can have
+changed for a patch (`reach`), and the fence remembers the step each scope and
+the whole store last moved at. A patch is rejected only if the whole store, or
+a scope it carries, moved after its capture. -/
+
+/-- What a step of the store can have changed for a patch. -/
+inductive Reach where
+  /-- Rows no patch carries. -/
+  | nothing
+  /-- Rows of the session scopes the step names. -/
+  | named
+  /-- Rows of any scope. -/
+  | whole
+  deriving DecidableEq, Repr
+
+/-- The steps that move `accepts`: request events and publications. -/
+inductive PatchStep where
+  /-- A request or session change whose event names its session scope. -/
+  | scopeEvent
+  /-- A change event that names no session scope (the Node, a trigger, a
+  deletion, a trigger-caused request) or a gap in the subscription. -/
+  | unscopedEvent
+  /-- A change of a collection whose rows no patch carries. -/
+  | collectionEvent
+  /-- A change of a collection whose rows patches carry (goals). -/
+  | carriedCollectionEvent
+  /-- A tool-call change (`provenanceInvalidation`): its event names only the
+  tool call, not the requests whose lineage it moves. -/
+  | provenanceEvent
+  /-- A reload of the whole node. -/
+  | nodeReload
+  /-- A reload of session scopes. -/
+  | scopeReload
+  /-- A reload of collections whose rows no patch carries. -/
+  | collectionReload
+  /-- A reload of a collection whose rows patches carry. -/
+  | carriedCollectionReload
+  /-- An accepted patch: it publishes rows of the scopes it carries. -/
+  | patch
+  /-- An accepted patch with a row that names no scope. -/
+  | unscopedPatch
+  deriving DecidableEq, Repr
+
+/-- Conformance function. -/
+def reach : PatchStep → Reach
+  | .scopeEvent => .named
+  | .unscopedEvent => .whole
+  | .collectionEvent => .nothing
+  | .carriedCollectionEvent => .whole
+  | .provenanceEvent => .whole
+  | .nodeReload => .whole
+  | .scopeReload => .named
+  | .collectionReload => .nothing
+  | .carriedCollectionReload => .whole
+  | .patch => .named
+  | .unscopedPatch => .whole
+
+/-- `sequence` counts the steps; `whole` and `scope k` are the steps at which
+the whole store and scope `k` last moved. -/
+structure PatchFence where
+  sequence : Nat
+  whole : Nat
+  scope : Nat → Nat
+
+def PatchFence.initial : PatchFence :=
+  { sequence := 0, whole := 0, scope := fun _ => 0 }
+
+def PatchFence.WellFormed (f : PatchFence) : Prop :=
+  f.whole ≤ f.sequence ∧ ∀ k, f.scope k ≤ f.sequence
+
+/-- A patch read captures the step count before it reads. -/
+def PatchFence.capture (f : PatchFence) : Nat := f.sequence
+
+/-- One step of kind `reach` naming the scopes `named`. -/
+def PatchFence.move (f : PatchFence) (reach : Reach) (named : List Nat) : PatchFence :=
+  match reach with
+  | .nothing => { f with sequence := f.sequence + 1 }
+  | .named =>
+      { sequence := f.sequence + 1
+        whole := f.whole
+        scope := fun k => if k ∈ named then f.sequence + 1 else f.scope k }
+  | .whole => { f with sequence := f.sequence + 1, whole := f.sequence + 1 }
+
+/-- Whether a patch captured at `captured` carrying the scopes `carried` may
+publish. A patch with a row that names no scope (`none`) is decided for the
+whole store, as `accepts` decides it: any step since the capture rejects it. -/
+def PatchFence.accepts (f : PatchFence) (captured : Nat) : Option (List Nat) → Bool
+  | none => decide (f.sequence = captured)
+  | some carried =>
+      decide (f.whole ≤ captured) && carried.all fun k => decide (f.scope k ≤ captured)
+
+theorem PatchFence.initial_well_formed : PatchFence.initial.WellFormed := by
+  simp [PatchFence.initial, PatchFence.WellFormed]
+
+theorem PatchFence.move_well_formed (f : PatchFence) (h : f.WellFormed) (reach : Reach)
+    (named : List Nat) : (f.move reach named).WellFormed := by
+  obtain ⟨hw, hs⟩ := h
+  cases reach
+  · exact ⟨by simp [PatchFence.move]; omega, fun k => by have := hs k; simp [PatchFence.move]; omega⟩
+  · refine ⟨by simp [PatchFence.move]; omega, fun k => ?_⟩
+    have := hs k
+    by_cases hk : k ∈ named <;> simp [PatchFence.move, hk]
+    omega
+  · exact ⟨by simp [PatchFence.move], fun k => by have := hs k; simp [PatchFence.move]; omega⟩
+
+/-- A patch published before any further step is accepted. -/
+theorem PatchFence.unmoved_patch_is_accepted (f : PatchFence) (h : f.WellFormed)
+    (carried : Option (List Nat)) : f.accepts f.capture carried = true := by
+  obtain ⟨hw, hs⟩ := h
+  cases carried with
+  | none => simp [PatchFence.accepts, PatchFence.capture]
+  | some carried =>
+      simp only [PatchFence.accepts, PatchFence.capture, Bool.and_eq_true, decide_eq_true_eq,
+        List.all_eq_true]
+      exact ⟨hw, fun k _ => hs k⟩
+
+/-- Whatever the store-wide rule accepts, the scoped rule accepts. -/
+theorem PatchFence.scoped_accepts_what_whole_store_accepts (f : PatchFence) (h : f.WellFormed)
+    (captured : Nat) (carried : List Nat) (whole : f.accepts captured none = true) :
+    f.accepts captured (some carried) = true := by
+  have hc : f.sequence = captured := by simpa [PatchFence.accepts] using whole
+  subst hc
+  exact f.unmoved_patch_is_accepted h (some carried)
+
+/-- A step that names only other scopes leaves the patch's decision as it was:
+another session's request events, scope reloads and patches do not reject it. -/
+theorem PatchFence.other_scopes_preserve_patch (f : PatchFence) (captured : Nat)
+    (named carried : List Nat) (disjoint : ∀ k ∈ carried, k ∉ named) :
+    (f.move .named named).accepts captured (some carried) = f.accepts captured (some carried) := by
+  simp only [PatchFence.accepts, PatchFence.move]
+  rw [Bool.eq_iff_iff]
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+  constructor
+  · rintro ⟨hw, hs⟩
+    exact ⟨hw, fun k hk => by have := hs k hk; simpa [disjoint k hk] using this⟩
+  · rintro ⟨hw, hs⟩
+    exact ⟨hw, fun k hk => by simpa [disjoint k hk] using hs k hk⟩
+
+/-- A step that reaches no patch row leaves every scoped patch's decision as it was. -/
+theorem PatchFence.unreached_step_preserves_patch (f : PatchFence) (captured : Nat)
+    (named carried : List Nat) :
+    (f.move .nothing named).accepts captured (some carried) = f.accepts captured (some carried) := by
+  simp [PatchFence.accepts, PatchFence.move]
+
+/-- However many steps name only other scopes while a patch is read, it publishes. -/
+theorem PatchFence.arbitrarily_many_other_scope_steps_preserve_patch (f : PatchFence)
+    (h : f.WellFormed) (carried : List Nat) (steps : List (List Nat))
+    (disjoint : ∀ named ∈ steps, ∀ k ∈ carried, k ∉ named) :
+    (steps.foldl (fun fence named => fence.move .named named) f).accepts f.capture (some carried)
+      = true := by
+  suffices ∀ (g : PatchFence), g.accepts f.capture (some carried) = true →
+      (steps.foldl (fun fence named => fence.move .named named) g).accepts f.capture
+        (some carried) = true from this f (f.unmoved_patch_is_accepted h (some carried))
+  induction steps with
+  | nil => intro g hg; simpa using hg
+  | cons named rest ih =>
+      intro g hg
+      simp only [List.foldl_cons]
+      apply ih (fun n hn => disjoint n (List.mem_cons_of_mem _ hn))
+      rw [PatchFence.other_scopes_preserve_patch g f.capture named carried
+        (disjoint named (List.mem_cons_self ..))]
+      exact hg
+
+/-- A step naming a scope the patch carries rejects it: an event of that scope,
+a reload of it, or another patch of it. -/
+theorem PatchFence.own_scope_rejects_patch (f : PatchFence) (named carried : List Nat)
+    (k : Nat) (carries : k ∈ carried) (moved : k ∈ named) :
+    (f.move .named named).accepts f.capture (some carried) = false := by
+  simp only [PatchFence.accepts, PatchFence.move, PatchFence.capture, Bool.and_eq_false_iff,
+    decide_eq_false_iff_not, List.all_eq_false]
+  right
+  exact ⟨k, carries, by simp [moved]⟩
+
+/-- A step that reaches the whole store rejects every patch read before it. -/
+theorem PatchFence.whole_store_step_rejects_patch (f : PatchFence) (named : List Nat)
+    (carried : Option (List Nat)) :
+    (f.move .whole named).accepts f.capture carried = false := by
+  cases carried with
+  | none => simp [PatchFence.accepts, PatchFence.move, PatchFence.capture]
+  | some carried =>
+      simp only [PatchFence.accepts, PatchFence.move, PatchFence.capture, Bool.and_eq_false_iff,
+        decide_eq_false_iff_not]
+      left
+      omega
+
+/-- A patch with a row naming no scope is rejected by any step, as `accepts` rejects it. -/
+theorem PatchFence.unscoped_patch_rejected_by_any_step (f : PatchFence) (reach : Reach)
+    (named : List Nat) : (f.move reach named).accepts f.capture none = false := by
+  cases reach <;> simp [PatchFence.accepts, PatchFence.move, PatchFence.capture]
+
+/-- Every step moves the sequence: the fence counts exactly the steps that move `accepts`. -/
+theorem PatchFence.every_step_counts (f : PatchFence) (reach : Reach) (named : List Nat) :
+    (f.move reach named).sequence = f.sequence + 1 := by
+  cases reach <;> rfl
 
 /-- Every node's store. A publication, event or reload acts on one node's store
 through that node's connection. -/

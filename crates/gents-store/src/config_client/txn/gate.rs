@@ -8,7 +8,7 @@ use defra_node::Node as EmbeddedNode;
 use tracing::{instrument::WithSubscriber, Instrument};
 
 #[cfg(any(test, feature = "test-fixtures"))]
-use super::fault_injection::{LOCAL_OPERATION_PAUSE, SUCCESSFUL_MUTATION_FAULT};
+use super::fault_injection::{LOCAL_OPERATION_PAUSE, WRITE_GATE_OBSERVATION};
 use super::native::ensure_not_reentrant_embedded_write;
 use super::{retry, ConfigClientError, Result, EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT};
 use crate::config_client::write_telemetry::{record_slow_native_phase, WriteOperation};
@@ -474,10 +474,7 @@ impl MutationWriteGate {
         tokio::pin!(acquire);
         let mut registration = None;
         #[cfg(any(test, feature = "test-fixtures"))]
-        let observation = SUCCESSFUL_MUTATION_FAULT
-            .try_with(|fault| fault.write_gate_observation.clone())
-            .ok()
-            .flatten();
+        let observation = WRITE_GATE_OBSERVATION.try_with(Arc::clone).ok();
         let acquire_future = std::future::poll_fn(|cx| match acquire.as_mut().poll(cx) {
             std::task::Poll::Pending => {
                 if registration.is_none() {

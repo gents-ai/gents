@@ -181,33 +181,20 @@ fn raw_block_appends_cache_control_last() {
 }
 
 #[test]
-fn raw_object_keeps_order_and_value_bytes() {
+fn raw_object_order_and_validation() {
     let text = r#"{"z":1,"type":"x","a":{"y":[1, 2],"b":null},"m":1.50}"#;
     let raw = RawObject::from_json(text).unwrap();
-    assert_eq!(
-        serde_json::to_string(&raw).unwrap(),
-        r#"{"z":1,"type":"x","a":{"y":[1, 2],"b":null},"m":1.50}"#
-    );
+    assert_eq!(serde_json::to_string(&raw).unwrap(), text);
     assert_eq!(raw.kind(), Some("x"));
     assert_eq!(raw.get("m").map(RawValue::get), Some("1.50"));
     assert!(raw.get("nope").is_none());
-}
 
-#[test]
-fn raw_object_duplicate_key_keeps_last_value_at_first_position() {
-    let raw = RawObject::from_json(r#"{"a":1,"b":2,"a":3}"#).unwrap();
-    assert_eq!(serde_json::to_string(&raw).unwrap(), r#"{"a":3,"b":2}"#);
-}
+    let dup = RawObject::from_json(r#"{"a":1,"b":2,"a":3}"#).unwrap();
+    assert_eq!(serde_json::to_string(&dup).unwrap(), r#"{"a":3,"b":2}"#);
 
-#[test]
-fn raw_object_rejects_non_objects() {
-    for text in ["[1]", "\"s\"", "1", "null", "{", ""] {
-        assert!(RawObject::from_json(text).is_err(), "{text}");
+    for bad in ["[1]", "\"s\"", "1", "null", "{", ""] {
+        assert!(RawObject::from_json(bad).is_err(), "{bad}");
     }
-}
-
-#[test]
-fn raw_object_without_string_type_has_no_kind() {
     assert_eq!(RawObject::from_json(r#"{"type":1}"#).unwrap().kind(), None);
     assert_eq!(RawObject::from_json("{}").unwrap().kind(), None);
 }
@@ -225,15 +212,18 @@ fn passthrough_json_keeps_key_order() {
         serde_json::to_string(&tool_use).unwrap(),
         r#"{"type":"tool_use","id":"t","name":"n","input":{"z":1,"a":2}}"#
     );
+    let schema = raw(
+        r#"{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"required":["zeta"],"additionalProperties":false}"#,
+    );
     let tool = Tool {
-        name: "n".to_owned(),
+        name: "Read".to_owned(),
         description: "d".to_owned(),
-        input_schema: input,
+        input_schema: schema,
         eager_input_streaming: false,
     };
     assert_eq!(
         serde_json::to_string(&tool).unwrap(),
-        r#"{"name":"n","description":"d","input_schema":{"z":1,"a":2}}"#
+        r#"{"name":"Read","description":"d","input_schema":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"required":["zeta"],"additionalProperties":false}}"#
     );
     let block = ContentBlock::Raw(RawObject::from_json(r#"{"z":1,"type":"q","a":2}"#).unwrap());
     assert_eq!(
@@ -281,23 +271,6 @@ fn thinking_modes_bytes() {
     assert_eq!(
         serde_json::to_string(&Thinking::Adaptive { display: None }).unwrap(),
         r#"{"type":"adaptive"}"#
-    );
-}
-
-#[test]
-fn tool_schema_keeps_insertion_order() {
-    let schema = raw(
-        r#"{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"required":["zeta"],"additionalProperties":false}"#,
-    );
-    let tool = Tool {
-        name: "Read".to_owned(),
-        description: "d".to_owned(),
-        input_schema: schema,
-        eager_input_streaming: false,
-    };
-    assert_eq!(
-        serde_json::to_string(&tool).unwrap(),
-        r#"{"name":"Read","description":"d","input_schema":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"required":["zeta"],"additionalProperties":false}}"#
     );
 }
 
@@ -354,29 +327,22 @@ fn absent_keys_are_omitted_and_temperature_is_a_number() {
 }
 
 #[test]
-fn output_config_format_follows_effort() {
+fn output_config_per_turn_row_and_eager_tool_key_order() {
     let c = OutputConfig {
         effort: Some("high".to_owned()),
-        format: Some(RawValue::from_string(r#"{"type":"json_schema"}"#.to_owned()).unwrap()),
+        format: Some(raw(r#"{"type":"json_schema"}"#)),
     };
     assert_eq!(
         serde_json::to_string(&c).unwrap(),
         r#"{"effort":"high","format":{"type":"json_schema"}}"#
     );
-}
 
-#[test]
-fn json_schema_format_keeps_type_before_the_schema_bytes() {
-    let schema = RawValue::from_string(r#"{"z":1,"a":{"y":2,"b":3}}"#.to_owned()).unwrap();
-    let format = OutputConfig::json_schema_format(&schema).unwrap();
+    let schema = raw(r#"{"z":1,"a":{"y":2,"b":3}}"#);
     assert_eq!(
-        format.get(),
+        OutputConfig::json_schema_format(&schema).unwrap().get(),
         r#"{"type":"json_schema","schema":{"z":1,"a":{"y":2,"b":3}}}"#
     );
-}
 
-#[test]
-fn per_turn_effort_row_bytes() {
     let row = Message {
         role: Role::System,
         content: MessageContent::Blocks(Vec::new()),
@@ -389,10 +355,7 @@ fn per_turn_effort_row_bytes() {
         serde_json::to_string(&row).unwrap(),
         r#"{"role":"system","content":[],"output_config":{"effort":"medium"}}"#
     );
-}
 
-#[test]
-fn eager_input_streaming_follows_the_description_and_precedes_nothing_else() {
     let tool = |eager| Tool {
         name: "n".to_owned(),
         description: "d".to_owned(),

@@ -2,7 +2,7 @@ use gents_protocol::file_changes::{
     FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     MAX_FILE_IMAGE_BYTES,
 };
-use gents_protocol::job::{JobBudget, JobProgress, JobState};
+use gents_protocol::job::JobState;
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -16,13 +16,23 @@ use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
 use gents_store::graphql::escape_graphql_string;
 
-use super::support::{seed_served_job_row, served_desktop, ServedDesktop};
+use super::support::{
+    attach_host, fixture_job_progress, seed_served_job_row, served_desktop, ServedDesktop,
+};
 
 #[tokio::test]
-async fn file_change_review_reads_the_bound_request_without_touching_a_local_checkout() {
+async fn file_change_reviews_enforce_scope_concurrency_retryability_and_max_host_frames() {
+    use crate::host::{protocol, ClientHost};
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use std::{sync::Arc, time::Duration};
+    use tokio_util::sync::CancellationToken;
+
     let served = served_desktop().await;
     let core = served.core.clone();
     let node = core.runtime_connections()[0].node_did.clone();
+
+    // Bound request read, invalid scope/retry rejections, immutability, and ambiguity.
     let session = "file-review-session";
     let call = "file-review-call";
     let request = format!("req-{call}");
@@ -43,24 +53,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
         },
     )
     .await;
-    let progress = JobProgress {
-        title: "File change".into(),
-        state: JobState::Completed,
-        pause_reason: None,
-        phases: Vec::new(),
-        active: Vec::new(),
-        spawned: 0,
-        budget: JobBudget {
-            total: 1,
-            spent: 0,
-            remaining: 1,
-        },
-        last_event: "finished".into(),
-        last_event_at: None,
-        question: None,
-        observed_terminal_children: 0,
-        revision: 1,
-    };
+    let progress = fixture_job_progress("File change", JobState::Completed, None);
     let result = crate::commands::tool_file_changes(
         &core,
         node.clone(),
@@ -191,7 +184,126 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
         error.to_string().contains("ambiguous observations"),
         "{error:#}"
     );
-    core.shutdown().await.unwrap();
+
+    // Concurrent reads preserve each retained image.
+    let concurrent_session = "concurrent-file-review";
+    let concurrent_call = "concurrent-file-call";
+    let (concurrent_doc, concurrent_expected) = seed_review(
+        &served,
+        concurrent_session,
+        concurrent_call,
+        FileImage::Missing,
+        FileImage::Missing,
+    )
+    .await;
+    let concurrent_request = format!("req-{concurrent_call}");
+    let results = futures::future::join_all((0..5).map(|_| {
+        crate::commands::tool_file_changes(
+            &core,
+            node.clone(),
+            concurrent_session.into(),
+            concurrent_request.clone(),
+            concurrent_doc.clone(),
+            None,
+        )
+    }))
+    .await;
+    for result in results {
+        assert_eq!(result.unwrap(), Some(concurrent_expected.clone()));
+    }
+
+    // Unavailable scope reports retryable ProjectionPending.
+    let unavailable = crate::commands::tool_file_changes(
+        &core,
+        node.clone(),
+        "not-received-session".into(),
+        "not-received-request".into(),
+        "physical-tool".into(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    let classified = unavailable
+        .downcast_ref::<gents_store::client_error::BridgeError>()
+        .unwrap();
+    assert_eq!(
+        classified.code,
+        gents_store::client_error::BridgeErrorCode::ProjectionPending
+    );
+    assert!(classified.retryable);
+
+    // Maximum file images cross editor host frames without truncation.
+    let max_session = "file-review-maximum";
+    let max_call = "maximum-file-call";
+    let image = |triplet: &str, tail: &str, hash: &str| FileImage::File {
+        content_hash: format!("sha256:{hash}"),
+        data: triplet.repeat(MAX_FILE_IMAGE_BYTES as usize / 3) + tail,
+        permissions: FilePermissions {
+            readonly: false,
+            unix_mode: None,
+        },
+        links: None,
+    };
+    assert_eq!(MAX_FILE_IMAGE_BYTES % 3, 1);
+    let (max_doc, max_expected) = seed_review(
+        &served,
+        max_session,
+        max_call,
+        image(
+            "YWFh",
+            "YQ==",
+            "9bc1b2a288b26af7257a36277ae3816a7d4f16e89c1e7e77d0a5c48bad62b360",
+        ),
+        image(
+            "YmJi",
+            "Yg==",
+            "e56ec8dc1862be6c09c53620cbc0f00f639de2a51c882745fbbc4e144714b3c2",
+        ),
+    )
+    .await;
+    let stop = CancellationToken::new();
+    let host = Arc::new(ClientHost::new(core.clone()));
+    let (mut client, hello, task) = attach_host(host, stop.clone()).await;
+    assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "call", "id": 1, "command": {
+                    "name": "desktop_tool_file_changes", "args": {
+                        "nodeDid": node, "sessionId": max_session,
+                        "requestId": format!("req-{max_call}"), "toolCallDocId": max_doc,
+                        "retryId": "59761a54-a2e2-4bb1-9a08-ec0df44fd4c1",
+                    },
+                },
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let frame = client.next().await.unwrap().unwrap();
+            let response: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+            if response["kind"] == "response" {
+                assert!(response["error"].is_null(), "{response}");
+                assert!(frame.len() > MAX_FILE_IMAGE_BYTES as usize * 2);
+                break response;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(response["id"], 1);
+    assert!(response["error"].is_null());
+    assert_eq!(
+        serde_json::from_value::<ToolFileChanges>(response["result"].clone()).unwrap(),
+        max_expected
+    );
+    stop.cancel();
+    drop(client);
+    task.await.unwrap().unwrap();
+    drop(core);
+    served.shutdown().await;
 }
 
 async fn seed_review(
@@ -201,24 +313,7 @@ async fn seed_review(
     before: FileImage,
     after: FileImage,
 ) -> (String, ToolFileChanges) {
-    let progress = JobProgress {
-        title: "File change".into(),
-        state: JobState::Completed,
-        pause_reason: None,
-        phases: Vec::new(),
-        active: Vec::new(),
-        spawned: 0,
-        budget: JobBudget {
-            total: 1,
-            spent: 0,
-            remaining: 1,
-        },
-        last_event: "finished".into(),
-        last_event_at: None,
-        question: None,
-        observed_terminal_children: 0,
-        revision: 1,
-    };
+    let progress = fixture_job_progress("File change", JobState::Completed, None);
     let node = served.node_did();
     let physical = seed_served_job_row(served, session, call, "completed", &progress, None).await;
     seed_admission(served, session, &physical, call, 1).await;
@@ -270,163 +365,6 @@ async fn seed_review(
         })
     }).await.unwrap();
     (physical, expected)
-}
-
-#[tokio::test]
-async fn concurrent_file_reviews_preserve_each_retained_image() {
-    let served = served_desktop().await;
-    let core = served.core.clone();
-    let node = core.runtime_connections()[0].node_did.clone();
-    let session = "concurrent-file-review";
-    let call = "concurrent-file-call";
-    let (physical, expected) = seed_review(
-        &served,
-        session,
-        call,
-        FileImage::Missing,
-        FileImage::Missing,
-    )
-    .await;
-    let request = format!("req-{call}");
-    let results = futures::future::join_all((0..5).map(|_| {
-        crate::commands::tool_file_changes(
-            &core,
-            node.clone(),
-            session.into(),
-            request.clone(),
-            physical.clone(),
-            None,
-        )
-    }))
-    .await;
-    for result in results {
-        assert_eq!(result.unwrap(), Some(expected.clone()));
-    }
-    core.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
-    let served = served_desktop().await;
-    let core = served.core.clone();
-    let node = core.runtime_connections()[0].node_did.clone();
-    let error = crate::commands::tool_file_changes(
-        &core,
-        node,
-        "not-received-session".into(),
-        "not-received-request".into(),
-        "physical-tool".into(),
-        None,
-    )
-    .await
-    .unwrap_err();
-    let classified = error
-        .downcast_ref::<gents_store::client_error::BridgeError>()
-        .unwrap();
-    assert_eq!(
-        classified.code,
-        gents_store::client_error::BridgeErrorCode::ProjectionPending
-    );
-    assert!(classified.retryable);
-    core.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
-    use crate::host::{protocol, ClientHost};
-    use bytes::Bytes;
-    use futures::{SinkExt, StreamExt};
-    use std::{sync::Arc, time::Duration};
-    use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
-
-    let served = served_desktop().await;
-    let core = served.core.clone();
-    let node = core.runtime_connections()[0].node_did.clone();
-    let session = "file-review-maximum";
-    let call = "maximum-file-call";
-    let image = |triplet: &str, tail: &str, hash: &str| FileImage::File {
-        content_hash: format!("sha256:{hash}"),
-        data: triplet.repeat(MAX_FILE_IMAGE_BYTES as usize / 3) + tail,
-        permissions: FilePermissions {
-            readonly: false,
-            unix_mode: None,
-        },
-        links: None,
-    };
-    assert_eq!(MAX_FILE_IMAGE_BYTES % 3, 1);
-    let (physical, expected) = seed_review(
-        &served,
-        session,
-        call,
-        image(
-            "YWFh",
-            "YQ==",
-            "9bc1b2a288b26af7257a36277ae3816a7d4f16e89c1e7e77d0a5c48bad62b360",
-        ),
-        image(
-            "YmJi",
-            "Yg==",
-            "e56ec8dc1862be6c09c53620cbc0f00f639de2a51c882745fbbc4e144714b3c2",
-        ),
-    )
-    .await;
-    let (client, server) = tokio::io::duplex(4096);
-    let stop = CancellationToken::new();
-    let host = Arc::new(ClientHost::new(core.clone()));
-    let task = tokio::spawn(host.serve(server, stop.clone()));
-    let mut client = LengthDelimitedCodec::builder()
-        .max_frame_length(protocol::MAX_FRAME_BYTES)
-        .new_framed(client);
-    client
-        .send(Bytes::from(
-            serde_json::to_vec(&serde_json::json!({
-                "kind": "hello", "version": protocol::PROTOCOL_VERSION,
-            }))
-            .unwrap(),
-        ))
-        .await
-        .unwrap();
-    let hello: serde_json::Value =
-        serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
-    assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
-    client
-        .send(Bytes::from(
-            serde_json::to_vec(&serde_json::json!({
-                "kind": "call", "id": 1, "command": {
-                    "name": "desktop_tool_file_changes", "args": {
-                        "nodeDid": node, "sessionId": session,
-                        "requestId": format!("req-{call}"), "toolCallDocId": physical,
-                        "retryId": "59761a54-a2e2-4bb1-9a08-ec0df44fd4c1",
-                    },
-                },
-            }))
-            .unwrap(),
-        ))
-        .await
-        .unwrap();
-    let response = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let frame = client.next().await.unwrap().unwrap();
-            let response: serde_json::Value = serde_json::from_slice(&frame).unwrap();
-            if response["kind"] == "response" {
-                assert!(response["error"].is_null(), "{response}");
-                assert!(frame.len() > MAX_FILE_IMAGE_BYTES as usize * 2);
-                break response;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(response["id"], 1);
-    assert!(response["error"].is_null());
-    assert_eq!(
-        serde_json::from_value::<ToolFileChanges>(response["result"].clone()).unwrap(),
-        expected
-    );
-    stop.cancel();
-    drop(client);
-    task.await.unwrap().unwrap();
-    core.shutdown().await.unwrap();
 }
 
 async fn seed_admission(

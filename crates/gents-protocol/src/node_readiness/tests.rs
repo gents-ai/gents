@@ -53,27 +53,6 @@ fn source_projection_is_sorted_and_unavailability_wins() {
 }
 
 #[test]
-fn ready_snapshot_does_not_expire_without_semantic_changes() {
-    let snapshot = readiness_snapshot(vec![AgentReadinessEntry {
-        agent_did: "a".to_string(),
-        state: AgentReadinessState::Ready,
-        reason: None,
-        effective_inference: None,
-    }]);
-    let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
-    let projection = project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"));
-    assert_eq!(projection.unknown_reason, None);
-    assert_eq!(
-        projection.agents.get("a"),
-        Some(&ProjectedAgentReadiness::Ready),
-    );
-    assert!(matches!(
-        project_node_readiness_summary(Some(&row), "did:test:node"),
-        ProjectedNodeReadinessSummary::Observed(_)
-    ));
-}
-
-#[test]
 fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     let ready = AgentReadinessEntry {
         agent_did: "a".to_string(),
@@ -87,19 +66,18 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
         effective_inference: None,
     };
-    let canonical = readiness_row(
-        "did:test:node",
-        serde_json::to_string(&readiness_snapshot(vec![
-            ready.clone(),
-            unavailable.clone(),
-        ]))
-        .unwrap(),
-    );
+    let row_of = |snapshot: &NodeReadinessSnapshot| {
+        readiness_row("did:test:node", serde_json::to_string(snapshot).unwrap())
+    };
+    let canonical = row_of(&readiness_snapshot(vec![
+        ready.clone(),
+        unavailable.clone(),
+    ]));
     assert_eq!(projected_unknown(&canonical), None);
 
     let malformed_snapshots = [
         readiness_snapshot(vec![ready.clone(), ready.clone()]),
-        readiness_snapshot(vec![unavailable.clone(), ready.clone()]),
+        readiness_snapshot(vec![unavailable, ready.clone()]),
         readiness_snapshot(vec![AgentReadinessEntry {
             agent_did: " a".to_string(),
             ..ready.clone()
@@ -109,71 +87,53 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
             ..ready.clone()
         }]),
         readiness_snapshot(vec![AgentReadinessEntry {
-            agent_did: "a".to_string(),
             state: AgentReadinessState::Unavailable,
-            reason: None,
-            effective_inference: None,
+            ..ready.clone()
         }]),
+        NodeReadinessSnapshot {
+            default_agent_did: "a ".to_string(),
+            ..readiness_snapshot(vec![ready.clone()])
+        },
     ];
     for snapshot in malformed_snapshots {
-        let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
         assert_eq!(
-            projected_unknown(&row),
+            projected_unknown(&row_of(&snapshot)),
             Some(AgentReadinessUnknownReason::ReadinessMalformed)
         );
     }
 
-    let unknown_process = readiness_row(
-        "did:test:node",
-        canonical.snapshot_json.replace("\"ready\"", "\"starting\""),
-    );
-    assert_eq!(
-        projected_unknown(&unknown_process),
-        Some(AgentReadinessUnknownReason::ReadinessMalformed)
-    );
+    for bad_row in [
+        readiness_row(
+            "did:test:node",
+            canonical.snapshot_json.replace("\"ready\"", "\"starting\""),
+        ),
+        readiness_row("did:test:foreign", canonical.snapshot_json.clone()),
+        readiness_row(
+            "did:test:node",
+            format!(
+                r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null,"extra":true}}]}}"#
+            ),
+        ),
+    ] {
+        assert_eq!(
+            projected_unknown(&bad_row),
+            Some(AgentReadinessUnknownReason::ReadinessMalformed)
+        );
+    }
     assert_eq!(
         project_node_readiness(Some(&canonical), "did:test:node", [" a"], Some("a")).unknown_reason,
         Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
 
-    let mut whitespace_default = readiness_snapshot(vec![ready.clone()]);
-    whitespace_default.default_agent_did = "a ".to_string();
-    let row = readiness_row(
-        "did:test:node",
-        serde_json::to_string(&whitespace_default).unwrap(),
-    );
+    let invalid_default = NodeReadinessSnapshot {
+        default_agent_did: "missing".to_string(),
+        ..readiness_snapshot(vec![ready])
+    };
     assert_eq!(
-        projected_unknown(&row),
-        Some(AgentReadinessUnknownReason::ReadinessMalformed)
-    );
-
-    let mut invalid_default = readiness_snapshot(vec![ready]);
-    invalid_default.default_agent_did = "missing".to_string();
-    let row = readiness_row(
-        "did:test:node",
-        serde_json::to_string(&invalid_default).unwrap(),
-    );
-    assert_eq!(
-        projected_unknown(&row),
+        projected_unknown(&row_of(&invalid_default)),
         Some(AgentReadinessUnknownReason::AgentNotAssigned)
     );
 
-    let foreign = readiness_row("did:test:foreign", canonical.snapshot_json.clone());
-    assert_eq!(
-        projected_unknown(&foreign),
-        Some(AgentReadinessUnknownReason::ReadinessMalformed)
-    );
-
-    let with_unknown_field = readiness_row(
-        "did:test:node",
-        format!(
-            r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null,"extra":true}}]}}"#
-        ),
-    );
-    assert_eq!(
-        projected_unknown(&with_unknown_field),
-        Some(AgentReadinessUnknownReason::ReadinessMalformed)
-    );
     let with_unknown_top_level_field = readiness_row(
         "did:test:node",
         format!(

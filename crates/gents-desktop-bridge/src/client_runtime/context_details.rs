@@ -144,19 +144,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_details_cache_reuses_only_the_same_call_over_http() {
+    async fn context_details_cache_retries_missing_captures_and_reuses_only_the_same_call() {
         let directory = tempfile::tempdir().unwrap();
-        let core = ClientRuntime::start_with_paths_and_options(
-            DesktopPaths::from_root(directory.path()),
-            crate::client_test_support::file_journal_options(),
-        )
-        .await
-        .unwrap();
-        let core = std::sync::Arc::new(core);
+        let core = std::sync::Arc::new(
+            ClientRuntime::start_with_paths_and_options(
+                DesktopPaths::from_root(directory.path()),
+                crate::client_test_support::file_journal_options(),
+            )
+            .await
+            .unwrap(),
+        );
         let server = MockServer::start().await;
         let access = ConfigAccess::graphql(server.uri());
         let (body, mut context) = fixture();
-        mounts(&server, &body, true, 2).await;
+
         let mut unsupported = context.clone();
         unsupported.accounting.estimator = "unsupported".into();
         assert!(core
@@ -172,6 +173,25 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(server.received_requests().await.unwrap().is_empty());
+
+        // A missing capture is not cached, so the next read fetches once replicated.
+        mounts(&server, &body, false, 1).await;
+        assert!(core
+            .session_context_details(
+                &access,
+                "node",
+                None,
+                "session",
+                "physical-request",
+                &context
+            )
+            .await
+            .unwrap()
+            .is_none());
+        server.verify().await;
+        server.reset().await;
+
+        mounts(&server, &body, true, 2).await;
         let first = core
             .session_context_details(
                 &access,
@@ -210,51 +230,6 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        core.shutdown().await.unwrap();
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn context_details_cache_retries_a_capture_that_was_not_replicated_yet() {
-        let directory = tempfile::tempdir().unwrap();
-        let core = ClientRuntime::start_with_paths_and_options(
-            DesktopPaths::from_root(directory.path()),
-            crate::client_test_support::file_journal_options(),
-        )
-        .await
-        .unwrap();
-        let core = std::sync::Arc::new(core);
-        let server = MockServer::start().await;
-        let access = ConfigAccess::graphql(server.uri());
-        let (body, context) = fixture();
-        mounts(&server, &body, false, 1).await;
-        assert!(core
-            .session_context_details(
-                &access,
-                "node",
-                None,
-                "session",
-                "physical-request",
-                &context
-            )
-            .await
-            .unwrap()
-            .is_none());
-        server.verify().await;
-        server.reset().await;
-        mounts(&server, &body, true, 1).await;
-        assert!(core
-            .session_context_details(
-                &access,
-                "node",
-                None,
-                "session",
-                "physical-request",
-                &context
-            )
-            .await
-            .unwrap()
-            .is_some());
         core.shutdown().await.unwrap();
         server.verify().await;
     }

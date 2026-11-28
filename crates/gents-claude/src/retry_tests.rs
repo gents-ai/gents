@@ -7,30 +7,20 @@ fn b(attempt: u32, retry_after: Option<&str>, random: f64) -> u64 {
 }
 
 #[test]
-fn backoff_table_without_jitter() {
-    let want = [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 32000];
-    for (attempt, want) in want.into_iter().enumerate() {
-        assert_eq!(b(attempt as u32, None, 0.0), want, "attempt {attempt}");
+fn backoff_schedule_and_bounds() {
+    for (random, expected) in [
+        (0.0, [250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 32000]),
+        (
+            0.999999,
+            [312, 625, 1250, 2500, 5000, 10000, 20000, 40000, 40000],
+        ),
+    ] {
+        for (attempt, want) in expected.into_iter().enumerate() {
+            assert_eq!(b(attempt as u32, None, random), want, "attempt {attempt}");
+        }
     }
-}
-
-#[test]
-fn backoff_table_with_maximal_jitter() {
-    let want = [312, 625, 1250, 2500, 5000, 10000, 20000, 40000, 40000];
-    for (attempt, want) in want.into_iter().enumerate() {
-        assert_eq!(b(attempt as u32, None, 0.999999), want, "attempt {attempt}");
-    }
-}
-
-#[test]
-fn backoff_rounds_half_up() {
-    // jitter of 0.25 rounds down, of 0.75 rounds up.
     assert_eq!(b(1, None, 0.002), 500);
     assert_eq!(b(1, None, 0.006), 501);
-}
-
-#[test]
-fn backoff_cap_and_custom_base() {
     assert_eq!(backoff_ms(30, None, 1000, 500, 0.0), 1000);
     assert_eq!(backoff_ms(3, None, u64::MAX, 100, 0.0), 400);
     assert_eq!(b(u32::MAX, None, 0.0), 32000);

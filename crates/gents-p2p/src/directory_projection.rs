@@ -488,26 +488,25 @@ mod tests {
         }
     }
 
-    async fn reconcile_on_node(input: &family::ReconcileInput) -> Result<family::ReconcileOutput> {
-        let dir = tempfile::tempdir()?;
-        let node = acp_node(dir.path()).await?;
-        node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::node_store()
-                .render(gents_protocol::schemas::NODE_DIRECTORY_ENTRY),
-        )
-        .await?;
-        let store = GraphqlDirectoryStore::new(node.clone());
+    async fn reconcile_on_node(
+        store: &GraphqlDirectoryStore,
+        case_index: usize,
+        input: &family::ReconcileInput,
+    ) -> Result<family::ReconcileOutput> {
+        let scope = |source: &str| format!("case-{case_index}:{source}");
+        let scoped_input_source = scope(&input.source);
         for entry in &input.existing {
+            let scoped_source = scope(&entry.source);
             let row = DirectoryEntry {
-                directory_key: directory_entry_key(&entry.source, &entry.node),
-                source_did: entry.source.clone(),
+                directory_key: directory_entry_key(&scoped_source, &entry.node),
+                source_did: scoped_source,
                 node_did: entry.node.clone(),
                 display_name: "previously published".into(),
                 ..DirectoryEntry::default()
             };
             store.upsert_directory_entry(&row).await?;
         }
-        let result = reconcile_directory_tick(&store, &input.source).await?;
+        let result = reconcile_directory_tick(store, &scoped_input_source).await?;
         let desired = result
             .upserted
             .iter()
@@ -518,7 +517,7 @@ mod tests {
         for entry in &input.existing {
             if !listed.contains_key(entry.source.as_str()) {
                 let keys = store
-                    .list_directory_entries(&entry.source)
+                    .list_directory_entries(&scope(&entry.source))
                     .await?
                     .into_keys()
                     .collect();
@@ -532,10 +531,9 @@ mod tests {
             .map(|entry| entry_of(&entry.source, &entry.node))
             .collect();
         assert_eq!(
-            reconcile_directory_tick(&store, &input.source).await?,
+            reconcile_directory_tick(store, &scoped_input_source).await?,
             DirectoryTickOutcome::default()
         );
-        node.shutdown().await?;
         Ok(family::ReconcileOutput { desired, remaining })
     }
 
@@ -583,7 +581,15 @@ mod tests {
 
     #[tokio::test]
     async fn directory_reconciliation_matches_lean_publication_model() -> Result<()> {
-        for case in family::cases() {
+        let dir = tempfile::tempdir()?;
+        let node = acp_node(dir.path()).await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE_DIRECTORY_ENTRY),
+        )
+        .await?;
+        let store = GraphqlDirectoryStore::new(node.clone());
+        for (case_index, case) in family::cases().into_iter().enumerate() {
             let input = &case.input;
             let every_owned_delete_succeeds = input
                 .existing
@@ -591,12 +597,13 @@ mod tests {
                 .filter(|entry| entry.source == input.source)
                 .all(|entry| input.deleted.contains(&entry.node));
             let output = if every_owned_delete_succeeds {
-                reconcile_on_node(input).await?
+                reconcile_on_node(&store, case_index, input).await?
             } else {
                 reconcile_with_failing_deletes(input).await
             };
             case.check(output);
         }
+        node.shutdown().await?;
         Ok(())
     }
 

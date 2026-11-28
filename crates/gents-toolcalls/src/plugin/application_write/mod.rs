@@ -125,6 +125,80 @@ fn preview_call(args: &WriteParams) -> WriteParams {
     next
 }
 
+fn parse_write_operation<'a>(
+    args: &'a WriteParams,
+    words: &[&'a str],
+    preview: bool,
+) -> std::result::Result<&'a str, WriteFailure> {
+    match words {
+        ["preview", op @ ("create" | "update" | "delete")] if preview => Ok(*op),
+        [op @ ("create" | "update" | "delete")] => Ok(*op),
+        ["preview", op @ ("create" | "update" | "delete"), col] if args.collection.is_none() => {
+            let mut corrected = args.clone();
+            corrected.argv = vec!["preview".into(), (*op).into()];
+            corrected.collection = Some((*col).into());
+            Err(recovery(
+                format!(
+                    "argv takes only [\"preview\", {op:?}]; pass {col:?} in the collection parameter instead"
+                ),
+                WRITE_TOOL_NAME,
+                serde_json::to_value(corrected).map_err(anyhow::Error::from)?,
+            ))
+        }
+        [op @ ("create" | "update" | "delete"), col] if args.collection.is_none() => {
+            let mut corrected = args.clone();
+            corrected.argv = vec![(*op).into()];
+            corrected.collection = Some((*col).into());
+            let next = if corrected.options.contains_key("digest") {
+                corrected
+            } else {
+                preview_call(&corrected)
+            };
+            Err(recovery(
+                format!(
+                    "argv takes only [{op:?}] (or [\"preview\", {op:?}]); pass {col:?} in the collection parameter instead"
+                ),
+                WRITE_TOOL_NAME,
+                serde_json::to_value(next).map_err(anyhow::Error::from)?,
+            ))
+        }
+        _ => Err(anyhow!("unknown write command; call write with {{\"argv\":[\"help\"]}}").into()),
+    }
+}
+
+fn unknown_write_option(
+    args: &WriteParams,
+    operation: &str,
+    preview: bool,
+    key: &str,
+    allowed: &[&str],
+) -> WriteFailure {
+    if key == "fields" && matches!(operation, "create" | "update") {
+        let next_args = if !args.options.contains_key("input") {
+            let mut corrected = args.clone();
+            if let Some(val) = corrected.options.remove("fields") {
+                corrected.options.insert("input".into(), val);
+            }
+            let next = if preview || corrected.options.contains_key("digest") {
+                corrected
+            } else {
+                preview_call(&corrected)
+            };
+            serde_json::to_value(next).unwrap_or_else(|_| json!({"argv":["help",operation]}))
+        } else {
+            json!({"argv":["help",operation]})
+        };
+        return recovery(
+            format!(
+                "unknown option \"fields\"; use options.input (not \"fields\") for document fields. Accepted options: {allowed:?}"
+            ),
+            WRITE_TOOL_NAME,
+            next_args,
+        );
+    }
+    anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into()
+}
+
 #[derive(Clone)]
 struct WritePlan<'a> {
     operation: &'a str,
@@ -161,13 +235,20 @@ impl WriteTool {
         if args.argv.first().is_some_and(|v| v == "help")
             || args.argv.last().is_some_and(|v| v == "--help")
         {
-            if !(args.collection.is_none() && args.options.is_empty()) {
-                return Err(anyhow!("help accepts argv only").into());
+            let dash_help = args.argv.last().is_some_and(|v| v == "--help");
+            if !dash_help && !args.options.is_empty() {
+                return Err(recovery(
+                    "help accepts argv only (omit options)",
+                    WRITE_TOOL_NAME,
+                    json!({"argv": args.argv}),
+                ));
             }
             let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
             let command = match words.as_slice() {
                 ["help"] => "help",
-                ["help", command] | [command, "--help"] => *command,
+                ["help", command] | [command, "--help"] | ["preview", command, "--help"] => {
+                    *command
+                }
                 _ => return Err(anyhow!("help accepts [help] or [help, command]").into()),
             };
             let help = match command {
@@ -181,16 +262,7 @@ impl WriteTool {
         }
         let preview = args.argv.first().is_some_and(|v| v == "preview");
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
-        let operation = match words.as_slice() {
-            ["preview", op @ ("create" | "update" | "delete")] if preview => *op,
-            [op @ ("create" | "update" | "delete")] => *op,
-            _ => {
-                return Err(anyhow!(
-                    "unknown write command; call write with {{\"argv\":[\"help\"]}}"
-                )
-                .into())
-            }
-        };
+        let operation = parse_write_operation(args, &words, preview)?;
         let collection = args
             .collection
             .as_deref()
@@ -228,9 +300,7 @@ impl WriteTool {
         };
         for key in args.options.keys() {
             if !allowed.contains(&key.as_str()) {
-                return Err(
-                    anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into(),
-                );
+                return Err(unknown_write_option(args, operation, preview, key, allowed));
             }
         }
         let limit = if operation == "create" {
@@ -474,7 +544,50 @@ impl Tool for WriteTool {
     type Args = WriteParams;
     type Output = String;
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition{name:Self::NAME.into(),description:"Create, update or delete application documents within your exact collection grant. Call [help] for syntax. Mutations require [preview,VERB], then apply its observed-state-bound next_call. Configuration uses config; schemas use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
+        ToolDefinition {
+            name: Self::NAME.into(),
+            description: "Create, update or delete application documents within your exact collection grant. Always preview first with argv:[\"preview\",\"create\"|\"update\"|\"delete\"], then apply the returned next_call (which includes options.digest). Put document fields in options.input (not \"fields\"). Call argv:[\"help\"] or [\"help\",VERB] for syntax. Configuration uses config; schemas use schema.".into(),
+            parameters: json!({
+                "type": "object",
+                "required": ["argv"],
+                "additionalProperties": false,
+                "properties": {
+                    "argv": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "Command verb array: [\"preview\",\"create\"], [\"preview\",\"update\"], [\"preview\",\"delete\"], or [\"help\"] / [\"help\",VERB]. For apply, copy next_call.args from preview. Never put the collection name in argv."
+                    },
+                    "collection": {
+                        "type": "string",
+                        "description": "Exact granted application collection name (required for create/update/delete; omit for help)."
+                    },
+                    "options": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "Mutation options. Use options.input (NOT \"fields\") for document field values.",
+                        "properties": {
+                            "input": {
+                                "type": "object",
+                                "description": "Required for create and update: nonempty object of document fields to write (use \"input\", not \"fields\"). Discover fields with query argv:[\"fields\"]."
+                            },
+                            "filter": {
+                                "type": "object",
+                                "description": "Required for update and delete: nonempty native DefraDB filter object selecting exact targets."
+                            },
+                            "max_targets": {
+                                "type": "integer",
+                                "description": "Required for update and delete: upper bound on matched documents (1–100)."
+                            },
+                            "digest": {
+                                "type": "string",
+                                "description": "Apply-only: sha256 digest copied from preview's next_call.args.options.digest. Omit during preview."
+                            }
+                        }
+                    }
+                }
+            }),
+        }
     }
     async fn call(
         &self,

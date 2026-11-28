@@ -201,17 +201,11 @@ async fn concurrent_mutations_share_the_node_write_path() {
         .await
         .unwrap();
     assert_eq!(rows::<Value>(&response, "GateWrite").unwrap().len(), WRITES);
-    node.shutdown().await.expect("node shutdown");
-}
 
-#[tokio::test]
-async fn public_graphql_read_helpers_reject_mutations_before_execution() {
-    let node = EmbeddedNode::builder().build().await.unwrap();
     node.add_collection("type ReadBoundaryFact { value: String }")
         .await
         .unwrap();
     let mutation = r#"mutation { create_ReadBoundaryFact(input: {value: "bypass"}) { _docID } }"#;
-
     assert!(
         graphql_with_transaction_retry(&node, mutation, "read boundary")
             .await
@@ -222,12 +216,12 @@ async fn public_graphql_read_helpers_reject_mutations_before_execution() {
             .await
             .is_err()
     );
-
-    let response = node.execute("{ ReadBoundaryFact { value } }").await;
+    let read_boundary = node.execute("{ ReadBoundaryFact { value } }").await;
     assert_eq!(
-        response.data.unwrap()["ReadBoundaryFact"],
+        read_boundary.data.unwrap()["ReadBoundaryFact"],
         serde_json::json!([])
     );
+
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -366,6 +360,132 @@ async fn node_execute_supports_cid_time_travel_projection_reads() {
         "v1",
         "CID time-travel read should return the document as of the captured commit"
     );
+
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
+    )
+    .await
+    .expect("add text probe schema");
+    let revisions = [
+        "fn main() {}\n",
+        "fn main() {\n    println!(\"hi\");\n}\n",
+        "// header\nfn main() {\n    println!(\"hi\");\n}\n",
+        "// header\nfn main() {\n    tracing::info!(\"hi \u{e9}\u{1f600}\");\n}\n",
+        "",
+        "rewritten\n",
+    ];
+    let create = format!(
+        r#"mutation {{
+            row: create_TextVersionProbe(input: {{ probe_id: "file", text: "{}" }}) {{
+                _docID
+                _version {{ cid fieldName }}
+            }}
+        }}"#,
+        escape_graphql_string(revisions[0])
+    );
+    let created = node.execute(&create).await;
+    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
+    let created = created.data.expect("create data");
+    let text_doc_id = first_str(&created, "row", "_docID").to_string();
+    let mut cids = vec![first_composite_version_cid(&created, "row").to_string()];
+    for revision in &revisions[1..] {
+        let update = format!(
+            r#"mutation {{
+                row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{
+                    _version {{ cid fieldName }}
+                }}
+            }}"#,
+            escape_graphql_string(&text_doc_id),
+            escape_graphql_string(revision)
+        );
+        let updated = node.execute(&update).await;
+        assert!(!updated.has_errors(), "update failed: {:?}", updated.errors);
+        cids.push(
+            first_composite_version_cid(&updated.data.expect("update data"), "row").to_string(),
+        );
+    }
+    for (cid, expected) in cids.iter().zip(revisions) {
+        let read = node
+            .execute(&format!(
+                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
+                escape_graphql_string(cid)
+            ))
+            .await;
+        assert!(
+            !read.has_errors(),
+            "historical read failed: {:?}",
+            read.errors
+        );
+        assert_eq!(
+            first_str(
+                &read.data.expect("historical data"),
+                "TextVersionProbe",
+                "text"
+            ),
+            expected,
+            "revision at {cid}"
+        );
+    }
+
+    use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
+    let created = node
+        .execute(r#"mutation { row: create_TextVersionProbe(input: { probe_id: "txn", text: "one\n" }) { _docID } }"#)
+        .await;
+    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
+    let txn_doc_id = first_str(&created.data.expect("create data"), "row", "_docID").to_string();
+    let txn_revisions = ["one\ntwo\n", "zero\none\ntwo\n"];
+    let txn_cids = ConfigAccess::transact_local_idempotent(
+        &node,
+        None,
+        IdempotentTransactionRetry::Standard,
+        "test.text_versions_in_one_txn",
+        |txn| {
+            let doc_id = txn_doc_id.clone();
+            Box::pin(async move {
+                let mut cids = Vec::new();
+                for revision in txn_revisions {
+                    let updated = txn
+                        .execute(&format!(
+                            r#"mutation {{ row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{ _version {{ cid fieldName }} }} }}"#,
+                            escape_graphql_string(&doc_id),
+                            escape_graphql_string(revision)
+                        ))
+                        .await?;
+                    cids.push(first_composite_version_cid(&updated["data"], "row").to_string());
+                }
+                Ok::<_, crate::config_client::ConfigClientError>(cids)
+            })
+        },
+    )
+    .await
+    .expect("transaction");
+    assert_ne!(
+        txn_cids[0], txn_cids[1],
+        "each update in one transaction is its own version"
+    );
+    for (cid, expected) in txn_cids.iter().zip(txn_revisions) {
+        let read = node
+            .execute(&format!(
+                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
+                escape_graphql_string(cid)
+            ))
+            .await;
+        assert!(
+            !read.has_errors(),
+            "historical read failed: {:?}",
+            read.errors
+        );
+        assert_eq!(
+            first_str(
+                &read.data.expect("historical data"),
+                "TextVersionProbe",
+                "text"
+            ),
+            expected,
+            "revision at {cid}"
+        );
+    }
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn composite_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
@@ -434,149 +554,3 @@ type TextVersionProbe {
     text: String @crdt(type: text)
 }
 "#;
-
-#[tokio::test]
-async fn text_crdt_reads_each_revision_at_its_cid() {
-    let db = probe_db().await;
-    let node = db.node;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
-    )
-    .await
-    .expect("add text probe schema");
-
-    let revisions = [
-        "fn main() {}\n",
-        "fn main() {\n    println!(\"hi\");\n}\n",
-        "// header\nfn main() {\n    println!(\"hi\");\n}\n",
-        "// header\nfn main() {\n    tracing::info!(\"hi \u{e9}\u{1f600}\");\n}\n",
-        "",
-        "rewritten\n",
-    ];
-    let create = format!(
-        r#"mutation {{
-            row: create_TextVersionProbe(input: {{ probe_id: "file", text: "{}" }}) {{
-                _docID
-                _version {{ cid fieldName }}
-            }}
-        }}"#,
-        escape_graphql_string(revisions[0])
-    );
-    let created = node.execute(&create).await;
-    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
-    let created = created.data.expect("create data");
-    let doc_id = first_str(&created, "row", "_docID").to_string();
-    let mut cids = vec![first_composite_version_cid(&created, "row").to_string()];
-
-    for revision in &revisions[1..] {
-        let update = format!(
-            r#"mutation {{
-                row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{
-                    _version {{ cid fieldName }}
-                }}
-            }}"#,
-            escape_graphql_string(&doc_id),
-            escape_graphql_string(revision)
-        );
-        let updated = node.execute(&update).await;
-        assert!(!updated.has_errors(), "update failed: {:?}", updated.errors);
-        cids.push(
-            first_composite_version_cid(&updated.data.expect("update data"), "row").to_string(),
-        );
-    }
-
-    for (cid, expected) in cids.iter().zip(revisions) {
-        let read = node
-            .execute(&format!(
-                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
-                escape_graphql_string(cid)
-            ))
-            .await;
-        assert!(
-            !read.has_errors(),
-            "historical read failed: {:?}",
-            read.errors
-        );
-        assert_eq!(
-            first_str(
-                &read.data.expect("historical data"),
-                "TextVersionProbe",
-                "text"
-            ),
-            expected,
-            "revision at {cid}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
-    use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
-
-    let db = probe_db().await;
-    let node = db.node;
-    node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
-    )
-    .await
-    .expect("add text probe schema");
-    let created = node
-        .execute(r#"mutation { row: create_TextVersionProbe(input: { probe_id: "txn", text: "one\n" }) { _docID } }"#)
-        .await;
-    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
-    let doc_id = first_str(&created.data.expect("create data"), "row", "_docID").to_string();
-
-    let revisions = ["one\ntwo\n", "zero\none\ntwo\n"];
-    let cids = ConfigAccess::transact_local_idempotent(
-        &node,
-        None,
-        IdempotentTransactionRetry::Standard,
-        "test.text_versions_in_one_txn",
-        |txn| {
-            let doc_id = doc_id.clone();
-            Box::pin(async move {
-                let mut cids = Vec::new();
-                for revision in revisions {
-                    let updated = txn
-                        .execute(&format!(
-                            r#"mutation {{ row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{ _version {{ cid fieldName }} }} }}"#,
-                            escape_graphql_string(&doc_id),
-                            escape_graphql_string(revision)
-                        ))
-                        .await?;
-                    cids.push(first_composite_version_cid(&updated["data"], "row").to_string());
-                }
-                Ok::<_, crate::config_client::ConfigClientError>(cids)
-            })
-        },
-    )
-    .await
-    .expect("transaction");
-    assert_ne!(
-        cids[0], cids[1],
-        "each update in one transaction is its own version"
-    );
-
-    for (cid, expected) in cids.iter().zip(revisions) {
-        let read = node
-            .execute(&format!(
-                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
-                escape_graphql_string(cid)
-            ))
-            .await;
-        assert!(
-            !read.has_errors(),
-            "historical read failed: {:?}",
-            read.errors
-        );
-        assert_eq!(
-            first_str(
-                &read.data.expect("historical data"),
-                "TextVersionProbe",
-                "text"
-            ),
-            expected,
-            "revision at {cid}"
-        );
-    }
-}

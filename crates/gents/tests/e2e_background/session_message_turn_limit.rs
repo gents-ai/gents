@@ -275,7 +275,7 @@ const CHAIN_PROGRESS: &str = r#"{ AgentRequest { _docID lifecycle_state } AgentT
 
 /// Waits for the child request to terminalize, failing only once the chain
 /// has made no progress for [`STALL_CEILING`]. The chain is two parent turns,
-/// five child turns with their tool calls and the sessions' title audits, all
+/// three child turns with their tool calls and the sessions' title audits, all
 /// through one backend permit; a fixed window failed it whenever the host ran
 /// it slower than the window (`MCWallClockBoundFixedWindow`).
 async fn wait_for_terminal_child(

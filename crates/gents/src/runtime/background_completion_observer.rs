@@ -100,40 +100,62 @@ impl BackgroundCompletionObserver {
                 continue;
             }
 
-            for change in batch.changes {
-                for (actor, access) in self.selected_agents() {
+            let mut doc_ids = batch
+                .changes
+                .into_iter()
+                .map(|change| change.doc_id)
+                .filter(|doc_id| !doc_id.is_empty())
+                .collect::<Vec<_>>();
+            doc_ids.sort();
+            doc_ids.dedup();
+            if doc_ids.is_empty() {
+                continue;
+            }
+            for (actor, access) in self.selected_agents() {
+                if let Err(error) =
+                    gents_session::session::recover_agent_session_relationships_with_access(
+                        &access,
+                        &self.local_did,
+                        &actor,
+                    )
+                    .await
+                {
+                    tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
+                }
+                let terminal_parent_docs = match terminal_requests_with_parent_tool_call(
+                    &access, &doc_ids,
+                )
+                .await
+                {
+                    Ok(docs) => docs,
+                    Err(error) => {
+                        tracing::warn!(agent_did = %actor, %error, "background completion request filter failed; the periodic scan retries");
+                        continue;
+                    }
+                };
+                for doc_id in terminal_parent_docs {
                     if let Err(error) =
                         gents_toolcalls::background::completion::settle_rows_after_request_update(
                             &self.node,
                             &access,
                             &gents_automation::goal::session_message::SessionGoals,
                             &self.local_did,
-                            &change.doc_id,
+                            &doc_id,
                         )
                         .await
                     {
-                        tracing::warn!(request_doc_id = %change.doc_id, agent_did = %actor, %error, "session-message settlement failed; the periodic scan retries");
-                    }
-                    if let Err(error) =
-                        gents_session::session::recover_agent_session_relationships_with_access(
-                            &access,
-                            &self.local_did,
-                            &actor,
-                        )
-                        .await
-                    {
-                        tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
+                        tracing::warn!(request_doc_id = %doc_id, agent_did = %actor, %error, "session-message settlement failed; the periodic scan retries");
                     }
                     if let Err(error) =
                         gents_toolcalls::background::job::recovery::wake_jobs_after_request_update(
                             &access,
                             &self.job_driver,
-                            &change.doc_id,
+                            &doc_id,
                         )
                         .await
                     {
                         tracing::warn!(
-                            request_doc_id = %change.doc_id,
+                            request_doc_id = %doc_id,
                             agent_did = %actor,
                             error = %format!("{error:#}"),
                             "job wake from a request update failed"
@@ -273,4 +295,43 @@ impl BackgroundCompletionObserver {
             }
         }).collect()
     }
+}
+
+async fn terminal_requests_with_parent_tool_call(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_ids: &[String],
+) -> Result<Vec<String>> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID),
+    )
+    .filter(Filter::any_of(fields::DOC_ID, doc_ids))
+    .render();
+    let response = access.read(&rendered).await?;
+    let Some(rows) = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(rows
+        .iter()
+        .filter(|row| {
+            RequestLifecycleState::is_terminal_str(
+                row.get("lifecycle_state")
+                    .and_then(serde_json::Value::as_str),
+            ) && row
+                .get("caused_by_parent_tool_call_doc_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|parent| !parent.is_empty())
+        })
+        .filter_map(|row| row.get("_docID").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect())
 }

@@ -83,100 +83,62 @@ fn armed_seed(rows: Vec<ReplayEvidenceRow>) -> ReplayEstimateSeed {
     seed
 }
 
-#[tokio::test]
-async fn a_seeded_lookup_resolves_only_the_tags_the_seed_does_not_cover() {
-    let seeded = provider_tag(0);
-    let missing = provider_tag(1);
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
-        resolve: Some(counting_resolver(
-            vec![evidence_row(&missing, "header-1", Vec::new())],
-            vec![missing.clone()],
-            calls.clone(),
-        )),
-        estimate_seed: Some(armed_seed(vec![evidence_row(
-            &seeded,
-            "header-0",
-            Vec::new(),
-        )])),
-        ..LoopReplayInput::default()
-    };
-    let served = resolve_replay_evidence(&replay, &[seeded.clone(), missing.clone()])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0", "header-1"],
-        "seeded rows and freshly resolved rows compose one answer"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "only the uncovered tag crosses the canonical resolver"
-    );
+fn headers_of(rows: &[ReplayEvidenceRow]) -> Vec<&str> {
+    rows.iter()
+        .map(|row| row.evidence.physical_header.as_str())
+        .collect()
 }
 
 #[tokio::test]
-async fn a_seed_is_taken_once_so_the_next_lookup_re_resolves() {
-    let tag = provider_tag(0);
+async fn seeded_lookup_resolves_only_uncovered_tags_once_and_filters_subsets() {
+    let tag0 = provider_tag(0);
+    let tag1 = provider_tag(1);
+    let row0 = evidence_row(&tag0, "header-0", Vec::new());
+    let row1 = evidence_row(&tag1, "header-1", Vec::new());
+
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
+    let partial = LoopReplayInput {
         resolve: Some(counting_resolver(
-            vec![evidence_row(&tag, "header-0", Vec::new())],
-            vec![tag.clone()],
+            vec![row1.clone()],
+            vec![tag1.clone()],
             calls.clone(),
         )),
-        estimate_seed: Some(armed_seed(vec![evidence_row(&tag, "header-0", Vec::new())])),
+        estimate_seed: Some(armed_seed(vec![row0.clone()])),
         ..LoopReplayInput::default()
     };
-    resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
+    let served = resolve_replay_evidence(&partial, &[tag0.clone(), tag1.clone()])
         .await
         .unwrap();
-    let re_resolved = resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
-        .await
-        .unwrap();
-    assert_eq!(
-        re_resolved
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0"],
-        "the second lookup still answers the same evidence"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "every lookup after the seeded dispatch revalidates the store"
-    );
-}
+    assert_eq!(headers_of(&served), ["header-0", "header-1"]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-#[tokio::test]
-async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
-    let requested = provider_tag(0);
-    let superset = provider_tag(1);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
+    let once = LoopReplayInput {
+        resolve: Some(counting_resolver(
+            vec![row0.clone()],
+            vec![tag0.clone()],
+            calls.clone(),
+        )),
+        estimate_seed: Some(armed_seed(vec![row0.clone()])),
+        ..LoopReplayInput::default()
+    };
+    resolve_replay_evidence(&once, std::slice::from_ref(&tag0))
+        .await
+        .unwrap();
+    let re_resolved = resolve_replay_evidence(&once, std::slice::from_ref(&tag0))
+        .await
+        .unwrap();
+    assert_eq!(headers_of(&re_resolved), ["header-0"]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let subset = LoopReplayInput {
         resolve: Some(counting_resolver(Vec::new(), vec![], calls.clone())),
-        estimate_seed: Some(armed_seed(vec![
-            evidence_row(&requested, "header-0", Vec::new()),
-            evidence_row(&superset, "header-1", Vec::new()),
-        ])),
+        estimate_seed: Some(armed_seed(vec![row0, row1])),
         ..LoopReplayInput::default()
     };
-    let served = resolve_replay_evidence(&replay, &[requested])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0"],
-        "a subset dispatch never sees the estimate's other tags"
-    );
+    let served = resolve_replay_evidence(&subset, &[tag0]).await.unwrap();
+    assert_eq!(headers_of(&served), ["header-0"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
@@ -186,44 +148,15 @@ fn assembly_only() -> crate::test_support::scripted_provider::ScriptedProvider {
 }
 
 fn replay_assembly_config() -> LoopConfig {
-    LoopConfig {
-        provider_call: Default::default(),
-        replay: LoopReplayInput::default(),
-        provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
-            crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
-            crate::openai_wire::OpenAiWireApi::ChatCompletions,
-            "test-model",
-        )),
-        preamble: None,
-        context_message: None,
-        temperature: None,
-        max_tokens: None,
-        aggregate_token_budget: None,
-        additional_params: None,
-        structured_output: None,
-        tool_choice: None,
-        configuration_guard: None,
-        tool_rebinding: None,
-        on_rendered_request: None,
-        turn_compactor: None,
-        active_reduction_keys: Vec::new(),
-        reduction_chain_keys: Vec::new(),
-        initial_turn_index: 0,
-        resume_from_history: false,
-        context_window: 128_000,
-        compaction_threshold: 0.75,
-        context_calibration: Default::default(),
-        retry_policy: CompletionRetryPolicy::interactive_default(),
-        provider_idle_timeout: None,
-        deadline: None,
-        max_turns: 4,
-        max_invalid_tool_calls: crate::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
-        repeated_tool_failure_limit: crate::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
-        output_obligation_gate: None,
-        folded_prompts: Vec::new(),
-        authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::default(),
-    }
+    let mut config = crate::end_to_end_test::test_loop_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
+        crate::openai_wire::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+    config.preamble = None;
+    config.max_turns = 4;
+    config
 }
 
 fn assistant_with(request_id: Option<&str>, call: Option<(&str, &str)>) -> Message {
@@ -704,6 +637,17 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
             message: Message::Assistant {
                 request_id: None,
                 id: None,
+                content: vec![reasoning("only")],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("header-0".into()),
+            block_indices: vec![0],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
                 content: vec![
                     reasoning("a"),
                     AssistantContent::Text(Text {
@@ -712,20 +656,329 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
                     reasoning("b"),
                 ],
             },
-            source: Some(provider_tag(0)),
-            physical_header: Some("header".into()),
+            source: Some(provider_tag(1)),
+            physical_header: Some("header-1".into()),
             block_indices: vec![0, 1, 2],
             stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::user("next")),
     ];
     strip_all_reasoning(&mut rows);
+    assert_eq!(
+        rows.len(),
+        2,
+        "reasoning-only assistant row must be dropped"
+    );
     let Message::Assistant { content, .. } = &rows[0].message else {
         panic!("assistant row")
     };
     assert!(matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible"));
     assert_eq!(rows[0].block_indices, [1]);
     assert_eq!(rows[1].message, Message::user("next"));
+}
+
+#[tokio::test]
+async fn unpaired_tool_call_with_reasoning_leaves_no_ghost_assistant_on_openai_wire() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::{Reasoning, ToolCall, ToolFunction};
+
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+
+    let raw_history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![
+                    AssistantContent::Reasoning(Reasoning::new("planning background tool")),
+                    AssistantContent::ToolCall(ToolCall::new(
+                        "call_unpaired".into(),
+                        ToolFunction::new("shell".into(), serde_json::json!({"cmd": "ls"})),
+                    )),
+                ],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("hdr-0".into()),
+            block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![
+                    AssistantContent::Reasoning(Reasoning::new("reasoning before text")),
+                    AssistantContent::Text(Text {
+                        text: "visible reply".into(),
+                    }),
+                ],
+            },
+            source: Some(provider_tag(1)),
+            physical_header: Some("hdr-1".into()),
+            block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("status?")),
+    ];
+
+    let mut history = tagged_history::sanitize_tagged_history(raw_history).unwrap();
+    assert!(
+        matches!(
+            &history[1].message,
+            Message::Assistant { content, .. }
+                if matches!(content.as_slice(), [AssistantContent::Reasoning(_)])
+        ),
+        "sanitization drops the unpaired tool call, leaving a reasoning-only assistant row"
+    );
+
+    let context_row = TaggedMessage::unassociated(Message::user("<context>\nseat: a\n</context>"));
+    let prompt_row = TaggedMessage::unassociated(Message::user("what happened?"));
+    let mut new_messages = vec![context_row.clone(), prompt_row.clone()];
+
+    let request = assemble_provider_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &LoopReplayInput::default(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        history.len(),
+        3,
+        "emptied reasoning-only assistant row is dropped from history"
+    );
+    assert_eq!(
+        new_messages,
+        vec![context_row, prompt_row],
+        "dropping from history must preserve the history/new_messages split"
+    );
+    assert!(
+        matches!(
+            &history[1].message,
+            Message::Assistant { content, .. }
+                if matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible reply")
+        ),
+        "reasoning-plus-text assistant turn keeps its text block"
+    );
+
+    let assistant_messages: Vec<_> = request
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
+        .collect();
+    assert_eq!(
+        assistant_messages.len(),
+        1,
+        "no empty ghost assistant message in chat_history: {assistant_messages:?}"
+    );
+
+    #[cfg(feature = "native")]
+    {
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .unwrap();
+        let assistant_wire: Vec<_> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|msg| msg["role"] == "assistant")
+            .collect();
+        assert_eq!(
+            assistant_wire.len(),
+            1,
+            "projected OpenAI ChatCompletions body must contain zero ghost assistant turns: {body}"
+        );
+        assert_eq!(
+            assistant_wire[0]["content"],
+            serde_json::json!([{"type": "text", "text": "visible reply"}]),
+            "visible assistant text is preserved: {body}"
+        );
+    }
+}
+
+#[cfg(feature = "native")]
+#[tokio::test]
+async fn stripped_reasoning_only_assistant_leaves_no_ghost_on_responses_wire() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::claude_messages_body::ReplayWire;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::Reasoning;
+
+    let issuer = ReplayIssuer {
+        family: "OpenAiCompatible".into(),
+        endpoint: "https://api.openai.test".into(),
+    };
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::Responses,
+        "test-model",
+    ));
+    let replay = LoopReplayInput {
+        issuer: Some(issuer),
+        wire: Some(ReplayWire::Responses),
+        resolve: Some(Arc::new(|_| Box::pin(async { Ok(Vec::new()) }))),
+        ..LoopReplayInput::default()
+    };
+
+    let mut history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: Some("msg_ghost".into()),
+                content: vec![AssistantContent::Reasoning(Reasoning::new(
+                    "unreplayable foreign reasoning",
+                ))],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("hdr-0".into()),
+            block_indices: vec![0],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("continue")),
+    ];
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("next"))];
+
+    let request = assemble_provider_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        history,
+        vec![
+            TaggedMessage::unassociated(Message::user("start")),
+            TaggedMessage::unassociated(Message::user("continue")),
+        ]
+    );
+    assert_eq!(
+        new_messages,
+        vec![TaggedMessage::unassociated(Message::user("next"))]
+    );
+
+    let body = config
+        .provider_input_counter
+        .project_body(&request)
+        .unwrap();
+    let assistant_items: Vec<_> = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("assistant"))
+        .collect();
+    assert!(
+        assistant_items.is_empty(),
+        "Responses wire body must contain zero empty ghost assistant messages: {body}"
+    );
+}
+
+#[tokio::test]
+async fn repair_and_rebuild_drops_reasoning_only_assistants_and_keeps_prompt() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::{Reasoning, ToolCall, ToolFunction};
+
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+
+    let mut history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage::unassociated(Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("unpaired reasoning")),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call_unpaired".into(),
+                    ToolFunction::new("shell".into(), serde_json::json!({})),
+                )),
+            ],
+        }),
+        TaggedMessage::unassociated(Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("kept turn reasoning")),
+                AssistantContent::Text(Text {
+                    text: "kept reply".into(),
+                }),
+            ],
+        }),
+    ];
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("retry"))];
+
+    let request = repair::repair_and_rebuild_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        new_messages,
+        vec![TaggedMessage::unassociated(Message::user("retry"))]
+    );
+    let assistant_messages: Vec<_> = request
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
+        .collect();
+    assert_eq!(assistant_messages.len(), 1);
+
+    let mut fallback_history = vec![TaggedMessage::unassociated(Message::user("fallback"))];
+    let mut reasoning_only_prompt = vec![TaggedMessage::unassociated(Message::Assistant {
+        request_id: None,
+        id: None,
+        content: vec![AssistantContent::Reasoning(Reasoning::new("only"))],
+    })];
+    let rebuilt = repair::repair_and_rebuild_request(
+        &assembly_only(),
+        &mut fallback_history,
+        &mut reasoning_only_prompt,
+        &[],
+        &config,
+    )
+    .await
+    .unwrap();
+    assert!(fallback_history.is_empty());
+    assert_eq!(
+        reasoning_only_prompt,
+        vec![TaggedMessage::unassociated(Message::user("fallback"))]
+    );
+    assert!(rebuilt
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .all(|msg| !matches!(msg, Message::Assistant { .. })));
 }
 
 #[test]

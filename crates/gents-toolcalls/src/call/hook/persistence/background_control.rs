@@ -117,15 +117,21 @@ impl DefraSessionHook {
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
-            if matches!(
-                lifecycle.kind(),
-                crate::call::lifecycle::ToolRowKind::SessionMessage
-                    | crate::call::lifecycle::ToolRowKind::PluginJob
-            ) {
-                anyhow::bail!(
-                    "{tool_call_id} is a {} call; its result arrives only as a completion message, so wait_process does not wait on it",
-                    lifecycle.tool_name()
-                );
+            match lifecycle.kind() {
+                crate::call::lifecycle::ToolRowKind::SessionMessage => {
+                    anyhow::bail!(
+                        "{tool_call_id} is a {} call; wait_process only accepts spawn_process handles. Inspect the child session with sessions or agent_session_read using the session_id returned by {} instead",
+                        lifecycle.tool_name(),
+                        lifecycle.tool_name()
+                    );
+                }
+                crate::call::lifecycle::ToolRowKind::PluginJob => {
+                    anyhow::bail!(
+                        "{tool_call_id} is a {} call; wait_process only accepts spawn_process handles, and its result arrives only as a completion message",
+                        lifecycle.tool_name()
+                    );
+                }
+                _ => {}
             }
             if lifecycle.is_terminal() {
                 return self.background_tool_envelope(lifecycle, "terminal").await;

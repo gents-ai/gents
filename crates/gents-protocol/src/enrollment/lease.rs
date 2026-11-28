@@ -87,44 +87,64 @@ mod tests {
     }
 
     #[test]
-    fn a_thirty_day_lease_is_current_until_its_last_week() {
+    fn authorization_lease_window_expiry_and_canonical_parsing() {
         let expires = "2026-11-29T19:07:47Z";
-        let issued = at("2026-10-30T19:07:47Z");
-        let lease = AuthorizationLease::at(expires, issued);
-        assert_eq!(lease.state, AuthorizationLeaseState::Current);
-        assert_eq!(lease.remaining_days(), 30);
-
-        let just_outside = at("2026-11-22T19:07:46Z");
-        assert_eq!(
-            AuthorizationLease::at(expires, just_outside).state,
-            AuthorizationLeaseState::Current
-        );
-        let window_opens = at("2026-11-22T19:07:47Z");
-        let lease = AuthorizationLease::at(expires, window_opens);
-        assert_eq!(lease.state, AuthorizationLeaseState::RenewalDue);
-        assert_eq!(lease.remaining_days(), 7);
-        assert!(lease.needs_renewal());
-    }
-
-    #[test]
-    fn the_expiry_instant_is_expired_and_matches_the_freshness_gate() {
-        let expires = "2026-11-29T19:07:47Z";
-        let last_second = at("2026-11-29T19:07:46Z");
-        let lease = AuthorizationLease::at(expires, last_second);
-        assert_eq!(lease.state, AuthorizationLeaseState::RenewalDue);
-        assert_eq!(lease.remaining_days(), 0);
-        assert!(authorization_lease_is_fresh_at(expires, last_second));
-
-        for now in [at("2026-11-29T19:07:47Z"), at("2026-12-25T00:00:00Z")] {
+        for (now, state, days, fresh) in [
+            (
+                "2026-10-30T19:07:47Z",
+                AuthorizationLeaseState::Current,
+                30,
+                true,
+            ),
+            (
+                "2026-11-22T19:07:46Z",
+                AuthorizationLeaseState::Current,
+                7,
+                true,
+            ),
+            (
+                "2026-11-22T19:07:47Z",
+                AuthorizationLeaseState::RenewalDue,
+                7,
+                true,
+            ),
+            (
+                "2026-11-29T19:07:46Z",
+                AuthorizationLeaseState::RenewalDue,
+                0,
+                true,
+            ),
+            (
+                "2026-11-29T19:07:47Z",
+                AuthorizationLeaseState::Expired,
+                0,
+                false,
+            ),
+            (
+                "2026-12-25T00:00:00Z",
+                AuthorizationLeaseState::Expired,
+                0,
+                false,
+            ),
+        ] {
+            let now = at(now);
             let lease = AuthorizationLease::at(expires, now);
-            assert_eq!(lease.state, AuthorizationLeaseState::Expired);
-            assert_eq!(lease.remaining, Duration::zero());
-            assert!(!authorization_lease_is_fresh_at(expires, now));
+            assert_eq!(lease.state, state, "{now}");
+            assert_eq!(lease.remaining_days(), days, "{now}");
+            assert_eq!(
+                lease.needs_renewal(),
+                state != AuthorizationLeaseState::Current
+            );
+            assert_eq!(
+                authorization_lease_is_fresh_at(expires, now),
+                fresh,
+                "{now}"
+            );
+            if !fresh {
+                assert_eq!(lease.remaining, Duration::zero());
+            }
         }
-    }
 
-    #[test]
-    fn a_non_canonical_expiry_fails_closed() {
         let now = at("2026-11-01T00:00:00Z");
         for invalid in [
             "",
@@ -137,25 +157,16 @@ mod tests {
             assert!(lease.needs_renewal());
             assert!(!authorization_lease_is_fresh_at(invalid, now));
         }
-    }
 
-    #[test]
-    fn reading_a_lease_is_idempotent_and_a_later_generation_clears_renewal() {
-        let now = at("2026-11-25T00:00:00Z");
-        let expiring = "2026-11-29T19:07:47Z";
-        assert_eq!(
-            AuthorizationLease::at(expiring, now),
-            AuthorizationLease::at(expiring, now)
-        );
-        assert!(AuthorizationLease::at(expiring, now).needs_renewal());
-        // The superseding generation approved now with the default lease.
         let renewed = (now
             + Duration::seconds(
                 crate::enrollment::DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS as i64,
             ))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let lease = AuthorizationLease::at(&renewed, now);
-        assert_eq!(lease.state, AuthorizationLeaseState::Current);
-        assert_eq!(lease.remaining_days(), 30);
+        assert_eq!(
+            (lease.state, lease.remaining_days()),
+            (AuthorizationLeaseState::Current, 30)
+        );
     }
 }

@@ -176,6 +176,11 @@ pub struct WriteToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub output_obligation: Option<WriteToolOutputObligation>,
+    /// Upsert keys: a write updates the document whose key fields equal the
+    /// input's, or creates one when none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub key_fields: Option<Vec<String>>,
 }
 
 #[derive(
@@ -288,6 +293,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             fields: Vec<WriteToolField>,
             #[serde(default)]
             output_obligation: Option<WriteToolOutputObligation>,
+            #[serde(default)]
+            key_fields: Option<Vec<String>>,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(WriteToolDecl {
@@ -297,6 +304,9 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             description: raw.description,
             fields: raw.fields,
             output_obligation: raw.output_obligation,
+            key_fields: raw
+                .key_fields
+                .map(|keys| keys.iter().map(|key| key.trim().to_string()).collect()),
         })
     }
 }
@@ -329,6 +339,19 @@ impl WriteToolDecl {
             if field.name == "requester_did" && field.fill.is_none() {
                 anyhow::bail!(
                     "field[{index}] requester_did is node identity and must be runtime-filled"
+                );
+            }
+        }
+        if let Some(keys) = &self.key_fields {
+            anyhow::ensure!(!keys.is_empty(), "key_fields must name at least one field");
+            for (index, key) in keys.iter().enumerate() {
+                anyhow::ensure!(
+                    self.fields.iter().any(|field| field.name == *key),
+                    "key_fields[{index}] {key:?} is not one of the declared fields"
+                );
+                anyhow::ensure!(
+                    !keys[..index].contains(key),
+                    "key_fields[{index}] {key:?} is named twice"
                 );
             }
         }

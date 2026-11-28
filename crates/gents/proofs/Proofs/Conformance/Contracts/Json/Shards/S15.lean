@@ -1,0 +1,26 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AggregateBudget
+import Proofs.Conformance.CompletionRetry.Contracts
+import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.Contracts.Json.Runtime
+import Proofs.Conformance.DiscoveryFieldVisibility
+import Proofs.Conformance.EventDeliveryTransitions
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.GoalOperatorResume
+import Proofs.Conformance.HookInterrupt
+import Proofs.Conformance.Identity.SessionChildRecovery
+import Proofs.Conformance.MailboxHandoff
+import Proofs.Conformance.MailboxSweep
+import Proofs.Conformance.ProviderUsageRefusal
+import Proofs.Conformance.RootCandidates.StartupBarrier
+import Proofs.Conformance.StartupReadiness
+import Proofs.Conformance.UsageCacheRuntime
+import Proofs.Conformance.WorkspaceProvision
+
+namespace Conformance.Contracts.Shards.S15
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S15

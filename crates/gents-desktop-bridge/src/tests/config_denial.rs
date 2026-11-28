@@ -69,8 +69,10 @@ impl DenyingRuntime {
 }
 
 #[tokio::test]
-async fn a_denied_config_write_keeps_its_permission_code() {
+async fn denied_config_writes_session_reads_and_stops_keep_their_permission_code() {
     let runtime = DenyingRuntime::start().await;
+    let (core, node) = (runtime.core.as_ref(), runtime.node_did.as_str());
+
     let error = crate::commands::delete_task_config(
         &runtime.core,
         TaskDeleteRequest {
@@ -90,26 +92,15 @@ async fn a_denied_config_write_keeps_its_permission_code() {
         log.contains("403"),
         "expected real HTTP status in log: {log}"
     );
-    runtime.shutdown().await;
-}
 
-#[tokio::test]
-async fn denied_session_reads_keep_their_permission_code() {
-    let runtime = DenyingRuntime::start().await;
-    let (core, node) = (runtime.core.as_ref(), runtime.node_did.as_str());
     DenyingRuntime::assert_denied(
         crate::commands::session_goal(core, node, "session")
             .await
             .unwrap_err(),
     );
     DenyingRuntime::assert_denied(core.request_timeline(node, "request").await.unwrap_err());
-    runtime.shutdown().await;
-}
 
-#[tokio::test]
-async fn a_denied_stop_keeps_its_permission_code() {
-    let runtime = DenyingRuntime::start().await;
-    let error = crate::interrupt::interrupt_request(
+    let stop_error = crate::interrupt::interrupt_request(
         &runtime.core,
         &crate::types::DesktopInterruptRequest {
             request_id: "request".into(),
@@ -119,6 +110,7 @@ async fn a_denied_stop_keeps_its_permission_code() {
     )
     .await
     .unwrap_err();
-    DenyingRuntime::assert_denied(error.into());
+    DenyingRuntime::assert_denied(stop_error.into());
+
     runtime.shutdown().await;
 }

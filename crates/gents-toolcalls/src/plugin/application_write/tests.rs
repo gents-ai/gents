@@ -467,6 +467,176 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     node.shutdown().await.expect("node shutdown");
 }
 
+async fn run_write_tool(tool: &WriteTool, args: Value) -> std::result::Result<Value, Value> {
+    match Tool::call(
+        tool,
+        serde_json::from_value(args).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    {
+        Ok(text) => Ok(serde_json::from_str(&text).unwrap()),
+        Err(error) => Err(serde_json::from_str(&error.to_string()).unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn definition_documents_options_input_filter_max_targets_and_digest() {
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
+    let def = Tool::definition(&tool, String::new()).await;
+
+    assert_eq!(def.name, "write");
+    assert!(
+        def.description.contains("options.input") && def.description.contains("not \"fields\""),
+        "{}",
+        def.description
+    );
+    let props = &def.parameters["properties"];
+    let option_props = props["options"]["properties"].as_object().unwrap();
+    for key in ["input", "filter", "max_targets", "digest"] {
+        let entry = option_props
+            .get(key)
+            .unwrap_or_else(|| panic!("missing options.{key} in write definition"));
+        assert!(
+            entry["type"].is_string(),
+            "options.{key} must declare a JSON Schema type: {entry}"
+        );
+        assert!(
+            entry["description"].as_str().is_some_and(|s| !s.is_empty()),
+            "options.{key} must have a description: {entry}"
+        );
+    }
+    assert!(
+        option_props["input"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("not \"fields\""),
+        "{}",
+        option_props["input"]
+    );
+    assert!(
+        option_props["max_targets"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("1–100"),
+        "{}",
+        option_props["max_targets"]
+    );
+    node.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn help_with_collection_and_fields_option_mistake_recover_cleanly() {
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
+
+    for help_args in [
+        json!({"argv": ["help"], "collection": "Parcel"}),
+        json!({"argv": ["help", "create"], "collection": "Parcel"}),
+        json!({"argv": ["preview", "create", "--help"], "collection": "Parcel", "options": {"fields": {"reference": "S0"}}}),
+    ] {
+        let ok = run_write_tool(&tool, help_args.clone()).await.unwrap();
+        assert!(
+            ok["help"].as_str().is_some_and(|s| !s.is_empty()),
+            "{help_args}: {ok}"
+        );
+    }
+    let err = run_write_tool(
+        &tool,
+        json!({"argv": ["help"], "options": {"input": {"reference": "S0"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "write", "args": {"argv": ["help"]}})
+    );
+
+    let err = run_write_tool(
+        &tool,
+        json!({"argv": ["preview", "create"], "collection": "Parcel", "options": {"fields": {"reference": "S1", "status": "queued"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("use options.input (not \"fields\")"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({"tool": "write", "args": {"argv": ["preview", "create"], "collection": "Parcel", "options": {"input": {"reference": "S1", "status": "queued"}}}})
+    );
+    let preview = run_write_tool(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(preview["effect"]["operation"], "create");
+
+    let err = run_write_tool(
+        &tool,
+        json!({"argv": ["create"], "collection": "Parcel", "options": {"fields": {"reference": "S2", "status": "queued"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err["recovery"]["args"]["argv"],
+        json!(["preview", "create"])
+    );
+    assert_eq!(
+        err["recovery"]["args"]["options"]["input"],
+        json!({"reference": "S2", "status": "queued"})
+    );
+    run_write_tool(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+
+    let conflict = run_write_tool(
+        &tool,
+        json!({"argv": ["preview", "create"], "collection": "Parcel", "options": {"fields": {"reference": "A"}, "input": {"reference": "B"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        conflict["error"]
+            .as_str()
+            .unwrap()
+            .contains("use options.input (not \"fields\")"),
+        "{conflict}"
+    );
+    assert_eq!(
+        conflict["recovery"],
+        json!({"tool": "write", "args": {"argv": ["help", "create"]}})
+    );
+
+    let positional = run_write_tool(
+        &tool,
+        json!({"argv": ["preview", "create", "Parcel"], "options": {"input": {"reference": "S3", "status": "queued"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        positional["error"].as_str().unwrap().contains("collection"),
+        "{positional}"
+    );
+    assert_eq!(
+        positional["recovery"],
+        json!({"tool": "write", "args": {"argv": ["preview", "create"], "collection": "Parcel", "options": {"input": {"reference": "S3", "status": "queued"}}}})
+    );
+    run_write_tool(&tool, positional["recovery"]["args"].clone())
+        .await
+        .unwrap();
+
+    let rows = ConfigAccess::local(node.clone())
+        .execute("{Parcel{_docID}}")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Parcel"], json!([]));
+    node.shutdown().await.expect("node shutdown");
+}
+
 mod plugin {
     use super::*;
     use crate::plugin::data::{OnConflict, Stamp, StampContext};
@@ -682,41 +852,21 @@ mod plugin {
     }
 
     #[tokio::test]
-    async fn plugin_write_to_a_runtime_collection_is_refused() {
+    async fn plugin_write_to_runtime_or_ungranted_collection_is_refused() {
         let node = node().await;
-        let error = apply_all(
-            &node,
-            &grant(&["AgentRequest"]),
-            vec![write(
-                DataOp::Insert,
-                "AgentRequest",
-                None,
-                json!({"body": "x"}),
-            )],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("declared data grant"),
-            "{error:#}"
-        );
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn plugin_write_outside_the_grant_is_refused() {
-        let node = node().await;
-        let error = apply_all(
-            &node,
-            &grant(&["Other"]),
-            vec![write(DataOp::Insert, "Note", None, json!({"body": "x"}))],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("declared data grant"),
-            "{error:#}"
-        );
+        for (granted, target) in [("AgentRequest", "AgentRequest"), ("Other", "Note")] {
+            let error = apply_all(
+                &node,
+                &grant(&[granted]),
+                vec![write(DataOp::Insert, target, None, json!({"body": "x"}))],
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("declared data grant"),
+                "{target}: {error:#}"
+            );
+        }
         assert_eq!(notes(&node).await, json!([]));
         node.shutdown().await.expect("node shutdown");
     }

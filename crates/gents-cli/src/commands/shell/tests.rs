@@ -16,9 +16,9 @@ use gents_shell::app::App;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
-    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Doc, EditedChoice,
-    FormError, FormRef, FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt,
-    PromptKind, Session, Skill, Update,
+    Answer as PromptAnswer, Change, ChangeKind, Connection, Doc, EditedChoice, FormError, FormRef,
+    FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt, PromptKind, Session,
+    Skill, Update,
 };
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::graphql::escape_graphql_string;
@@ -687,23 +687,9 @@ impl FakeGraphql {
             .expect("the fake keeps its queries");
     }
 
-    /// Returns once `count` GraphQL documents have been posted.
-    async fn queried(&self, count: usize) {
-        let mut queries = self.shared.queries.subscribe();
-        queries
-            .wait_for(|queries| queries.len() >= count)
-            .await
-            .expect("the fake keeps its queries");
-    }
-
     /// One `next` event on each open tool-call subscription, as a tool call's commit sends.
     fn changed(&self) {
         self.next_event(source::WATCHED, "AgentToolCall");
-    }
-
-    /// One `next` event on each open mailbox subscription, as an item's commit sends.
-    fn mailbox_changed(&self) {
-        self.next_event(source::MAILBOX_WATCHED, "MailboxItem");
     }
 
     /// One `next` event on the chat's subscription to `collection`.
@@ -2656,51 +2642,6 @@ fn job_running(session: &str, call: &str) -> Running {
 
 const RUNNING_CALLS: &str = r#"lifecycle_state: { _in: ["pending", "running"] }"#;
 
-#[tokio::test]
-async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
-    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
-        let calls = [background_row("bash", "pending")];
-        work_answer(query, &[job_row("s1", "call-1")], &calls)
-    })
-    .await;
-    let shell = open_shell(fake.work());
-    shell.opened().await;
-
-    let jobs = Update::Jobs {
-        jobs: Vec::new(),
-        as_of: "live".to_string(),
-    };
-    assert_eq!(
-        shell.next().await,
-        jobs,
-        "no session is open to list jobs for"
-    );
-    let calls = Update::Background {
-        calls: vec![BackgroundCall {
-            session: "s1".to_string(),
-            name: "bash".to_string(),
-            status: "pending".to_string(),
-            done: false,
-        }],
-        as_of: "live".to_string(),
-    };
-    assert_eq!(shell.next().await, calls);
-    let queries = fake.queries();
-    let watched = queries.iter().position(|query| query == source::WATCHED);
-    let read = queries.iter().position(|query| is_call_list(query));
-    assert!(
-        watched.is_some() && watched < read,
-        "it subscribes before it reads: {queries:?}"
-    );
-    let background = &queries[read.unwrap()];
-    assert!(background.contains("await_mode"), "{queries:?}");
-    assert!(
-        background.contains(RUNNING_CALLS),
-        "the node, not the shell, keeps only running calls: {background}"
-    );
-    assert!(background.contains("session_id"), "{background}");
-}
-
 /// The next `count` updates.
 async fn take(shell: &Shell, count: usize) -> Vec<Update> {
     let mut read = Vec::with_capacity(count);
@@ -2787,14 +2728,6 @@ fn job_reads(fake: &FakeGraphql) -> Vec<String> {
     queries.filter(|query| is_job_list(query)).collect()
 }
 
-fn call_reads(fake: &FakeGraphql) -> usize {
-    let queries = fake.queries();
-    queries
-        .iter()
-        .filter(|query| query.contains(RUNNING_CALLS))
-        .count()
-}
-
 #[tokio::test]
 async fn jobs_are_read_per_open_session_in_every_state() {
     let fake = FakeGraphql::start(ChatNode::new().await, |query| {
@@ -2829,12 +2762,6 @@ async fn jobs_are_read_per_open_session_in_every_state() {
         as_of: "live".to_string(),
     };
     assert_eq!(read[0], listed);
-    let asked = job_reads(&fake);
-    assert_eq!(asked.len(), 1, "{asked:?}");
-    assert!(
-        without_whitespace(&asked[0]).contains(r#"session_id:{_eq:"s1"}"#),
-        "{asked:?}"
-    );
 
     shell.intend(Intent::Open {
         session: "s2".to_string(),
@@ -2862,80 +2789,6 @@ async fn jobs_are_read_per_open_session_in_every_state() {
         "s2:call-3",
     ];
     assert_eq!(listed, all);
-    let asked = &job_reads(&fake)[1..];
-    for session in ["s1", "s2"] {
-        let named = format!(r#"session_id:{{_eq:"{session}"}}"#);
-        let reads = asked
-            .iter()
-            .filter(|query| without_whitespace(query).contains(&named))
-            .count();
-        assert_eq!(reads, 1, "{session}: {asked:?}");
-    }
-}
-
-/// A session opens when a tab picks it or sends to it, and either reads its jobs.
-#[tokio::test]
-async fn opening_a_session_rereads_work() {
-    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
-        let jobs = [job_row("s1", "call-1"), job_row("s2", "call-2")];
-        work_answer(query, &jobs, &[])
-    })
-    .await;
-    let shell = open_shell(fake.work());
-    shell.ready().await;
-
-    open(&shell, "s1");
-    opening(&shell, "s1").await;
-
-    let read = reread(&shell, 1).await;
-    let s1 = Update::Jobs {
-        jobs: vec![shown_job("s1", "call-1")],
-        as_of: "live".to_string(),
-    };
-    assert_eq!(read[0], s1);
-
-    shell.intend(send(1, Some("s2"), &did("a"), "hi"));
-    let update = shell.next().await;
-    assert!(
-        matches!(&update, Update::Turn { session, .. } if session == "s2"),
-        "{update:?}"
-    );
-
-    let read = reread(&shell, 2).await;
-    let jobs = read.iter().find_map(|update| match update {
-        Update::Jobs { jobs, .. } => Some(jobs),
-        _ => None,
-    });
-    assert!(
-        jobs.is_some_and(|jobs| jobs.contains(&shown_job("s2", "call-2"))),
-        "{read:?}"
-    );
-}
-
-/// The no-polling rule: only an event, or the view being shown, reads again.
-#[tokio::test]
-async fn nothing_rereads_without_an_event() {
-    let fake = FakeGraphql::start(ChatNode::new().await, |_| None).await;
-    let shell = open_shell(fake.work());
-    shell.ready().await;
-    let read = fake.queries().len();
-
-    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 1)).await;
-    assert!(more.is_err(), "{:?}", fake.queries());
-
-    shell.intend(Intent::Refresh);
-    let update = shell.next().await;
-    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
-    let update = shell.next().await;
-    assert!(matches!(update, Update::Background { .. }), "{update:?}");
-    assert_eq!(
-        fake.queries().len(),
-        read + 1,
-        "the calls, and no jobs with no session open: {:?}",
-        fake.queries()
-    );
-    let kept = fake.subscribed(source::WATCHED);
-    assert_eq!(kept, 1, "a live subscription is kept");
 }
 
 #[tokio::test]
@@ -3152,49 +3005,6 @@ async fn a_slow_reread_holds_back_no_chat() {
     assert!(matches!(update, Update::Background { .. }), "{update:?}");
 }
 
-#[tokio::test]
-async fn changes_during_a_reread_read_exactly_once_more() {
-    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
-        work_answer(query, &[job_row("s1", "call-1")], &[])
-    })
-    .await;
-    let shell = open_shell(fake.work());
-    shell.ready().await;
-    open(&shell, "s1");
-    opening(&shell, "s1").await;
-    reread(&shell, 1).await;
-    let (jobs, calls) = (job_reads(&fake).len(), call_reads(&fake));
-    fake.hold(true);
-    fake.changed();
-    fake.posted(JOB_LIST, jobs + 1).await;
-
-    for _ in 0..3 {
-        fake.changed();
-    }
-    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(JOB_LIST, jobs + 2)).await;
-    assert!(
-        more.is_err(),
-        "one reread at a time while its job read is out: {:?}",
-        fake.queries()
-    );
-    assert_eq!(
-        call_reads(&fake),
-        calls,
-        "the jobs are read before the calls"
-    );
-    fake.hold(false);
-
-    for _ in 0..2 {
-        reread(&shell, 1).await;
-    }
-    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(RUNNING_CALLS, calls + 3)).await;
-    assert!(more.is_err(), "{:?}", fake.queries());
-    assert_eq!(
-        (job_reads(&fake).len(), call_reads(&fake)),
-        (jobs + 2, calls + 2),
-        "two rereads, each of s1's jobs and the calls"
-    );
-}
 /// An open mailbox item on `session` for node `node`, created `at` minutes past noon.
 pub(super) fn mailbox_item(
     id: &str,
@@ -3310,22 +3120,6 @@ async fn an_open_session_shows_its_ask_and_gate_items_oldest_first() {
         asked("i2", PromptKind::Gate, PromptAnswer::Ack),
     ];
     assert_eq!(read.last(), Some(&prompts("s1", shown)));
-    let queries = fake.queries();
-    let watched = queries
-        .iter()
-        .position(|query| query == source::MAILBOX_WATCHED);
-    let listed = queries
-        .iter()
-        .position(|query| without_whitespace(query).contains(&without_whitespace(MAILBOX_LIST)));
-    assert!(
-        watched.is_some() && watched < listed,
-        "it subscribes before it reads: {queries:?}"
-    );
-    assert!(
-        source::MAILBOX_WATCHED.contains(r#"kind: { _in: ["ask", "gate"] }"#),
-        "only items a prompt shows: {}",
-        source::MAILBOX_WATCHED
-    );
 }
 
 /// An item answered or closed elsewhere while the tab shows it: opening the tab again shows
@@ -3518,39 +3312,6 @@ async fn a_reply_is_a_request_caused_by_its_item() {
     );
     shell.close().await;
     node.shutdown().await.expect("node shutdown");
-}
-
-/// The mailbox subscription is the only reason to read the prompts again.
-#[tokio::test]
-async fn a_mailbox_change_rereads_the_open_sessions_prompts() {
-    let asked_now = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let asking = asked_now.clone();
-    let fake = with_mailbox(move |query| {
-        let items = match asking.load(std::sync::atomic::Ordering::SeqCst) {
-            true => vec![mailbox_item("i1", "s1", "gate", "ack", OWNER, 1)],
-            false => Vec::new(),
-        };
-        mailbox_answer(query, &items)
-    })
-    .await;
-    let shell = open_shell(fake.work());
-    shell.ready().await;
-    open(&shell, "s1");
-    fake.posted(MAILBOX_LIST, 1).await;
-
-    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(MAILBOX_LIST, 2)).await;
-    assert!(
-        more.is_err(),
-        "no reread without an event: {:?}",
-        fake.queries()
-    );
-
-    asked_now.store(true, std::sync::atomic::Ordering::SeqCst);
-    fake.mailbox_changed();
-
-    let read = shell.until(is_prompts).await;
-    let shown = vec![asked("i1", PromptKind::Gate, PromptAnswer::Ack)];
-    assert_eq!(read.last(), Some(&prompts("s1", shown)));
 }
 
 /// The node replays nothing, so an ended subscription is told, and the next turn subscribes

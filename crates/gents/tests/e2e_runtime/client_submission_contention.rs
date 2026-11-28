@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use gents::test_support::tla_trace::{Action, Red, SpecTraceMap, Trace};
+use gents::test_support::tla_trace::{Action, SpecTraceMap};
+use gents_lean_vocab::tla::replay::{Red, Trace};
 use gents_protocol::document_query::{
     fields::{agent_request as request, agent_session as session},
     Filter, Input, Query, Selection, Update,
@@ -77,7 +78,7 @@ const MAP: SpecTraceMap<Writer> = SpecTraceMap {
         "BindingChange" => Action::Environment(Writer::ChangeBinding),
         "Compose" => Action::Internal,
         "ReserveCommit" | "SubmitCommit" => {
-            assert_eq!(step.actor, Some(1), "one authored request");
+            assert_eq!(step.actor, Some(1.into()), "one authored request");
             Action::Commit
         }
         action => panic!("unknown submission action {action}"),

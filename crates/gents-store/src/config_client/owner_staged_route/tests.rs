@@ -1357,17 +1357,20 @@ async fn host_access_stages_only_controlled_cursor_writers() {
     f.node.shutdown().await.unwrap();
 }
 
-/// `Identity.OwnerStaged.applyOverHttp` with `planDiscarded = false`: when the
-/// PLAN transaction cannot be confirmed discarded, nothing is revoked and the
-/// apply is not run again.
+/// `Identity.OwnerStaged.applyOverHttp` plan guards and route nonce authority:
+/// - Unconfirmed PLAN discard revokes nothing and does not rerun.
+/// - Dispatched client-signed graph without replay authorization revokes nothing.
+/// - Unauthorized signed commands are denied before consuming a nonce, while an
+///   authorized command consumes its nonce once.
 #[tokio::test]
-async fn unconfirmed_plan_discard_revokes_nothing() {
+async fn owner_staged_plan_guards_and_unauthorized_nonce_protection() {
     let f = Fixture::start().await;
     f.client(f.user.as_ref())
         .request_owner_staged(&f.change(&f.route), true)
         .await
         .unwrap();
     assert_eq!(f.readable().await, vec![f.route.clone()]);
+
     let passes = std::sync::atomic::AtomicUsize::new(0);
     let client = f.client(f.admin.as_ref());
     let reached = Arc::new(tokio::sync::Notify::new());
@@ -1391,25 +1394,12 @@ async fn unconfirmed_plan_discard_revokes_nothing() {
     );
     assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(f.readable().await, vec![f.route.clone()]);
-    f.node.shutdown().await.unwrap();
-}
 
-/// A PLAN pass that dispatched a client-signed graph reruns only with its
-/// owner's replay authorization (`client_signed_write_may_retry`); without it
-/// nothing is revoked.
-#[tokio::test]
-async fn unauthorized_signed_plan_is_not_rerun() {
-    let f = Fixture::start().await;
-    f.client(f.user.as_ref())
-        .request_owner_staged(&f.change(&f.route), true)
-        .await
-        .unwrap();
     let marker = format!("did:key:z{}", uuid::Uuid::new_v4().simple());
-    let passes = std::sync::atomic::AtomicUsize::new(0);
-    let client = f.client(f.admin.as_ref());
+    let replay_passes = std::sync::atomic::AtomicUsize::new(0);
     let applied = client
         .transact_write("test.owner_staged_route.unauthorized_replay", |txn| {
-            let (passes, marker, change) = (&passes, &marker, f.change(&f.route));
+            let (passes, marker, change) = (&replay_passes, &marker, f.change(&f.route));
             Box::pin(async move {
                 passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 txn.execute_client_signed_create(
@@ -1429,18 +1419,9 @@ async fn unauthorized_signed_plan_is_not_rerun() {
         ),
         "{applied:?}"
     );
-    assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(replay_passes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(f.readable().await, vec![f.route.clone()]);
-    f.node.shutdown().await.unwrap();
-}
 
-/// The route decides the signer's authority before it consumes the command's
-/// nonce: an unauthorized but validly signed command is denied with the fixed
-/// denial and makes the runtime write no nonce, while an authorized command's
-/// nonce is still consumed once.
-#[tokio::test]
-async fn unauthorized_signed_command_writes_no_nonce() {
-    let f = Fixture::start().await;
     let runtime = ConfigAccess::local_as(f.node.clone(), did(f.runtime.did()));
     let nonces = || async {
         let response = runtime

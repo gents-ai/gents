@@ -2,9 +2,12 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "mapping", Path(__file__).with_name("check-canonical-output-map.py"))
@@ -97,6 +100,17 @@ class MappingTests(unittest.TestCase):
         for scripts in invalid:
             with self.subTest(scripts=scripts), self.assertRaises(ValueError):
                 mapping.check_execution_export(export(scripts))
+
+    def test_load_exported_contract_reads_file_or_env_without_invoking_lean(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            wrapped = Path(scratch) / "wrapped.txt"
+            wrapped.write_text(f"{mapping.BEGIN}\n{{\"families\":{{}}}}\n{mapping.END}\n")
+            raw = Path(scratch) / "raw.json"
+            raw.write_text('{"families":{"ok":true}}')
+            with mock.patch.object(mapping.subprocess, "run", side_effect=AssertionError("lean should not run")):
+                self.assertEqual(mapping.load_exported_contract(Path(scratch), wrapped), {"families": {}})
+                with mock.patch.dict(os.environ, {"GENTS_LEAN_CONTRACT_FILE": str(raw)}):
+                    self.assertEqual(mapping.load_exported_contract(Path(scratch)), {"families": {"ok": True}})
 
 if __name__ == "__main__":
     unittest.main()
