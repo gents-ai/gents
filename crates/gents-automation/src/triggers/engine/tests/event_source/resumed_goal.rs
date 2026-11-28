@@ -142,6 +142,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
                 },
             ],
             output_obligation: None,
+            key_fields: None,
         },
     );
     let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
