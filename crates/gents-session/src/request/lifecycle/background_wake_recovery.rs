@@ -122,6 +122,43 @@ impl RequestLifecycle {
     }
 }
 
+fn failed_candidates_query(node_did: &str, agent_did: &str) -> String {
+    format!(
+        r#"{{
+            failed: AgentRequest(filter: {{
+                node_did: {{ _eq: "{node_did}" }},
+                agent_did: {{ _eq: "{agent_did}" }},
+                lifecycle_state: {{ _eq: "{failed}" }},
+                execution_origin: {{ _eq: "scheduled" }}
+            }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
+                _docID request_id node_did requester_did agent_did session_id
+                retry_root_request input
+                request_hop retry_count
+                terminalized_at
+            }}
+        }}"#,
+        failed = RequestLifecycleState::Failed.as_str(),
+    )
+}
+
+fn actor_wake_context_query(node_did: &str, agent_did: &str) -> String {
+    format!(
+        r#"{{
+            successors: AgentRequest(filter: {{
+                node_did: {{ _eq: "{node_did}" }},
+                agent_did: {{ _eq: "{agent_did}" }},
+                retry_parent_request_doc_id: {{ _neq: null }}
+            }}) {{ _docID request_id retry_parent_request_doc_id }}
+            pending: AgentRequest(filter: {{
+                node_did: {{ _eq: "{node_did}" }},
+                agent_did: {{ _eq: "{agent_did}" }},
+                lifecycle_state: {{ _eq: "{pending}" }}
+            }}) {{ _docID request_id session_id requester_did input }}
+        }}"#,
+        pending = RequestLifecycleState::Pending.as_str(),
+    )
+}
+
 async fn load_candidates(
     node_did: &str,
     accesses: &std::collections::BTreeMap<String, gents_store::config_client::ConfigAccess>,
@@ -139,58 +176,45 @@ async fn load_candidates(
     let mut seen_pending = BTreeSet::new();
     for (actor, access) in accesses {
         let agent_did = escape_graphql_string(actor);
-        let query = format!(
-            r#"{{
-                failed: AgentRequest(filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    lifecycle_state: {{ _eq: "{failed}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
-                    _docID request_id node_did requester_did agent_did session_id
-                    retry_root_request input
-                    request_hop retry_count
-                    terminalized_at
-                }}
-                successors: AgentRequest(filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    retry_parent_request_doc_id: {{ _neq: null }}
-                }}) {{ _docID request_id retry_parent_request_doc_id }}
-                pending: AgentRequest(filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    lifecycle_state: {{ _eq: "{pending}" }}
-                }}) {{ _docID request_id session_id requester_did input }}
-            }}"#,
-            failed = RequestLifecycleState::Failed.as_str(),
-            pending = RequestLifecycleState::Pending.as_str()
-        );
-        let response = access.execute(&query).await?;
-        let data = response
+        let failed_response = access
+            .execute(&failed_candidates_query(&node_did, &agent_did))
+            .await?;
+        let failed_data = failed_response
             .get("data")
             .context("background wake query has no data")?;
-        if ["failed", "successors", "pending"]
-            .iter()
-            .any(|name| data.get(name).is_none())
-        {
+        if failed_data.get("failed").is_none() {
             // A denied actor (a disabled Agent holds no baseline) does not
             // block the healthy actors' scans; its rows stay for a later tick.
             tracing::warn!(agent_did = %actor, "background wake scan omitted rows for this actor");
             continue;
         }
-        append_unique_rows(
-            &mut failed,
-            &mut seen_failed,
-            agent_request_rows(data, "failed")?,
-        )?;
+        let actor_failed = agent_request_rows(failed_data, "failed")?;
+        if actor_failed.is_empty() {
+            continue;
+        }
+        let context_response = access
+            .execute(&actor_wake_context_query(&node_did, &agent_did))
+            .await?;
+        let context_data = context_response
+            .get("data")
+            .context("background wake context query has no data")?;
+        if ["successors", "pending"]
+            .iter()
+            .any(|name| context_data.get(name).is_none())
+        {
+            tracing::warn!(agent_did = %actor, "background wake scan omitted context rows for this actor");
+            continue;
+        }
+        append_unique_rows(&mut failed, &mut seen_failed, actor_failed)?;
         append_unique_rows(
             &mut successors,
             &mut seen_successors,
-            agent_request_rows(data, "successors")?,
+            agent_request_rows(context_data, "successors")?,
         )?;
         append_unique_rows(
             &mut pending,
             &mut seen_pending,
-            agent_request_rows(data, "pending")?,
+            agent_request_rows(context_data, "pending")?,
         )?;
     }
     failed.sort_by(|a, b| {

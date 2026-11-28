@@ -43,7 +43,10 @@ pub(crate) struct CallbackEngine {
     plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
+    lifecycle_subscription: Option<gents_store::subscription_source::ChangeSubscription>,
+    config_collection_ids: RapidHashSet<String>,
     desired_collections: RapidHashSet<String>,
+    active_binding_agents: RapidHashSet<String>,
     seen_docs: RapidHashMap<String, RapidHashMap<String, RapidHashSet<String>>>,
     cursor_bindings: RapidHashMap<String, String>,
     group_collections: RapidHashSet<String>,
@@ -51,9 +54,29 @@ pub(crate) struct CallbackEngine {
     collection_id_to_name: RapidHashMap<String, String>,
     group_page_cursors: RapidHashMap<String, String>,
     group_recovery_cursor: usize,
+    non_retryable_failed: RapidHashSet<(String, i64, String)>,
+    recovery_has_open_work: bool,
+    next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
     rescan_tick: tokio::time::Interval,
     cancel: CancellationToken,
     workers: Option<workers::CallbackWorkers>,
+}
+
+async fn run_recovery_sweep(engine: &mut CallbackEngine, context: &str) {
+    let node = engine.node.clone();
+    let node_did = engine.node_did.clone();
+    let ceiling = engine.ceiling.clone();
+    let plugins = engine.plugins.clone();
+    match recover_local_invocations(&node, &node_did, ceiling.as_deref(), &plugins, engine).await {
+        Ok(outcome) => {
+            engine.recovery_has_open_work = outcome.has_open_work;
+            engine.next_retry_at = outcome.next_retry_at;
+        }
+        Err(error) => {
+            engine.recovery_has_open_work = true;
+            tracing::warn!(%error, "{context}");
+        }
+    }
 }
 
 pub async fn run_callback_engine(
@@ -73,91 +96,139 @@ pub async fn run_callback_engine(
         workers::PLUGIN_CALLBACK_CONCURRENCY,
         cancel,
     ));
+    engine.ensure_lifecycle_subscription();
     engine.reconcile_bindings().await;
-    if let Err(error) = recover_local_invocations(
-        &engine.node,
-        &node_did,
-        ceiling.as_deref(),
-        &engine.plugins,
-        &engine,
-    )
-    .await
-    {
-        tracing::warn!(%error, "callback recovery sweep failed at startup");
+    run_recovery_sweep(&mut engine, "callback recovery sweep failed at startup").await;
+    engine.rescan_tick.reset();
+
+    enum EngineWake {
+        Cancelled,
+        SnapshotChanged,
+        SnapshotClosed,
+        Lifecycle(Option<events::DocumentChangeBatch>),
+        RetryDue,
+        FallbackTick,
+        SourceUpdate(Option<events::Message>),
     }
+
+    let mut snapshots_open = true;
 
     let result = loop {
         if engine.cancel.is_cancelled() {
             break Ok(());
         }
+        engine.ensure_lifecycle_subscription();
         if engine.subscription.is_none() && !engine.desired_collections.is_empty() {
             engine.subscription = Some(engine.subscription_source.subscribe_updates());
         }
 
-        if engine.subscription.is_none() {
+        let retry_delay = engine
+            .next_retry_at
+            .map(|at| (at - chrono::Utc::now()).to_std().unwrap_or_default());
+
+        let wake = {
+            let cancel = &engine.cancel;
+            let snapshots = &mut engine.snapshots;
+            let lifecycle = &mut engine.lifecycle_subscription;
+            let source_sub = &mut engine.subscription;
+            let rescan_tick = &mut engine.rescan_tick;
             tokio::select! {
                 biased;
-                _ = engine.cancel.cancelled() => break Ok(()),
-                _ = engine.rescan_tick.tick() => {
-                    engine.reconcile_bindings().await;
-                    engine.rescan_created_docs().await;
-                    if let Err(error) = recover_local_invocations(
-                        &engine.node,
-                        &engine.node_did,
-                        engine.ceiling.as_deref(),
-                        &engine.plugins,
-                        &engine,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%error, "callback recovery sweep failed");
+                _ = cancel.cancelled() => EngineWake::Cancelled,
+                changed = async {
+                    match snapshots.as_mut() {
+                        Some(rx) => rx.changed().await,
+                        None => std::future::pending().await,
+                    }
+                }, if snapshots_open => {
+                    if changed.is_err() {
+                        EngineWake::SnapshotClosed
+                    } else {
+                        EngineWake::SnapshotChanged
                     }
                 }
-            }
-            continue;
-        }
-
-        let mut message = None;
-        let rescan_due = {
-            let subscription = engine
-                .subscription
-                .as_mut()
-                .expect("subscription is Some when desired_collections is non-empty");
-            tokio::select! {
-                biased;
-                _ = engine.cancel.cancelled() => break Ok(()),
-                _ = engine.rescan_tick.tick() => true,
-                msg = subscription.recv() => {
-                    message = msg;
-                    false
+                batch = async {
+                    match lifecycle.as_mut() {
+                        Some(sub) => sub.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => EngineWake::Lifecycle(batch),
+                _ = tokio::time::sleep(retry_delay.unwrap_or_default()), if retry_delay.is_some() => {
+                    EngineWake::RetryDue
                 }
+                _ = rescan_tick.tick() => EngineWake::FallbackTick,
+                msg = async {
+                    match source_sub.as_mut() {
+                        Some(sub) => sub.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => EngineWake::SourceUpdate(msg),
             }
         };
-        if rescan_due {
-            engine.reconcile_bindings().await;
-            engine.rescan_created_docs().await;
-            if let Err(error) = recover_local_invocations(
-                &engine.node,
-                &engine.node_did,
-                engine.ceiling.as_deref(),
-                &engine.plugins,
-                &engine,
-            )
-            .await
-            {
-                tracing::warn!(%error, "callback recovery sweep failed");
+
+        match wake {
+            EngineWake::Cancelled => break Ok(()),
+            EngineWake::SnapshotClosed => {
+                snapshots_open = false;
             }
-            continue;
+            EngineWake::SnapshotChanged => {
+                engine.clear_non_retryable_failed();
+                engine.reconcile_bindings().await;
+                if !engine.desired_collections.is_empty() {
+                    engine.rescan_created_docs().await;
+                }
+                run_recovery_sweep(&mut engine, "callback recovery sweep failed").await;
+            }
+            EngineWake::Lifecycle(Some(batch)) => {
+                let config_changed = batch.resync_required
+                    || batch
+                        .changes
+                        .iter()
+                        .any(|change| engine.config_collection_ids.contains(&change.collection_id));
+                if config_changed {
+                    engine.clear_non_retryable_failed();
+                    engine.reconcile_bindings().await;
+                    if !engine.desired_collections.is_empty() {
+                        engine.rescan_created_docs().await;
+                    }
+                }
+                run_recovery_sweep(&mut engine, "callback recovery sweep failed").await;
+            }
+            EngineWake::Lifecycle(None) => {
+                engine.lifecycle_subscription = None;
+                engine.recovery_has_open_work = true;
+                tracing::warn!(
+                    "callback lifecycle subscription closed; continuing interval rescans"
+                );
+            }
+            EngineWake::RetryDue => {
+                engine.next_retry_at = None;
+                run_recovery_sweep(&mut engine, "callback retry sweep failed").await;
+            }
+            EngineWake::FallbackTick => {
+                let idle_with_live_subscription = engine.lifecycle_subscription.is_some()
+                    && !engine.recovery_has_open_work
+                    && engine.desired_collections.is_empty()
+                    && engine.active_binding_agents.is_empty();
+                if idle_with_live_subscription {
+                    continue;
+                }
+                engine.reconcile_bindings().await;
+                if !engine.desired_collections.is_empty() {
+                    engine.rescan_created_docs().await;
+                }
+                run_recovery_sweep(&mut engine, "callback recovery sweep failed").await;
+            }
+            EngineWake::SourceUpdate(None) => break Ok(()),
+            EngineWake::SourceUpdate(Some(message)) => {
+                let Some(update) = message.as_update() else {
+                    continue;
+                };
+                engine
+                    .handle_update(&update.collection_id, &update.doc_id)
+                    .await;
+            }
         }
-        let Some(message) = message else {
-            break Ok(());
-        };
-        let Some(update) = message.as_update() else {
-            continue;
-        };
-        engine
-            .handle_update(&update.collection_id, &update.doc_id)
-            .await;
     };
     engine
         .workers

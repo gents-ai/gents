@@ -126,32 +126,47 @@ pub(crate) async fn unanswered_goal_commands(
 ) -> Result<Vec<String>> {
     use gents_protocol::document_query::{
         fields::{agent_session_goal_control as control, agent_session_goal_receipt as receipt},
-        Filter, Query, QuerySet, Selection,
+        Filter, Query, Selection,
     };
-    let query = QuerySet::new()
-        .plain(
-            &Query::select(Selection::doc_id().field(control::INTENT_JSON)).filter(
-                Filter::eq(control::NODE_DID, runtime.did())
-                    .and(Filter::eq(control::AGENT_DID, agent_identity.did())),
-            ),
-        )
-        .plain(&Query::select(
-            Selection::new()
-                .field(receipt::COMMAND_DOC_ID)
-                .field(receipt::RECEIPT_JSON)
-                .field(receipt::RELATIONSHIPS_PENDING),
-        ))
-        .render();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent_identity.did())?,
         agent_identity,
     )?;
-    let response = access.read(&query).await?;
-    let rows = response["data"]["AgentSessionGoalControl"]
+    let control_query = Query::select(Selection::doc_id().field(control::INTENT_JSON))
+        .filter(
+            Filter::eq(control::NODE_DID, runtime.did())
+                .and(Filter::eq(control::AGENT_DID, agent_identity.did())),
+        )
+        .render();
+    let control_response = access.read(&control_query).await?;
+    let rows = control_response["data"]["AgentSessionGoalControl"]
         .as_array()
         .context("goal command observation omitted rows")?;
-    let receipts = response["data"]["AgentSessionGoalReceipt"]
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let command_doc_ids = rows
+        .iter()
+        .map(|row| {
+            row["_docID"]
+                .as_str()
+                .context("goal command lacks document identity")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let receipt_query = Query::select(
+        Selection::new()
+            .field(receipt::COMMAND_DOC_ID)
+            .field(receipt::RECEIPT_JSON)
+            .field(receipt::RELATIONSHIPS_PENDING),
+    )
+    .filter(Filter::any_of(
+        receipt::COMMAND_DOC_ID,
+        command_doc_ids.iter().copied(),
+    ))
+    .render();
+    let receipt_response = access.read(&receipt_query).await?;
+    let receipts = receipt_response["data"]["AgentSessionGoalReceipt"]
         .as_array()
         .context("goal receipt observation omitted rows")?;
     let mut receipts_by_command = RapidHashMap::new();

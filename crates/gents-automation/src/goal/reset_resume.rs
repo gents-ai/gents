@@ -10,18 +10,15 @@ pub enum ResetResume {
     Resumed(GoalResumeReceipt),
 }
 
-pub async fn resume_at_reset(
+pub async fn next_reset_resume_at(
     node: &std::sync::Arc<EmbeddedNode>,
-    runtime: &dyn NodeIdentity,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
-    now: DateTime<Utc>,
-) -> Result<ResetResume> {
-    if goal.parsed_status() != Some(GoalStatus::UsageLimited) {
-        return Ok(ResetResume::NotUsageLimited);
-    }
-    if goal.auto_resume_at_reset != Some(true) {
-        return Ok(ResetResume::Deferred);
+) -> Result<Option<DateTime<Utc>>> {
+    if goal.parsed_status() != Some(GoalStatus::UsageLimited)
+        || goal.auto_resume_at_reset != Some(true)
+    {
+        return Ok(None);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
     let access = ConfigAccess::local_with_optional_agent_signer(
@@ -29,29 +26,77 @@ pub async fn resume_at_reset(
         identity::Did::new(identity.did())?,
         identity.managed_agent_signer(),
     )?;
-    let reset_passed = access
+    access
         .transact_readonly("goal.reset_due", move |txn| {
             Box::pin(async move {
                 let stopped = goal_stopped_in_txn(txn, node_did, session_id).await?;
                 Ok::<_, anyhow::Error>(
                     stopped
                         .and_then(|(_, _, _, call)| call)
-                        .and_then(|call| call.usage_limit().and_then(|limit| limit.resets_at))
-                        .is_some_and(|reset| reset <= now),
+                        .and_then(|call| call.usage_limit().and_then(|limit| limit.resets_at)),
+                )
+            })
+        })
+        .await
+}
+
+pub async fn resume_at_reset_with_deadline(
+    node: &std::sync::Arc<EmbeddedNode>,
+    runtime: &dyn NodeIdentity,
+    identity: &dyn NodeIdentity,
+    goal: &GoalDocument,
+    now: DateTime<Utc>,
+) -> Result<(ResetResume, Option<DateTime<Utc>>)> {
+    if goal.parsed_status() != Some(GoalStatus::UsageLimited) {
+        return Ok((ResetResume::NotUsageLimited, None));
+    }
+    if goal.auto_resume_at_reset != Some(true) {
+        return Ok((ResetResume::Deferred, None));
+    }
+    let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
+    let access = ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        identity::Did::new(identity.did())?,
+        identity.managed_agent_signer(),
+    )?;
+    let reset_at = access
+        .transact_readonly("goal.reset_due", move |txn| {
+            Box::pin(async move {
+                let stopped = goal_stopped_in_txn(txn, node_did, session_id).await?;
+                Ok::<_, anyhow::Error>(
+                    stopped
+                        .and_then(|(_, _, _, call)| call)
+                        .and_then(|call| call.usage_limit().and_then(|limit| limit.resets_at)),
                 )
             })
         })
         .await?;
-    if !reset_passed {
-        return Ok(ResetResume::Deferred);
+    let Some(reset_at) = reset_at else {
+        return Ok((ResetResume::Deferred, None));
+    };
+    if reset_at > now {
+        return Ok((ResetResume::Deferred, Some(reset_at)));
     }
-    access
+    let outcome = access
         .transact_write("goal.resume_at_reset", move |txn| {
             Box::pin(stage_reset_resume(
                 txn, runtime, identity, node_did, session_id, now,
             ))
         })
+        .await?;
+    Ok((outcome, None))
+}
+
+pub async fn resume_at_reset(
+    node: &std::sync::Arc<EmbeddedNode>,
+    runtime: &dyn NodeIdentity,
+    identity: &dyn NodeIdentity,
+    goal: &GoalDocument,
+    now: DateTime<Utc>,
+) -> Result<ResetResume> {
+    resume_at_reset_with_deadline(node, runtime, identity, goal, now)
         .await
+        .map(|(outcome, _)| outcome)
 }
 
 async fn stage_reset_resume(

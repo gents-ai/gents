@@ -3066,3 +3066,126 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
     }
     node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn callback_recovery_skips_disabled_agents_and_caches_non_retryable_failures() {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
+
+    let db = super::test_node_builder("callback-skip-disabled-and-cache").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
+    super::seed_test_agent(&node, owner).await;
+
+    let disabled_did = "did:key:zDisabledCallbackAgent";
+    let unresolved_did = "did:key:zUnresolvedCallbackAgent";
+    let local_access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(owner).unwrap(),
+    );
+    local_access
+        .write(
+            "test.callback.seed_disabled_agent",
+            &format!(
+                r#"mutation {{ create_Agent(input: {{ node_did: "{}", agent_did: "{}", creation_nonce: "disabled-nonce", inference_profile_id: "fixture-profile", enabled: false }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(owner),
+                gents_store::graphql::escape_graphql_string(disabled_did),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let enabled_agent =
+        gents_store::test_support::fixture_agent(gents_store::test_support::FIXTURE_AGENT_NONCE);
+    let mut unavailable_agents = rapidhash::RapidHashMap::default();
+    unavailable_agents.insert(
+        enabled_agent.did().to_owned(),
+        crate::triggers::runtime_snapshot::UnavailableAgent::new(
+            AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+            "enabled watched fixture agent",
+        )
+        .with_watcher_identity(enabled_agent.clone()),
+    );
+    unavailable_agents.insert(
+        disabled_did.to_owned(),
+        crate::triggers::runtime_snapshot::UnavailableAgent::new(
+            AgentReadinessUnavailableReason::AgentDisabled,
+            "disabled core-pack agent",
+        ),
+    );
+    unavailable_agents.insert(
+        unresolved_did.to_owned(),
+        crate::triggers::runtime_snapshot::UnavailableAgent::new(
+            AgentReadinessUnavailableReason::BackendDisabled,
+            "unresolved agent without watcher identity",
+        ),
+    );
+    let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        placement_basis: Default::default(),
+        generation: 1,
+        node: None,
+        local_did: owner.to_owned(),
+        default_agent_did: enabled_agent.did().to_owned(),
+        agents: Default::default(),
+        tool_surfaces: Default::default(),
+        tool_configs: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_agents,
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
+    });
+    let (_tx, rx) = tokio::sync::watch::channel(snapshot);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut engine = super::CallbackEngine::new(node.clone(), owner.to_owned(), None, cancel);
+    engine.snapshots = Some(rx);
+
+    let scanned_dids = engine
+        .watcher_agent_accesses()
+        .unwrap()
+        .into_iter()
+        .map(|(did, _)| did)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        scanned_dids,
+        vec![enabled_agent.did().to_owned()],
+        "disabled and unresolved agents must never be scanned"
+    );
+
+    let access = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
+    let mut failed_inv = sample_invocation("inv-non-retryable", owner, "src-doc-1");
+    let created = super::create_pending_invocation(&node, &access, &failed_inv)
+        .await
+        .unwrap();
+    failed_inv = created;
+    failed_inv.lifecycle_state = LIFECYCLE_FAILED.to_owned();
+    failed_inv.attempts = Some(3);
+    assert!(
+        super::update_invocation(&access, &failed_inv, Some(LIFECYCLE_PENDING))
+            .await
+            .unwrap()
+    );
+
+    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default());
+    let outcome = super::recover_local_invocations(&node, owner, None, &plugins, &mut engine)
+        .await
+        .unwrap();
+    assert!(!outcome.has_open_work);
+    assert!(outcome.next_retry_at.is_none());
+    let key = (
+        "inv-non-retryable".to_owned(),
+        3i64,
+        LIFECYCLE_FAILED.to_owned(),
+    );
+    assert!(
+        engine.is_non_retryable_failed(&key),
+        "non-retryable failed invocation must be cached so subsequent sweeps skip it"
+    );
+    engine.clear_non_retryable_failed();
+    assert!(!engine.is_non_retryable_failed(&key));
+    node.shutdown().await.expect("node shutdown");
+}

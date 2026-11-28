@@ -1026,15 +1026,22 @@ async fn succeed_then_emit_result(
     .map(|_| ())
 }
 
+pub(crate) struct RecoverySweepOutcome {
+    pub(crate) has_open_work: bool,
+    pub(crate) next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 pub(crate) async fn recover_local_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    engine: &super::CallbackEngine,
-) -> Result<()> {
-    let mut invocations =
-        super::documents::list_recoverable_invocations(node, node_did, engine).await?;
+    engine: &mut super::CallbackEngine,
+) -> Result<RecoverySweepOutcome> {
+    let (mut invocations, any_repair_failed) =
+        super::documents::list_recoverable_invocations_with_repair_status(node, node_did, engine)
+            .await?;
+    let mut has_open_work = any_repair_failed || !invocations.is_empty();
     if let Some(workers) = engine.workers.as_ref() {
         workers.prioritize(&mut invocations);
     }
@@ -1107,7 +1114,12 @@ pub(crate) async fn recover_local_invocations(
             );
         }
     }
-    retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
+    let retry = retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await?;
+    has_open_work |= retry.has_open_work;
+    Ok(RecoverySweepOutcome {
+        has_open_work,
+        next_retry_at: retry.next_retry_at,
+    })
 }
 
 pub(super) async fn callback_for_recovery(
@@ -1133,17 +1145,29 @@ async fn retry_failed_plugin_invocations(
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    engine: &super::CallbackEngine,
-) -> Result<()> {
+    engine: &mut super::CallbackEngine,
+) -> Result<RecoverySweepOutcome> {
     let now = chrono::Utc::now();
+    let mut has_open_work = false;
+    let mut next_retry_at: Option<chrono::DateTime<chrono::Utc>> = None;
     for failed in super::documents::list_recent_failed(node, node_did, engine).await? {
+        let cache_key = (
+            failed.invocation_id.clone(),
+            failed.attempts.unwrap_or(0),
+            failed.lifecycle_state.clone(),
+        );
+        if engine.is_non_retryable_failed(&cache_key) {
+            continue;
+        }
         let Some(callback) =
             load_callback(node, &failed.callback_id, &failed.owner_node_did).await?
         else {
+            engine.mark_non_retryable_failed(cache_key);
             continue;
         };
         let gents_documents::CallbackHandler::Plugin { max_attempts, .. } = &callback.handler
         else {
+            engine.mark_non_retryable_failed(cache_key);
             continue;
         };
         let attempts = u32::try_from(failed.attempts.unwrap_or(0)).unwrap_or(0);
@@ -1154,17 +1178,27 @@ async fn retry_failed_plugin_invocations(
             attempts,
             gents_pack::plugin::attempts_allowed(*max_attempts),
         ) {
+            engine.mark_non_retryable_failed(cache_key);
             continue;
         }
+        has_open_work = true;
+        let backoff = gents_pack::plugin::retry_backoff(attempts);
         let last_claim = failed
             .claimed_at
             .as_deref()
-            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
-        let due = last_claim.is_none_or(|at| {
-            now.signed_duration_since(at).to_std().unwrap_or_default()
-                >= gents_pack::plugin::retry_backoff(attempts)
-        });
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .map(|at| at.with_timezone(&chrono::Utc));
+        let due = last_claim
+            .is_none_or(|at| now.signed_duration_since(at).to_std().unwrap_or_default() >= backoff);
         if !due {
+            if let (Some(at), Ok(backoff_delta)) = (last_claim, chrono::Duration::from_std(backoff))
+            {
+                let due_at = at + backoff_delta;
+                next_retry_at = Some(match next_retry_at {
+                    Some(current) => current.min(due_at),
+                    None => due_at,
+                });
+            }
             continue;
         }
         let mut pending = failed.clone();
@@ -1190,7 +1224,10 @@ async fn retry_failed_plugin_invocations(
             );
         }
     }
-    Ok(())
+    Ok(RecoverySweepOutcome {
+        has_open_work,
+        next_retry_at,
+    })
 }
 
 async fn execute_recovered(
