@@ -160,9 +160,13 @@ owner, which is the creating Agent, holds delete on its own Goal rows
 (`goal_creator_deletes_its_goal`), while another session Agent does not. The
 goal-create source is the only grant, so disabling goal creation withdraws it.
 The memory tool carries `delete-document` (decision): `forget` deletes a fact
-the Agent owns, and document ACP narrows that to rows whose native owner is the
-calling Agent, so it cannot reach another Agent's memory. Disabling the memory
-tool withdraws the grant. P2P pairing mutations likewise carry
+the Agent owns. It is the only permission that source adds
+(`memory_grants_only_delete_document`), and document ACP narrows it to memory
+rows the calling Agent owns or that are filed under an Agent on which it holds
+`session_admin` (`AgentMemoryAccess.memory_delete_is_owner_or_session_admin`),
+so it reaches another Agent's memory only where the caller already administers
+that Agent. Disabling the memory tool withdraws the grant. P2P pairing
+mutations likewise carry
 `delete-document` (decision): revoking a pairing deletes the Agent-owned
 overlay, and document ACP limits that to the overlay's native owner, so another
 Agent's overlay is unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
@@ -326,6 +330,16 @@ Agent baseline and the parent relation is `add-dac-relation`, also baseline. -/
 theorem p2p_pairing_grants_only_delete_document (surface : ToolPolicy.Surface)
     (packInstall : Bool) (permission : String)
     (granted : ("p2p-pairing", permission) ∈ toolOperationSources surface packInstall) :
+    permission = "delete-document" := by
+  simp [toolOperationSources] at granted
+  exact granted.2
+
+/-- The memory source grants `delete-document` and nothing else; document ACP
+decides which rows it reaches
+(`AgentMemoryAccess.memory_delete_is_owner_or_session_admin`). -/
+theorem memory_grants_only_delete_document (surface : ToolPolicy.Surface)
+    (packInstall : Bool) (permission : String)
+    (granted : ("memory", permission) ∈ toolOperationSources surface packInstall) :
     permission = "delete-document" := by
   simp [toolOperationSources] at granted
   exact granted.2

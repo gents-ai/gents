@@ -17,6 +17,14 @@
 \*            that already resolves to the merged key) and inserts the alias
 \*            row; with `Guard` it also writes the agent's one alias-guard
 \*            document. The unique index refuses a key already merged.
+\* `memory carry`, run concurrently by the agent, copies another agent's alias
+\* rows (`Carried`, translated to the agent's own problem keys), one row per
+\* transaction: with `CarryAdmits` it asks `mergeAdmitted` over the problems
+\* and alias rows it reads inside that transaction and inserts the row only
+\* when admitted, reporting a refusal instead; with `CarryGuard` an insert
+\* also writes the alias-guard document. Without `CarryAdmits` it inserts any
+\* row whose keys differ and whose merged key has no alias row yet, the checks
+\* the copy made before admission.
 \* Readers resolve a cited key with Lean `resolve`: follow the alias rows with
 \* fuel (rows + 1); a walk that comes back to a key lands on the minimum key
 \* of the cycle it closed (`MinBreak`; FALSE stops at the revisited key, the
@@ -34,8 +42,12 @@
 \* the first merge creates under a unique key collides the same way. The
 \* owner runs an aborted callback again on a fresh transaction
 \* (`TransactionReplay`); a refusal writes nothing and is not repeated. An
-\* operation aborts only for a commit of the other request, so two requests
-\* of `Steps` = 2 operations never exhaust the owner's four attempts. A
+\* operation aborts only for another actor's commit that writes the guard or
+\* inserts the unique value it inserts: the other request's at most `Steps`
+\* = 2 operations and the carry's one row, so a request's operation is
+\* aborted at most three times, and while the guard keeps the alias rows a
+\* forest over the three keys at most two commits write it, so the carry's is
+\* aborted at most twice; neither exhausts the owner's four attempts. A
 \* concurrent identical open aborts on the unique index and its rebuild finds
 \* the winner's row.
 \*
@@ -44,7 +56,9 @@
 \* transaction, so the rebuild after the guard's conflict commits the stale
 \* decision; `Rewrite` merges by moving the attempts its filtered read
 \* returned to the target and deleting the merged problem instead of
-\* appending an alias. The minimum-key break matters only once the alias rows
+\* appending an alias; `CarryUnadmitted` copies alias rows without admission
+\* or guard; `CarryNoGuard` admits each copied row inside its transaction but
+\* writes no guard. The minimum-key break matters only once the alias rows
 \* hold a cycle, which the guard prevents: `NoGuardResolves` checks it over
 \* the cycles `NoGuard` reaches, and `RevisitBreak` removes it there.
 EXTENDS Naturals, Sequences, FiniteSets
@@ -57,7 +71,10 @@ CONSTANTS
   Guard,       \* every merge also writes the agent's alias-guard document
   AdmitInTxn,  \* a merge, and its rebuild, decide on aliases read inside the transaction
   MinBreak,    \* resolve lands a cycle on its minimum key
-  AppendOnly   \* merge appends an alias row and changes no attempt or problem
+  AppendOnly,  \* merge appends an alias row and changes no attempt or problem
+  Carried,     \* alias rows the carry copies, in order, as <<from, to>>
+  CarryAdmits, \* the carry admits each row with `mergeAdmitted` inside its transaction
+  CarryGuard   \* a carried insert also writes the alias-guard document
 
 ASSUME /\ Keys \subseteq Nat \ {0}
        /\ Seeded \subseteq Keys
@@ -66,6 +83,9 @@ ASSUME /\ Keys \subseteq Nat \ {0}
        /\ AdmitInTxn \in BOOLEAN
        /\ MinBreak \in BOOLEAN
        /\ AppendOnly \in BOOLEAN
+       /\ \A i \in 1..Len(Carried) : Carried[i] \in Keys \X Keys
+       /\ CarryAdmits \in BOOLEAN
+       /\ CarryGuard \in BOOLEAN
 
 None == 0
 
@@ -77,7 +97,7 @@ Ops == [kind : {"open", "attempt"}, key : Keys, to : {None}]
 
 NoOp == [kind |-> "none", key |-> None, to |-> None]
 
-MaxCommits == Cardinality(Requests) * Steps
+MaxCommits == Cardinality(Requests) * Steps + Len(Carried)
 
 VARIABLES
   problems,  \* keys with a problem row
@@ -90,9 +110,18 @@ VARIABLES
   left,      \* per request: operations still to run
   began,     \* per request: the guard commits its transaction began after
   writes,    \* per request: the transaction writes what its callback staged
-  moved      \* per request, `AppendOnly` FALSE: the attempt rows its merge read
+  moved,     \* per request, `AppendOnly` FALSE: the attempt rows its merge read
+  cpos,      \* carry: the position in `Carried` of the row it copies next
+  cpc,       \* carry: "idle", or "open" while its transaction is open
+  cbegan,    \* carry: the guard commits its transaction began after
+  cwrites    \* carry: the transaction inserts the row its callback admitted
 
-vars == <<problems, alias, cites, written, guard, pc, op, left, began, writes, moved>>
+vars == <<problems, alias, cites, written, guard, pc, op, left, began, writes, moved,
+          cpos, cpc, cbegan, cwrites>>
+
+requestVars == <<pc, op, left, began, writes, moved>>
+
+carryVars == <<cpos, cpc, cbegan, cwrites>>
 
 Min(S) == CHOOSE m \in S : \A n \in S : m <= n
 
@@ -155,6 +184,10 @@ TypeOK ==
   /\ began \in [Requests -> 0..MaxCommits]
   /\ writes \in [Requests -> BOOLEAN]
   /\ moved \in [Requests -> SUBSET Ids]
+  /\ cpos \in 1..(Len(Carried) + 1)
+  /\ cpc \in {"idle", "open"}
+  /\ cbegan \in 0..MaxCommits
+  /\ cwrites \in BOOLEAN
 
 Init ==
   /\ problems = Seeded
@@ -168,6 +201,10 @@ Init ==
   /\ began = [r \in Requests |-> 0]
   /\ writes = [r \in Requests |-> FALSE]
   /\ moved = [r \in Requests |-> {}]
+  /\ cpos = 1
+  /\ cpc = "idle"
+  /\ cbegan = 0
+  /\ cwrites = FALSE
 
 \* A request starts its next operation: the transaction begins and its
 \* callback reads the committed rows and stages its writes.
@@ -181,6 +218,7 @@ Begin(r, o) ==
   /\ writes' = [writes EXCEPT ![r] = Stages(o)]
   /\ moved' = [moved EXCEPT ![r] = Moved(o)]
   /\ UNCHANGED <<problems, alias, cites, written, guard>>
+  /\ UNCHANGED carryVars
 
 \* The staged writes land in one commit.
 Apply(r) ==
@@ -221,8 +259,46 @@ Commit(r) ==
        ELSE /\ pc' = [pc EXCEPT ![r] = "idle"]
             /\ IF writes[r] THEN Apply(r) ELSE UNCHANGED <<problems, alias, cites, written, guard>>
             /\ UNCHANGED <<op, left, began, writes, moved>>
+  /\ UNCHANGED carryVars
 
-Next == \E r \in Requests : (\E o \in Ops : Begin(r, o)) \/ Commit(r)
+\* The alias row the carry copies next.
+Carry == Carried[cpos]
+
+\* Whether the carry's callback, over the committed rows, inserts its row.
+CarryStages ==
+  IF CarryAdmits THEN MergeAdmitted(problems, alias, Carry[1], Carry[2])
+  ELSE Carry[1] # Carry[2] /\ alias[Carry[1]] = None
+
+\* The carry starts copying its next row: the transaction begins and its
+\* callback reads the committed rows.
+CarryBegin ==
+  /\ cpc = "idle"
+  /\ cpos <= Len(Carried)
+  /\ cpc' = "open"
+  /\ cbegan' = guard
+  /\ cwrites' = CarryStages
+  /\ UNCHANGED <<problems, alias, cites, written, guard, cpos>>
+  /\ UNCHANGED requestVars
+
+\* The carry commits its insert, or aborts on the guard or the unique index
+\* and is rebuilt on a fresh transaction that decides again; a refusal
+\* commits nothing and the carry reports it.
+CarryCommit ==
+  /\ cpc = "open"
+  /\ IF cwrites /\ ((CarryGuard /\ guard # cbegan) \/ alias[Carry[1]] # None)
+       THEN /\ cbegan' = guard
+            /\ cwrites' = CarryStages
+            /\ UNCHANGED <<problems, alias, cites, written, guard, cpos, cpc>>
+       ELSE /\ cpc' = "idle"
+            /\ cpos' = cpos + 1
+            /\ alias' = IF cwrites THEN [alias EXCEPT ![Carry[1]] = Carry[2]] ELSE alias
+            /\ guard' = IF cwrites /\ CarryGuard THEN guard + 1 ELSE guard
+            /\ UNCHANGED <<problems, cites, written, cbegan, cwrites>>
+  /\ UNCHANGED requestVars
+
+Next == \/ \E r \in Requests : (\E o \in Ops : Begin(r, o)) \/ Commit(r)
+        \/ CarryBegin
+        \/ CarryCommit
 
 Spec == Init /\ [][Next]_vars
 

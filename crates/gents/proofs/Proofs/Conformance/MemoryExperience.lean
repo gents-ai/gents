@@ -5,8 +5,9 @@ namespace Conformance.MemoryExperience
 
 open Lean Tools.Memory.Experience
 
-deriving instance ToJson for ProblemRow, AttemptRow, OutcomeRow, Current, Provenance, Score,
-  FoldedAttempt, FoldedProblem, Experience, Index, MergeDecision
+deriving instance ToJson for ProblemRow, AttemptRow, Score, OutcomeRow, Current, Provenance,
+  Observation, FoldedAttempt, FoldedProblem, Experience, Index, MergeDecision, ScoreDecision,
+  ScoreAdmission
 
 structure AliasRow where
   fromProblemKey : String
@@ -26,20 +27,28 @@ def RowsInput.rows (input : RowsInput) : Rows :=
     outcomes := input.outcomes
     aliases := input.aliases.map fun row => (row.fromProblemKey, row.toProblemKey) }
 
-def reader : Current := { agentDid := "did:key:self", executedModelName := "model-a" }
+def reader : Current := { agentDid := "did:key:self", executedModelName := some "model-a" }
+
+def readerWithoutModel : Current := { reader with executedModelName := none }
+
+def readerWithEmptyModel : Current := { reader with executedModelName := some "" }
 
 def problem (key name : String) (createdAt : Nat) (carriedFrom : Option String := none) :
     ProblemRow :=
   { problemKey := key, name, carriedFrom, createdAt }
 
 def attempt (key cited : String) (createdAt : Nat) (predicted : List String := [])
-    (model : String := "model-a") (carriedFrom : Option String := none) : AttemptRow :=
+    (model : Option String := some "model-a") (carriedFrom : Option String := none) : AttemptRow :=
   { attemptKey := key, problemKey := cited, predicted, executedModelName := model, carriedFrom,
     createdAt }
 
-def outcome (key attemptKey : String) (createdAt passed total : Nat)
-    (fixed missed : List String := []) : OutcomeRow :=
-  { outcomeKey := key, attemptKey, fixed, missed, passed, total, createdAt }
+def scored (passed total : Nat) : Option Score := some ⟨passed, total⟩
+
+def outcome (key attemptKey : String) (createdAt : Nat) (score : Option Score)
+    (fixed missed : List String := []) (model : Option String := some "model-a")
+    (carriedFrom : Option String := none) : OutcomeRow :=
+  { outcomeKey := key, attemptKey, fixed, missed, score, executedModelName := model, carriedFrom,
+    createdAt }
 
 def chain : RowsInput :=
   { problems := [problem "p-a" "Cache stale after deploy" 1, problem "p-b" "Stale cache entries" 2,
@@ -58,16 +67,37 @@ def index : RowsInput :=
   { problems := [problem "p-1" "Flaky login test" 1, problem "p-2" "Slow build" 3,
       problem "p-3" "Memory leak in worker" 6, problem "p-4" "Build takes too long" 7]
     attempts := [attempt "a-1" "p-1" 2 ["login"], attempt "a-2" "p-2" 4 ["build"]]
-    outcomes := [outcome "o-2" "a-2" 5 10 10 ["build"]]
+    outcomes := [outcome "o-2" "a-2" 5 (scored 10 10) ["build"]]
     aliases := [⟨"p-4", "p-2"⟩] }
 
 def provenances : RowsInput :=
   { problems := [problem "p-1" "Flaky login test" 1,
       problem "p-5" "Flaky login test on CI" 2 (some "did:key:source")]
-    attempts := [attempt "a-1" "p-1" 3 ["login"] "model-b",
-      attempt "a-2" "p-5" 4 ["login"] "model-a" (some "did:key:source"),
-      attempt "a-3" "p-5" 5 [] "model-b" (some "did:key:source"),
-      attempt "a-4" "p-1" 6 [] "model-a" (some "did:key:self")] }
+    attempts := [attempt "a-1" "p-1" 3 ["login"] (some "model-b"),
+      attempt "a-2" "p-5" 4 ["login"] (some "model-a") (some "did:key:source"),
+      attempt "a-3" "p-5" 5 [] (some "model-b") (some "did:key:source"),
+      attempt "a-4" "p-1" 6 [] (some "model-a") (some "did:key:self")] }
+
+def unnamedModels : RowsInput :=
+  { problems := [problem "p-1" "Flaky login test" 1]
+    attempts := [attempt "a-1" "p-1" 2 ["login"] (some ""),
+      attempt "a-2" "p-1" 3 [] none (some "did:key:source"),
+      attempt "a-3" "p-1" 4 [] (some "model-a")]
+    outcomes := [outcome "o-1" "a-1" 5 (scored 3 4) ["login"] [] (some "")] }
+
+def observed : RowsInput :=
+  { problems := [problem "p-1" "Flaky login test" 1, problem "p-2" "Slow build" 5,
+      problem "p-3" "Cache misses after deploy" 8 (some "did:key:source"),
+      problem "p-4" "Upload timeout" 11]
+    attempts := [attempt "a-1" "p-1" 2 ["login", "logout"], attempt "a-2" "p-2" 6,
+      attempt "a-3" "p-3" 9 [] (some "model-a") (some "did:key:source"),
+      attempt "a-4" "p-4" 12 ["upload"]]
+    outcomes := [outcome "o-1" "a-1" 3 (scored 8 10) ["login"],
+      outcome "o-2" "a-1" 4 none [] ["logout"] (some "model-b"),
+      outcome "o-3" "a-2" 7 (scored 7 10) [] [] (some "model-b"),
+      outcome "o-4" "a-3" 10 (scored 5 5) [] [] (some "model-a") (some "did:key:source"),
+      outcome "o-5" "a-4" 13 none [] [] none,
+      outcome "o-6" "a-4" 14 none] }
 
 def longRootCause : String :=
   "The integration suite fails when the payment sandbox rate-limits parallel workers, " ++
@@ -89,20 +119,25 @@ def fold : Family FoldInput Experience where
       { scenario := "multiple_outcomes", current := reader, rows :=
           { problems := [problem "p-flaky" "Flaky test timeout" 1]
             attempts := [attempt "a-1" "p-flaky" 2 ["test_login", "test_logout", "test_signup"]]
-            outcomes := [outcome "o-2" "a-1" 5 9 10 ["test_login"] ["test_logout"],
-              outcome "o-1" "a-1" 3 8 10 ["test_login"]] } },
+            outcomes := [outcome "o-2" "a-1" 5 (scored 9 10) ["test_login"] ["test_logout"],
+              outcome "o-1" "a-1" 3 (scored 8 10) ["test_login"]] } },
       { scenario := "fixed_then_missed", current := reader, rows :=
           { problems := [problem "p-flaky" "Flaky test timeout" 1]
             attempts := [{ attempt "a-1" "p-flaky" 2 ["test_login"] with accepted := false }]
-            outcomes := [outcome "o-2" "a-1" 3 9 10 [] ["test_login"],
-              outcome "o-1" "a-1" 3 10 10 ["test_login"]] } },
+            outcomes := [outcome "o-2" "a-1" 3 (scored 9 10) [] ["test_login"],
+              outcome "o-1" "a-1" 3 (scored 10 10) ["test_login"]] } },
       { scenario := "alias_chain", current := reader, rows := chain },
       { scenario := "alias_cycle", current := reader, rows := cycle },
       { scenario := "unknown_keys", current := reader, rows :=
           { problems := [problem "p-1" "Flaky login test" 1]
             attempts := [attempt "a-1" "p-ghost" 2 ["login"], attempt "a-2" "p-1" 3]
-            outcomes := [outcome "o-1" "a-missing" 4 1 2, outcome "o-2" "a-2" 5 2 2] } },
+            outcomes := [outcome "o-1" "a-missing" 4 (scored 1 2),
+              outcome "o-2" "a-2" 5 (scored 2 2)] } },
       { scenario := "other_model_and_carried", current := reader, rows := provenances },
+      { scenario := "reader_model_unknown", current := readerWithoutModel, rows := provenances },
+      { scenario := "empty_and_absent_models", current := reader, rows := unnamedModels },
+      { scenario := "reader_model_empty", current := readerWithEmptyModel, rows := unnamedModels },
+      { scenario := "unscored_and_other_model_outcomes", current := reader, rows := observed },
       { scenario := "merged_index", current := reader, rows := index } ]
   model := fun input => Tools.Memory.Experience.fold input.current input.rows.rows
 
@@ -132,6 +167,12 @@ def recall : Family RecallInput Index where
             attempts := [attempt "a-1" "p-long" 2 ["payments"]] }, ranks := [], budget := 1000 },
       { scenario := "provenance_flags", current := reader, rows := provenances, ranks := [],
         budget := 1000 },
+      { scenario := "reader_model_unknown", current := readerWithoutModel, rows := provenances,
+        ranks := [], budget := 1000 },
+      { scenario := "empty_and_absent_models", current := reader, rows := unnamedModels,
+        ranks := [], budget := 1000 },
+      { scenario := "latest_observations", current := reader, rows := observed, ranks := [],
+        budget := 1000 },
       { scenario := "alias_cycle", current := reader, rows := cycle, ranks := ["k-m"],
         budget := 1000 },
       { scenario := "empty", current := reader, rows := {}, ranks := ["p-1"], budget := 1000 } ]
@@ -149,37 +190,81 @@ structure MergeInput where
   aliases : List AliasRow
   fromProblemKey : String
   toProblemKey : String
+  deriving ToJson
+
+def merge (scenario fromKey toKey : String) (aliases : List AliasRow := []) : MergeInput :=
+  { scenario, problems := mergeProblems, aliases, fromProblemKey := fromKey,
+    toProblemKey := toKey }
+
+@[conformance_family]
+def mergeAdmission : Family MergeInput MergeDecision where
+  inputs :=
+    [ merge "admitted" "p-1" "p-2",
+      merge "admitted_reverse" "p-2" "p-1",
+      merge "same_key" "p-1" "p-1",
+      merge "unknown_from" "p-9" "p-1",
+      merge "unknown_to" "p-1" "p-9",
+      merge "already_merged" "p-1" "p-3" [⟨"p-1", "p-2"⟩],
+      merge "closes_cycle" "p-1" "p-2" [⟨"p-2", "p-1"⟩],
+      merge "closes_cycle_through_chain" "p-1" "p-3" [⟨"p-3", "p-2"⟩, ⟨"p-2", "p-1"⟩],
+      merge "into_merged_key" "p-1" "p-2" [⟨"p-2", "p-3"⟩],
+      merge "into_cycle" "p-1" "p-3" [⟨"p-2", "p-3"⟩, ⟨"p-3", "p-2"⟩] ]
+  model := fun input => mergeAdmitted (input.problems.map (·.problemKey))
+    (input.aliases.map fun row => (row.fromProblemKey, row.toProblemKey))
+    input.fromProblemKey input.toProblemKey
+
+/-- `existing` are the names the agent's problems were opened with; the
+replay derives each one's key, and the root cause's, with production's key
+derivation. -/
+structure LandsOnInput where
+  scenario : String
+  agentDid : String
+  existing : List String
   rootCause : String
   deriving ToJson
 
-structure MergeOutput where
-  decision : MergeDecision
-  landsOn : Option String
-  deriving ToJson
+def opened : List String := ["Flaky login test", "Slow build", "Fehler in der Übersetzung"]
 
-def merge (scenario fromKey toKey rootCause : String) (aliases : List AliasRow := []) :
-    MergeInput :=
-  { scenario, problems := mergeProblems, aliases, fromProblemKey := fromKey,
-    toProblemKey := toKey, rootCause }
+def lands (scenario rootCause : String) (existing : List String := opened) : LandsOnInput :=
+  { scenario, agentDid := "did:key:self", existing, rootCause }
 
 @[conformance_family]
-def mergeAdmission : Family MergeInput MergeOutput where
+def landsOn : Family LandsOnInput (Option String) where
   inputs :=
-    [ merge "admitted" "p-1" "p-2" "  flaky   LOGIN test\n",
-      merge "same_key" "p-1" "p-1" "Flaky login test",
-      merge "unknown_from" "p-9" "p-1" "Flaky login tests",
-      merge "unknown_to" "p-1" "p-9" "SLOW BUILD",
-      merge "already_merged" "p-1" "p-3" "Slow\u00A0build" [⟨"p-1", "p-2"⟩],
-      merge "closes_cycle" "p-1" "p-2" "Slow\u2003 build" [⟨"p-2", "p-1"⟩],
-      merge "closes_cycle_through_chain" "p-1" "p-3" "fehler in der Übersetzung"
-        [⟨"p-3", "p-2"⟩, ⟨"p-2", "p-1"⟩],
-      merge "into_merged_key" "p-1" "p-2" "fehler in der übersetzung" [⟨"p-2", "p-3"⟩],
-      merge "into_cycle" "p-1" "p-3" "FEHLER IN DER Übersetzung" [⟨"p-2", "p-3"⟩, ⟨"p-3", "p-2"⟩],
-      merge "empty_root_cause" "p-2" "p-1" " " ]
-  model := fun input =>
-    { decision := mergeAdmitted (input.problems.map (·.problemKey))
-        (input.aliases.map fun row => (row.fromProblemKey, row.toProblemKey))
-        input.fromProblemKey input.toProblemKey
-      landsOn := landsOn input.problems input.rootCause }
+    [ lands "identical" "Flaky login test",
+      lands "whitespace_and_ascii_case" "  flaky   LOGIN test\n",
+      lands "other_text" "Flaky login tests",
+      lands "upper_case" "SLOW BUILD",
+      lands "no_break_space" "Slow\u00A0build",
+      lands "em_space" "Slow\u2003 build",
+      lands "non_ascii_kept" "fehler in der Übersetzung",
+      lands "non_ascii_case_differs" "fehler in der übersetzung",
+      lands "ascii_folded_around_non_ascii" "FEHLER IN DER Übersetzung",
+      lands "empty_root_cause" " ",
+      lands "no_problems" "Flaky login test" [] ]
+  model := fun input => Tools.Memory.Experience.landsOn input.existing input.rootCause
+
+structure ScoreInput where
+  scenario : String
+  passed : Option Int
+  total : Option Int
+  deriving ToJson
+
+@[conformance_family]
+def scoreAdmission : Family ScoreInput ScoreAdmission where
+  inputs :=
+    [ ⟨"scored", some 9, some 10⟩,
+      ⟨"unscored", none, none⟩,
+      ⟨"zero_of_zero", some 0, some 0⟩,
+      ⟨"all_passed", some 10, some 10⟩,
+      ⟨"passed_without_total", some 3, none⟩,
+      ⟨"total_without_passed", none, some 3⟩,
+      ⟨"negative_without_total", some (-1), none⟩,
+      ⟨"negative_passed", some (-1), some 10⟩,
+      ⟨"negative_total", some 0, some (-1)⟩,
+      ⟨"negative_beside_exceeding", some 5, some (-2)⟩,
+      ⟨"exceeds_total", some 11, some 10⟩,
+      ⟨"largest", some 9223372036854775807, some 9223372036854775807⟩ ]
+  model := fun input => scoreAdmitted input.passed input.total
 
 end Conformance.MemoryExperience

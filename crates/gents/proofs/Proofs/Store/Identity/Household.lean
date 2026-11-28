@@ -124,21 +124,34 @@ holding it grants nothing: the receiving node reads it only as a certified
 assignment whose creator is the issuer it trusts
 (`only_the_owner_places_an_agent`, `a_host_grants_no_permission`).
 
-`agent_memory` holds an Agent's memory: its facts, problems, attempts,
-outcomes, alias rows and alias guard (`Tools.Memory.Experience`,
-`Identity.AgentMemoryAccess`). Decision (operator, Q1): its parent is the
-Agent, so memory outlives the session that recorded it. The Agent's DID creates
-every row and so owns it, and reads, updates and deletes it natively. Its read
-is the Agent's `memory_read`: an explicit `memory_reader`, a configuration
+`agent_memory` holds an Agent's experience: its problems, attempts, outcomes,
+alias rows and alias guard (`Tools.Memory.Experience`); `agent_memory_facts`
+holds its facts (`Identity.AgentMemoryAccess`). Decision (operator, Q1): the
+parent of both is the Agent, so memory outlives the session that recorded it.
+Decision (operator, H2): a row is filed under an Agent only by an actor holding
+the Agent's `memory_write`: the Agent itself, its `executor`, or whoever holds
+`session_admin` on it (an `administrator`, and the Node's delete). The create
+gate checks it when the row is created and when a parent link is added
+(`gatedCreateAllowed`, `parentLinkAllowed`), so no other Agent files a row under
+it (`only_the_agent_and_its_administrators_file_memory`). Rows are selected by
+the `agent_did` field their creator wrote, which no permission checks: the gate
+is what makes that field trustworthy, because a row under an Agent was written
+by that Agent or its administrators, so a reader selecting an Agent's rows by
+`agent_did` also requires them to be filed under that Agent. A row's creator
+owns it and reads, updates and deletes it natively. Experience is read through
+the Agent's `memory_read`: an explicit `memory_reader`, a configuration
 `reader`, an `administrator`, and the Node's delete as for `session_read`, so
-whoever may change memory through `session_admin` also reads it; its update and
-delete are the Agent's `session_admin`. Sharing an Agent's memory is one
-`memory_reader` relationship on the Agent document, never one per row, and it
-grants nothing else (`memory_reader_grants_only_memory_read`). Decision
-(operator, Q2): `administrator` manages `memory_reader`, and so does
-`executor`, so an Agent may share its own experience; an executor manages no
-other relation, and only on its own Agent document
-(`an_executor_shares_only_its_own_memory`). -/
+whoever may change memory through `session_admin` also reads it. Decision
+(operator, M8): facts are read only through `memory_fact_read`: an explicit
+`memory_fact_reader`, an `administrator`, and the Node's delete; only an
+`administrator` manages `memory_fact_reader`, so an Agent shares its experience
+on its own but never its facts. Updates and deletes of both are the Agent's
+`session_admin`. Sharing is one relationship on the Agent document, never one
+per row, and grants nothing else (`memory_reader_grants_only_memory_read`,
+`memory_fact_reader_grants_only_memory_fact_read`). Decision (operator, Q2):
+`administrator` manages `memory_reader`, and so does `executor`, so an Agent
+may share its own experience; an executor manages no other relation, and only
+on its own Agent document (`an_executor_shares_only_its_own_memory`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -200,16 +213,18 @@ def policy : List ResourceDefinition :=
         ⟨"workspace_selected_by", ["configuration->reader", "agents->executor"], []⟩,
         ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor", "nodes->owner", "nodes->administrator"],
           ["parent", "reader", "session_writer", "administrator", "executor", "config_writer",
-            "memory_reader"]⟩,
+            "memory_reader", "memory_fact_reader"]⟩,
         ⟨"executor", ["actor"], ["memory_reader"]⟩, ⟨"config_writer", ["actor"], []⟩, ⟨"host", ["actor"], []⟩,
-        ⟨"memory_reader", ["actor"], []⟩]
+        ⟨"memory_reader", ["actor"], []⟩, ⟨"memory_fact_reader", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "workspace_selected_by", "session_writer", "administrator", "executor", "config_writer"] [("parent", "read")],
         permission "update" ["administrator", "config_writer"] [("parent", "update")],
         permission "delete" ["administrator"] [("parent", "delete")],
         permission "invoke" ["session_writer", "executor", "administrator"] [("parent", "delete")],
         permission "session_read" ["reader", "administrator"] [("parent", "delete")],
         permission "session_admin" ["administrator"] [("parent", "delete")],
-        permission "memory_read" ["memory_reader", "reader", "administrator"] [("parent", "delete")]] }
+        permission "memory_read" ["memory_reader", "reader", "administrator"] [("parent", "delete")],
+        permission "memory_fact_read" ["memory_fact_reader", "administrator"] [("parent", "delete")],
+        permission "memory_write" ["executor", "administrator"] [("parent", "delete")]] }
   , { name := "sessions"
       relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"working_agent", ["actor"], []⟩]
@@ -251,7 +266,14 @@ def policy : List ResourceDefinition :=
       relations := [⟨"parent", ["agents"], []⟩]
       permissions := [permission "read" [] [("parent", "memory_read")],
         permission "update" [] [("parent", "session_admin")],
-        permission "delete" [] [("parent", "session_admin")]] }
+        permission "delete" [] [("parent", "session_admin")]]
+      create := some ("parent", "memory_write") }
+  , { name := "agent_memory_facts"
+      relations := [⟨"parent", ["agents"], []⟩]
+      permissions := [permission "read" [] [("parent", "memory_fact_read")],
+        permission "update" [] [("parent", "session_admin")],
+        permission "delete" [] [("parent", "session_admin")]]
+      create := some ("parent", "memory_write") }
   , { name := "workspaces"
       relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩, ⟨"writer", ["actor"], []⟩,
         ⟨"integrator", ["actor"], []⟩]
@@ -581,6 +603,24 @@ def gatedCreateAllowed (definitions : List ResourceDefinition) (state : State)
   match (definitions.find? (·.name == resource)).bind (·.create) with
   | none => true
   | some (_, required) => allowedIn definitions 5 state actor parentResource parentId required
+
+/-- Whether a relationship may link a document to a parent. External premise
+(defradb.rs `ZanzibarDocumentACP::check_parent_link`, run on every added
+relationship): on a resource with a create gate `(relation, required)`, a
+`relation` relationship names an object on which its requester holds
+`required`, as at creation, so a gated document is filed under a parent only by
+whoever may create under it, its owner included. Any other relationship
+passes. -/
+def parentLinkAllowed (definitions : List ResourceDefinition) (state : State) (actor : DID)
+    (relation : Relation) : Bool :=
+  match (definitions.find? (·.name == relation.resource)).bind (·.create) with
+  | some (parent, required) =>
+    if relation.relation == parent then
+      match relation.subject with
+      | .object resource id => allowedIn definitions 5 state actor resource id required
+      | _ => false
+    else true
+  | none => true
 
 /-- A Goal's stop policy (`goal_policies`): what a blocked report does and the
 user's budget ceiling. Its parent is the working Agent's Agent document, which
@@ -1433,11 +1473,12 @@ theorem agent_manager_admits_no_actor (node : String) (did : DID) :
       true :=
   ⟨agent_manager_types.1, agent_manager_types.1, agent_manager_types.2⟩
 
-/-- A relationship is added when its requester manages the relation and the
-relation takes the subject. `apply` models the first condition alone; this is
-the whole native admission. -/
+/-- A relationship is added when a parent link passes its create gate, its
+requester manages the relation and the relation takes the subject. `apply`
+models the management condition alone; this is the whole native admission. -/
 def grantAdmitted (state : State) (actor : DID) (relation : Relation) : Bool :=
-  mayManage state actor relation && subjectAdmitted relation
+  parentLinkAllowed policy state actor relation && mayManage state actor relation &&
+    subjectAdmitted relation
 
 /-- Whoever asks, on whatever state: no actor and no wildcard is granted
 `agent_manager`. -/

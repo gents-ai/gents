@@ -209,7 +209,7 @@ resources:
         types: [actor]
       - name: administrator
         types: [actor, nodes->owner, nodes->administrator]
-        manages: [parent, reader, session_writer, administrator, executor, config_writer, memory_reader]
+        manages: [parent, reader, session_writer, administrator, executor, config_writer, memory_reader, memory_fact_reader]
       - name: executor
         types: [actor]
         manages: [memory_reader]
@@ -218,6 +218,8 @@ resources:
       - name: host
         types: [actor]
       - name: memory_reader
+        types: [actor]
+      - name: memory_fact_reader
         types: [actor]
     permissions:
       - name: read
@@ -234,6 +236,10 @@ resources:
         expr: administrator + parent->delete
       - name: memory_read
         expr: memory_reader + reader + administrator + parent->delete
+      - name: memory_fact_read
+        expr: memory_fact_reader + administrator + parent->delete
+      - name: memory_write
+        expr: executor + administrator + parent->delete
   - name: sessions
     relations:
       - name: parent
@@ -335,6 +341,19 @@ resources:
         expr: parent->session_admin
       - name: delete
         expr: parent->session_admin
+    create: {parent: parent, requires: memory_write}
+  - name: agent_memory_facts
+    relations:
+      - name: parent
+        types: [agents]
+    permissions:
+      - name: read
+        expr: parent->memory_fact_read
+      - name: update
+        expr: parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+    create: {parent: parent, requires: memory_write}
   - name: workspaces
     relations:
       - name: parent

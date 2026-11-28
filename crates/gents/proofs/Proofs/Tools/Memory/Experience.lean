@@ -22,8 +22,9 @@ structure ProblemRow where
 
 /-- An attempt row (`AgentMemoryAttempt`): one committed change, filed under
 the problem key it cites, possibly a merged one, with the fixes it predicted
-before the change was tested. Decision (arXiv 2611.18856): attempts are
-append-only, so failures, regressions and later-replaced edits stay in the
+before the change was tested and the executed model of the request that
+recorded it, when that request named one. Decision (arXiv 2611.18856): attempts
+are append-only, so failures, regressions and later-replaced edits stay in the
 record, and only a committed edit records an attempt
 (`SelfConfig.StructuredConfig.experienceStaged`). -/
 structure AttemptRow where
@@ -31,23 +32,95 @@ structure AttemptRow where
   problemKey : String
   predicted : List String := []
   accepted : Bool := true
-  executedModelName : String
+  executedModelName : Option String
   carriedFrom : Option String := none
   createdAt : Nat
   deriving DecidableEq, Repr
 
-/-- An outcome row (`AgentMemoryOutcome`): one observation of an attempt.
-Decision: an attempt may be observed again, for example after a model change,
-so its outcomes are rows of their own. -/
+/-- `passed` of `total` checks. -/
+structure Score where
+  passed : Nat
+  total : Nat
+  deriving DecidableEq, Repr
+
+/-- An outcome row (`AgentMemoryOutcome`): one observation of an attempt, with
+its score when it has one and the executed model of the request that observed
+it, when that request named one. Decision: an attempt may be observed again,
+for example after a model change, so its outcomes are rows of their own; a
+score is optional (`scoreAdmitted`), and an outcome recorded without one is
+unscored, never 0 of 0. -/
 structure OutcomeRow where
   outcomeKey : String
   attemptKey : String
   fixed : List String := []
   missed : List String := []
-  passed : Nat
-  total : Nat
+  score : Option Score := none
+  executedModelName : Option String
+  carriedFrom : Option String := none
   createdAt : Nat
   deriving DecidableEq, Repr
+
+/-- What `memory outcome` answers for the score it is given. -/
+inductive ScoreDecision where
+  | scored
+  | unscored
+  | unpaired
+  | negative
+  | exceedsTotal
+  deriving DecidableEq, Repr
+
+/-- The answer for a score, and the score an admitted outcome records. -/
+structure ScoreAdmission where
+  decision : ScoreDecision
+  score : Option Score
+  deriving DecidableEq, Repr
+
+/-- Whether `memory outcome` may record `passed` of `total`, as the tool's
+integers give them. Decision (operator, C1): the score is optional, so `passed`
+and `total` come together or not at all, and an outcome without them is
+`unscored`; one without the other is `unpaired`. A count below zero is
+`negative` and more passed than total `exceedsTotal`; each refusal records no
+outcome. So a recorded score always has `passed ≤ total`. -/
+def scoreAdmitted (passed total : Option Int) : ScoreAdmission :=
+  match passed, total with
+  | none, none => ⟨.unscored, none⟩
+  | some passed, some total =>
+    if passed < 0 ∨ total < 0 then ⟨.negative, none⟩
+    else if total < passed then ⟨.exceedsTotal, none⟩
+    else ⟨.scored, some ⟨passed.toNat, total.toNat⟩⟩
+  | _, _ => ⟨.unpaired, none⟩
+
+/-- An outcome records a score exactly when it was given both counts, neither
+negative and `passed` at most `total`; the score is those counts. -/
+theorem scoreAdmitted_score_iff (passed total : Option Int) (score : Score) :
+    (scoreAdmitted passed total).score = some score ↔
+      passed = some (score.passed : Int) ∧ total = some (score.total : Int) ∧
+        score.passed ≤ score.total := by
+  obtain ⟨p, t⟩ := score
+  cases passed with
+  | none => cases total <;> simp [scoreAdmitted]
+  | some passed =>
+    cases total with
+    | none => simp [scoreAdmitted]
+    | some total =>
+      simp only [scoreAdmitted]
+      split_ifs with hnegative hexceeds
+      · simp only [Option.some.injEq, reduceCtorEq, false_iff, not_and]
+        omega
+      · simp only [Option.some.injEq, reduceCtorEq, false_iff, not_and]
+        omega
+      · simp only [Option.some.injEq, Score.mk.injEq]
+        omega
+
+/-- An outcome is unscored exactly when it was given neither count. -/
+theorem scoreAdmitted_unscored_iff (passed total : Option Int) :
+    (scoreAdmitted passed total).decision = .unscored ↔ passed = none ∧ total = none := by
+  cases passed <;> cases total <;> simp only [scoreAdmitted] <;> (try split_ifs) <;> simp
+
+/-- A refused score records nothing: only `scored` carries a score. -/
+theorem scoreAdmitted_scored_iff (passed total : Option Int) :
+    (scoreAdmitted passed total).decision = .scored ↔ (scoreAdmitted passed total).score.isSome := by
+  cases passed <;> cases total <;> simp only [scoreAdmitted] <;> (try split_ifs) <;> simp
 
 /-- The rows an agent's experience is folded from; `aliases` holds the
 `AgentMemoryAlias` rows as (`from_problem_key`, `to_problem_key`). -/
@@ -68,14 +141,28 @@ def normalize (text : String) : String :=
   (" ".intercalate ((text.split TextNormalization.objectiveWhitespace).filter
     fun piece => !piece.isEmpty)).toLower
 
-/-- The existing problem a root cause lands on: the one whose normalized text
-equals its own; `none` opens a new problem. Decision (arXiv 2611.18856): the
-agent decides which problem a diagnosis belongs to and the runtime never merges
-by similarity; only identical normalized text merges, because it derives the
-same `problem_key`. -/
-def landsOn (problems : List ProblemRow) (rootCause : String) : Option String :=
-  (problems.find? fun problem => normalize problem.name == normalize rootCause).map
-    (·.problemKey)
+/-- The existing problem a root cause lands on, among the names the agent's
+problems were opened with: the first whose normalized text equals the root
+cause's; `none` opens a new problem. Decision (arXiv 2611.18856): the agent
+decides which problem a diagnosis belongs to and the runtime never merges by
+similarity; only identical normalized text merges. External premise
+(`ProblemRow`): production derives a problem's key from the agent's DID and
+`normalize name`, collision-free, and opens a problem under that key, so a
+root cause lands on an existing problem exactly when it derives that
+problem's key. -/
+def landsOn (existing : List String) (rootCause : String) : Option String :=
+  existing.find? fun name => normalize name == normalize rootCause
+
+theorem landsOn_some {existing : List String} {rootCause name : String}
+    (h : landsOn existing rootCause = some name) :
+    name ∈ existing ∧ normalize name = normalize rootCause :=
+  ⟨List.mem_of_find?_eq_some h, by simpa using List.find?_some h⟩
+
+/-- A root cause opens a new problem exactly when no existing name normalizes
+to its text. -/
+theorem landsOn_none_iff (existing : List String) (rootCause : String) :
+    landsOn existing rootCause = none ↔ ∀ name ∈ existing, normalize name ≠ normalize rootCause := by
+  simp [landsOn, List.find?_eq_none]
 
 /-- The key an alias row merges `key` into: the first row naming it. The store
 holds at most one, since `from_problem_key` is unique. -/
@@ -553,35 +640,65 @@ theorem admitted_merge_keeps_aliases_acyclic (problems : List String)
     rw [next_merge hkey]
     exact hacyclic key n hn hold
 
-/-- Where an attempt was recorded, relative to the reader. -/
+/-- Where an attempt or an outcome was recorded, relative to the reader. -/
 inductive Provenance where
   | same
   | otherModel
+  | unknownModel
   | otherAgent
   | otherModelAndAgent
+  | unknownModelAndOtherAgent
   deriving DecidableEq, Repr
 
-/-- The reader's setting: its own DID and the request's executed model. -/
+/-- The reader's setting: its own DID and the request's executed model, when
+the request names one. -/
 structure Current where
   agentDid : String
-  executedModelName : String
+  executedModelName : Option String
   deriving DecidableEq, Repr
 
-/-- Decision (arXiv 2611.18856, reading rule D.2.8): evidence recorded under
-another policy model or by another agent is flagged, never reweighted or
-hidden. The model is the request's executed model name; the agent is the one an
-attempt was carried from. -/
-def provenance (current : Current) (attempt : AttemptRow) : Provenance :=
-  match attempt.executedModelName != current.executedModelName,
-      attempt.carriedFrom.any (· != current.agentDid) with
-  | false, false => .same
-  | true, false => .otherModel
-  | false, true => .otherAgent
-  | true, true => .otherModelAndAgent
+/-- A model name a relation can be decided on: present and not empty. -/
+def knownModel (name : Option String) : Option String :=
+  name.filter fun model => !model.isEmpty
 
-structure Score where
-  passed : Nat
-  total : Nat
+/-- Where a row was recorded, relative to the reader. Decision (arXiv
+2611.18856, reading rule D.2.8): evidence recorded under another policy model or
+by another agent is flagged, never reweighted or hidden. The model is the
+executed model name of the request that recorded the row, against the
+reader's; the agent is the one the row was carried from. Decision (operator,
+M4): a model whose name is absent or empty is unknown, and a relation with an
+unknown model on either side is unknown, never the same model or another
+one. -/
+def provenance (current : Current) (model carriedFrom : Option String) : Provenance :=
+  let otherAgent := carriedFrom.any (· != current.agentDid)
+  match knownModel current.executedModelName, knownModel model with
+  | some reader, some recorded =>
+    match reader != recorded, otherAgent with
+    | false, false => .same
+    | true, false => .otherModel
+    | false, true => .otherAgent
+    | true, true => .otherModelAndAgent
+  | _, _ => if otherAgent then .unknownModelAndOtherAgent else .unknownModel
+
+theorem knownModel_empty : knownModel (some "") = none := rfl
+
+/-- The relation is unknown exactly when either side's model is: two models
+are compared only when both are named. -/
+theorem provenance_unknown_iff (current : Current) (model carriedFrom : Option String) :
+    (provenance current model carriedFrom = .unknownModel ∨
+      provenance current model carriedFrom = .unknownModelAndOtherAgent) ↔
+      knownModel current.executedModelName = none ∨ knownModel model = none := by
+  unfold provenance
+  cases knownModel current.executedModelName <;> cases knownModel model <;>
+    simp only [reduceCtorEq, or_self, or_true, true_or, iff_true, iff_false] <;>
+    split <;> simp_all
+
+/-- One observation of an attempt as the reader sees it: its score, if it has
+one, and where it was recorded. -/
+structure Observation where
+  outcomeKey : String
+  score : Option Score
+  provenance : Provenance
   deriving DecidableEq, Repr
 
 structure FoldedAttempt where
@@ -592,8 +709,7 @@ structure FoldedAttempt where
   fixed : List String
   missed : List String
   unresolved : List String
-  outcomeKeys : List String
-  latest : Option Score
+  outcomes : List Observation
   provenance : Provenance
   createdAt : Nat
   deriving DecidableEq, Repr
@@ -604,7 +720,7 @@ structure FoldedProblem where
   carriedFrom : Option String
   merged : List String
   attempts : List FoldedAttempt
-  latest : Option Score
+  latest : Option Observation
   lastActive : Nat
   deriving DecidableEq, Repr
 
@@ -626,12 +742,16 @@ def attemptBefore (first second : AttemptRow) : Bool :=
 def observations (outcomes : List OutcomeRow) (attemptKey : String) : List OutcomeRow :=
   (outcomes.filter (·.attemptKey == attemptKey)).mergeSort outcomeBefore
 
-def score (outcome : OutcomeRow) : Score := ⟨outcome.passed, outcome.total⟩
+def observe (current : Current) (outcome : OutcomeRow) : Observation :=
+  { outcomeKey := outcome.outcomeKey
+    score := outcome.score
+    provenance := provenance current outcome.executedModelName outcome.carriedFrom }
 
 /-- An attempt as the reader sees it. Decision: a prediction is unresolved while
 no outcome names it fixed or missed; fixed and missed gather every observation,
-so a prediction fixed under one model and missed under another shows both, and
-the score is the latest observation's. -/
+so a prediction fixed under one model and missed under another shows both.
+Each observation keeps its own score and where it was recorded, oldest
+first. -/
 def foldAttempt (current : Current) (outcomes : List OutcomeRow) (attempt : AttemptRow) :
     FoldedAttempt :=
   let observed := observations outcomes attempt.attemptKey
@@ -645,9 +765,8 @@ def foldAttempt (current : Current) (outcomes : List OutcomeRow) (attempt : Atte
     missed
     unresolved := attempt.predicted.eraseDups.filter fun prediction =>
       !(fixed.contains prediction || missed.contains prediction)
-    outcomeKeys := observed.map (·.outcomeKey)
-    latest := observed.getLast?.map score
-    provenance := provenance current attempt
+    outcomes := observed.map (observe current)
+    provenance := provenance current attempt.executedModelName attempt.carriedFrom
     createdAt := attempt.createdAt }
 
 /-- The problems the rows hold: every key a problem row or an attempt resolves
@@ -670,7 +789,7 @@ def foldProblem (current : Current) (rows : Rows) (key : String) : FoldedProblem
       other != key && resolve rows.aliases other == key).dedup.mergeSort
       fun first second => first ≤ second
     attempts := filed.map (foldAttempt current rows.outcomes)
-    latest := observed.getLast?.map score
+    latest := observed.getLast?.map (observe current)
     lastActive := ((row.map (·.createdAt)).toList ++ filed.map (·.createdAt) ++
       observed.map (·.createdAt)).foldl max 0 }
 
@@ -804,7 +923,7 @@ theorem fold_keeps_every_outcome (current : Current) (rows : Rows) (outcome : Ou
     (h : outcome ∈ rows.outcomes) :
     outcome.outcomeKey ∈ (fold current rows).unattached ∨
       ∃ problem ∈ (fold current rows).problems, ∃ folded ∈ problem.attempts,
-        outcome.outcomeKey ∈ folded.outcomeKeys := by
+        observe current outcome ∈ folded.outcomes := by
   by_cases hattempt : rows.attempts.any (·.attemptKey == outcome.attemptKey)
   · right
     obtain ⟨attempt, hrow, hkey⟩ := List.any_eq_true.mp hattempt
@@ -857,21 +976,31 @@ def unresolvedCount (problem : FoldedProblem) : Nat :=
 def Provenance.text : Provenance → String
   | .same => "same setting"
   | .otherModel => "other model"
+  | .unknownModel => "unknown model"
   | .otherAgent => "other agent"
   | .otherModelAndAgent => "other model and agent"
+  | .unknownModelAndOtherAgent => "unknown model and other agent"
 
 /-- The relations a problem's attempts hold, in declaration order. -/
 def flags (problem : FoldedProblem) : List Provenance :=
-  [Provenance.same, .otherModel, .otherAgent, .otherModelAndAgent].filter fun relation =>
+  [Provenance.same, .otherModel, .unknownModel, .otherAgent, .otherModelAndAgent,
+    .unknownModelAndOtherAgent].filter fun relation =>
     problem.attempts.any (·.provenance == relation)
 
-/-- One index line: key, root-cause excerpt, attempt count, latest score,
-unresolved predictions and, for a problem with attempts, where they were
-recorded. -/
-def line (problem : FoldedProblem) : String :=
-  let latest := match problem.latest with
+/-- An observation's score, `unscored` without one, and where it was recorded
+unless that is the reader's own setting. -/
+def Observation.text (observation : Observation) : String :=
+  let score := match observation.score with
     | some score => toString score.passed ++ "/" ++ toString score.total
-    | none => "none"
+    | none => "unscored"
+  if observation.provenance == .same then score
+  else score ++ " (" ++ observation.provenance.text ++ ")"
+
+/-- One index line: key, root-cause excerpt, attempt count, the latest
+observation (`Observation.text`, `none` before any), unresolved predictions
+and, for a problem with attempts, where they were recorded. -/
+def line (problem : FoldedProblem) : String :=
+  let latest := (problem.latest.map Observation.text).getD "none"
   let origin := match flags problem with
     | [] => ""
     | relations => "; from " ++ ", ".intercalate (relations.map Provenance.text)

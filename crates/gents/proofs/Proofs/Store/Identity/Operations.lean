@@ -338,7 +338,7 @@ def networkProtocolResource : String → Option String
   | "CallbackInvocation" => some "agent_children"
   | "CallbackResult" => some "agent_children"
   | "EventGroupState" => some "agent_children"
-  | "AgentMemory" => some "agent_memory"
+  | "AgentMemory" => some "agent_memory_facts"
   | "AgentMemoryProblem" => some "agent_memory"
   | "AgentMemoryAttempt" => some "agent_memory"
   | "AgentMemoryOutcome" => some "agent_memory"
