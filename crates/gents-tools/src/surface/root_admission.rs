@@ -899,7 +899,7 @@ pub fn admit_authored_root(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set host.root to an admitted absolute workspace path (a sibling of host.files and host.bash). In config, read tools get first, then tools update with set.host preserving its other fields; do not put root inside host.files. For agent create, omit --preset (options.preset) for database/plugin-only agents or pass --root <path> (options.root)")]
+#[error("active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set set.host.root to an admitted absolute workspace path (a sibling of host.files and host.bash, never inside host.files). In config, read [\"tools\",\"get\"] first, then pass tools update with set.host preserving its other fields and \"root\". For agent create, omit --preset (options.preset) for database/plugin-only agents or pass --root <path> (options.root)")]
 pub struct ExplicitHostRootRequired;
 
 /// Validate and canonicalize the existing `Tools.host.root` field against a

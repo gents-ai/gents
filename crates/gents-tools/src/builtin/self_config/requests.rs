@@ -179,7 +179,45 @@ pub fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequ
             .await?;
             let stored_root = stored_host_root(stored);
             let mut tools = decode_merged::<gents_documents::Tools>("Tools", merged)?;
-            crate::surface::canonicalize_tools_root(&mut tools, &policy, stored_root.as_deref())?;
+            let missing_explicit_root = policy.configured
+                && tools
+                    .host
+                    .as_ref()
+                    .and_then(|host| host.root.as_deref())
+                    .map(str::trim)
+                    .is_none_or(str::is_empty);
+            if let Err(error) =
+                crate::surface::canonicalize_tools_root(&mut tools, &policy, stored_root.as_deref())
+            {
+                if missing_explicit_root
+                    && crate::surface::ResolvedToolSelection::from_document(&tools)
+                        .is_ok_and(|selection| selection.requires_filesystem_root())
+                {
+                    let root_hint = if let Some(root) =
+                        stored_root.as_deref().filter(|r| !r.trim().is_empty())
+                    {
+                        format!(" Previous host.root was {root:?}; include \"root\": {root:?} inside set.host.")
+                    } else if let [only] = policy.published.as_slice() {
+                        let root = only.display().to_string();
+                        format!(" Admitted workspace root on this node: {root:?}; set set.host.root to {root:?}.")
+                    } else if !policy.published.is_empty() {
+                        let roots: Vec<String> = policy
+                            .published
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect();
+                        format!(" Admitted workspace roots on this node: {roots:?}; set set.host.root to one of them.")
+                    } else {
+                        String::new()
+                    };
+                    return Err(command::CommandGuidance {
+                        message: format!("{error:#}{root_hint}"),
+                        next_call: json!({"argv": ["tools", "get"]}),
+                    }
+                    .into());
+                }
+                return Err(error);
+            }
             let canonical = serde_json::to_value(tools)?
                 .as_object()
                 .context("canonical Tools document must be an object")?

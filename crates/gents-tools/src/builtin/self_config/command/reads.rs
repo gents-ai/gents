@@ -120,7 +120,7 @@ impl ConfigCommandTool {
             );
             return ordered! {"resource": target.collection_name(), "document": document, "observation": observation}.pretty();
         }
-        let document = gents_store::config_client::ConfigAccess::transact_local_readonly(
+        let document = match gents_store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.command_read",
@@ -197,10 +197,30 @@ impl ConfigCommandTool {
             },
         )
         .await?
-        .ok_or(super::ops::MissingConfigDocument {
-            target,
-            id: id.to_owned(),
-        })?;
+        {
+            Some(document) => document,
+            None => {
+                if let Some(candidate) = self.owned_suffixed_agent_doc(target, id).await? {
+                    let resource = match target {
+                        SelfConfigTarget::Tools => "tools",
+                        SelfConfigTarget::AgentContext => "context",
+                        _ => unreachable!(),
+                    };
+                    return Err(Self::bare_agent_did_guidance(
+                        target,
+                        id,
+                        &candidate,
+                        json!({"argv": [resource, "get"], "target_id": candidate}),
+                    )
+                    .into());
+                }
+                return Err(super::ops::MissingConfigDocument {
+                    target,
+                    id: id.to_owned(),
+                }
+                .into());
+            }
+        };
         if target == SelfConfigTarget::AgentTarget {
             return ordered! {"resource": target.collection_name(), "connection": ops::target_destination(document.as_object().context("agent target must be an object")?, &self.node_did), "document": document}.pretty();
         }
@@ -234,5 +254,55 @@ impl ConfigCommandTool {
                 )
             })?;
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
+    }
+
+    pub(super) async fn owned_suffixed_agent_doc(
+        &self,
+        target: SelfConfigTarget,
+        id: &str,
+    ) -> Result<Option<String>> {
+        let suffix = match target {
+            SelfConfigTarget::Tools => ":tools",
+            SelfConfigTarget::AgentContext => ":context",
+            _ => return Ok(None),
+        };
+        if !id.starts_with("did:") || id.ends_with(suffix) {
+            return Ok(None);
+        }
+        let candidate = format!("{id}{suffix}");
+        let owner = self.node_did.as_str();
+        let lookup = candidate.as_str();
+        let exists = gents_store::config_client::ConfigAccess::transact_local_readonly(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.bare_did_doc_check",
+            |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        ops::read_owned_doc(txn, target, owner, lookup)
+                            .await?
+                            .is_some(),
+                    )
+                })
+            },
+        )
+        .await?;
+        Ok(exists.then_some(candidate))
+    }
+
+    pub(super) fn bare_agent_did_guidance(
+        target: SelfConfigTarget,
+        id: &str,
+        candidate: &str,
+        next_call: Value,
+    ) -> CommandGuidance {
+        CommandGuidance {
+            message: format!(
+                "no owned {} with ID {id:?}: {id:?} is an agent DID, not a {} document ID. Its owned document ID is {candidate:?}; retry with target_id {candidate:?} (or omit target_id and pass options.agent: {id:?}).",
+                target.collection_name(),
+                target.collection_name(),
+            ),
+            next_call,
+        }
     }
 }

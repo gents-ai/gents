@@ -458,8 +458,16 @@ pub(super) async fn execute_typed_command(
             }
             .into());
         };
-        serde_json::from_value(raw_fields)
-            .context("options.fields must be an array of field names")?
+        let fields: Vec<String> = serde_json::from_value(raw_fields)
+            .context("options.fields must be an array of field names")?;
+        if fields.iter().any(|field| field == "*") {
+            return Err(SelectionRefusal {
+                message: "wildcard field \"*\" must be the only entry (and cannot be mixed with other fields or selected in find/search/explain; legacy fields: [\"*\"] maps to argv:[\"fields\"]). Call query with argv:[\"fields\"] to discover the collection's queryable fields, then select explicit field names".into(),
+                next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": ["fields"], "collection": collection}}),
+            }
+            .into());
+        }
+        fields
     };
     let (fields, relations) = relation::resolve(access, &observed, &requested, scope).await?;
     let limit = args

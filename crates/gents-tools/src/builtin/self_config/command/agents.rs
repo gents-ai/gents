@@ -74,7 +74,7 @@ impl ConfigCommandTool {
                         }
                     }
                     _ => {
-                        let options = agent_options(operation, &argv[2..])?;
+                        let options = agent_options(operation, true, &argv[2..])?;
                         if let Some(creation) = AgentCreateOperation::for_verb(operation) {
                             let input = self.agent_create_input(creation, options).await?;
                             let params = creation_preview_params(creation);
@@ -112,8 +112,8 @@ impl ConfigCommandTool {
                 )
             }
             "create" | "clone" | "disable" => {
+                let options = agent_options(verb, false, &argv[1..])?;
                 let identity = self.agent_signer()?;
-                let options = agent_options(verb, &argv[1..])?;
                 if let Some(creation) = AgentCreateOperation::for_verb(verb) {
                     let input = self.agent_create_input(creation, options).await?;
                     self.execution.enter_mutation();
@@ -534,7 +534,7 @@ pub fn agent_params(
     argv: &[String],
 ) -> Result<ConfigureAgentParams> {
     let verb = operation.as_deref().unwrap_or(action);
-    Ok(agent_options(verb, argv)?.params(action, operation))
+    Ok(agent_options(verb, action == "preview", argv)?.params(action, operation))
 }
 
 struct AgentOptions {
@@ -573,8 +573,13 @@ impl AgentOptions {
 /// The agent verbs share one option vocabulary: what create and clone
 /// declare, `id` (disable's target, refused by name on create and clone) and
 /// `clear`.
-fn agent_options(verb: &str, argv: &[String]) -> Result<AgentOptions> {
+fn agent_options(verb: &str, preview: bool, argv: &[String]) -> Result<AgentOptions> {
     let parsed = ParsedArgs::parse(argv)?;
+    if AgentCreateOperation::for_verb(verb).is_some() {
+        if let Some(set_entries) = parsed.options.get("set") {
+            return Err(composition_set_guidance(verb, preview, &parsed, set_entries).into());
+        }
+    }
     let allowed = |option: &str| {
         matches!(option, "id" | "clear")
             || [AGENT_CREATE, AGENT_CLONE]
@@ -643,4 +648,95 @@ fn agent_options(verb: &str, argv: &[String]) -> Result<AgentOptions> {
         profile_id: update("profile", "profile_id")?,
         make_default: parsed.switches.contains("default"),
     })
+}
+
+fn composition_set_guidance(
+    verb: &str,
+    preview: bool,
+    parsed: &ParsedArgs,
+    set_entries: &[String],
+) -> CommandGuidance {
+    let mut options: BTreeMap<String, Value> = parsed
+        .options
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "set" | "clear"))
+        .filter_map(|(key, values)| {
+            values
+                .first()
+                .map(|value| (key.clone(), Value::String(value.clone())))
+        })
+        .collect();
+    let mut moved = Vec::new();
+    let mut unmapped = Vec::new();
+    for assignment in set_entries {
+        let Some((field, raw)) = assignment.split_once('=') else {
+            unmapped.push(assignment.clone());
+            continue;
+        };
+        let value =
+            serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.into()));
+        let mapped = match field {
+            "profile" | "inference_profile_id" => Some("profile"),
+            "display_name" => Some("display-name"),
+            "system_prompt" => Some("system-prompt"),
+            "description" => Some("description"),
+            "root" => Some("root"),
+            "context_id" if verb == "create" => Some("context-id"),
+            "preset" if verb == "create" => Some("preset"),
+            "from" | "clone_from" if verb == "clone" => Some("from"),
+            _ => None,
+        };
+        if let Some(option) = mapped {
+            options.entry(option.to_owned()).or_insert(value);
+            moved.push(format!("set.{field} -> options.{option}"));
+        } else {
+            unmapped.push(field.to_owned());
+        }
+    }
+    let has_profile = options.contains_key("profile");
+    if has_profile && !moved.is_empty() {
+        let mut next_argv = if preview {
+            vec!["agent".to_owned(), "preview".to_owned(), verb.to_owned()]
+        } else {
+            vec!["agent".to_owned(), verb.to_owned()]
+        };
+        if parsed.switches.contains("default") {
+            next_argv.push("--default".to_owned());
+        }
+        let mut call = serde_json::Map::new();
+        call.insert("argv".into(), json!(next_argv));
+        call.insert("options".into(), json!(options));
+        if let Some(clear) = parsed.options.get("clear") {
+            if !clear.is_empty() {
+                call.insert("clear".into(), json!(clear));
+            }
+        }
+        let extra = if unmapped.is_empty() {
+            String::new()
+        } else {
+            format!(" Unsupported set fields omitted: {}.", unmapped.join(", "))
+        };
+        CommandGuidance {
+            message: format!(
+                "agent {verb} takes options instead of set; move {} into options.{extra}",
+                moved.join(", ")
+            ),
+            next_call: Value::Object(call),
+        }
+    } else if !has_profile {
+        CommandGuidance {
+            message: format!(
+                "agent {verb} takes options instead of set, including a published inference profile in options.profile; list published profiles with [\"profile\",\"list\"] and pass fields in options"
+            ),
+            next_call: json!({"argv":["profile","list"]}),
+        }
+    } else {
+        CommandGuidance {
+            message: format!(
+                "agent {verb} takes options instead of set; remove set ({}) and see [\"agent\",\"{verb}\",\"--help\"]",
+                unmapped.join(", ")
+            ),
+            next_call: json!({"argv":["agent",verb,"--help"]}),
+        }
+    }
 }

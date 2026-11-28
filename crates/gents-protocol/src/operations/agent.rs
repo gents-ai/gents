@@ -535,6 +535,7 @@ impl AgentCreateDeclaration {
 
 const CREATE_NOTES: &[&str] = &[
     "ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.",
+    "options.profile is required (a published profile ID from [\"profile\",\"list\"]); pass it in options, not set.",
     "Pass options.context-id to bind an existing AgentContext unchanged instead of allocating a new Context/Tools (omit system-prompt, preset and root).",
     "A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.",
 ];

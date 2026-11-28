@@ -221,6 +221,7 @@ impl ConfigCommandTool {
             target,
             SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
         );
+        let guidance_inputs = (contextual && !create).then(|| (patch.clone(), allow_drop.clone()));
         let mut bound = false;
         if contextual && !create {
             if let Some(agent) = self.document_agent(target, &id, shared_ack).await? {
@@ -322,9 +323,66 @@ impl ConfigCommandTool {
                 Ok(())
             });
         }
-        self.patch(&core, if preview { "preview" } else { "edit" }, request)
+        match self
+            .patch(&core, if preview { "preview" } else { "edit" }, request)
             .await
-            .map(Some)
+        {
+            Ok(text) => Ok(Some(text)),
+            Err(error) => {
+                if let Some((patch_for_guidance, allow_drop_for_guidance)) = guidance_inputs {
+                    if ops::MissingConfigDocument::in_error(&error).is_some() {
+                        if let Some(candidate) = self.owned_suffixed_agent_doc(target, &id).await? {
+                            let next_verb = if verb == "edit" { "update" } else { verb };
+                            let next_argv = if preview {
+                                vec![resource, "preview", next_verb]
+                            } else {
+                                vec![resource, next_verb]
+                            };
+                            let mut call = serde_json::Map::new();
+                            call.insert("argv".into(), json!(next_argv));
+                            call.insert("target_id".into(), json!(candidate));
+                            let mut set = serde_json::Map::new();
+                            let mut clear = Vec::new();
+                            for (field, value) in patch_for_guidance {
+                                match value {
+                                    Some(value) => {
+                                        set.insert(field, value);
+                                    }
+                                    None => clear.push(field),
+                                }
+                            }
+                            if !set.is_empty() {
+                                call.insert("set".into(), Value::Object(set));
+                            }
+                            if !clear.is_empty() {
+                                call.insert("clear".into(), json!(clear));
+                            }
+                            let mut options = serde_json::Map::new();
+                            if !allow_drop_for_guidance.is_empty() {
+                                options.insert(
+                                    "allow-drop".into(),
+                                    json!(allow_drop_for_guidance.into_iter().collect::<Vec<_>>()),
+                                );
+                            }
+                            if shared_ack {
+                                options.insert("shared".into(), json!("acknowledge"));
+                            }
+                            if !options.is_empty() {
+                                call.insert("options".into(), Value::Object(options));
+                            }
+                            return Err(Self::bare_agent_did_guidance(
+                                target,
+                                &id,
+                                &candidate,
+                                Value::Object(call),
+                            )
+                            .into());
+                        }
+                    }
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn automation_core(

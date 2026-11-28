@@ -240,6 +240,7 @@ async fn agent_create_and_clone_text_is_pinned() {
 const PINNED: &str = r###"## help ["agent","create","--help"] (ok)
 agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root, context-id; argv switch --default
 ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
+options.profile is required (a published profile ID from ["profile","list"]); pass it in options, not set.
 Pass options.context-id to bind an existing AgentContext unchanged instead of allocating a new Context/Tools (omit system-prompt, preset and root).
 A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.
 Page and recipe: ["help","agent"]
@@ -250,7 +251,7 @@ A new Agent with host tools needs a User to grant it WorkspaceRoot access; the r
 Page and recipe: ["help","agent"]
 ## help ["agent","preview","--help"] (ok)
 agent: an agent role. create bundles its Context and Tools; a profile supplies inference settings. get without an ID inspects your current role.
-Verbs: list | get ID | create (options.display-name, profile, plus system-prompt/preset or context-id; allocates ID) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
+Verbs: list | get ID | create (options.display-name, options.profile from ["profile","list"], plus system-prompt/preset or context-id; allocates ID) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
 Also: agent clone, disable, default. Use context get/update for its selected Context.
 Fields of Agent: ["display_name","description","context_id","inference_profile_id","enabled","tags"]. Append --help to create/update for shapes.
 Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Creating, cloning and choosing the default need manage_agents on the Node; changing an Agent needs update on that Agent. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.

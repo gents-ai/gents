@@ -816,6 +816,141 @@ async fn build_registers_gated_family() {
         assert!(definition.description.contains(core), "missing {core}");
     }
     assert_eq!(definition.parameters["required"], json!(["argv"]));
+    let options_desc = definition.parameters["properties"]["options"]["description"]
+        .as_str()
+        .expect("options description");
+    assert!(
+        options_desc.contains("options.profile"),
+        "options description should highlight options.profile: {options_desc}"
+    );
+}
+
+#[tokio::test]
+async fn config_help_and_argument_guidance_cover_standalone_tools_pack_export_and_agent_create_set()
+{
+    let db = gents_store::test_support::TestStore::start(
+        "self-config-ergonomics-unit",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let mut cfg = config(&["node", "agent", "tools", "profile"]);
+    cfg.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        db.node.clone(),
+        "did:key:zSelfConfigTest".to_string(),
+        None,
+        &cfg,
+        Arc::new(crate::plugin_host::NoPluginHost),
+        Arc::new(crate::task_run::NoTaskRunService),
+    );
+    let tool = tools[0].as_ref();
+    let call = |args: Value| async move {
+        tool.call(
+            args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+    };
+    let parse_err = |err: String| -> Value {
+        serde_json::from_str(err.strip_prefix("tool call error: ").unwrap_or(&err))
+            .unwrap_or_else(|e| panic!("{e}: {err}"))
+    };
+
+    let tools_help = call(json!({"argv": ["help", "tools"]}))
+        .await
+        .expect("help tools");
+    assert!(
+        tools_help.contains("WorkspaceRoot")
+            && tools_help.contains("set.host.root")
+            && tools_help.contains("tools get"),
+        "{tools_help}"
+    );
+
+    for standalone in ["write", "query", "schema", "script"] {
+        let err = parse_err(
+            call(json!({"argv": ["help", standalone]}))
+                .await
+                .unwrap_err()
+                .to_string(),
+        );
+        let msg = err["error"].as_str().unwrap();
+        assert!(
+            msg.contains("standalone tool")
+                && msg.contains(standalone)
+                && msg.contains(r#"{"argv":["help"]}"#),
+            "{standalone}: {err}"
+        );
+        assert_eq!(
+            err["recovery"]["next_call"],
+            json!({"tool": standalone, "args": {"argv": ["help"]}}),
+            "{standalone}: {err}"
+        );
+    }
+
+    let export_err = parse_err(
+        call(json!({"argv": ["pack", "export"], "target_id": "my_pack"}))
+            .await
+            .unwrap_err()
+            .to_string(),
+    );
+    let export_msg = export_err["error"].as_str().unwrap();
+    assert!(
+        export_msg.contains("target_id is not accepted by \"pack export\"")
+            && export_msg.contains("options.dir")
+            && export_msg.contains("options.version"),
+        "{export_err}"
+    );
+    assert_eq!(
+        export_err["recovery"]["next_call"],
+        json!({"argv": ["pack", "export", "--help"]}),
+        "{export_err}"
+    );
+    let export_help = call(export_err["recovery"]["next_call"].clone())
+        .await
+        .expect("pack export --help replays cleanly");
+    assert!(
+        export_help.contains("pack export NAME") && export_help.contains("dir"),
+        "{export_help}"
+    );
+
+    let set_profile_err = parse_err(
+        call(json!({
+            "argv": ["agent", "create"],
+            "set": {"profile": "main"},
+            "options": {"display-name": "Helper", "system-prompt": "Help."}
+        }))
+        .await
+        .unwrap_err()
+        .to_string(),
+    );
+    assert_eq!(
+        set_profile_err["recovery"]["next_call"],
+        json!({
+            "argv": ["agent", "create"],
+            "options": {
+                "display-name": "Helper",
+                "profile": "main",
+                "system-prompt": "Help."
+            }
+        }),
+        "{set_profile_err}"
+    );
+
+    let set_no_profile_err = parse_err(
+        call(json!({
+            "argv": ["agent", "create"],
+            "set": {"display_name": "Helper", "system_prompt": "Help."}
+        }))
+        .await
+        .unwrap_err()
+        .to_string(),
+    );
+    assert_eq!(
+        set_no_profile_err["recovery"]["next_call"],
+        json!({"argv": ["profile", "list"]}),
+        "{set_no_profile_err}"
+    );
 }
 
 #[test]
