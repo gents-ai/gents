@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
-use gents_documents::QueryToolDecl;
+use gents_documents::{QueryToolDecl, SIGNER_FIELD};
 use gents_loop::tool::{Tool, ToolDefinition};
 use gents_store::config_client::ConfigAccess;
 
@@ -101,7 +101,7 @@ impl BoundedQueryTool {
                 .iter()
                 .map(|field| field.name.as_str()),
         ) {
-            if !fields.contains(field) {
+            if field != SIGNER_FIELD && !fields.contains(field) {
                 bail!("field `{field}` is absent from `{}`", self.decl.collection);
             }
         }
@@ -134,6 +134,12 @@ impl BoundedQueryTool {
         let schema: ::schema::CollectionVersion = serde_json::from_value(version)?;
         self.model_filter_fields()
             .map(|field| {
+                if field.name == SIGNER_FIELD {
+                    let mut shape = json!({"type": "string"});
+                    shape["description"] =
+                        json!("Keep only documents this DID signed every version of.");
+                    return Ok((field.name.clone(), shape));
+                }
                 let native = schema
                     .fields
                     .iter()
@@ -293,7 +299,9 @@ impl BoundedQueryTool {
                 );
             };
             ensure!(
-                field == "_docID" || self.decl.fields.iter().any(|allowed| allowed == field),
+                field == "_docID"
+                    || (field != SIGNER_FIELD
+                        && self.decl.fields.iter().any(|allowed| allowed == field)),
                 "tool `{}` cannot order by `{field}`; allowed: {}",
                 self.decl.tool_name,
                 self.decl.fields.join(", ")
@@ -488,11 +496,34 @@ impl Tool for BoundedQueryTool {
         call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         self.ensure_well_formed()?;
-        let fields = self.resolve_projection(&args.0)?;
-        let filter = self.resolve_filter(call, &args.0)?;
+        let mut fields = self.resolve_projection(&args.0)?;
+        let mut filter = self.resolve_filter(call, &args.0)?;
         let limit = self.resolve_limit(&args.0)?;
         let offset = self.resolve_offset(&args.0)?;
         let order = self.resolve_order(&args.0)?;
+        let signed_by = filter
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|filter| filter.remove(SIGNER_FIELD))
+            .map(|only| {
+                only["_eq"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| anyhow!("filter `{SIGNER_FIELD}` must be a DID string"))
+            })
+            .transpose()?;
+        if filter
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(Map::is_empty)
+        {
+            filter = None;
+        }
+        let project_signer = fields.iter().any(|field| field == SIGNER_FIELD);
+        fields.retain(|field| field != SIGNER_FIELD);
+        if fields.is_empty() {
+            fields.push("_docID".into());
+        }
         let params = DefraQueryParams {
             collection: self.decl.collection.clone(),
             filter,
@@ -501,6 +532,9 @@ impl Tool for BoundedQueryTool {
         };
         let scope = CollectionScope::restricted(vec![self.decl.collection.clone()]);
         let mut command: super::QueryParams = params.into();
+        if project_signer && args.0.get("field_page").is_none() {
+            command.options.insert("signer".into(), json!(true));
+        }
         if let Some(page) = args.0.get("field_page") {
             command.options.insert("field_page".into(), page.clone());
         } else {
@@ -520,6 +554,7 @@ impl Tool for BoundedQueryTool {
                     |txn| {
                         let command = &command;
                         let scope = &scope;
+                        let signed_by = signed_by.as_deref();
                         Box::pin(async move {
                             if let Some(surface_scope) = &self.surface_scope {
                                 let surface = self
@@ -534,7 +569,8 @@ impl Tool for BoundedQueryTool {
                                     )
                                     .await?;
                             }
-                            super::execute_command(txn, command, scope).await
+                            super::command::execute_find_signed_by(txn, command, scope, signed_by)
+                                .await
                         })
                     },
                 )
@@ -568,6 +604,7 @@ impl Tool for BoundedQueryTool {
                     .transact_readonly("bounded_application_query", |txn| {
                         let command = &command;
                         let scope = &scope;
+                        let signed_by = signed_by.as_deref();
                         Box::pin(async move {
                             surface_scope
                                 .revalidate(
@@ -576,25 +613,41 @@ impl Tool for BoundedQueryTool {
                                     &gents_documents::SurfaceToolDecl::Query(self.decl.clone()),
                                 )
                                 .await?;
-                            super::execute_command(txn, command, scope).await
+                            super::command::execute_find_signed_by(txn, command, scope, signed_by)
+                                .await
                         })
                     })
                     .await?
             }
-            (_, None) => super::execute_command(&self.access, &command, &scope).await?,
+            (_, None) => {
+                super::command::execute_find_signed_by(
+                    &self.access,
+                    &command,
+                    &scope,
+                    signed_by.as_deref(),
+                )
+                .await?
+            }
         };
         let mut payload = result;
         let count = payload["returned_count"].as_u64().unwrap_or(0);
         if payload.get("results").is_some() {
             payload["count"] = json!(count);
         }
+        let scanned = payload
+            .as_object_mut()
+            .and_then(|payload| payload.remove("scanned_count"))
+            .and_then(|scanned| scanned.as_u64())
+            .unwrap_or(count);
         // A full page may be the last one; the next offset says where the
         // following page starts and the caller stops at the first short one.
-        if count as u32 == limit && args.0.get("field_page").is_none() {
-            payload["next_offset"] = json!(offset + count as u32);
+        // A signer filter applies after the page is read, so the page it
+        // filtered still says where the next one starts.
+        if scanned as u32 == limit && args.0.get("field_page").is_none() {
+            payload["next_offset"] = json!(offset + scanned as u32);
             payload["limit_note"] = json!(format!(
                 "Result set hit the {limit}-row cap; continue with offset {} or narrow the filter.",
-                offset + count as u32
+                offset + scanned as u32
             ));
         }
         gents_session::session::output_render::render(
@@ -621,6 +674,144 @@ mod tests {
     use defra_node::Node as EmbeddedNode;
     use gents_documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use gents_loop::tool::Tool;
+
+    #[tokio::test]
+    async fn signer_reads_follow_the_document_signer_model() {
+        let mut store = crate::test_support::MixedSigningStore::new(
+            "type SignedNote { label: String step: Int }",
+        )
+        .await;
+        let reader_did = store.agent_did(0);
+        let other_did = store.agent_did(1);
+        let histories = [
+            ("unsigned", vec!["unsigned"]),
+            ("by_reader", vec!["reader"]),
+            ("by_other", vec!["other"]),
+            ("reader_then_reader", vec!["reader", "reader"]),
+            ("reader_then_other", vec!["reader", "other"]),
+            ("other_then_reader", vec!["other", "reader"]),
+            ("reader_then_unsigned", vec!["reader", "unsigned"]),
+        ];
+        let mut written = vec![(0, None::<String>); histories.len()];
+        let mut signing = false;
+        while written
+            .iter()
+            .zip(&histories)
+            .any(|((step, _), (_, writers))| *step < writers.len())
+        {
+            store.reopen(signing).await;
+            for ((step, doc_id), (label, writers)) in written.iter_mut().zip(&histories) {
+                while let Some(writer) = writers.get(*step) {
+                    let access = match (*writer, signing) {
+                        ("reader", true) => store.agent_access(0),
+                        ("other", true) => store.agent_access(1),
+                        ("unsigned", false) => store.unsigned_access(),
+                        _ => break,
+                    };
+                    let mutation = match &doc_id {
+                        None => format!(
+                            r#"mutation {{ add_SignedNote(input: {{label: "{label}", step: {step}}}) {{ _docID }} }}"#
+                        ),
+                        Some(id) => format!(
+                            r#"mutation {{ update_SignedNote(filter: {{_docID: {{_eq: "{id}"}}}}, input: {{step: {step}}}) {{ _docID }} }}"#
+                        ),
+                    };
+                    let response = access.write("test.signed_note", &mutation).await.unwrap();
+                    doc_id.get_or_insert_with(|| {
+                        gents_store::graphql::created_doc_id(&response, "SignedNote")
+                            .unwrap()
+                            .to_owned()
+                    });
+                    *step += 1;
+                }
+            }
+            signing = !signing;
+        }
+        let tool = BoundedQueryTool::new(
+            ConfigAccess::local(store.node().clone()),
+            QueryToolDecl {
+                tool_name: "read_signed_notes".into(),
+                collection: "SignedNote".into(),
+                description: String::new(),
+                fields: vec!["label".into(), SIGNER_FIELD.into()],
+                filter_fields: vec![
+                    WriteToolField {
+                        name: "label".into(),
+                        required: true,
+                        fill: None,
+                    },
+                    WriteToolField {
+                        name: SIGNER_FIELD.into(),
+                        required: false,
+                        fill: None,
+                    },
+                ],
+            },
+        );
+        tool.validate_schema().await.unwrap();
+        let read = |args: Map<String, Value>| {
+            let tool = &tool;
+            async move {
+                let output = Tool::call(
+                    tool,
+                    BoundedQueryParams(args),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
+                )
+                .await
+                .unwrap();
+                serde_json::from_str::<Value>(&output).unwrap()
+            }
+        };
+        for case in gents_lean_vocab::families::document_signer_read::cases::<String, String>() {
+            let label = case.input.history.as_str();
+            let mut args = Map::from_iter([("label".to_owned(), json!(label))]);
+            let unfiltered = read(args.clone()).await;
+            assert_eq!(unfiltered["count"], 1, "{unfiltered}");
+            let provenance = &unfiltered["results"][0][SIGNER_FIELD];
+            let writers = provenance["writers"].as_array().unwrap();
+            let wrote = |did: &str| writers.iter().any(|writer| writer == did);
+            match case.input.filter.as_str() {
+                "none" => {}
+                "reader" => {
+                    args.insert(SIGNER_FIELD.into(), json!(reader_did));
+                }
+                "other" => {
+                    args.insert(SIGNER_FIELD.into(), json!(other_did));
+                }
+                filter => panic!("unknown filter {filter}"),
+            }
+            let filtered = read(args).await;
+            case.check(gents_lean_vocab::families::document_signer_read::Read {
+                returned: filtered["count"] == 1,
+                reader_wrote: wrote(&reader_did),
+                other_wrote: wrote(&other_did),
+                unsigned: provenance["unsigned"].as_bool().unwrap(),
+            });
+        }
+        drop(tool);
+        store.shutdown().await;
+    }
+
+    #[test]
+    fn a_create_cannot_write_the_signer() {
+        let declaration = gents_documents::WriteToolDecl {
+            notification: None,
+            tool_name: "add_note".into(),
+            collection: "SignedNote".into(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: SIGNER_FIELD.into(),
+                required: false,
+                fill: None,
+            }],
+            output_obligation: None,
+            key_fields: None,
+        };
+        assert_eq!(
+            declaration.validate().unwrap_err().to_string(),
+            "field[0] _signer is read from the document's signature and cannot be written"
+        );
+    }
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {

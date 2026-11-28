@@ -149,7 +149,7 @@ pub use surface_tool::validate_surface_tool_names;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 pub use surface_tool::{
-    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
+    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, SIGNER_FIELD,
 };
 pub use surface_tool::{validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource};
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};

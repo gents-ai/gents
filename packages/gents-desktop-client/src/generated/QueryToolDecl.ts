@@ -8,5 +8,12 @@ import type { WriteToolField } from "./WriteToolField.js";
 export type QueryToolDecl = { tool_name: string, collection: string, description?: string,
 /**
  * Projection allowlist; omit `fields` at call time to return all of these.
+ * `_signer` is the document's provenance (`created`, `latest`, `writers`,
+ * `unsigned`) read from its verified version signatures.
  */
-fields?: Array<string>, filter_fields?: Array<WriteToolField>, };
+fields?: Array<string>,
+/**
+ * Exact-match filters; `_signer` keeps documents that DID signed every
+ * version of.
+ */
+filter_fields?: Array<WriteToolField>, };

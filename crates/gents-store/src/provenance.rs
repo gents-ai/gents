@@ -34,6 +34,14 @@ pub struct DocumentSigners {
     pub unsigned: bool,
 }
 
+impl DocumentSigners {
+    /// `did` signed every version: it is the only writer and no version is
+    /// unattributed. Modelled by `DocumentSigner.signedOnlyBy`.
+    pub fn signed_only_by(&self, did: &str) -> bool {
+        !self.unsigned && self.writers.len() == 1 && self.writers.contains(did)
+    }
+}
+
 /// Read one document's version history as `access` and name its signers.
 pub async fn document_signers(
     access: &dyn ConfigRead,
