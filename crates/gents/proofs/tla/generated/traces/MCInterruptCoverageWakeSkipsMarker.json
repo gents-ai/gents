@@ -1,0 +1,449 @@
+{
+  "config": "MCInterruptCoverageWakeSkipsMarker",
+  "constants": {
+    "Attempts": 4,
+    "ClaimReadsMarker": true,
+    "InterruptReads": false,
+    "OtherInterrupts": 0,
+    "OtherWrites": 0,
+    "Requests": [
+      {
+        "$model": "r1"
+      }
+    ],
+    "WakeReadsMarker": false,
+    "Wakes": [
+      {
+        "$model": "w1"
+      },
+      {
+        "$model": "w2"
+      }
+    ]
+  },
+  "expect": "violates InterruptedRequestDoesNotRun",
+  "spec": "InterruptCoverage",
+  "steps": [
+    {
+      "action": "WakeRead",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "WakeCommit",
+      "actor": {
+        "$model": "w1"
+      },
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 1,
+        "wakeRec": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ]
+          ]
+        },
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Begin",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          1
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 1,
+        "wakeRec": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ]
+          ]
+        },
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 1,
+        "wakeRec": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ]
+          ]
+        },
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "action": "Commit",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [
+          {
+            "$model": "w1"
+          }
+        ],
+        "gen": 1,
+        "iread": [
+          0,
+          1
+        ],
+        "istate": "done",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 1,
+        "wakeRec": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ]
+          ]
+        },
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          1
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 1,
+        "wakeRec": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              -1
+            ]
+          ]
+        },
+        "wakeSeen": {
+          "$function": [
+            [
+              {
+                "$model": "w1"
+              },
+              0
+            ],
+            [
+              {
+                "$model": "w2"
+              },
+              -1
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

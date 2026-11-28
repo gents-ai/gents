@@ -1,0 +1,700 @@
+{
+  "config": "MCBackgroundAdmissionContentionStartWitness",
+  "constants": {
+    "Attempts": 4,
+    "BumpSequence": true,
+    "Max": 2,
+    "N": 4,
+    "RedriveLostPoll": true,
+    "RenewAttempts": 4,
+    "RenewTicks": 1,
+    "RenewalSpaced": true,
+    "Renewals": 2,
+    "SequentialAdmission": true,
+    "StartAttempts": 4
+  },
+  "expect": "violates StartNeverConflicts",
+  "spec": "BackgroundAdmissionContention",
+  "steps": [
+    {
+      "action": "Begin",
+      "actor": 1,
+      "after": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 0,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 0,
+          "sess": 0
+        }
+      },
+      "before": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 0,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 0,
+          "sess": 0
+        }
+      }
+    },
+    {
+      "action": "RenewBegin",
+      "actor": null,
+      "after": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 0,
+        "rLost": 0,
+        "rOpen": true,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 1,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 0,
+          "sess": 0
+        }
+      },
+      "before": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 0,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 0,
+          "sess": 0
+        }
+      }
+    },
+    {
+      "action": "RenewCommit",
+      "actor": null,
+      "after": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 1,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 1,
+          "sess": 0
+        }
+      },
+      "before": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 0,
+        "rLost": 0,
+        "rOpen": true,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 1,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 0,
+          "sess": 0
+        }
+      }
+    },
+    {
+      "action": "Abort",
+      "actor": 1,
+      "after": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 1,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": true,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 1,
+          "sess": 0
+        }
+      },
+      "before": {
+        "child": [
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "lease": "live",
+        "liveSnap": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "open": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "phase": [
+          "start",
+          "start",
+          "start",
+          "start"
+        ],
+        "rCommits": 1,
+        "rLost": 0,
+        "rOpen": false,
+        "rSnap": {
+          "req": 0,
+          "sess": 0
+        },
+        "rTicks": 1,
+        "rTries": 0,
+        "receipts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "refused": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "rseen": [
+          true,
+          false,
+          false,
+          false
+        ],
+        "snap": [
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          },
+          {
+            "req": 0,
+            "sess": 0
+          }
+        ],
+        "startConflicted": false,
+        "tries": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ver": {
+          "req": 1,
+          "sess": 0
+        }
+      }
+    }
+  ]
+}

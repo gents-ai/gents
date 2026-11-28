@@ -1,6 +1,7 @@
 ---- MODULE BackgroundWakeIdentity ----
 \* lean: none
 \* crates: gents-session, gents-toolcalls
+\* traces: violates
 (***************************************************************************)
 (* Concurrent background-completion notifications of one finished request *)
 (* coalescing into one wake request.                                       *)
@@ -44,6 +45,7 @@
 (* it orders the notifiers of one process, and the store admits one         *)
 (* process per home (gents-store local/home/lock.rs `StoreLock`).           *)
 (***************************************************************************)
+\* trace actors: Enqueue, Read, Commit => st
 EXTENDS Integers, FiniteSets
 
 CONSTANTS
@@ -106,7 +108,7 @@ Tick ==
 \* against the accepted deadline (delivery `append_tool_output_with_time`).
 Prepare ==
   /\ setup = "preparing" /\ prepared < N
-  /\ IF ObserveAtClaim \/ clock < Deadline
+  /\ IF ObserveAtClaim \/ clock <= Deadline
        THEN /\ prepared' = prepared + 1
             /\ setup' = IF prepared + 1 = N THEN "ready" ELSE "preparing"
        ELSE /\ setup' = "refused" /\ UNCHANGED prepared

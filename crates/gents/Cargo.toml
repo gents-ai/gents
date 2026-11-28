@@ -107,6 +107,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+blockstore.workspace = true
 wiremock = "0.6"
 gents-workspace-hack = { workspace = true }
 # Integration tests link the library with its fixtures.

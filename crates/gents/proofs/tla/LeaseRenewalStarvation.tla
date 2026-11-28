@@ -2,6 +2,7 @@
 \* lean: none
 \* crates: gents-session, gents-loop
 \* models: RequestExecutionLease.renewalDue
+\* traces: violates
 \* One request's execution lease, its owner and its renewal task on the
 \* owner's runtime, beside the wall clock (#3704).
 \*

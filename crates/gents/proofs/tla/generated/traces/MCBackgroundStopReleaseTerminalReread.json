@@ -1,0 +1,102 @@
+{
+  "config": "MCBackgroundStopReleaseTerminalReread",
+  "constants": {
+    "Bound": "wallclock",
+    "Completes": false,
+    "Decision": "terminal"
+  },
+  "expect": "violates NoFalseAlreadyTerminal",
+  "spec": "BackgroundStopRelease",
+  "steps": [
+    {
+      "action": "Load",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      },
+      "before": {
+        "canceller": "idle",
+        "reply": "none",
+        "row": "running",
+        "signalled": false,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "Observe",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "dropped"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "CommitCancel",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "dropped"
+      }
+    },
+    {
+      "action": "Expire",
+      "actor": null,
+      "after": {
+        "canceller": "expired",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      }
+    },
+    {
+      "action": "RereadRow",
+      "actor": null,
+      "after": {
+        "canceller": "done",
+        "reply": "already_terminal",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      },
+      "before": {
+        "canceller": "expired",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      }
+    }
+  ]
+}

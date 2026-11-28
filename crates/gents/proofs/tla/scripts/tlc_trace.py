@@ -122,7 +122,7 @@ def actor_fields(source):
         if not line.startswith(prefix):
             continue
         actions, selector = line[len(prefix):].split(" => ")
-        if not re.fullmatch(r'\w+(?:\.\w+|\{2\})?', selector):
+        if not re.fullmatch(r'\w+(?:(?:\|\w+)+|\.\w+|\{(?:member|2)\})?', selector):
             raise ValueError(f"invalid trace actor selector {selector}")
         for action in actions.split(", "):
             if not NAME.fullmatch(action) or action in fields:
@@ -140,10 +140,10 @@ def changed_keys(old, new):
         if isinstance(data, dict):
             return data["$function"] if "$function" in data else sorted(data.items())
         raise ValueError(f"actor field has no indexed domain: {data}")
-    left, right = entries(old), entries(new)
-    if [k for k, _ in left] != [k for k, _ in right]:
-        raise ValueError("actor domain changed")
-    return [k for (k, v), (_, w) in zip(left, right) if v != w]
+    left = {canonical_key(k): (k, v) for k, v in entries(old)}
+    right = {canonical_key(k): (k, v) for k, v in entries(new)}
+    return [(left[k] if k in left else right[k])[0] for k in sorted(left.keys() | right.keys())
+            if left.get(k) != right.get(k)]
 
 
 def actor(source, before, after):
@@ -160,8 +160,13 @@ def actor(source, before, after):
         candidates = groups[0]
     else:
         field, _, identity = source.field.partition(".")
-        old, new = before[field], after[field]
-        if identity:
+        if field.endswith("{member}"):
+            name = field.removesuffix("{member}")
+            old = {canonical_key(v): v for v in before[name]}
+            new = {canonical_key(v): v for v in after[name]}
+            candidates = [(old[k] if k in old else new[k]) for k in sorted(old.keys() ^ new.keys())]
+        elif identity:
+            old, new = before[field], after[field]
             candidates = []
             for i, entry in enumerate(old):
                 rest = old[:i] + old[i + 1:]
@@ -169,7 +174,9 @@ def actor(source, before, after):
                                    and rest == new[:i] + new[i + 1:]):
                     candidates.append(entry[identity])
         else:
-            candidates = changed_keys(old, new)
+            changes = {canonical_key(k): k for name in field.split("|")
+                       for k in changed_keys(before[name], after[name])}
+            candidates = [changes[k] for k in sorted(changes)]
     if len(candidates) != source.count:
         raise ValueError(f"{source}: expected {source.count} changed actors, got {candidates}")
     return candidates[0] if source.count == 1 else candidates

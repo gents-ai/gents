@@ -1,0 +1,239 @@
+{
+  "config": "MCRetryBackoffLeaseWallClock",
+  "constants": {
+    "Backoff": 2,
+    "DrivePoll": 1,
+    "FixtureCasOnDeadline": false,
+    "Horizon": 12,
+    "Lease": 8,
+    "WakeFence": true
+  },
+  "expect": "violates NoRetryAfterExpiry",
+  "spec": "RetryBackoffLease",
+  "steps": [
+    {
+      "action": "FirstCallFails",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "waiting",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 0,
+        "pc": "backoff",
+        "readDeadline": 0,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "waiting",
+        "nextDrive": 0,
+        "nextRenewal": 2,
+        "now": 0,
+        "pc": "calling",
+        "readDeadline": 0,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 0
+      }
+    },
+    {
+      "action": "FixtureRead",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 0,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "waiting",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 0,
+        "pc": "backoff",
+        "readDeadline": 0,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 1,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 0,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    },
+    {
+      "action": "DrivePollStep",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 1,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 1,
+        "nextRenewal": 2,
+        "now": 1,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 2,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 1,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    },
+    {
+      "action": "Wake",
+      "actor": null,
+      "after": {
+        "deadline": 8,
+        "dispatchLive": true,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 2,
+        "pc": "dispatched",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": false,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 2,
+        "pc": "backoff",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    },
+    {
+      "action": "FixtureWrite",
+      "actor": null,
+      "after": {
+        "deadline": 2,
+        "dispatchLive": true,
+        "expiry": "expired",
+        "fixture": "done",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 2,
+        "pc": "dispatched",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      },
+      "before": {
+        "deadline": 8,
+        "dispatchLive": true,
+        "expiry": "none",
+        "fixture": "read",
+        "nextDrive": 2,
+        "nextRenewal": 2,
+        "now": 2,
+        "pc": "dispatched",
+        "readDeadline": 8,
+        "renewing": true,
+        "request": "processing",
+        "wakeAt": 2
+      }
+    }
+  ]
+}

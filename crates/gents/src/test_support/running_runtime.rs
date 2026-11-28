@@ -27,6 +27,7 @@ pub struct AgentRuntimeHome {
     pub binding: AgentIdentityBinding,
     pub agent: Arc<dyn NodeIdentity>,
     backend_id: String,
+    wire_api: Option<gents_loop::openai_wire::OpenAiWireApi>,
 }
 
 impl AgentRuntimeHome {
@@ -37,6 +38,25 @@ impl AgentRuntimeHome {
         endpoint: &str,
         max_concurrent: i64,
         probe_status: &str,
+    ) -> Self {
+        Self::start_with_wire_api(
+            name,
+            backend_id,
+            endpoint,
+            max_concurrent,
+            probe_status,
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_with_wire_api(
+        name: &str,
+        backend_id: Option<&str>,
+        endpoint: &str,
+        max_concurrent: i64,
+        probe_status: &str,
+        wire_api: Option<gents_loop::openai_wire::OpenAiWireApi>,
     ) -> Self {
         let home = SignedHome::enroll(crate::support::trial_store(name).await, name).await;
         let binding = gents_inference::test_support::default_agent(&home).await;
@@ -52,6 +72,7 @@ impl AgentRuntimeHome {
             binding,
             agent,
             backend_id,
+            wire_api,
         };
         runtime_home
             .write_backend(endpoint, max_concurrent, probe_status)
@@ -306,7 +327,7 @@ impl AgentRuntimeHome {
                 Collection::InferenceBackend,
                 serde_json::json!({
                     "node_did": node_did, "backend_id": backend_id, "name": backend_id,
-                    "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
+                    "provider_kind": "OpenAiCompatible", "endpoint": endpoint, "openai_wire_api": self.wire_api,
                     "max_concurrent": max_concurrent, "auth": {"kind": "unauthenticated"}
                 }),
             ),

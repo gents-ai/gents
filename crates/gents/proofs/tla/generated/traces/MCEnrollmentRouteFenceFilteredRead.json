@@ -1,0 +1,96 @@
+{
+  "config": "MCEnrollmentRouteFenceFilteredRead",
+  "constants": {
+    "Merges": false,
+    "PeerTrustsRoute": false,
+    "ReconcileLocks": false
+  },
+  "expect": "violates NoRouteForRevokedMember",
+  "spec": "EnrollmentRouteFence",
+  "steps": [
+    {
+      "action": "RouteRead",
+      "actor": null,
+      "after": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "idle",
+        "readAuth": false,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "Revoke",
+      "actor": null,
+      "after": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "RouteCommit",
+      "actor": null,
+      "after": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": true
+      },
+      "before": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    }
+  ]
+}

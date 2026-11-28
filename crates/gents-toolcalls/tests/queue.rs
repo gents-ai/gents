@@ -233,6 +233,122 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
 }
 
 #[tokio::test]
+async fn background_wake_identity_notifier_traces() {
+    use gents_lean_vocab::tla::replay::{Red, Trace};
+    use gents_store::test_support::paused_transaction::PausedTransaction;
+    use rapidhash::RapidHashMap;
+    for json in [
+        include_str!("../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityNoGate.json"),
+        include_str!(
+            "../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityNoGateNoConflict.json"
+        ),
+        include_str!(
+            "../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityWallClock.json"
+        ),
+    ] {
+        let trace = Trace::load(json, "BackgroundWakeIdentity", &[]);
+        let home = AgentHome::start("wake-identity").await;
+        let mut fixture = canonical_background_fixture(&home, "wake-identity").await;
+        let mut observation_time = fixture.claimed_at;
+        let mut tools = Vec::new();
+        let mut published = RapidHashMap::default();
+        let mut writes = RapidHashMap::default();
+        let mut reading = None;
+        let mut actions = trace.steps.iter().peekable();
+        while let Some(step) =
+            actions.next_if(|step| matches!(step.action.as_str(), "Prepare" | "Tick"))
+        {
+            match step.action.as_str() {
+                "Tick" => {
+                    let bound =
+                        fixture.lifecycle.claimed_deadline_at().unwrap() - fixture.claimed_at;
+                    let ticks = trace.constants["Deadline"].as_i64().unwrap();
+                    let progress = step.after["clock"].as_i64().unwrap();
+                    observation_time = fixture.claimed_at
+                        + bound * i32::try_from(progress).unwrap() / i32::try_from(ticks).unwrap();
+                }
+                "Prepare" => tools.push(
+                    fixture
+                        .prepare_notification_at("notification", observation_time)
+                        .await
+                        .unwrap(),
+                ),
+                _ => unreachable!(),
+            }
+        }
+        if trace.config == "MCBackgroundWakeIdentityWallClock" {
+            assert!(observation_time > fixture.lifecycle.claimed_deadline_at().unwrap());
+            trace.check(Red::Defect, &[("SetupNotRefused", !tools.is_empty())]);
+            continue;
+        }
+        let selection = fixture.writer.terminal_output(&fixture.parent.doc_id).await;
+        fixture
+            .lifecycle
+            .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+            .await
+            .unwrap();
+        for step in actions {
+            let actor = step.actor.as_ref().unwrap()["$model"].as_str().unwrap();
+            if published.contains_key(actor) {
+                continue;
+            }
+            match step.action.as_str() {
+                "Enqueue" => {
+                    let i: usize = actor.strip_prefix('n').unwrap().parse().unwrap();
+                    let fixture = &fixture;
+                    let tool = &tools[i - 1];
+                    let call = PausedTransaction::before_commit(async move {
+                        fixture
+                            .publish_prepared_notification(
+                                "notification",
+                                &format!("background-completion-notification:trace-{i}:tool"),
+                                "review notifications",
+                                background_hints(&fixture.parent),
+                                None,
+                                tool,
+                            )
+                            .await
+                    });
+                    assert!(writes.insert(actor, call).is_none());
+                }
+                "Read" if reading.is_none() => {
+                    assert!(writes.get_mut(actor).unwrap().advance().await);
+                    reading = Some(actor);
+                }
+                "Read" => assert!(futures::poll!(std::pin::pin!(writes
+                    .get_mut(actor)
+                    .unwrap()
+                    .advance()))
+                .is_pending()),
+                "Commit" => {
+                    let call = writes.remove(actor).unwrap();
+                    assert!(reading.is_none() || reading == Some(actor));
+                    published.insert(actor, call.finish().await.unwrap());
+                    reading = None;
+                }
+                action => panic!("unmapped wake action {action}"),
+            }
+        }
+        assert!(writes.is_empty());
+        let unique = published.values().filter(|p| p.created_request).count();
+        let first = published.values().next().unwrap().request.as_ref().unwrap();
+        trace.check(
+            Red::Defect,
+            &[
+                ("NoneFailed", !published.is_empty()),
+                (
+                    "OneWake",
+                    unique == 1
+                        && published
+                            .values()
+                            .all(|p| p.request.as_ref().unwrap().doc_id == first.doc_id),
+                ),
+            ],
+        );
+    }
+}
+
+#[tokio::test]
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
     let db = AgentHome::start("background-restart-before-claim").await;
     let node = db.node.clone();

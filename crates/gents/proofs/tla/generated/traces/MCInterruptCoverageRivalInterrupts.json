@@ -1,0 +1,765 @@
+{
+  "config": "MCInterruptCoverageRivalInterrupts",
+  "constants": {
+    "Attempts": 4,
+    "ClaimReadsMarker": true,
+    "InterruptReads": false,
+    "OtherInterrupts": 4,
+    "OtherWrites": 0,
+    "Requests": [
+      {
+        "$model": "r1"
+      }
+    ],
+    "WakeReadsMarker": true,
+    "Wakes": []
+  },
+  "expect": "violates InterruptNotPrevented",
+  "spec": "InterruptCoverage",
+  "steps": [
+    {
+      "action": "Begin",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 4,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 4,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "OtherInterrupt",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 0,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 4,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Abort",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 0,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Begin",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          0,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "OtherInterrupt",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 1,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 3,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Abort",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 1,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Begin",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          1,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "OtherInterrupt",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 2,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 2,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Abort",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 2,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Begin",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          3,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          2,
+          0
+        ],
+        "istate": "idle",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "OtherInterrupt",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 4,
+        "iread": [
+          3,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 3,
+        "iread": [
+          3,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 1,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    },
+    {
+      "action": "Abort",
+      "actor": null,
+      "after": {
+        "active": "none",
+        "attempts": 4,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 4,
+        "iread": [
+          3,
+          0
+        ],
+        "istate": "failed",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      },
+      "before": {
+        "active": "none",
+        "attempts": 3,
+        "claimRec": [],
+        "claimSeen": {
+          "$function": [
+            [
+              {
+                "$model": "r1"
+              },
+              -1
+            ]
+          ]
+        },
+        "coveredReq": "none",
+        "coveredWakes": [],
+        "gen": 4,
+        "iread": [
+          3,
+          0
+        ],
+        "istate": "open",
+        "later": [],
+        "others": 0,
+        "rivals": 0,
+        "sessionVer": 0,
+        "wakeRec": [],
+        "wakeSeen": []
+      }
+    }
+  ]
+}

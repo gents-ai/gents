@@ -2,6 +2,7 @@
 \* lean: none
 \* crates: gents-p2p
 \* models: Enrollment.RouteFence.routeWrite, Enrollment.RouteFence.revisionWrite, TransactionFence.conflicts
+\* traces: violates
 \* One enrolled member's route on the node that authorizes it, against the
 \* revocation of that member and a peer that syncs through the route.
 \*

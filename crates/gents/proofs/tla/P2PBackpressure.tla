@@ -1,6 +1,11 @@
 ---- MODULE P2PBackpressure ----
 \* lean: none
 \* crates: gents-p2p
+\* traces: violates
+\* trace actors: StartPush, PushSucceeds, PushTimesOut => outState
+\* trace actors: ReceiveComplete, BadAckAtCapacity, ReceiveMissingAndRegister => acked{member}
+\* trace actors: NackAtCapacity => nacked{member}
+\* trace actors: ResolvePending => pending{member}
 EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS
