@@ -79,8 +79,12 @@ impl ConfigCommandTool {
                             let input = self.agent_create_input(creation, options).await?;
                             let params = creation_preview_params(creation);
                             return agent_preview_text(
-                                agent_management::model_agent_create_preview(&self.core, &input)
-                                    .await,
+                                agent_management::model_agent_create_preview(
+                                    &self.core,
+                                    &input,
+                                    self.experience.is_some(),
+                                )
+                                .await,
                                 &params,
                             );
                         }
@@ -90,7 +94,12 @@ impl ConfigCommandTool {
                     }
                 };
                 agent_preview_text(
-                    agent_management::model_agent_outcome(&self.core, &params).await,
+                    agent_management::model_agent_outcome(
+                        &self.core,
+                        &params,
+                        self.experience.is_some(),
+                    )
+                    .await,
                     &params,
                 )
             }
@@ -105,20 +114,34 @@ impl ConfigCommandTool {
                     }
                 };
                 let identity = self.agent_signer()?;
+                let attempt = self.experience_attempt(true).await?;
                 self.execution.enter_mutation();
                 agent_commit_text(
-                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    agent_management::model_agent_apply(
+                        &self.core,
+                        identity,
+                        params.clone(),
+                        attempt.as_ref(),
+                    )
+                    .await,
                     &params,
                 )
             }
             "create" | "clone" | "disable" => {
                 let identity = self.agent_signer()?;
+                let attempt = self.experience_attempt(true).await?;
                 let options = agent_options(verb, &argv[1..])?;
                 if let Some(creation) = AgentCreateOperation::for_verb(verb) {
                     let input = self.agent_create_input(creation, options).await?;
                     self.execution.enter_mutation();
                     return agent_commit_text(
-                        agent_management::model_agent_create(&self.core, identity, &input).await,
+                        agent_management::model_agent_create(
+                            &self.core,
+                            identity,
+                            &input,
+                            attempt.as_ref(),
+                        )
+                        .await,
                         &options_free_params(verb),
                     );
                 }
@@ -126,7 +149,13 @@ impl ConfigCommandTool {
                 self.resolve_agent_dids(&mut params).await?;
                 self.execution.enter_mutation();
                 agent_commit_text(
-                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    agent_management::model_agent_apply(
+                        &self.core,
+                        identity,
+                        params.clone(),
+                        attempt.as_ref(),
+                    )
+                    .await,
                     &params,
                 )
             }
@@ -139,9 +168,16 @@ impl ConfigCommandTool {
                 let agent_did = self.resolve_agent_did(agent_did).await?;
                 let identity = self.agent_signer()?;
                 let params = default_agent_params("edit", &agent_did);
+                let attempt = self.experience_attempt(true).await?;
                 self.execution.enter_mutation();
                 agent_commit_text(
-                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    agent_management::model_agent_apply(
+                        &self.core,
+                        identity,
+                        params.clone(),
+                        attempt.as_ref(),
+                    )
+                    .await,
                     &params,
                 )
             }

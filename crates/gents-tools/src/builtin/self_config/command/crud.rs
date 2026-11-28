@@ -425,6 +425,10 @@ impl ConfigCommandTool {
     }
 
     pub(super) async fn batch(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.experience.is_none(),
+            "batch records experience per operation; put experience inside each operation instead"
+        );
         let parsed = ParsedArgs::parse(&argv[1..])?;
         anyhow::ensure!(
             parsed.positionals.is_empty()
@@ -445,6 +449,16 @@ impl ConfigCommandTool {
             .into_iter()
             .enumerate()
             .map(|(index, call)| {
+                let experience = call.experience.clone();
+                if let Some(experience) = &experience {
+                    experience
+                        .validate()
+                        .with_context(|| format!("batch item {index}; no operations ran"))?;
+                    anyhow::ensure!(
+                        self.memory_enabled,
+                        "batch item {index}: memory is disabled for this agent; enable memory in Tools before recording experience; no operations ran"
+                    );
+                }
                 let argv = call
                     .into_argv()
                     .with_context(|| format!("batch item {index}; no operations ran"))?;
@@ -452,13 +466,14 @@ impl ConfigCommandTool {
                     argv.first().is_none_or(|word| word != "batch"),
                     "batch item {index}: nested batches are not supported; no operations ran"
                 );
-                Ok(argv)
+                Ok((argv, experience))
             })
             .collect::<Result<Vec<_>>>()?;
         let mut results = Vec::new();
-        for (index, argv) in commands.iter().enumerate() {
+        for (index, (argv, experience)) in commands.iter().enumerate() {
             let child = Self {
                 execution: Arc::new(super::super::execution::ExecutionObservation::default()),
+                experience: experience.clone(),
                 ..self.clone()
             };
             let result = Box::pin(child.dispatch(argv)).await;

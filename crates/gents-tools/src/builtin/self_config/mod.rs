@@ -344,6 +344,8 @@ pub fn build_self_config_tools_with_runtime(
         plugin_builder: config.plugin_builder.clone(),
         ux_preview_assets: config.ux_preview_assets.clone(),
         skill_pointers,
+        memory_enabled: config.memory_enabled,
+        experience: None,
         envelope: gents_loop::tool::ToolCallEnvelope::default(),
     }));
     tools

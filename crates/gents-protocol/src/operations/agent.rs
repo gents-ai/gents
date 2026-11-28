@@ -126,6 +126,9 @@ pub struct AgentReceipt<A> {
     pub overridden_on_request: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_warning: Option<String>,
+    /// The experience attempt this commit recorded, when it carried one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experience: Option<serde_json::Value>,
     pub agent: A,
     pub make_default: bool,
 }
@@ -618,6 +621,7 @@ mod tests {
             not_copied: Vec::new(),
             overridden_on_request: Vec::new(),
             prompt_warning: None,
+            experience: None,
             agent: serde_json::json!({"agent_did": "did:key:new"}),
             make_default: false,
         };

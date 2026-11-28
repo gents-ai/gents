@@ -231,7 +231,7 @@ const RECEIPT_TEXT_LIMIT: usize = 2048;
 /// value is still readable.
 const RECEIPT_ECHO_LIMIT: usize = 256;
 
-pub(super) fn safe_diff(
+pub(crate) fn safe_diff(
     target: SelfConfigTarget,
     before: &Map<String, Value>,
     after: &Map<String, Value>,

@@ -132,75 +132,112 @@ pub(super) async fn ensure_problem_in_txn(
     })
 }
 
+fn request_provenance_query(request_id: &str) -> String {
+    format!(
+        "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 1) {{ executed_model_name executed_reasoning_effort executed_inference_profile_id executed_runtime_generation workspace_id session_id }}}}",
+        gents_store::graphql::escape_graphql_string(request_id),
+    )
+}
+
+fn caller_context_from_row(
+    row: Option<&Value>,
+    request_id: Option<&str>,
+    session_id: Option<&str>,
+) -> CallerContext {
+    let mut values: Map<String, Value> = Map::new();
+    let mut executed_model_name = None;
+    let mut session_id = session_id.map(str::to_owned);
+    if let Some(row) = row {
+        for field in [
+            "executed_model_name",
+            "executed_inference_profile_id",
+            "executed_reasoning_effort",
+        ] {
+            if let Some(text) = row.get(field).and_then(Value::as_str) {
+                values.insert(field.to_owned(), Value::String(text.to_owned()));
+                if field == "executed_model_name" {
+                    executed_model_name = Some(text.to_owned());
+                }
+            }
+        }
+        if let Some(generation) = row
+            .get("executed_runtime_generation")
+            .and_then(Value::as_i64)
+        {
+            values.insert("executed_runtime_generation".to_owned(), json!(generation));
+        }
+        if let Some(workspace) = row.get("workspace_id").and_then(Value::as_str) {
+            values.insert(
+                "workspace_id".to_owned(),
+                Value::String(workspace.to_owned()),
+            );
+        }
+        if let Some(session) = row.get("session_id").and_then(Value::as_str) {
+            session_id = Some(session.to_owned());
+        }
+    }
+    if let Some(request_id) = request_id {
+        values.insert(
+            "request_id".to_owned(),
+            Value::String(request_id.to_owned()),
+        );
+    }
+    if let Some(session) = session_id.as_deref() {
+        values.insert("session_id".to_owned(), Value::String(session.to_owned()));
+    }
+    CallerContext {
+        request_id: request_id.map(str::to_owned),
+        session_id,
+        executed_model_name,
+        provenance: provenance_literal(&values),
+    }
+}
+
+/// The provenance a write transaction reads from its AgentRequest, so the
+/// attempt and the configuration write see the same transaction.
+pub(super) async fn caller_context_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    request_id: Option<&str>,
+    session_id: Option<&str>,
+) -> anyhow::Result<CallerContext> {
+    let row = match request_id {
+        Some(request_id) => {
+            let value = txn.execute(&request_provenance_query(request_id)).await?;
+            value.pointer("/data/AgentRequest/0").cloned()
+        }
+        None => None,
+    };
+    Ok(caller_context_from_row(
+        row.as_ref(),
+        request_id,
+        session_id,
+    ))
+}
+
 impl MemoryStore<'_> {
     pub(super) async fn caller_context(
         &self,
         request_id: Option<&str>,
         session_id: Option<&str>,
     ) -> anyhow::Result<CallerContext> {
-        let mut values: Map<String, Value> = Map::new();
-        let mut executed_model_name = None;
-        let mut session_id = session_id.map(str::to_owned);
-        if let Some(request_id) = request_id {
-            let read = self
-                .read(&format!(
-                    "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 1) {{ executed_model_name executed_reasoning_effort executed_inference_profile_id executed_runtime_generation workspace_id session_id }}}}",
-                    gents_store::graphql::escape_graphql_string(request_id),
-                ))
-                .await;
-            match read {
-                Ok(value) => {
-                    if let Some(row) = value.pointer("/data/AgentRequest/0") {
-                        for field in [
-                            "executed_model_name",
-                            "executed_inference_profile_id",
-                            "executed_reasoning_effort",
-                        ] {
-                            if let Some(text) = row.get(field).and_then(Value::as_str) {
-                                values.insert(field.to_owned(), Value::String(text.to_owned()));
-                                if field == "executed_model_name" {
-                                    executed_model_name = Some(text.to_owned());
-                                }
-                            }
-                        }
-                        if let Some(generation) = row
-                            .get("executed_runtime_generation")
-                            .and_then(Value::as_i64)
-                        {
-                            values.insert(
-                                "executed_runtime_generation".to_owned(),
-                                json!(generation),
-                            );
-                        }
-                        if let Some(workspace) = row.get("workspace_id").and_then(Value::as_str) {
-                            values.insert(
-                                "workspace_id".to_owned(),
-                                Value::String(workspace.to_owned()),
-                            );
-                        }
-                        if let Some(session) = row.get("session_id").and_then(Value::as_str) {
-                            session_id = Some(session.to_owned());
-                        }
+        let row = match request_id {
+            Some(request_id) => {
+                let read = self.read(&request_provenance_query(request_id)).await;
+                match read {
+                    Ok(value) => value.pointer("/data/AgentRequest/0").cloned(),
+                    Err(error) => {
+                        tracing::warn!(%error, "memory provenance request read failed");
+                        None
                     }
                 }
-                Err(error) => {
-                    tracing::warn!(%error, "memory provenance request read failed");
-                }
             }
-            values.insert(
-                "request_id".to_owned(),
-                Value::String(request_id.to_owned()),
-            );
-        }
-        if let Some(session) = session_id.as_deref() {
-            values.insert("session_id".to_owned(), Value::String(session.to_owned()));
-        }
-        Ok(CallerContext {
-            request_id: request_id.map(str::to_owned),
+            None => None,
+        };
+        Ok(caller_context_from_row(
+            row.as_ref(),
+            request_id,
             session_id,
-            executed_model_name,
-            provenance: provenance_literal(&values),
-        })
+        ))
     }
 
     fn reader(&self, context: &CallerContext) -> Current {

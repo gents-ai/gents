@@ -111,7 +111,8 @@ const HELP_INDEX: &[(&str, &str)] = &[
 ];
 
 const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
-Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool.";
+Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool.
+Experience: a write may carry an experience object beside argv with one of problem_key (from memory problems) or new_problem, plus rationale, and optional what and predicted. It records an attempt in the same transaction and returns its attempt_key; preview records nothing.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -139,6 +140,9 @@ pub struct ConfigCommandParams {
     pub clear: Vec<String>,
     #[serde(default)]
     pub options: BTreeMap<String, Value>,
+    /// A committed write records this attempt in the same transaction.
+    #[serde(default)]
+    pub experience: Option<crate::memory::ExperienceArgs>,
 }
 
 impl ConfigCommandParams {
@@ -149,8 +153,9 @@ impl ConfigCommandParams {
                 self.target_id.is_none()
                     && self.set.is_empty()
                     && self.clear.is_empty()
-                    && self.options.is_empty(),
-                "help accepts a command path only; remove target_id, set, clear and options"
+                    && self.options.is_empty()
+                    && self.experience.is_none(),
+                "help accepts a command path only; remove target_id, set, clear, options and experience"
             );
         }
         if let Some(next_call) = self.options_moved_out_of_argv() {
@@ -397,6 +402,11 @@ pub struct ConfigCommandTool {
     pub(super) plugin_builder: Option<std::path::PathBuf>,
     pub(super) ux_preview_assets: Option<std::path::PathBuf>,
     pub(super) skill_pointers: Arc<crate::skill_pointer::SkillPointers>,
+    /// Whether this Agent's Tools enable the memory tool; an experience
+    /// argument is refused when they do not.
+    pub(super) memory_enabled: bool,
+    /// The attempt this call carries, when it carries one.
+    pub(super) experience: Option<crate::memory::ExperienceArgs>,
     /// The call this copy serves; [`Tool::call`] sets it on its own copy.
     pub(super) envelope: gents_loop::tool::ToolCallEnvelope,
 }
@@ -425,7 +435,21 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
                     "target_id": {"type":"string", "description":"Exact document ID; alternatively put it after the verb in argv. agent create allocates its ID."},
                     "set": {"type":"object", "additionalProperties":true, "description":"Fields to write, as native JSON. Each replaces the whole field."},
                     "clear": {"type":"array", "items":{"type":"string"}, "description":"Optional fields to remove."},
-                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Object options stay JSON objects."}
+                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Object options stay JSON objects."},
+                    "experience": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "Writes only: record an experience attempt in the same transaction. Preview records nothing.",
+                        "properties": {
+                            "problem_key": {"type":"string", "minLength":1, "description":"A problem_key from memory problems."},
+                            "new_problem": {"type":"string", "minLength":1, "description":"The root cause when no existing problem explains the failure."},
+                            "what": {"type":"string", "minLength":1, "description":"The change; defaults to the collection, target and changed fields."},
+                            "rationale": {"type":"string", "description":"Why this change should work."},
+                            "predicted": {"type":"array", "items":{"type":"string"}, "description":"Fixes predicted before testing."}
+                        },
+                        "required": ["rationale"],
+                        "oneOf": [{"required":["problem_key"]}, {"required":["new_problem"]}]
+                    }
                 },
                 "required": ["argv"],
                 "additionalProperties": false
@@ -438,17 +462,26 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
         args: Self::Args,
         context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        let call = Self {
+        let mut call = Self {
             execution: Arc::new(super::execution::ExecutionObservation::default()),
             envelope: context.clone(),
             ..self.clone()
         };
+        let experience = args.experience.clone();
+        call.experience = experience.clone();
         let mut previewing = false;
         let mut deleting = false;
         let mut help = false;
         let observed = observed_call(&args);
         let words = args.argv.clone();
         let result = async {
+            if let Some(experience) = &experience {
+                experience.validate()?;
+                anyhow::ensure!(
+                    call.memory_enabled,
+                    "memory is disabled for this agent; enable memory in Tools before recording experience"
+                );
+            }
             let argv = args.into_argv()?;
             previewing = argv.iter().any(|word| word == "preview");
             deleting = argv.first().is_some_and(|word| word == "cleanup")
@@ -516,6 +549,23 @@ impl ConfigCommandTool {
     /// row. `options.shared = "acknowledge"` waives the sharing refusal only.
     fn holds_catalog_grant(&self) -> bool {
         self.categories.contains("node")
+    }
+
+    /// The attempt the committing write carries, with the embedder a new
+    /// problem needs. A preview stages nothing.
+    pub(super) async fn experience_attempt(
+        &self,
+        committing: bool,
+    ) -> Result<Option<crate::memory::AttemptRequest>> {
+        match &self.experience {
+            Some(args) if committing => Ok(Some(crate::memory::AttemptRequest::from_envelope(
+                args.clone(),
+                crate::memory::embedder().await?,
+                self.core.agent_did(),
+                &self.envelope,
+            ))),
+            _ => Ok(None),
+        }
     }
 
     async fn dispatch(&self, argv: &[String]) -> Result<String> {

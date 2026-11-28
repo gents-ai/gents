@@ -171,6 +171,9 @@ pub struct ToolSurface {
 pub struct SelfConfigToolConfig {
     pub enabled: bool,
     pub agent_did: String,
+    /// Whether the Agent's Tools enable the memory tool, which an experience
+    /// argument on a config write requires.
+    pub memory_enabled: bool,
     pub categories: std::collections::BTreeSet<String>,
     pub no_lockout: bool,
     pub preview: bool,

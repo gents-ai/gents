@@ -189,7 +189,7 @@ pub(crate) const FENCES: &[(&str, usize, &str)] = &[
         "UniqueIndex(AgentMemoryProblem(problem_key)): the problem is created only under its unique key, and a twin returns the committed row",
     ),
     (
-        "crates/gents-tools/src/memory/experience_write.rs::attempt::transact_write",
+        "crates/gents-tools/src/memory/experience_write.rs::stage_attempt_in_txn",
         1,
         "UniqueIndex(AgentMemoryAttempt(attempt_key)): the ordinal is read inside the transaction and the attempt is created only under its unique key",
     ),

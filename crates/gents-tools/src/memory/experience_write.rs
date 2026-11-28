@@ -5,11 +5,184 @@ use super::experience::{merge_admitted, normalize, MergeDecision};
 use super::experience_rows::{
     parse_aliases, ALIAS_COLLECTION, ATTEMPT_COLLECTION, GUARD_COLLECTION, OUTCOME_COLLECTION,
 };
-use super::experience_store::{ensure_problem_in_txn, NewProblem};
+use super::experience_store::{caller_context_in_txn, ensure_problem_in_txn, NewProblem};
 use super::{
     content_hash, digest_key, link_parent_to_agent, nullable_string, nullable_string_list,
-    MemoryParams, MemoryStore, MAX_ALIAS_ROWS, MAX_ATTEMPTS_PER_PAGE, MAX_OUTCOMES_PER_PAGE,
+    ExperienceArgs, ExperienceTarget, MemoryParams, MemoryStore, StagedAttempt, MAX_ALIAS_ROWS,
+    MAX_ATTEMPTS_PER_PAGE, MAX_OUTCOMES_PER_PAGE,
 };
+
+/// The facts one attempt is staged with: the agent whose memory it joins, the
+/// request its provenance reads, and what the committed write changed.
+pub(crate) struct AttemptContext<'a> {
+    pub node_did: &'a str,
+    pub agent_did: &'a str,
+    pub embedder: &'a gents_memory_embed::StaticEmbedder,
+    pub request_id: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub correlation: Option<&'a str>,
+    pub targets: &'a [ExperienceTarget],
+    pub accepted: bool,
+    pub summary: &'a str,
+}
+
+/// Stages one attempt row inside `txn`, after the write it records has
+/// succeeded in that transaction. The cited problem must exist, or a new one
+/// is opened through the same path `memory problem` uses.
+pub(crate) async fn stage_attempt_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    experience: &ExperienceArgs,
+    context: &AttemptContext<'_>,
+) -> anyhow::Result<StagedAttempt> {
+    let AttemptContext {
+        node_did,
+        agent_did,
+        embedder,
+        request_id,
+        session_id,
+        correlation,
+        targets,
+        accepted,
+        summary,
+    } = *context;
+    experience.validate()?;
+    let request_id = request_id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "experience needs a request; record it from a session request so provenance is stored"
+        )
+    })?;
+    let (problem_key, new_name) = match (&experience.problem_key, &experience.new_problem) {
+        (Some(key), None) => (key.clone(), None),
+        (None, Some(name)) => {
+            let normalized = normalize(name);
+            if normalized.is_empty() {
+                anyhow::bail!("experience.new_problem must contain non-whitespace text");
+            }
+            (
+                content_hash(agent_did, &normalized),
+                Some((name.clone(), normalized)),
+            )
+        }
+        _ => unreachable!("experience.validate checked the problem source"),
+    };
+    let what = match experience
+        .what
+        .as_deref()
+        .map(str::trim)
+        .filter(|what| !what.is_empty())
+    {
+        Some(what) => what.to_owned(),
+        None => {
+            anyhow::ensure!(
+                !summary.trim().is_empty(),
+                "attempt requires what: the committed change, in one line"
+            );
+            summary.to_owned()
+        }
+    };
+    let rationale = experience.rationale.trim().to_owned();
+    let context = caller_context_in_txn(txn, Some(request_id), session_id).await?;
+    let session_id = context.session_id.clone();
+    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+        txn,
+        gents_store::collection::Collection::Agent,
+        node_did,
+        agent_did,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
+    if let Some((name, normalized)) = new_name {
+        let vector = embedder
+            .embed_one(name.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("embedding failed: {error}"))?;
+        ensure_problem_in_txn(
+            txn,
+            &agent_doc_id,
+            agent_did,
+            &NewProblem {
+                problem_key: &problem_key,
+                name: &name,
+                normalized: &normalized,
+                vector: &vector,
+                request_id: Some(request_id),
+                session_id: session_id.as_deref(),
+                provenance: &context.provenance,
+                created_at: &Utc::now().to_rfc3339(),
+            },
+        )
+        .await?;
+    } else {
+        let existing = txn
+            .execute(&format!(
+                "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: 1) {{ problem_key }}}}",
+                agent = gents_store::graphql::escape_graphql_string(agent_did),
+                key = gents_store::graphql::escape_graphql_string(&problem_key),
+            ))
+            .await?;
+        if existing
+            .pointer("/data/AgentMemoryProblem/0/problem_key")
+            .is_none()
+        {
+            anyhow::bail!(
+                "no problem {problem_key}; call memory problems to list the index or memory problem with name to open one"
+            );
+        }
+    }
+    let prior = txn
+        .execute(&format!(
+            "{{AgentMemoryAttempt(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{request_id: {{_eq: \"{request}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: {limit}) {{ attempt_key }}}}",
+            agent = gents_store::graphql::escape_graphql_string(agent_did),
+            request = gents_store::graphql::escape_graphql_string(request_id),
+            key = gents_store::graphql::escape_graphql_string(&problem_key),
+            limit = MAX_ATTEMPTS_PER_PAGE + 1,
+        ))
+        .await?;
+    let ordinal = prior
+        .pointer("/data/AgentMemoryAttempt")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if ordinal >= MAX_ATTEMPTS_PER_PAGE {
+        anyhow::bail!(
+            "more than {MAX_ATTEMPTS_PER_PAGE} attempts under this request and problem; start a new request"
+        );
+    }
+    let attempt_key = digest_key(&[
+        agent_did,
+        &problem_key,
+        request_id,
+        correlation.unwrap_or(""),
+        &ordinal.to_string(),
+    ]);
+    let targets = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(targets).map_err(anyhow::Error::from)?,
+    )?;
+    let mutation = format!(
+        "mutation {{ add_AgentMemoryAttempt(input: {{ attempt_key: \"{attempt_key}\", agent_did: \"{agent}\", problem_key: \"{problem}\", what: \"{what}\", rationale: \"{rationale}\", targets: {targets}, predicted: {predicted}, accepted: {accepted}, provenance: {provenance}, request_id: \"{request}\", session_id: {session_id}, created_at: \"{created_at}\" }}) {{ _docID }} }}",
+        attempt_key = gents_store::graphql::escape_graphql_string(&attempt_key),
+        agent = gents_store::graphql::escape_graphql_string(agent_did),
+        problem = gents_store::graphql::escape_graphql_string(&problem_key),
+        what = gents_store::graphql::escape_graphql_string(&what),
+        rationale = gents_store::graphql::escape_graphql_string(&rationale),
+        predicted = nullable_string_list(&experience.predicted),
+        request = gents_store::graphql::escape_graphql_string(request_id),
+        session_id = nullable_string(session_id.as_deref()),
+        provenance = context.provenance,
+        created_at = gents_store::graphql::escape_graphql_string(&Utc::now().to_rfc3339()),
+    );
+    let created = txn.execute(&mutation).await?;
+    let doc_id = created
+        .pointer(&format!("/data/add_{ATTEMPT_COLLECTION}/0/_docID"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("attempt write returned no document id"))?
+        .to_owned();
+    link_parent_to_agent(txn, ATTEMPT_COLLECTION, &doc_id, &agent_doc_id).await?;
+    Ok(StagedAttempt {
+        attempt_key,
+        problem_key,
+    })
+}
 
 impl MemoryStore<'_> {
     pub(super) async fn attempt(
@@ -17,40 +190,14 @@ impl MemoryStore<'_> {
         args: MemoryParams,
         runtime: Option<&gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext>,
     ) -> anyhow::Result<Value> {
-        let cited = args.problem_key.clone();
-        let new_problem = args.new_problem.clone();
-        let (problem_key, new_name) = match (cited, new_problem) {
-            (Some(key), None) => (key, None),
-            (None, Some(name)) => {
-                let normalized = normalize(&name);
-                if normalized.is_empty() {
-                    anyhow::bail!("new_problem must contain non-whitespace text");
-                }
-                (
-                    content_hash(self.agent_did, &normalized),
-                    Some((name, normalized)),
-                )
-            }
-            (Some(_), Some(_)) => {
-                anyhow::bail!(
-                    "attempt takes problem_key or new_problem, not both; call memory problems for an index or memory problem with name to open one"
-                )
-            }
-            (None, None) => {
-                anyhow::bail!(
-                    "attempt needs problem_key from memory problem or problems, or new_problem when none explains the failure"
-                )
-            }
+        let experience = ExperienceArgs {
+            problem_key: args.problem_key,
+            new_problem: args.new_problem,
+            what: args.what,
+            rationale: args.rationale.unwrap_or_default(),
+            predicted: args.predicted.unwrap_or_default(),
         };
-        let what = args
-            .what
-            .as_deref()
-            .map(str::trim)
-            .filter(|what| !what.is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!("attempt requires what: the committed change, in one line")
-            })?
-            .to_owned();
+        experience.validate()?;
         let request_id = runtime
             .and_then(|runtime| runtime.request_id.as_deref())
             .ok_or_else(|| {
@@ -59,141 +206,44 @@ impl MemoryStore<'_> {
                 )
             })?
             .to_owned();
-        let session_id = runtime.and_then(|runtime| runtime.session_id.as_deref());
         let correlation = runtime
             .and_then(|runtime| runtime.correlation.as_deref())
             .unwrap_or("");
-        let context = self.caller_context(Some(&request_id), session_id).await?;
-        let rationale = args.rationale.clone().unwrap_or_default();
-        let predicted = args.predicted.clone().unwrap_or_default();
         let accepted = args.accepted.unwrap_or(true);
-        let new_vector = match new_name.as_ref() {
-            Some((name, _)) => Some(
-                self.embedder
-                    .embed_one(name.clone())
-                    .await
-                    .map_err(|error| anyhow::anyhow!("embedding failed: {error}"))?,
-            ),
-            None => None,
-        };
         let agent_did = self.agent_did.to_owned();
         let node_did = self.node_did.to_owned();
-        let problem_key_owned = problem_key.clone();
-        let new_name_owned = new_name.clone();
-        let provenance = context.provenance.clone();
-        let request_id_clone = request_id.clone();
-        let session_id_owned = context.session_id.clone();
-        let predicted_literal = nullable_string_list(&predicted);
-        let created_at = Utc::now().to_rfc3339();
-        let (attempt_key, problem_key) = self
+        let session_id = runtime.and_then(|runtime| runtime.session_id.clone());
+        let embedder = &self.embedder;
+        let staged = self
             .access
             .transact_write("tool.memory.attempt", move |txn| {
+                let experience = experience.clone();
                 let agent_did = agent_did.clone();
                 let node_did = node_did.clone();
-                let problem_key = problem_key_owned.clone();
-                let new_name = new_name_owned.clone();
-                let new_vector = new_vector.clone();
-                let provenance = provenance.clone();
-                let request_id = request_id_clone.clone();
-                let session_id = session_id_owned.clone();
-                let predicted = predicted_literal.clone();
-                let created_at = created_at.clone();
-                let what = what.clone();
-                let rationale = rationale.clone();
+                let request_id = request_id.clone();
+                let session_id = session_id.clone();
                 let correlation = correlation.to_owned();
                 Box::pin(async move {
-                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+                    stage_attempt_in_txn(
                         txn,
-                        gents_store::collection::Collection::Agent,
-                        &node_did,
-                        &agent_did,
+                        &experience,
+                        &AttemptContext {
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            embedder,
+                            request_id: Some(&request_id),
+                            session_id: session_id.as_deref(),
+                            correlation: Some(&correlation),
+                            targets: &[],
+                            accepted,
+                            summary: "",
+                        },
                     )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the agent has no readable Agent document"))?;
-                    if let Some((name, normalized)) = new_name {
-                        let vector = new_vector.unwrap_or_default();
-                        ensure_problem_in_txn(
-                            txn,
-                            &agent_doc_id,
-                            &agent_did,
-                            &NewProblem {
-                                problem_key: &problem_key,
-                                name: &name,
-                                normalized: &normalized,
-                                vector: &vector,
-                                request_id: Some(&request_id),
-                                session_id: session_id.as_deref(),
-                                provenance: &provenance,
-                                created_at: &created_at,
-                            },
-                        )
-                        .await?;
-                    } else {
-                        let existing = txn
-                            .execute(&format!(
-                                "{{AgentMemoryProblem(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: 1) {{ problem_key }}}}",
-                                agent = gents_store::graphql::escape_graphql_string(&agent_did),
-                                key = gents_store::graphql::escape_graphql_string(&problem_key),
-                            ))
-                            .await?;
-                        if existing
-                            .pointer("/data/AgentMemoryProblem/0/problem_key")
-                            .is_none()
-                        {
-                            anyhow::bail!(
-                                "no problem {problem_key}; call memory problem with name to open one or memory problems to list the index"
-                            );
-                        }
-                    }
-                    let prior = txn
-                        .execute(&format!(
-                            "{{AgentMemoryAttempt(filter: {{_and: [{{agent_did: {{_eq: \"{agent}\"}}}}, {{request_id: {{_eq: \"{request}\"}}}}, {{problem_key: {{_eq: \"{key}\"}}}}]}}, limit: {limit}) {{ attempt_key }}}}",
-                            agent = gents_store::graphql::escape_graphql_string(&agent_did),
-                            request = gents_store::graphql::escape_graphql_string(&request_id),
-                            key = gents_store::graphql::escape_graphql_string(&problem_key),
-                            limit = MAX_ATTEMPTS_PER_PAGE + 1,
-                        ))
-                        .await?;
-                    let ordinal = prior
-                        .pointer("/data/AgentMemoryAttempt")
-                        .and_then(Value::as_array)
-                        .map(Vec::len)
-                        .unwrap_or(0);
-                    if ordinal >= MAX_ATTEMPTS_PER_PAGE {
-                        anyhow::bail!(
-                            "more than {MAX_ATTEMPTS_PER_PAGE} attempts under this request and problem; start a new request"
-                        );
-                    }
-                    let attempt_key = digest_key(&[
-                        &agent_did,
-                        &problem_key,
-                        &request_id,
-                        &correlation,
-                        &ordinal.to_string(),
-                    ]);
-                    let mutation = format!(
-                        "mutation {{ add_AgentMemoryAttempt(input: {{ attempt_key: \"{attempt_key}\", agent_did: \"{agent}\", problem_key: \"{problem}\", what: \"{what}\", rationale: \"{rationale}\", predicted: {predicted}, accepted: {accepted}, provenance: {provenance}, request_id: \"{request}\", session_id: {session_id}, created_at: \"{created_at}\" }}) {{ _docID }} }}",
-                        attempt_key = gents_store::graphql::escape_graphql_string(&attempt_key),
-                        agent = gents_store::graphql::escape_graphql_string(&agent_did),
-                        problem = gents_store::graphql::escape_graphql_string(&problem_key),
-                        what = gents_store::graphql::escape_graphql_string(&what),
-                        rationale = gents_store::graphql::escape_graphql_string(&rationale),
-                        request = gents_store::graphql::escape_graphql_string(&request_id),
-                        session_id = nullable_string(session_id.as_deref()),
-                        created_at = gents_store::graphql::escape_graphql_string(&created_at),
-                    );
-                    let created = txn.execute(&mutation).await?;
-                    let doc_id = created
-                        .pointer(&format!("/data/add_{ATTEMPT_COLLECTION}/0/_docID"))
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow::anyhow!("attempt write returned no document id"))?
-                        .to_owned();
-                    link_parent_to_agent(txn, ATTEMPT_COLLECTION, &doc_id, &agent_doc_id).await?;
-                    Ok::<(String, String), anyhow::Error>((attempt_key, problem_key))
+                    .await
                 })
             })
             .await?;
-        Ok(json!({"attempt_key": attempt_key, "problem_key": problem_key}))
+        Ok(json!({"attempt_key": staged.attempt_key, "problem_key": staged.problem_key}))
     }
 
     pub(super) async fn outcome(

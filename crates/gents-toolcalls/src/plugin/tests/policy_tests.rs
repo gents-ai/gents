@@ -149,6 +149,7 @@ impl PolicyFixture {
         let config = SelfConfigToolConfig {
             enabled: true,
             agent_did: self.agent_did.clone(),
+            memory_enabled: false,
             categories: categories.iter().map(|c| c.to_string()).collect(),
             no_lockout,
             preview: false,

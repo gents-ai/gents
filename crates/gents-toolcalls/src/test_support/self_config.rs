@@ -15,6 +15,7 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
         agent_did: "beh-test".to_string(),
+        memory_enabled: true,
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         preview: false,

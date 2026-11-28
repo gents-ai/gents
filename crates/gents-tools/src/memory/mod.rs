@@ -17,7 +17,7 @@ use gents_memory_embed::{EmbedError, StaticEmbedder};
 use gents_protocol::tool_names::MEMORY_TOOL_NAME;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -28,6 +28,7 @@ mod experience_write;
 mod facts;
 
 pub use experience::{fold, lands_on, merge_admitted, normalize, recall, resolve, MergeDecision};
+pub(crate) use experience_write::{stage_attempt_in_txn, AttemptContext};
 pub use facts::{inject, inject_with_experience_budget, merge_context, RecallSetting};
 
 pub const MEMORY_COLLECTION: &str = gents_protocol::schemas::AGENT_MEMORY_NAME;
@@ -117,6 +118,180 @@ pub struct MemoryParams {
     pub from: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+}
+
+/// The attempt a write records in its own transaction: one cited problem or
+/// one new root cause, the change and why it should work.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExperienceArgs {
+    #[serde(default)]
+    pub problem_key: Option<String>,
+    #[serde(default)]
+    pub new_problem: Option<String>,
+    #[serde(default)]
+    pub what: Option<String>,
+    pub rationale: String,
+    #[serde(default)]
+    pub predicted: Vec<String>,
+}
+
+impl ExperienceArgs {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match (&self.problem_key, &self.new_problem) {
+            (Some(key), None) => anyhow::ensure!(
+                !key.trim().is_empty(),
+                "experience.problem_key must not be blank"
+            ),
+            (None, Some(name)) => anyhow::ensure!(
+                !normalize(name).is_empty(),
+                "experience.new_problem must contain non-whitespace text"
+            ),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "experience takes problem_key or new_problem, not both; call memory problems for an index"
+            ),
+            (None, None) => anyhow::bail!(
+                "experience needs problem_key from memory problems, or new_problem when none explains the failure"
+            ),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExperienceField {
+    pub field: String,
+    pub from_sha256: String,
+    pub to_sha256: String,
+}
+
+/// One written document an attempt names: never its raw values, only the
+/// field names and the sha256 of each serialized value.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExperienceTarget {
+    pub collection: String,
+    pub target_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_id: Option<String>,
+    pub fields: Vec<ExperienceField>,
+}
+
+impl ExperienceTarget {
+    pub fn from_changes(
+        collection: &str,
+        target_id: &str,
+        doc_id: Option<String>,
+        changes: &[gents_documents::patch::FieldDelta],
+    ) -> Self {
+        Self {
+            collection: collection.to_owned(),
+            target_id: target_id.to_owned(),
+            doc_id,
+            fields: changes
+                .iter()
+                .map(|change| ExperienceField {
+                    field: change.field.clone(),
+                    from_sha256: value_sha256(&change.from),
+                    to_sha256: value_sha256(&change.to),
+                })
+                .collect(),
+        }
+    }
+}
+
+fn value_sha256(value: &Value) -> String {
+    format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+}
+
+pub fn change_summary(
+    collection: &str,
+    target_id: &str,
+    changes: &[gents_documents::patch::FieldDelta],
+) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let fields = changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{collection} {target_id}: {fields}")
+}
+
+/// Lean `SelfConfig.StructuredConfig.experienceStaged`: a write records its
+/// attempt exactly when it enters the write path and commits. A preview and
+/// a refused write stage nothing.
+pub fn experience_staged(committed: bool, preview: bool) -> bool {
+    committed && !preview
+}
+
+#[derive(Debug)]
+pub struct StagedAttempt {
+    pub attempt_key: String,
+    pub problem_key: String,
+}
+
+/// The attempt a configuration write carries, with the request facts its
+/// provenance reads.
+#[derive(Clone)]
+pub struct AttemptRequest {
+    pub args: ExperienceArgs,
+    pub embedder: Arc<StaticEmbedder>,
+    pub agent_did: String,
+    pub request_id: Option<String>,
+    pub session_id: Option<String>,
+    pub correlation: Option<String>,
+}
+
+impl AttemptRequest {
+    pub fn from_envelope(
+        args: ExperienceArgs,
+        embedder: Arc<StaticEmbedder>,
+        agent_did: &str,
+        envelope: &ToolCallEnvelope,
+    ) -> Self {
+        let runtime = envelope.runtime();
+        Self {
+            args,
+            embedder,
+            agent_did: agent_did.to_owned(),
+            request_id: runtime
+                .as_ref()
+                .and_then(|runtime| runtime.request_id.clone()),
+            session_id: runtime
+                .as_ref()
+                .and_then(|runtime| runtime.session_id.clone()),
+            correlation: runtime
+                .as_ref()
+                .and_then(|runtime| runtime.correlation.clone()),
+        }
+    }
+
+    pub async fn stage_in_txn(
+        &self,
+        txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        node_did: &str,
+        targets: &[ExperienceTarget],
+        summary: &str,
+    ) -> anyhow::Result<StagedAttempt> {
+        stage_attempt_in_txn(
+            txn,
+            &self.args,
+            &AttemptContext {
+                node_did,
+                agent_did: &self.agent_did,
+                embedder: &self.embedder,
+                request_id: self.request_id.as_deref(),
+                session_id: self.session_id.as_deref(),
+                correlation: self.correlation.as_deref(),
+                targets,
+                accepted: true,
+                summary,
+            },
+        )
+        .await
+    }
 }
 
 pub(crate) struct MemoryStore<'a> {
@@ -555,5 +730,82 @@ mod tests {
         assert_eq!(params.problem_key.as_deref(), Some("p"));
         assert_eq!(params.predicted, Some(vec!["a".to_owned()]));
         assert_eq!(params.accepted, Some(false));
+    }
+
+    #[test]
+    fn experience_is_staged_only_when_a_write_commits() {
+        assert!(experience_staged(true, false));
+        assert!(!experience_staged(false, false));
+        assert!(!experience_staged(true, true));
+        assert!(!experience_staged(false, true));
+    }
+
+    #[test]
+    fn experience_arguments_take_exactly_one_problem_source() {
+        let cited = ExperienceArgs {
+            problem_key: Some("p".into()),
+            rationale: "why".into(),
+            ..ExperienceArgs::default()
+        };
+        cited.validate().unwrap();
+        let opened = ExperienceArgs {
+            new_problem: Some("a race".into()),
+            rationale: "why".into(),
+            ..ExperienceArgs::default()
+        };
+        opened.validate().unwrap();
+        let both = ExperienceArgs {
+            problem_key: Some("p".into()),
+            new_problem: Some("a race".into()),
+            rationale: "why".into(),
+            ..ExperienceArgs::default()
+        };
+        assert!(both.validate().is_err());
+        let neither = ExperienceArgs {
+            rationale: "why".into(),
+            ..ExperienceArgs::default()
+        };
+        assert!(neither.validate().is_err());
+    }
+
+    #[test]
+    fn experience_targets_name_fields_and_hash_values() {
+        let changes = vec![gents_documents::patch::FieldDelta {
+            field: "model_name".into(),
+            from: json!("old-secret-model"),
+            to: json!("new-secret-model"),
+        }];
+        let target = ExperienceTarget::from_changes(
+            gents_documents::patch::SelfConfigTarget::Agent.collection_name(),
+            "agent-1",
+            Some("doc-1".into()),
+            &changes,
+        );
+        assert_eq!(
+            target.collection,
+            gents_documents::patch::SelfConfigTarget::Agent.collection_name()
+        );
+        assert_eq!(target.target_id, "agent-1");
+        assert_eq!(target.doc_id.as_deref(), Some("doc-1"));
+        assert_eq!(target.fields.len(), 1);
+        assert_eq!(target.fields[0].field, "model_name");
+        for digest in [&target.fields[0].from_sha256, &target.fields[0].to_sha256] {
+            assert_eq!(digest.len(), 64, "sha256 hex");
+            assert!(digest.chars().all(|digit| digit.is_ascii_hexdigit()));
+        }
+        assert_ne!(target.fields[0].from_sha256, target.fields[0].to_sha256);
+        let serialized = serde_json::to_string(&[&target]).unwrap();
+        assert!(!serialized.contains("secret-model"), "{serialized}");
+        assert_eq!(
+            change_summary(
+                gents_documents::patch::SelfConfigTarget::Agent.collection_name(),
+                "agent-1",
+                &changes
+            ),
+            format!(
+                "{} agent-1: model_name",
+                gents_documents::patch::SelfConfigTarget::Agent.collection_name()
+            )
+        );
     }
 }

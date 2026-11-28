@@ -15,7 +15,8 @@ impl ConfigCommandTool {
     }
 
     /// A Skill or MCP service write through the handlers every client calls
-    /// (Lean `DocumentOperations`), as the invoking Agent.
+    /// (Lean `DocumentOperations`), as the invoking Agent, with its attempt in
+    /// the same transaction.
     pub(super) async fn document_write(
         &self,
         target: SelfConfigTarget,
@@ -32,65 +33,59 @@ impl ConfigCommandTool {
             self.execution.enter_mutation();
         }
         let access = self.core.access()?;
-        let policy = gents_inference::resolved::ProviderProfilePolicy;
-        let (resource, result) = match target {
-            SelfConfigTarget::Skill => (
-                "skill",
-                skill::save(
-                    &access,
-                    &skill::SkillWrite {
-                        owner: &self.node_did,
-                        skill_id: id,
-                        mode,
-                        patch: &patch,
-                        node_binding: self.core.node_binding(),
-                    },
-                    &policy,
-                    !preview,
-                )
-                .await
-                .map_err(|failure| {
-                    failure.map(|error| match error {
-                        gents_protocol::operations::skill::SkillOperationError::Document(error) => {
-                            error
-                        }
-                        other => DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(other)),
-                    })
+        let attempt = self.experience_attempt(!preview).await?;
+        let node_did = self.core.node_did().to_owned();
+        let request = match target {
+            SelfConfigTarget::Skill => DocumentAttempt {
+                write: DocumentWriteSpec::Skill(skill::SkillWrite {
+                    owner: &self.node_did,
+                    skill_id: id,
+                    mode,
+                    patch: &patch,
+                    node_binding: self.core.node_binding(),
                 }),
-            ),
-            SelfConfigTarget::ToolServiceRegistry => (
-                "mcp-service",
-                mcp_service::save(
-                    &access,
-                    &mcp_service::McpServiceWrite {
-                        owner: &self.node_did,
-                        service_id: id,
-                        mode,
-                        patch: &patch,
-                        node_binding: self.core.node_binding(),
-                    },
-                    &policy,
-                    !preview,
-                )
-                .await
-                .map_err(|failure| {
-                    failure.map(|error| {
-                        match error {
-                        gents_protocol::operations::mcp_service::McpServiceOperationError::Document(
-                            error,
-                        ) => error,
-                        other => DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(other)),
-                    }
-                    })
+                commit: !preview,
+                attempt: attempt.as_ref(),
+                node_did: &node_did,
+            },
+            SelfConfigTarget::ToolServiceRegistry => DocumentAttempt {
+                write: DocumentWriteSpec::Mcp(mcp_service::McpServiceWrite {
+                    owner: &self.node_did,
+                    service_id: id,
+                    mode,
+                    patch: &patch,
+                    node_binding: self.core.node_binding(),
                 }),
-            ),
+                commit: !preview,
+                attempt: attempt.as_ref(),
+                node_did: &node_did,
+            },
             other => bail!(
                 "{} is not written through the document handlers",
                 other.collection_name()
             ),
         };
+        let request = &request;
+        let written = if preview {
+            access
+                .transact_readonly("self_config.document.preview", |txn| {
+                    Box::pin(save_document_in_txn(txn, request))
+                })
+                .await
+        } else {
+            access
+                .transact_write("self_config.document", |txn| {
+                    Box::pin(save_document_in_txn(txn, request))
+                })
+                .await
+        };
         let stringified = stringified_field(&patch);
-        let receipt = result.map_err(|failure| match failure {
+        let resource = if target == SelfConfigTarget::Skill {
+            "skill"
+        } else {
+            "mcp-service"
+        };
+        let (receipt, staged) = written.map_err(|failure| match failure {
             OperationFailure::Operation(DocumentOperationError::Missing { id, .. }) => {
                 super::ops::MissingConfigDocument { target, id }.into()
             }
@@ -108,11 +103,17 @@ impl ConfigCommandTool {
             }
             OperationFailure::Other(error) => error,
         })?;
-        outcome_text(&PatchOutcome::from_receipt(
-            target,
-            self.core.agent_did(),
-            receipt,
-        ))
+        let mut outcome = PatchOutcome::from_receipt(target, self.core.agent_did(), receipt);
+        outcome.experience = staged.map(|staged| {
+            json!({
+                "attempt_key": staged.attempt_key,
+                "problem_key": staged.problem_key,
+            })
+        });
+        if preview && self.experience.is_some() {
+            outcome.experience = Some(json!("not recorded on preview"));
+        }
+        outcome_text(&outcome)
     }
 
     async fn patch_outcome(
@@ -126,17 +127,23 @@ impl ConfigCommandTool {
         } else {
             "update"
         };
-        let outcome = match verb {
+        let mut outcome = match verb {
             "preview" => {
                 anyhow::ensure!(self.preview, "preview is not granted for this agent");
                 core.preview(request).await
             }
             "edit" => {
                 self.execution.enter_mutation();
-                core.apply(request).await
+                let attempt = self.experience_attempt(true).await?;
+                core.apply_with_experience(request, attempt).await
             }
             _ => unreachable!("patch verb"),
         };
+        if verb == "preview" && self.experience.is_some() {
+            if let Ok(outcome) = &mut outcome {
+                outcome.experience = Some(json!("not recorded on preview"));
+            }
+        }
         match outcome {
             Ok(outcome)
                 if outcome.committed
@@ -207,4 +214,119 @@ fn json_string_hint(
         ),
         None => error,
     }
+}
+
+async fn stage_write_attempt(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    commit: bool,
+    attempt: Option<&crate::memory::AttemptRequest>,
+    receipt: &gents_protocol::operations::document::DocumentReceipt,
+) -> Result<
+    Option<crate::memory::StagedAttempt>,
+    gents_documents::operations::OperationFailure<
+        gents_protocol::operations::document::DocumentOperationError,
+    >,
+> {
+    let Some(attempt) = attempt.filter(|_| commit) else {
+        return Ok(None);
+    };
+    let changes = receipt
+        .changed
+        .iter()
+        .map(|change| gents_documents::patch::FieldDelta {
+            field: change.field.clone(),
+            from: change.from.clone(),
+            to: change.to.clone(),
+        })
+        .collect::<Vec<_>>();
+    let targets = [crate::memory::ExperienceTarget::from_changes(
+        receipt.collection,
+        &receipt.id,
+        receipt.doc_id.clone(),
+        &changes,
+    )];
+    let summary = crate::memory::change_summary(receipt.collection, &receipt.id, &changes);
+    let staged = attempt
+        .stage_in_txn(txn, node_did, &targets, &summary)
+        .await
+        .map_err(gents_documents::operations::OperationFailure::Other)?;
+    Ok(Some(staged))
+}
+
+type DocumentFailure = gents_documents::operations::OperationFailure<
+    gents_protocol::operations::document::DocumentOperationError,
+>;
+type SkillFailure = gents_documents::operations::OperationFailure<
+    gents_protocol::operations::skill::SkillOperationError,
+>;
+type McpServiceFailure = gents_documents::operations::OperationFailure<
+    gents_protocol::operations::mcp_service::McpServiceOperationError,
+>;
+
+enum DocumentWriteSpec<'a> {
+    Skill(gents_documents::operations::skill::SkillWrite<'a>),
+    Mcp(gents_documents::operations::mcp_service::McpServiceWrite<'a>),
+}
+
+struct DocumentAttempt<'a> {
+    write: DocumentWriteSpec<'a>,
+    commit: bool,
+    attempt: Option<&'a crate::memory::AttemptRequest>,
+    node_did: &'a str,
+}
+
+async fn save_document_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    request: &DocumentAttempt<'_>,
+) -> Result<
+    (
+        gents_protocol::operations::document::DocumentReceipt,
+        Option<crate::memory::StagedAttempt>,
+    ),
+    DocumentFailure,
+> {
+    let policy = gents_inference::resolved::ProviderProfilePolicy;
+    let receipt = match &request.write {
+        DocumentWriteSpec::Skill(write) => {
+            gents_documents::operations::skill::save_in_txn(txn, write, &policy, request.commit)
+                .await
+                .map_err(skill_failure)?
+        }
+        DocumentWriteSpec::Mcp(write) => gents_documents::operations::mcp_service::save_in_txn(
+            txn,
+            write,
+            &policy,
+            request.commit,
+        )
+        .await
+        .map_err(mcp_service_failure)?,
+    };
+    let staged = stage_write_attempt(
+        txn,
+        request.node_did,
+        request.commit,
+        request.attempt,
+        &receipt,
+    )
+    .await?;
+    Ok((receipt, staged))
+}
+
+fn skill_failure(failure: SkillFailure) -> DocumentFailure {
+    failure.map(|error| match error {
+        gents_protocol::operations::skill::SkillOperationError::Document(error) => error,
+        other => gents_protocol::operations::document::DocumentOperationError::Passthrough(
+            gents_protocol::error_chain::PassedThrough::error(other),
+        ),
+    })
+}
+
+fn mcp_service_failure(failure: McpServiceFailure) -> DocumentFailure {
+    failure.map(|error| match error {
+        gents_protocol::operations::mcp_service::McpServiceOperationError::Document(error) => error,
+        other => gents_protocol::operations::document::DocumentOperationError::Passthrough(
+            gents_protocol::error_chain::PassedThrough::error(other),
+        ),
+    })
 }

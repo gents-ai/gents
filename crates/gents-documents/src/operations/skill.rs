@@ -54,7 +54,7 @@ pub struct SkillWrite<'a> {
     pub node_binding: Option<&'a ConfigurationNodeBinding>,
 }
 
-async fn save_in_txn(
+pub async fn save_in_txn(
     txn: &ConfigApplyTxn<'_>,
     write: &SkillWrite<'_>,
     policy: &dyn AdvertisedProfilePolicy,

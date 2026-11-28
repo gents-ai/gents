@@ -22,10 +22,10 @@ mod guards;
 mod request;
 
 pub use documents::{apply_tool_grant_selection, validate_tool_network_selection};
-use documents::{candidate_doc, replacement_plan, safe_diff, shared_receipt};
+use documents::{candidate_doc, replacement_plan, shared_receipt};
 pub(crate) use documents::{
-    decode_merged, guard_shared_authority_in_txn, read_owned_doc, shared_referrers, shared_refusal,
-    summarized, validate_merged_selection,
+    decode_merged, guard_shared_authority_in_txn, read_owned_doc, safe_diff, shared_referrers,
+    shared_refusal, summarized, validate_merged_selection,
 };
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
@@ -166,6 +166,10 @@ pub struct PatchOutcome {
     /// its next turn holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_turn: Option<Value>,
+    /// The experience attempt this write recorded, or that a preview records
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experience: Option<Value>,
 }
 
 impl PatchOutcome {
@@ -202,6 +206,7 @@ impl PatchOutcome {
             doc_id: receipt.doc_id,
             shared: None,
             next_turn: None,
+            experience: None,
         }
     }
 }
@@ -471,6 +476,16 @@ impl SelfConfigCore {
     }
 
     pub async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome, ApplyFailure> {
+        self.apply_with_experience(request, None).await
+    }
+
+    /// A commit that also stages the experience attempt it carries in the
+    /// same transaction, after the configuration write succeeds.
+    pub async fn apply_with_experience(
+        &self,
+        request: ApplyRequest<'_>,
+        attempt: Option<crate::memory::AttemptRequest>,
+    ) -> Result<PatchOutcome, ApplyFailure> {
         ensure_admissible(request.target, &request.patch).map_err(anyhow::Error::from)?;
 
         let this = self;
@@ -478,7 +493,32 @@ impl SelfConfigCore {
         let outcome = self
             .access()?
             .transact_write("self_config.apply", move |txn| {
-                Box::pin(async move { this.apply_in_txn(txn, request).await })
+                let attempt = attempt.clone();
+                Box::pin(async move {
+                    let mut outcome = this.apply_in_txn(txn, request).await?;
+                    if let Some(attempt) = attempt {
+                        let targets = [crate::memory::ExperienceTarget::from_changes(
+                            outcome.collection,
+                            &outcome.target_id,
+                            outcome.doc_id.clone(),
+                            &outcome.changed,
+                        )];
+                        let summary = crate::memory::change_summary(
+                            outcome.collection,
+                            &outcome.target_id,
+                            &outcome.changed,
+                        );
+                        let staged = attempt
+                            .stage_in_txn(txn, this.node_did(), &targets, &summary)
+                            .await
+                            .map_err(ApplyFailure::Other)?;
+                        outcome.experience = Some(json!({
+                            "attempt_key": staged.attempt_key,
+                            "problem_key": staged.problem_key,
+                        }));
+                    }
+                    Ok(outcome)
+                })
             })
             .await
             .map_err(|failure| match failure {
@@ -646,6 +686,7 @@ impl SelfConfigCore {
             changed,
             shared,
             next_turn: None,
+            experience: None,
             effect: if request.target == SelfConfigTarget::DatastoreToolSurface {
                 "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Your own Tools apply from your next turn."
             } else if creating && request.target == SelfConfigTarget::InferenceProfile {
@@ -841,6 +882,7 @@ impl SelfConfigCore {
             committed: false,
             shared,
             next_turn: None,
+            experience: None,
             effect: PREVIEW_EFFECT,
         })
     }

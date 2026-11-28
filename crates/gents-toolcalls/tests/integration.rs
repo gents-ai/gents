@@ -4,6 +4,8 @@ mod background_panic;
 mod background_policy;
 #[path = "change_capture.rs"]
 mod change_capture;
+#[path = "config_experience.rs"]
+mod config_experience;
 #[path = "message_agent_tools.rs"]
 mod message_agent_tools;
 #[path = "message_hop.rs"]

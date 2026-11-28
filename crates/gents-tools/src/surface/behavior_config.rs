@@ -388,6 +388,7 @@ impl AgentToolSurfaceConfig {
             self_config: super::SelfConfigToolConfig {
                 enabled: static_policy.include_self_config(),
                 agent_did: agent_name.to_string(),
+                memory_enabled: enable_memory_tool,
                 categories: static_policy.self_config_category_set(),
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,

@@ -224,6 +224,26 @@ pub struct McpServiceWrite<'a> {
     pub node_binding: Option<&'a ConfigurationNodeBinding>,
 }
 
+/// Creates or edits one MCP service inside a caller's transaction.
+pub async fn save_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    write: &McpServiceWrite<'_>,
+    policy: &dyn AdvertisedProfilePolicy,
+    commit: bool,
+) -> Result<DocumentReceipt, McpServiceFailure> {
+    let document = DocumentWrite {
+        target: SelfConfigTarget::ToolServiceRegistry,
+        owner: write.owner,
+        id: write.service_id,
+        mode: write.mode,
+        patch: write.patch,
+        node_binding: write.node_binding,
+    };
+    super::write::write_in_txn(txn, &document, &valid, policy, commit)
+        .await
+        .map_err(|failure| failure.map(McpServiceOperationError::Document))
+}
+
 /// Creates or edits one MCP service of `owner` by its fields.
 pub async fn save(
     access: &ConfigAccess,

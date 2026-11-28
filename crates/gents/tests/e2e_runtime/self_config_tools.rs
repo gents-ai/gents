@@ -181,6 +181,7 @@ fn tool_config(
     SelfConfigToolConfig {
         enabled: true,
         agent_did: agent_did.into(),
+        memory_enabled: false,
         categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         preview,

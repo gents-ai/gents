@@ -375,9 +375,12 @@ pub async fn configure_agent(
         owner,
         args,
         ceiling,
-        args.action == "preview",
-        AgentCaller::default(),
-        None,
+        AgentApplySeams {
+            preview: args.action == "preview",
+            caller: AgentCaller::default(),
+            home: None,
+            attempt: None,
+        },
     )
     .await?;
     receipt_text(&receipt)
@@ -410,9 +413,12 @@ pub async fn apply_agent(
         owner,
         args,
         ceiling,
-        false,
-        AgentCaller::default(),
-        None,
+        AgentApplySeams {
+            preview: false,
+            caller: AgentCaller::default(),
+            home: None,
+            attempt: None,
+        },
     )
     .await?)
 }
@@ -431,9 +437,12 @@ pub async fn preview_agent(
         owner,
         args,
         ceiling,
-        true,
-        AgentCaller::default(),
-        None,
+        AgentApplySeams {
+            preview: true,
+            caller: AgentCaller::default(),
+            home: None,
+            attempt: None,
+        },
     )
     .await
     {
@@ -504,6 +513,7 @@ pub async fn apply_agent_in_txn(
             actor_did: &admission.actor_did,
             caller: AgentCaller::default(),
             home: admission.node_home.as_deref(),
+            attempt: None,
         },
     )
     .await?)
@@ -522,9 +532,12 @@ async fn agent_apply(
         owner,
         args,
         ceiling,
-        preview,
-        AgentCaller::default(),
-        None,
+        AgentApplySeams {
+            preview,
+            caller: AgentCaller::default(),
+            home: None,
+            attempt: None,
+        },
     )
     .await?;
     receipt_text(&receipt)
@@ -535,6 +548,7 @@ async fn agent_apply(
 pub(super) async fn model_agent_outcome(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
+    experience_on_preview: bool,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
     let mut args = args.clone();
     if AgentCreateOperation::for_verb(requested_operation(&args)).is_some() {
@@ -557,13 +571,21 @@ pub(super) async fn model_agent_outcome(
         core.node_did(),
         &args,
         core.process_ceiling(),
-        true,
-        caller,
-        core.node_home(),
+        AgentApplySeams {
+            preview: true,
+            caller,
+            home: core.node_home(),
+            attempt: None,
+        },
     )
     .await
     {
-        Ok(receipt) => Ok(AgentOutcome::Admitted(receipt_text(&receipt)?)),
+        Ok(mut receipt) => {
+            if experience_on_preview {
+                receipt.experience = Some(serde_json::json!("not recorded on preview"));
+            }
+            Ok(AgentOutcome::Admitted(receipt_text(&receipt)?))
+        }
         Err(AgentApplyError::Operation(error)) => {
             let next_call = recovery_for(&args, &error);
             error.preview_outcome(next_call).map_err(Into::into)
@@ -575,8 +597,9 @@ pub(super) async fn model_agent_outcome(
 pub(super) async fn model_agent_create_preview(
     core: &SelfConfigCore,
     input: &AgentCreateInput,
+    experience: bool,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
-    model_agent_outcome(core, &create_params(input, true)).await
+    model_agent_outcome(core, &create_params(input, true), experience).await
 }
 
 /// The preview as text, a refusal without its rendered next call.
@@ -585,7 +608,7 @@ pub async fn model_agent_preview(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
-    match model_agent_outcome(core, args).await? {
+    match model_agent_outcome(core, args, false).await? {
         AgentOutcome::Admitted(text) => Ok(text),
         AgentOutcome::Refused {
             refusal, message, ..
@@ -605,21 +628,23 @@ pub async fn model_agent_mutate(
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
-    receipt_text(&model_agent_apply(core, identity, args.clone()).await?)
+    receipt_text(&model_agent_apply(core, identity, args.clone(), None).await?)
 }
 
 pub(super) async fn model_agent_create(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     input: &AgentCreateInput,
+    attempt: Option<&crate::memory::AttemptRequest>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
-    model_agent_apply(core, identity, create_params(input, false)).await
+    model_agent_apply(core, identity, create_params(input, false), attempt).await
 }
 
 pub(super) async fn model_agent_apply(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     mut args: ConfigureAgentParams,
+    attempt: Option<&crate::memory::AttemptRequest>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
     let actor = core.identity()?;
     if identity.did() != actor.to_string() {
@@ -642,15 +667,25 @@ pub(super) async fn model_agent_apply(
         core.node_did(),
         &args,
         core.process_ceiling(),
-        false,
-        AgentCaller {
-            held: Some(core.held_grants()),
-            node_binding: core.node_binding(),
-            lockout: Some(core),
+        AgentApplySeams {
+            preview: false,
+            caller: AgentCaller {
+                held: Some(core.held_grants()),
+                node_binding: core.node_binding(),
+                lockout: Some(core),
+            },
+            home: core.node_home(),
+            attempt,
         },
-        core.node_home(),
     )
     .await
+}
+
+struct AgentApplySeams<'a> {
+    preview: bool,
+    caller: AgentCaller<'a>,
+    home: Option<&'a std::path::Path>,
+    attempt: Option<&'a crate::memory::AttemptRequest>,
 }
 
 async fn agent_apply_access(
@@ -658,10 +693,14 @@ async fn agent_apply_access(
     owner: &str,
     args: &ConfigureAgentParams,
     ceiling: &crate::surface::SelfConfigProcessCeiling,
-    preview: bool,
-    caller: AgentCaller<'_>,
-    home: Option<&std::path::Path>,
+    seams: AgentApplySeams<'_>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
+    let AgentApplySeams {
+        preview,
+        caller,
+        home,
+        attempt,
+    } = seams;
     let facts = admission_facts(access, owner, &admission_targets(args)).await?;
     let actor_did = access.actor_did().unwrap_or_default();
     let request = AgentApplyRequest {
@@ -673,6 +712,7 @@ async fn agent_apply_access(
         actor_did: &actor_did,
         caller,
         home,
+        attempt,
     };
     let request = &request;
     if preview {
@@ -700,6 +740,7 @@ struct AgentApplyRequest<'a> {
     caller: AgentCaller<'a>,
     /// The node home the runtime runs under, for a reader-grant step's `--home`.
     home: Option<&'a std::path::Path>,
+    attempt: Option<&'a crate::memory::AttemptRequest>,
 }
 
 /// Lean `SelfConfig.materializedAgent`: admits the request through
@@ -716,6 +757,7 @@ async fn agent_apply_in_txn(
         actor_did,
         caller,
         home,
+        attempt,
         ..
     } = *request;
     let refs = gents_documents::ConfigReferences::load_in_txn(txn, owner).await?;
@@ -862,6 +904,7 @@ async fn agent_apply_in_txn(
     let mut not_copied = Vec::new();
     let mut overridden_on_request = Vec::new();
     let mut prompt_warning = None;
+    let mut experience_changes = Vec::new();
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
             admit(
@@ -1160,8 +1203,19 @@ async fn agent_apply_in_txn(
             if let Some(core) = caller.lockout {
                 core.guard_lockout_chain_in_txn(txn, &merged).await?;
             }
+            experience_changes = ops::safe_diff(SelfConfigTarget::Agent, &stored, &merged);
             doc = serde_json::from_value(Value::Object(merged))?;
         }
+    }
+    if matches!(op, agent::AgentOperation::Create(_)) {
+        let created = serde_json::to_value(&doc)?;
+        experience_changes = ops::safe_diff(
+            SelfConfigTarget::Agent,
+            &serde_json::Map::new(),
+            created
+                .as_object()
+                .ok_or(AgentOperationError::ObjectRequired("agent"))?,
+        );
     }
     documents.push(replacement(
         gents_store::collection::Collection::Agent,
@@ -1224,6 +1278,33 @@ async fn agent_apply_in_txn(
         )
         .await?;
     }
+    let mut experience = None;
+    if crate::memory::experience_staged(!preview, preview) {
+        if let Some(attempt) = attempt {
+            let doc_id = ops::read_owned_doc(txn, SelfConfigTarget::Agent, owner, &id)
+                .await?
+                .map(|(doc_id, _)| doc_id);
+            let targets = [crate::memory::ExperienceTarget::from_changes(
+                SelfConfigTarget::Agent.collection_name(),
+                &id,
+                doc_id,
+                &experience_changes,
+            )];
+            let summary = crate::memory::change_summary(
+                SelfConfigTarget::Agent.collection_name(),
+                &id,
+                &experience_changes,
+            );
+            let staged = attempt
+                .stage_in_txn(txn, owner, &targets, &summary)
+                .await
+                .map_err(AgentApplyError::from)?;
+            experience = Some(serde_json::json!({
+                "attempt_key": staged.attempt_key,
+                "problem_key": staged.problem_key,
+            }));
+        }
+    }
     Ok(AgentReceipt {
         committed: !preview,
         admitted: true,
@@ -1233,6 +1314,7 @@ async fn agent_apply_in_txn(
         not_copied,
         overridden_on_request,
         prompt_warning,
+        experience,
         agent: doc,
         make_default: args.make_default,
     })
