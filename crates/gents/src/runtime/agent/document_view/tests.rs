@@ -2062,3 +2062,70 @@ async fn resolve_schedules_a_command_task_without_an_agent_and_holds_its_event_t
         snapshot.unavailable_event_triggers
     );
 }
+
+/// The slot of a running Agent is built from the heads its view read: an
+/// edit to a selected document moves that head, and the Agent the next view
+/// resolves no longer matches the slot's fingerprint, so the supervisor
+/// rebuilds the slot. A home on the node's own store verifies no body.
+#[tokio::test]
+async fn an_edit_to_a_selected_document_changes_the_slot_fingerprint() -> anyhow::Result<()> {
+    use gents_store::collection::Collection;
+    use gents_store::config_client::body_verification::BodyVerification;
+
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("body-slot-heads").await,
+        "body-slot-heads",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, access) = signed_home.into_parts();
+    let (node, identity) = (db.node.clone(), db.node_identity.clone());
+    let context = DocumentResolveContext::for_tests(
+        identity.clone(),
+        ToolCeiling::readonly(),
+        gents_inference::backends::health::BackendHealthMap::new(),
+    );
+    let context_id = format!("{}:context", binding.agent_did);
+    let resolved = || async {
+        let view = load_document_runtime_view(&node, identity.did()).await?;
+        let snapshot = resolve_document_runtime_snapshot_from_view(&node, &context, &view).await?;
+        anyhow::Ok((
+            snapshot
+                .agent_with_tools(&binding.agent_did)
+                .expect("the default Agent resolves")
+                .slot_fingerprint(),
+            view.contexts[&context_id]
+                .version
+                .clone()
+                .expect("a loaded record has a head"),
+            view.agents[&binding.agent_did].doc_id.clone(),
+            snapshot.placement_bodies,
+        ))
+    };
+
+    let (slot, context_head, agent_doc, bodies) = resolved().await?;
+    seed_automation(
+        &access,
+        vec![(
+            Collection::Skill,
+            serde_json::json!({"skill_id": "body-skill", "node_did": identity.did(), "name": "Body", "enabled": true}),
+        )],
+    )
+    .await;
+    patch_desired_document(
+        &access,
+        Collection::AgentContext,
+        identity.did(),
+        &context_id,
+        serde_json::json!({"skill_ids": ["body-skill"]}),
+    )
+    .await;
+    let (edited_slot, edited_context_head, _, edited_bodies) = resolved().await?;
+
+    assert!(slot.contains(&context_head));
+    assert_ne!(edited_context_head, context_head);
+    assert!(edited_slot.contains(&edited_context_head) && !edited_slot.contains(&context_head));
+    assert_eq!(bodies.get(&agent_doc), Some(&BodyVerification::NotStrict));
+    assert_eq!(edited_bodies, bodies);
+    Ok(())
+}

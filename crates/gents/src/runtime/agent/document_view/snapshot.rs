@@ -176,7 +176,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     .with_node(principal)
     .with_local_did(context.identity.did().to_string())
     .with_automation(automation)
-    .with_placement_basis(view.placement_basis()))
+    .with_placement_basis(view.placement_basis())
+    .with_placement_bodies(view.placement_bodies.clone()))
 }
 
 fn resolve_agent_factories(

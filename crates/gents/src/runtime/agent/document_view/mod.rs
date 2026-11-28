@@ -47,6 +47,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) unknown_kind_backends: RapidHashMap<String, String>,
     pub(crate) oauth_accounts: NodeOAuthAccounts,
     pub(crate) placement_floors: gents_store::config_client::placement_fence::PlacementFloors,
+    pub(crate) placement_bodies: gents_store::config_client::body_verification::PlacementBodies,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

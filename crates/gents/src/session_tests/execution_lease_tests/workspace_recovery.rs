@@ -359,6 +359,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let (dispatcher, _executor) = tokio::sync::mpsc::channel(1);
     let snapshot = Arc::new(ActiveRuntimeSnapshot {
         placement_basis: Default::default(),
+        placement_bodies: Default::default(),
         generation: 1,
         node: Some(runtime_node),
         local_did: did.into(),

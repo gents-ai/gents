@@ -38,6 +38,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             let snapshot = Arc::new(
                 gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
                     placement_basis: Default::default(),
+                    placement_bodies: Default::default(),
                     generation: 1,
                     node: None,
                     local_did: f.identity.did().into(),

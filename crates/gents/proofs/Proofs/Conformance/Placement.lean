@@ -44,6 +44,58 @@ def admitsProposal : Family AdmitInput Bool where
     , ⟨[at' "b" 3 3 "u"], [at' "a" 1 4 "x"]⟩ ]
   model := fun input => RuntimeReconcile.Placement.admitsProposal (floors input.basis) (floors input.fence)
 
+structure ClosureEntry where
+  present : Bool
+  registered : Bool
+  head : String
+  deriving ToJson
+
+structure BodyInput where
+  /-- The home this node holds replicated changes to; absent when it merges
+  them unchecked. -/
+  strictHome : Option String
+  issuerHome : String
+  closure : List ClosureEntry
+  deriving ToJson
+
+inductive Verdict where
+  | notStrict
+  | waiting
+  | verified
+  deriving ToJson
+
+structure BodyOutput where
+  verdict : Verdict
+  heads : List String
+  deriving ToJson
+
+@[conformance_family]
+def body : Family BodyInput BodyOutput where
+  inputs :=
+    let agent : ClosureEntry := ⟨true, true, "agent-1"⟩
+    let profile : ClosureEntry := ⟨true, true, "profile-1"⟩
+    [ ⟨none, "home", []⟩
+    , ⟨none, "home", [agent, profile]⟩
+    , ⟨some "other", "home", [agent, profile]⟩
+    , ⟨some "home", "home", []⟩
+    , ⟨some "home", "home", [agent]⟩
+    , ⟨some "home", "home", [agent, profile]⟩
+    , ⟨some "home", "home", [⟨true, true, "agent-2"⟩, profile]⟩
+    , ⟨some "home", "home", [agent, ⟨false, false, ""⟩]⟩
+    , ⟨some "home", "home", [agent, ⟨true, false, "profile-1"⟩]⟩
+    , ⟨some "home", "home", [⟨true, false, "agent-1"⟩, profile]⟩
+    , ⟨some "home", "home", [agent, ⟨false, true, ""⟩]⟩
+    , ⟨some "home", "", [agent]⟩ ]
+  model := fun input =>
+    let check := match input.strictHome with
+      | some home => MergeCheck.strict home
+      | none => MergeCheck.unchecked
+    match RuntimeReconcile.Placement.body check input.issuerHome
+        (input.closure.map fun entry => ⟨entry.present, entry.registered, entry.head⟩) with
+    | .notStrict => ⟨.notStrict, []⟩
+    | .waiting => ⟨.waiting, []⟩
+    | .verified heads => ⟨.verified, heads⟩
+
 structure StoppedInput where
   basis : List Floor
   scope : String

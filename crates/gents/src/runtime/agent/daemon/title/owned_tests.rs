@@ -1360,6 +1360,7 @@ impl TitleFixture {
         let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
         let snapshot = Arc::new(ActiveRuntimeSnapshot {
             placement_basis: Default::default(),
+            placement_bodies: Default::default(),
             generation: 1,
             node: None,
             local_did: String::new(),

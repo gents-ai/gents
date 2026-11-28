@@ -81,6 +81,7 @@ pub(crate) async fn load_document_runtime_view_as(
                             txn, &owner,
                         )
                         .await?,
+                    placement_bodies: Default::default(),
                 };
                 let visible = |id: &str| !gents_protocol::canonical::is_retired_reserved_id(id);
                 macro_rules! retain_visible {
@@ -117,6 +118,13 @@ pub(crate) async fn load_document_runtime_view_as(
                             .insert(backend_id.clone(), observation);
                     }
                 }
+                let agents = view
+                    .agents
+                    .iter()
+                    .map(|(agent_did, record)| (agent_did.clone(), record.doc_id.clone()))
+                    .collect::<Vec<_>>();
+                view.placement_bodies =
+                    gents_documents::placement_bodies(txn, &owner, &agents).await?;
                 Ok::<_, anyhow::Error>(view)
             })
         },
