@@ -637,6 +637,17 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
             message: Message::Assistant {
                 request_id: None,
                 id: None,
+                content: vec![reasoning("only")],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("header-0".into()),
+            block_indices: vec![0],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
                 content: vec![
                     reasoning("a"),
                     AssistantContent::Text(Text {
@@ -645,20 +656,329 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
                     reasoning("b"),
                 ],
             },
-            source: Some(provider_tag(0)),
-            physical_header: Some("header".into()),
+            source: Some(provider_tag(1)),
+            physical_header: Some("header-1".into()),
             block_indices: vec![0, 1, 2],
             stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::user("next")),
     ];
     strip_all_reasoning(&mut rows);
+    assert_eq!(
+        rows.len(),
+        2,
+        "reasoning-only assistant row must be dropped"
+    );
     let Message::Assistant { content, .. } = &rows[0].message else {
         panic!("assistant row")
     };
     assert!(matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible"));
     assert_eq!(rows[0].block_indices, [1]);
     assert_eq!(rows[1].message, Message::user("next"));
+}
+
+#[tokio::test]
+async fn unpaired_tool_call_with_reasoning_leaves_no_ghost_assistant_on_openai_wire() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::{Reasoning, ToolCall, ToolFunction};
+
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+
+    let raw_history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![
+                    AssistantContent::Reasoning(Reasoning::new("planning background tool")),
+                    AssistantContent::ToolCall(ToolCall::new(
+                        "call_unpaired".into(),
+                        ToolFunction::new("shell".into(), serde_json::json!({"cmd": "ls"})),
+                    )),
+                ],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("hdr-0".into()),
+            block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![
+                    AssistantContent::Reasoning(Reasoning::new("reasoning before text")),
+                    AssistantContent::Text(Text {
+                        text: "visible reply".into(),
+                    }),
+                ],
+            },
+            source: Some(provider_tag(1)),
+            physical_header: Some("hdr-1".into()),
+            block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("status?")),
+    ];
+
+    let mut history = tagged_history::sanitize_tagged_history(raw_history).unwrap();
+    assert!(
+        matches!(
+            &history[1].message,
+            Message::Assistant { content, .. }
+                if matches!(content.as_slice(), [AssistantContent::Reasoning(_)])
+        ),
+        "sanitization drops the unpaired tool call, leaving a reasoning-only assistant row"
+    );
+
+    let context_row = TaggedMessage::unassociated(Message::user("<context>\nseat: a\n</context>"));
+    let prompt_row = TaggedMessage::unassociated(Message::user("what happened?"));
+    let mut new_messages = vec![context_row.clone(), prompt_row.clone()];
+
+    let request = assemble_provider_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &LoopReplayInput::default(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        history.len(),
+        3,
+        "emptied reasoning-only assistant row is dropped from history"
+    );
+    assert_eq!(
+        new_messages,
+        vec![context_row, prompt_row],
+        "dropping from history must preserve the history/new_messages split"
+    );
+    assert!(
+        matches!(
+            &history[1].message,
+            Message::Assistant { content, .. }
+                if matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible reply")
+        ),
+        "reasoning-plus-text assistant turn keeps its text block"
+    );
+
+    let assistant_messages: Vec<_> = request
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
+        .collect();
+    assert_eq!(
+        assistant_messages.len(),
+        1,
+        "no empty ghost assistant message in chat_history: {assistant_messages:?}"
+    );
+
+    #[cfg(feature = "native")]
+    {
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .unwrap();
+        let assistant_wire: Vec<_> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|msg| msg["role"] == "assistant")
+            .collect();
+        assert_eq!(
+            assistant_wire.len(),
+            1,
+            "projected OpenAI ChatCompletions body must contain zero ghost assistant turns: {body}"
+        );
+        assert_eq!(
+            assistant_wire[0]["content"],
+            serde_json::json!([{"type": "text", "text": "visible reply"}]),
+            "visible assistant text is preserved: {body}"
+        );
+    }
+}
+
+#[cfg(feature = "native")]
+#[tokio::test]
+async fn stripped_reasoning_only_assistant_leaves_no_ghost_on_responses_wire() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::claude_messages_body::ReplayWire;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::Reasoning;
+
+    let issuer = ReplayIssuer {
+        family: "OpenAiCompatible".into(),
+        endpoint: "https://api.openai.test".into(),
+    };
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::Responses,
+        "test-model",
+    ));
+    let replay = LoopReplayInput {
+        issuer: Some(issuer),
+        wire: Some(ReplayWire::Responses),
+        resolve: Some(Arc::new(|_| Box::pin(async { Ok(Vec::new()) }))),
+        ..LoopReplayInput::default()
+    };
+
+    let mut history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage {
+            message: Message::Assistant {
+                request_id: None,
+                id: Some("msg_ghost".into()),
+                content: vec![AssistantContent::Reasoning(Reasoning::new(
+                    "unreplayable foreign reasoning",
+                ))],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("hdr-0".into()),
+            block_indices: vec![0],
+            stub_receipts: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("continue")),
+    ];
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("next"))];
+
+    let request = assemble_provider_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        history,
+        vec![
+            TaggedMessage::unassociated(Message::user("start")),
+            TaggedMessage::unassociated(Message::user("continue")),
+        ]
+    );
+    assert_eq!(
+        new_messages,
+        vec![TaggedMessage::unassociated(Message::user("next"))]
+    );
+
+    let body = config
+        .provider_input_counter
+        .project_body(&request)
+        .unwrap();
+    let assistant_items: Vec<_> = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("assistant"))
+        .collect();
+    assert!(
+        assistant_items.is_empty(),
+        "Responses wire body must contain zero empty ghost assistant messages: {body}"
+    );
+}
+
+#[tokio::test]
+async fn repair_and_rebuild_drops_reasoning_only_assistants_and_keeps_prompt() {
+    use crate::backend_provider::BackendProviderKind;
+    use crate::openai_wire::OpenAiWireApi;
+    use gents_protocol::message::{Reasoning, ToolCall, ToolFunction};
+
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+
+    let mut history = vec![
+        TaggedMessage::unassociated(Message::user("start")),
+        TaggedMessage::unassociated(Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("unpaired reasoning")),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call_unpaired".into(),
+                    ToolFunction::new("shell".into(), serde_json::json!({})),
+                )),
+            ],
+        }),
+        TaggedMessage::unassociated(Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("kept turn reasoning")),
+                AssistantContent::Text(Text {
+                    text: "kept reply".into(),
+                }),
+            ],
+        }),
+    ];
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("retry"))];
+
+    let request = repair::repair_and_rebuild_request(
+        &assembly_only(),
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        new_messages,
+        vec![TaggedMessage::unassociated(Message::user("retry"))]
+    );
+    let assistant_messages: Vec<_> = request
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
+        .collect();
+    assert_eq!(assistant_messages.len(), 1);
+
+    let mut fallback_history = vec![TaggedMessage::unassociated(Message::user("fallback"))];
+    let mut reasoning_only_prompt = vec![TaggedMessage::unassociated(Message::Assistant {
+        request_id: None,
+        id: None,
+        content: vec![AssistantContent::Reasoning(Reasoning::new("only"))],
+    })];
+    let rebuilt = repair::repair_and_rebuild_request(
+        &assembly_only(),
+        &mut fallback_history,
+        &mut reasoning_only_prompt,
+        &[],
+        &config,
+    )
+    .await
+    .unwrap();
+    assert!(fallback_history.is_empty());
+    assert_eq!(
+        reasoning_only_prompt,
+        vec![TaggedMessage::unassociated(Message::user("fallback"))]
+    );
+    assert!(rebuilt
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .all(|msg| !matches!(msg, Message::Assistant { .. })));
 }
 
 #[test]

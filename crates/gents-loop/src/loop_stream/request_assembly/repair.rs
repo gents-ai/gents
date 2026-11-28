@@ -87,6 +87,14 @@ where
     repair_provider_input(history, new_messages)?;
     strip_all_reasoning(history);
     strip_all_reasoning(new_messages);
+    if new_messages.is_empty() {
+        let prompt = history.pop().ok_or_else(|| {
+            StreamingError::Completion(CompletionError::RequestError(Box::new(
+                ProviderInputRepairError,
+            )))
+        })?;
+        new_messages.push(prompt);
+    }
     config.context_calibration.invalidate_anchor();
     build_core(model, history, new_messages, tools, config).await
 }
