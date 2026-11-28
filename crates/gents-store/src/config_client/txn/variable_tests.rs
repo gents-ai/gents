@@ -63,12 +63,7 @@ async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
         .await;
     assert!(!read.has_errors());
     assert_eq!(read.data.unwrap()["MutationVariableProbe"][0], before);
-    node.shutdown().await.expect("node shutdown");
-}
 
-#[tokio::test]
-async fn embedded_transaction_preserves_json_variables_and_rollback() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection("type TransactionJsonProbe { key: String payload: JSON }")
         .await
         .unwrap();
@@ -90,12 +85,7 @@ async fn embedded_transaction_preserves_json_variables_and_rollback() {
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await.expect("node shutdown");
-}
 
-#[tokio::test]
-async fn filter_doc_id_and_limit_variables_bind_in_reads_and_writes() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
         "type FilterVariableProbe { key: String label: String enabled: Boolean count: Int }",
     )

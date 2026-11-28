@@ -62,9 +62,9 @@ fn runtime_actor(node: &Arc<defra_node::Node>) -> Option<identity::Did> {
     Some(identity::Did::new(node.node_identity_did().unwrap()).unwrap())
 }
 
-fn authorized() -> EnrollmentEndpointEntry {
+fn authorized_for(desired_id: &str) -> EnrollmentEndpointEntry {
     EnrollmentEndpointEntry {
-        desired_id: "route".into(),
+        desired_id: desired_id.into(),
         peer_id: "peer".into(),
         node_did: "remote".into(),
         address: "fresh-address".into(),
@@ -103,16 +103,44 @@ async fn rows(node: &Arc<defra_node::Node>) -> Vec<serde_json::Value> {
     serde_json::from_value(data["data"]["PeerPairingDesired"].clone()).unwrap()
 }
 
+async fn rows_for(node: &Arc<defra_node::Node>, peer_id: &str) -> Vec<serde_json::Value> {
+    rows(node)
+        .await
+        .into_iter()
+        .filter(|row| row["peer_id"] == peer_id)
+        .collect()
+}
+
 #[tokio::test]
-async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
+async fn materialization_repairs_twins_refuses_conflicts_rolls_back_expiry_and_replaces_cached_generations(
+) {
     let node = fixture().await;
-    seed(&node, "route", 1).await;
-    seed(&node, "route", 2).await;
+
+    let mut expired = authorized_for("route-expired");
+    expired.authorization_expires_at = "2000-01-01T00:00:00Z".into();
+    assert!(ConfigAccess::transact_local_write(
+        &node,
+        runtime_actor(&node),
+        "test.desired.expired",
+        |txn| {
+            let entry = &expired;
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_PeerPairingDesired(input: {peer_id: "rollback"}) { _docID } }"#).await?;
+                materialize_enrollment_desired_in_txn(txn, "local", entry, &BTreeSet::new()).await
+            })
+        }
+    )
+    .await
+    .is_err());
+    assert!(rows(&node).await.is_empty());
+
+    seed(&node, "route-twins", 1).await;
+    seed(&node, "route-twins", 2).await;
     seed(&node, "other", 3).await;
     let before = rows(&node).await;
     let mut twins = before
         .iter()
-        .filter(|row| row["peer_id"] == "route")
+        .filter(|row| row["peer_id"] == "route-twins")
         .collect::<Vec<_>>();
     twins.sort_by_key(|row| row["_docID"].as_str().unwrap());
     let canonical = twins[0]["_docID"].as_str().unwrap().to_owned();
@@ -122,8 +150,8 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
         .write(
             "test.desired.old_upsert",
             r#"mutation {
-        upsert_PeerPairingDesired(filter: {peer_id: {_eq: "route"}},
-        add: {peer_id: "route"}, update: {template: "client"}) { _docID }
+        upsert_PeerPairingDesired(filter: {peer_id: {_eq: "route-twins"}},
+        add: {peer_id: "route-twins"}, update: {template: "client"}) { _docID }
     }"#,
         )
         .await
@@ -131,7 +159,7 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
     assert!(format!("{failed:#}").contains("multiple matching documents"));
     let mut first_repair = None;
     for _ in 0..2 {
-        let entry = authorized();
+        let entry = authorized_for("route-twins");
         let saved = ConfigAccess::transact_local_write(
             &node,
             runtime_actor(&node),
@@ -172,19 +200,28 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
         after.iter().find(|row| row["peer_id"] == "other"),
         before.iter().find(|row| row["peer_id"] == "other")
     );
-    node.shutdown().await.expect("node shutdown");
-}
 
-#[tokio::test]
-async fn conflicting_materialization_owners_leave_all_rows_unchanged() {
-    for patch in [r#"node_did: "foreign""#, r#"source: "manual""#] {
-        let node = fixture().await;
-        seed(&node, "route", 1).await;
-        seed(&node, "route", 2).await;
-        let id = rows(&node).await[0]["_docID"].as_str().unwrap().to_owned();
-        runtime_access(&node).write("test.desired.conflict", &format!(r#"mutation {{ update_PeerPairingDesired(docID: "{id}", input: {{ {patch} }}) {{ _docID }} }}"#)).await.unwrap();
+    for (route, patch) in [
+        ("route-conflict-node", r#"node_did: "foreign""#),
+        ("route-conflict-source", r#"source: "manual""#),
+    ] {
+        seed(&node, route, 1).await;
+        seed(&node, route, 2).await;
+        let id = rows_for(&node, route).await[0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        runtime_access(&node)
+            .write(
+                "test.desired.conflict",
+                &format!(
+                    r#"mutation {{ update_PeerPairingDesired(docID: "{id}", input: {{ {patch} }}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
         let before = rows(&node).await;
-        let entry = authorized();
+        let entry = authorized_for(route);
         assert!(ConfigAccess::transact_local_write(
             &node,
             runtime_actor(&node),
@@ -200,23 +237,75 @@ async fn conflicting_materialization_owners_leave_all_rows_unchanged() {
         .await
         .is_err());
         assert_eq!(rows(&node).await, before);
-        node.shutdown().await.expect("node shutdown");
     }
-}
 
-#[tokio::test]
-async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
-    let node = fixture().await;
-    let mut entry = authorized();
-    entry.authorization_expires_at = "2000-01-01T00:00:00Z".into();
-    assert!(ConfigAccess::transact_local_write(&node, runtime_actor(&node), "test.desired.expired", |txn| {
-        let entry = &entry;
-        Box::pin(async move {
-            txn.execute(r#"mutation { create_PeerPairingDesired(input: {peer_id: "rollback"}) { _docID } }"#).await?;
-            materialize_enrollment_desired_in_txn(txn, "local", entry, &BTreeSet::new()).await
-        })
-    }).await.is_err());
-    assert!(rows(&node).await.is_empty());
+    for (route, cached_digest, cached_sequence, cached_expiry) in [
+        (
+            "route-cached-1",
+            "previous-request",
+            1,
+            "2099-01-01T00:00:00Z",
+        ),
+        (
+            "route-cached-2",
+            "previous-request",
+            99,
+            "2099-01-01T00:00:00Z",
+        ),
+        ("route-cached-3", "verified", 1, "2000-01-01T00:00:00Z"),
+    ] {
+        seed(&node, route, 1).await;
+        seed(&node, route, 2).await;
+        let mut route_twins = rows_for(&node, route).await;
+        route_twins.sort_by(|a, b| a["_docID"].as_str().cmp(&b["_docID"].as_str()));
+        let canonical = route_twins[0]["_docID"].as_str().unwrap().to_owned();
+        let parked = route_twins[1]["_docID"].as_str().unwrap().to_owned();
+        runtime_access(&node).write("test.desired.cached_generations", &format!(r#"mutation {{
+            stale: update_PeerPairingDesired(docID: "{canonical}", input: {{
+                enrollment_request_digest: "{cached_digest}", enrollment_authorization_sequence: {cached_sequence},
+                enrollment_authorization_expires_at: "{cached_expiry}", replicator_addresses: ["fresh-address"]
+            }}) {{ _docID }}
+            parked: update_PeerPairingDesired(docID: "{parked}", input: {{
+                enrollment_request_digest: "verified", enrollment_authorization_sequence: 1
+            }}) {{ _docID }}
+        }}"#)).await.unwrap();
+        let parked_before = rows_for(&node, route)
+            .await
+            .into_iter()
+            .find(|row| row["_docID"] == parked)
+            .unwrap();
+        let mut current = authorized_for(route);
+        current.authorization_sequence = 1;
+        let saved = ConfigAccess::transact_local_write(
+            &node,
+            runtime_actor(&node),
+            "test.desired.current_request",
+            |txn| {
+                let current = &current;
+                Box::pin(async move {
+                    materialize_enrollment_desired_in_txn(txn, "local", current, &BTreeSet::new())
+                        .await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved, canonical);
+        let after = rows_for(&node, route).await;
+        assert_eq!(after.len(), 2);
+        let repaired = after.iter().find(|row| row["_docID"] == canonical).unwrap();
+        assert_eq!(repaired["enrollment_request_digest"], "verified");
+        assert_eq!(repaired["enrollment_authorization_sequence"], 1);
+        assert_eq!(
+            repaired["enrollment_authorization_expires_at"],
+            "2099-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            after.iter().find(|row| row["_docID"] == parked),
+            Some(&parked_before)
+        );
+    }
+
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -225,16 +314,16 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     use gents_store::identity::NodeIdentity;
     let mut published = std::collections::BTreeMap::new();
     let mut linked = std::collections::BTreeMap::new();
-    let own_node = fixture().await;
-    let own = own_node.node_identity_did().unwrap().to_owned();
-    let entry = authorized();
+    let node = fixture().await;
+    let local = node.node_identity_did().unwrap().to_owned();
+    let own_entry = authorized_for("route-runtime");
     let own_saved = ConfigAccess::transact_local_write(
-        &own_node,
-        runtime_actor(&own_node),
+        &node,
+        runtime_actor(&node),
         "test.desired.runtime",
         |txn| {
-            let entry = &entry;
-            let target = own.as_str();
+            let entry = &own_entry;
+            let target = local.as_str();
             Box::pin(async move {
                 materialize_enrollment_desired_in_txn(txn, target, entry, &BTreeSet::new()).await
             })
@@ -242,15 +331,13 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     )
     .await;
     published.insert("runtime", own_saved.is_ok());
-    own_node.shutdown().await.unwrap();
-    let node = fixture().await;
+
     let directory = tempfile::tempdir().unwrap();
     let remote =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("remote"), None)
             .unwrap();
-    let local = node.node_identity_did().unwrap().to_owned();
     assert_ne!(local, remote.did());
-    let entry = authorized();
+    let entry = authorized_for("route-client");
     let saved = ConfigAccess::transact_local_write(
         &node,
         runtime_actor(&node),
@@ -339,70 +426,4 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
         linked.is_empty(),
         "unmodeled deferred observations: {linked:?}"
     );
-}
-
-#[tokio::test]
-async fn cached_generations_cannot_veto_the_current_verified_enrollment_request() {
-    for (cached_digest, cached_sequence, cached_expiry) in [
-        ("previous-request", 1, "2099-01-01T00:00:00Z"),
-        ("previous-request", 99, "2099-01-01T00:00:00Z"),
-        ("verified", 1, "2000-01-01T00:00:00Z"),
-    ] {
-        let node = fixture().await;
-        seed(&node, "route", 1).await;
-        seed(&node, "route", 2).await;
-        let before = rows(&node).await;
-        let mut twins = before.iter().collect::<Vec<_>>();
-        twins.sort_by_key(|row| row["_docID"].as_str().unwrap());
-        let canonical = twins[0]["_docID"].as_str().unwrap().to_owned();
-        let parked = twins[1]["_docID"].as_str().unwrap().to_owned();
-        // Same owner/source and equal counters do not imply the same request.
-        // Keep all other fields current so the no-op path must compare the
-        // complete verified generation, not just its counter or endpoint.
-        runtime_access(&node).write("test.desired.cached_generations", &format!(r#"mutation {{
-            stale: update_PeerPairingDesired(docID: "{canonical}", input: {{
-                enrollment_request_digest: "{cached_digest}", enrollment_authorization_sequence: {cached_sequence},
-                enrollment_authorization_expires_at: "{cached_expiry}", replicator_addresses: ["fresh-address"]
-            }}) {{ _docID }}
-            parked: update_PeerPairingDesired(docID: "{parked}", input: {{
-                enrollment_request_digest: "verified", enrollment_authorization_sequence: 1
-            }}) {{ _docID }}
-        }}"#)).await.unwrap();
-        let parked_before = rows(&node)
-            .await
-            .into_iter()
-            .find(|row| row["_docID"] == parked)
-            .unwrap();
-        let mut current = authorized();
-        current.authorization_sequence = 1;
-        let saved = ConfigAccess::transact_local_write(
-            &node,
-            runtime_actor(&node),
-            "test.desired.current_request",
-            |txn| {
-                let current = &current;
-                Box::pin(async move {
-                    materialize_enrollment_desired_in_txn(txn, "local", current, &BTreeSet::new())
-                        .await
-                })
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(saved, canonical);
-        let after = rows(&node).await;
-        assert_eq!(after.len(), 2);
-        let repaired = after.iter().find(|row| row["_docID"] == canonical).unwrap();
-        assert_eq!(repaired["enrollment_request_digest"], "verified");
-        assert_eq!(repaired["enrollment_authorization_sequence"], 1);
-        assert_eq!(
-            repaired["enrollment_authorization_expires_at"],
-            "2099-01-01T00:00:00Z"
-        );
-        assert_eq!(
-            after.iter().find(|row| row["_docID"] == parked),
-            Some(&parked_before)
-        );
-        node.shutdown().await.expect("node shutdown");
-    }
 }

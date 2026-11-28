@@ -879,32 +879,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cli_endpoint_built_before_its_runtime_answered_recovers_on_first_use() {
+    async fn cli_endpoint_recovers_audience_rotations_and_local_identity_presentation() {
         let runtime = runtime().await;
-        let endpoint = cli_endpoint(&runtime).await;
+        let early = cli_endpoint(&runtime).await;
         runtime.reports(ready(Some(1)));
-        assert!(reads(&endpoint).await);
+        assert!(reads(&early).await);
         assert_eq!(runtime.presented(), vec![Some(1)]);
-    }
 
-    #[tokio::test]
-    async fn a_long_cli_command_survives_a_restart_under_another_audience() {
-        let runtime = runtime().await;
-        runtime.reports(ready(Some(1)));
-        let endpoint = cli_endpoint(&runtime).await;
-        assert!(reads(&endpoint).await);
-        assert_eq!(runtime.presented(), vec![Some(1)]);
         runtime.reports(ready(Some(2)));
-        assert!(reads(&endpoint).await);
+        assert!(reads(&early).await);
         assert_eq!(runtime.presented(), vec![Some(1), Some(2)]);
-    }
 
-    #[tokio::test]
-    async fn a_cli_endpoint_on_a_local_home_presents_its_identity_token_once() {
-        let runtime = runtime().await;
         runtime.reports(ready(None));
-        let endpoint = cli_endpoint(&runtime).await;
-        assert!(reads(&endpoint).await);
+        let local = cli_endpoint(&runtime).await;
+        assert!(reads(&local).await);
         assert_eq!(runtime.presented(), vec![None]);
     }
 

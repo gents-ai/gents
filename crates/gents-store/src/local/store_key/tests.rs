@@ -81,14 +81,20 @@ fn file_key(temp: &tempfile::TempDir) -> (StoreEncryption, StoreKey, PathBuf) {
 }
 
 #[tokio::test]
-async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
+async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
     use crate::config_client::ConfigAccess;
     use crate::graphql::escape_graphql_string;
     use std::sync::Arc;
 
     let temp = tempfile::tempdir().unwrap();
-    let (_, key, _) = file_key(&temp);
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(temp.path().join("identity.key"), None)
+            .unwrap();
+    let node_did = crate::identity::NodeIdentity::did(&identity);
+    let (record, key, key_file) = file_key(&temp);
+    assert_eq!(record.custody, StoreKeyCustody::File);
     let data = temp.path().join("data");
+
     let node = Arc::new(
         persistent_builder(
             &data,
@@ -96,10 +102,12 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
         )
         .unwrap()
+        .with_node_identity_did(node_did)
         .build()
         .await
         .unwrap(),
     );
+    write_credential(&node).await;
     let access = ConfigAccess::local(node.clone());
     access
         .add_collection("type BudgetDocument { payload: String }")
@@ -119,7 +127,12 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     drop(access);
     node.shutdown().await.expect("node shutdown");
     drop(node);
+    for token in [ACCESS_TOKEN, REFRESH_TOKEN] {
+        let leaked = files_containing(&data, token.as_bytes());
+        assert!(leaked.is_empty(), "{token} is on disk in {leaked:?}");
+    }
 
+    let key = record.load(&key_file, &data).expect("recorded key");
     let reopened = Arc::new(
         persistent_builder(
             &data,
@@ -127,68 +140,27 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
         )
         .unwrap()
+        .with_node_identity_did(node_did)
         .build()
         .await
         .unwrap(),
     );
-    let result = ConfigAccess::local(reopened.clone())
-        .execute("{ BudgetDocument { payload } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        result["data"]["BudgetDocument"][0]["payload"].as_str(),
-        Some(payload.as_str())
-    );
-    reopened.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(temp.path().join("identity.key"), None)
-            .unwrap();
-    let node_did = crate::identity::NodeIdentity::did(&identity);
-    let (record, key, key_file) = file_key(&temp);
-    assert_eq!(record.custody, StoreKeyCustody::File);
-    let data = temp.path().join("data");
-
-    let node = persistent_builder(
-        &data,
-        &key,
-        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
-    )
-    .unwrap()
-    .with_node_identity_did(node_did)
-    .build()
-    .await
-    .unwrap();
-    write_credential(&node).await;
-    node.shutdown().await.expect("node shutdown");
-    drop(node);
-    for token in [ACCESS_TOKEN, REFRESH_TOKEN] {
-        let leaked = files_containing(&data, token.as_bytes());
-        assert!(leaked.is_empty(), "{token} is on disk in {leaked:?}");
-    }
-
-    let key = record.load(&key_file, &data).expect("recorded key");
-    let reopened = persistent_builder(
-        &data,
-        &key,
-        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
-    )
-    .unwrap()
-    .with_node_identity_did(node_did)
-    .build()
-    .await
-    .unwrap();
     assert_eq!(
         read_refresh_token(&reopened).await.as_deref(),
         Some(REFRESH_TOKEN)
     );
+    let budget = ConfigAccess::local(reopened.clone())
+        .execute("{ BudgetDocument { payload } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        budget["data"]["BudgetDocument"][0]["payload"].as_str(),
+        Some(payload.as_str())
+    );
     reopened.shutdown().await.expect("node shutdown");
 
     let plain = temp.path().join("plain");
+    reject_unrecorded_store(&plain).expect("an absent store has nothing to refuse");
     let mut plain_options = crate::local::storage_backend::regolith_options(
         crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
     );
@@ -208,6 +180,11 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     assert!(
         !files_containing(&plain, REFRESH_TOKEN.as_bytes()).is_empty(),
         "the control store must expose the token, or the scan proves nothing"
+    );
+    let unrecorded = reject_unrecorded_store(&plain).unwrap_err();
+    assert_eq!(
+        incompatible_store(&unrecorded, &plain).map(|store| store.kind),
+        Some(IncompatibleStoreKind::UnencryptedStore)
     );
 }
 
@@ -374,28 +351,6 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     open_home_store_key(&home, &data)
         .await
         .expect("recorded custody survives reopening");
-}
-
-#[tokio::test]
-async fn a_store_with_data_but_no_recorded_key_is_refused() {
-    let temp = tempfile::tempdir().unwrap();
-    let data = temp.path().join("data");
-    reject_unrecorded_store(&data).expect("an absent store has nothing to refuse");
-
-    let legacy = defra_node::Node::builder()
-        .data_path(&data)
-        .with_storage_backend(defra_node::StorageBackend::Regolith)
-        .build()
-        .await
-        .unwrap();
-    legacy.shutdown().await.expect("node shutdown");
-    drop(legacy);
-
-    let error = reject_unrecorded_store(&data).unwrap_err();
-    assert_eq!(
-        incompatible_store(&error, &data).map(|store| store.kind),
-        Some(IncompatibleStoreKind::UnencryptedStore)
-    );
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

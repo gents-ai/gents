@@ -98,23 +98,6 @@ pub(super) async fn runtime_test_node_with_identity(identity: &dyn NodeIdentity)
     test
 }
 
-pub(super) async fn runtime_test_node_with_signing_key(
-    identity: &dyn NodeIdentity,
-    key: Vec<u8>,
-) -> TestNode {
-    let test = p2p_node_with_options(
-        Some(identity.did()),
-        None,
-        Some(defra_node::SigningKey::Ed25519(key)),
-        None,
-    )
-    .await;
-    ensure_runtime_schemas(&test.node)
-        .await
-        .expect("runtime schemas");
-    test
-}
-
 pub(super) async fn signed_p2p_node_without_schemas(
     identity: &dyn NodeIdentity,
     key: Vec<u8>,
@@ -203,37 +186,4 @@ pub(in crate::p2p_reconcile) async fn wait_for_active_peer(admin: &EmbeddedRemot
             .expect("node never reported an active P2P peer")
             .expect("peer connection subscription closed");
     }
-}
-
-pub(super) async fn exec(node: &EmbeddedNode, statement: &str, context: &str) {
-    let response = node.execute(statement).await;
-    assert!(
-        !response.has_errors(),
-        "{context} failed: {:?}\n{statement}",
-        response.errors
-    );
-}
-
-pub(super) async fn collection_values(
-    node: &EmbeddedNode,
-    collection: &str,
-    field: &str,
-) -> BTreeSet<String> {
-    let query = format!("{{ {collection} {{ {field} }} }}");
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query {collection}.{field} failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get(field).and_then(serde_json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect()
 }

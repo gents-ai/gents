@@ -6,7 +6,7 @@
 //! callback again. A two-raw-transaction unique-index commit is evidenced by
 //! `txn_owner_tests::defradb_refuses_a_concurrent_duplicate_after_read_then_insert`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -18,6 +18,8 @@ use crate::identity::NodeIdentity;
 
 const SDL: &str = "type IsolationProbe { key: String grp: String n: Int m: Int }";
 const SDL_UNIQUE: &str = "type UniqueIsolationProbe { key: String @index(unique: true) n: Int }";
+const ARRIVAL_HEAD: &str =
+    r#"{ _documentArrivals(collection: "IsolationProbe", limit: 1) { head } }"#;
 
 async fn node() -> (Arc<EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -151,17 +153,17 @@ where
     }
 }
 
-fn insert_if_absent(collection: &'static str) -> Box<Decide> {
+fn insert_if_absent(collection: &'static str, key: &'static str) -> Box<Decide> {
     decider(move |txn, attempt| {
         Box::pin(async move {
             let found = txn
                 .execute(&format!(
-                    "{{ {collection}(filter: {{key: {{_eq: \"k\"}}}}) {{ _docID }} }}"
+                    "{{ {collection}(filter: {{key: {{_eq: \"{key}\"}}}}) {{ _docID }} }}"
                 ))
                 .await?;
             if rows(&found, collection).is_empty() {
                 txn.execute(&format!(
-                    "mutation {{ create_{collection}(input: {{key: \"k\", n: {}}}) {{ _docID }} }}",
+                    "mutation {{ create_{collection}(input: {{key: \"{key}\", n: {}}}) {{ _docID }} }}",
                     100 + attempt
                 ))
                 .await?;
@@ -171,154 +173,64 @@ fn insert_if_absent(collection: &'static str) -> Box<Decide> {
     })
 }
 
-async fn absent_key_race(owner: Owner, collection: &'static str) -> (Observed, usize) {
-    let (node, access, _root) = match owner {
-        Owner::Embedded => {
-            let (node, access) = node().await;
-            (node, access, None)
-        }
-        Owner::ClientSigned => {
-            let (node, access, root) = client_signed_node().await;
-            (node, access, Some(root))
-        }
-    };
+async fn absent_key_race(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    owner: Owner,
+    collection: &'static str,
+    key: &'static str,
+) -> (Observed, usize) {
     let observed = race(
-        &access,
+        access,
         owner,
-        &insert_if_absent(collection),
+        &insert_if_absent(collection, key),
         write(
-            &node,
-            format!("mutation {{ create_{collection}(input: {{key: \"k\", n: 2}}) {{ _docID }} }}"),
+            node,
+            format!(
+                "mutation {{ create_{collection}(input: {{key: \"{key}\", n: 2}}) {{ _docID }} }}"
+            ),
         ),
     )
     .await;
     let keys = stored(
-        &node,
-        &format!("{{ {collection}(filter: {{key: {{_eq: \"k\"}}}}) {{ _docID }} }}"),
+        node,
+        &format!("{{ {collection}(filter: {{key: {{_eq: \"{key}\"}}}}) {{ _docID }} }}"),
         collection,
     )
     .await
     .len();
-    node.shutdown().await.unwrap();
     (observed, keys)
 }
 
-#[tokio::test]
-async fn a_filtered_read_that_found_nothing_does_not_conflict_with_a_concurrent_insert() {
-    let (observed, keys) = absent_key_race(Owner::Embedded, "IsolationProbe").await;
-    assert_eq!((observed.attempts, keys), (1, 2), "{observed:?}");
-    assert!(observed.result.is_ok(), "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_client_signed_filtered_read_that_found_nothing_does_not_conflict_with_a_concurrent_insert(
-) {
-    let (observed, keys) = absent_key_race(Owner::ClientSigned, "IsolationProbe").await;
-    assert_eq!((observed.attempts, keys), (1, 2), "{observed:?}");
-    assert!(observed.result.is_ok(), "{observed:?}");
-}
-
-#[tokio::test]
-async fn two_raw_transactions_that_read_a_key_absent_both_commit_its_insert() {
-    let (node, _access) = node().await;
-    let read = r#"{ IsolationProbe(filter: {key: {_eq: "raw"}}) { _docID } }"#;
-    let first = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-    let second = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-    for txn in [&first, &second] {
-        assert!(rows(&txn.execute(read).await.unwrap(), "IsolationProbe").is_empty());
-    }
-    for (txn, writer) in [(&first, 1), (&second, 2)] {
-        txn.execute(&format!(
-            "mutation {{ create_IsolationProbe(input: {{key: \"raw\", n: {writer}}}) {{ _docID }} }}"
-        ))
-        .await
-        .unwrap();
-    }
-    first.commit().await.unwrap();
-    second.commit().await.unwrap();
-    assert_eq!(stored(&node, read, "IsolationProbe").await.len(), 2);
-    node.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn a_unique_index_conflicts_a_read_then_insert_and_the_rebuild_sees_the_winner() {
-    let (observed, keys) = absent_key_race(Owner::Embedded, "UniqueIsolationProbe").await;
-    assert_eq!((observed.attempts, keys), (2, 1), "{observed:?}");
-    assert!(observed.result.is_ok(), "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_client_signed_unique_index_conflict_is_rebuilt_and_the_rebuild_sees_the_winner() {
-    let (observed, keys) = absent_key_race(Owner::ClientSigned, "UniqueIsolationProbe").await;
-    assert_eq!((observed.attempts, keys), (2, 1), "{observed:?}");
-    assert!(observed.result.is_ok(), "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_unique_index_conflicts_a_blind_insert_and_the_rebuild_fails_on_the_index() {
-    let (node, access) = node().await;
-    let blind = decider(|txn, attempt| {
-        Box::pin(async move {
-            txn.execute(&format!(
-                "mutation {{ create_UniqueIsolationProbe(input: {{key: \"k\", n: {}}}) {{ _docID }} }}",
-                100 + attempt
-            ))
-            .await?;
-            Ok(())
-        })
-    });
-    let observed = race(
-        &access,
-        Owner::Embedded,
-        &blind,
-        write(
-            &node,
-            r#"mutation { create_UniqueIsolationProbe(input: {key: "k", n: 2}) { _docID } }"#
-                .into(),
-        ),
+/// T1 reads document A by `selector`, writes document B; T2 updates A.
+async fn read_a_write_b(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    owner: Owner,
+    tag: &str,
+    selector: &'static str,
+) -> Observed {
+    let key_a = format!("{tag}-a");
+    let key_b = format!("{tag}-b");
+    let a = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{key_a}", n: 1, m: 1}}"#),
     )
     .await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-    assert!(
-        observed
-            .result
-            .as_ref()
-            .is_err_and(|error| error.contains("unique index")),
-        "{observed:?}"
-    );
-    assert_eq!(
-        stored(
-            &node,
-            "{ UniqueIsolationProbe { n } }",
-            "UniqueIsolationProbe"
-        )
-        .await,
-        vec![json!({"n": 2})]
-    );
-    node.shutdown().await.unwrap();
-}
-
-/// T1 reads document A by `selector`, writes document B; T2 updates A.
-async fn read_a_write_b(owner: Owner, selector: &'static str) -> Observed {
-    let (node, access, _root) = match owner {
-        Owner::Embedded => {
-            let (node, access) = node().await;
-            (node, access, None)
-        }
-        Owner::ClientSigned => {
-            let (node, access, root) = client_signed_node().await;
-            (node, access, Some(root))
-        }
-    };
-    let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
-    let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
+    let b = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{key_b}", n: 1, m: 1}}"#),
+    )
+    .await;
     let read = match selector {
         "docID" => format!("{{ IsolationProbe(docID: \"{a}\") {{ n }} }}"),
         "docIDs" => format!("{{ IsolationProbe(docIDs: [\"{a}\"]) {{ n }} }}"),
         "_docID filter" => {
             format!("{{ IsolationProbe(filter: {{_docID: {{_eq: \"{a}\"}}}}, limit: 1) {{ n }} }}")
         }
-        _ => r#"{ IsolationProbe(filter: {key: {_eq: "a"}}) { n } }"#.to_owned(),
+        _ => format!(r#"{{ IsolationProbe(filter: {{key: {{_eq: "{key_a}"}}}}) {{ n }} }}"#),
     };
     let decide = decider(move |txn, _| {
         let read = read.clone();
@@ -336,64 +248,297 @@ async fn read_a_write_b(owner: Owner, selector: &'static str) -> Observed {
             Ok(())
         })
     });
-    let observed = race(
-        &access,
+    race(
+        access,
         owner,
         &decide,
         write(
-            &node,
+            node,
             format!("mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"),
         ),
     )
+    .await
+}
+
+/// T1 reads the members of `grp = grp` and writes an unrelated document C; T2
+/// changes one member as `change` names.
+async fn set_read_then_member_changes(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    owner: Owner,
+    grp: &str,
+    change: &'static str,
+) -> Observed {
+    let a = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{grp}-a", grp: "{grp}", n: 1}}"#),
+    )
     .await;
-    node.shutdown().await.unwrap();
-    observed
+    create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{grp}-b", grp: "{grp}", n: 1}}"#),
+    )
+    .await;
+    let c = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{grp}-c", grp: "{grp}-summary", n: 0}}"#),
+    )
+    .await;
+    let concurrent = match change {
+        "leave" => format!(
+            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{grp: \"other\"}}) {{ _docID }} }}"
+        ),
+        "value" => format!(
+            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 9}}) {{ _docID }} }}"
+        ),
+        "delete" => format!("mutation {{ delete_IsolationProbe(docID: \"{a}\") {{ _docID }} }}"),
+        _ => format!(
+            r#"mutation {{ create_IsolationProbe(input: {{key: "{grp}-d", grp: "{grp}", n: 1}}) {{ _docID }} }}"#
+        ),
+    };
+    let grp_owned = grp.to_owned();
+    let decide = decider(move |txn, _| {
+        let c = c.clone();
+        let grp_owned = grp_owned.clone();
+        Box::pin(async move {
+            let found = txn
+                .execute(&format!(
+                    r#"{{ IsolationProbe(filter: {{grp: {{_eq: "{grp_owned}"}}}}) {{ _docID n }} }}"#
+                ))
+                .await?;
+            let total: i64 = rows(&found, "IsolationProbe")
+                .iter()
+                .map(|row| row["n"].as_i64().unwrap_or(0))
+                .sum();
+            txn.execute(&format!(
+                "mutation {{ update_IsolationProbe(docID: \"{c}\", input: {{n: {total}}}) {{ _docID }} }}"
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    race(access, owner, &decide, write(node, concurrent)).await
+}
+
+/// T1 reads document A by `selector` and writes `t1_writes` of A; T2 writes A.n.
+async fn same_document_writers(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    key: &str,
+    selector: &'static str,
+    t1_writes: &'static str,
+) -> (Observed, Value) {
+    let a = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{key}", n: 1, m: 1}}"#),
+    )
+    .await;
+    let read = match selector {
+        "docID" => format!("{{ IsolationProbe(docID: \"{a}\") {{ n m }} }}"),
+        _ => format!(
+            r#"{{ IsolationProbe(filter: {{key: {{_eq: "{key}"}}, n: {{_eq: 1}}}}) {{ _docID n m }} }}"#
+        ),
+    };
+    let target = a.clone();
+    let decide = decider(move |txn, _| {
+        let read = read.clone();
+        let a = target.clone();
+        Box::pin(async move {
+            if rows(&txn.execute(&read).await?, "IsolationProbe").is_empty() {
+                return Ok(());
+            }
+            txn.execute(&format!(
+                "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{{t1_writes}: 7}}) {{ _docID }} }}"
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    let observed = race(
+        access,
+        Owner::Embedded,
+        &decide,
+        write(
+            node,
+            format!("mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 2}}) {{ _docID }} }}"),
+        ),
+    )
+    .await;
+    let after = stored(
+        node,
+        &format!("{{ IsolationProbe(docID: \"{a}\") {{ n m }} }}"),
+        "IsolationProbe",
+    )
+    .await;
+    (observed, after[0].clone())
+}
+
+/// The id a create of `input` takes in `node`: DefraDB derives it from the
+/// genesis block, so a discarded create names it without storing it.
+async fn id_of_create(node: &Arc<EmbeddedNode>, input: &str) -> String {
+    let txn = ConfigApplyTxn::begin_local(node, None).await.unwrap();
+    let created = txn
+        .execute(&format!(
+            "mutation {{ create_IsolationProbe(input: {input}) {{ _docID }} }}"
+        ))
+        .await
+        .unwrap();
+    txn.discard().await.unwrap();
+    crate::graphql::created_doc_id(&created, "IsolationProbe").unwrap()
+}
+
+/// T1 reads by id a document that does not exist yet and writes document B;
+/// T2 creates the document with that id and commits first.
+async fn absent_point_read_then_create(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    owner: Owner,
+    key: &str,
+) -> (Observed, String, String) {
+    let input = format!(r#"{{key: "{key}", n: 1, m: 1}}"#);
+    let absent = id_of_create(node, &input).await;
+    assert!(stored(
+        node,
+        &format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}"),
+        "IsolationProbe"
+    )
+    .await
+    .is_empty());
+    let b = create(
+        node,
+        "IsolationProbe",
+        &format!(r#"{{key: "{key}-b", n: 1, m: 1}}"#),
+    )
+    .await;
+    let read = format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}");
+    let decide = decider(move |txn, _| {
+        let read = read.clone();
+        let b = b.clone();
+        Box::pin(async move {
+            let found = txn.execute(&read).await?;
+            let n = rows(&found, "IsolationProbe").len();
+            txn.execute(&format!(
+                "mutation {{ update_IsolationProbe(docID: \"{b}\", input: {{n: {n}}}) {{ _docID }} }}"
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    let created = std::sync::Mutex::new(None);
+    let observed = race(access, owner, &decide, async {
+        *created.lock().unwrap() = Some(create(node, "IsolationProbe", &input).await);
+    })
+    .await;
+    (observed, absent, created.into_inner().unwrap().unwrap())
 }
 
 #[tokio::test]
-async fn a_point_read_by_doc_id_conflicts_with_a_concurrent_update_of_that_document() {
-    let observed = read_a_write_b(Owner::Embedded, "docID").await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_doc_id_equality_filter_is_a_point_read_that_conflicts_with_a_concurrent_update() {
-    let observed = read_a_write_b(Owner::Embedded, "_docID filter").await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_doc_ids_list_read_conflicts_with_a_concurrent_update_of_a_listed_document() {
-    let observed = read_a_write_b(Owner::Embedded, "docIDs").await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_client_signed_point_read_conflicts_with_a_concurrent_update_of_that_document() {
-    let observed = read_a_write_b(Owner::ClientSigned, "docID").await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_filtered_read_of_a_document_does_not_conflict_with_a_concurrent_update_of_it() {
-    let observed = read_a_write_b(Owner::Embedded, "filter").await;
-    assert_eq!(observed.attempts, 1, "{observed:?}");
-}
-
-/// T1 finds A by an equality filter on its unique key and writes document B;
-/// T2 updates A. The store answers the filter from the unique index, and the
-/// read is validated like a read of A by id (Lean
-/// `TransactionFence.a_unique_key_read_is_a_point_read`).
-#[tokio::test]
-async fn a_unique_key_filter_is_a_point_read_that_conflicts_with_a_concurrent_update() {
+async fn embedded_isolation_premises() {
     let (node, access) = node().await;
-    let a = create(&node, "UniqueIsolationProbe", r#"{key: "a", n: 1}"#).await;
-    let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
+
+    let (observed, keys) = absent_key_race(
+        &node,
+        &access,
+        Owner::Embedded,
+        "IsolationProbe",
+        "absent-k",
+    )
+    .await;
+    assert_eq!((observed.attempts, keys), (1, 2), "{observed:?}");
+    assert!(observed.result.is_ok(), "{observed:?}");
+
+    let raw_read = r#"{ IsolationProbe(filter: {key: {_eq: "raw"}}) { _docID } }"#;
+    let first = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let second = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    for txn in [&first, &second] {
+        assert!(rows(&txn.execute(raw_read).await.unwrap(), "IsolationProbe").is_empty());
+    }
+    for (txn, writer) in [(&first, 1), (&second, 2)] {
+        txn.execute(&format!(
+            "mutation {{ create_IsolationProbe(input: {{key: \"raw\", n: {writer}}}) {{ _docID }} }}"
+        ))
+        .await
+        .unwrap();
+    }
+    first.commit().await.unwrap();
+    second.commit().await.unwrap();
+    assert_eq!(stored(&node, raw_read, "IsolationProbe").await.len(), 2);
+
+    let (observed, keys) = absent_key_race(
+        &node,
+        &access,
+        Owner::Embedded,
+        "UniqueIsolationProbe",
+        "uniq-read",
+    )
+    .await;
+    assert_eq!((observed.attempts, keys), (2, 1), "{observed:?}");
+    assert!(observed.result.is_ok(), "{observed:?}");
+
+    let blind = decider(|txn, attempt| {
+        Box::pin(async move {
+            txn.execute(&format!(
+                "mutation {{ create_UniqueIsolationProbe(input: {{key: \"uniq-blind\", n: {}}}) {{ _docID }} }}",
+                100 + attempt
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    let observed = race(
+        &access,
+        Owner::Embedded,
+        &blind,
+        write(
+            &node,
+            r#"mutation { create_UniqueIsolationProbe(input: {key: "uniq-blind", n: 2}) { _docID } }"#
+                .into(),
+        ),
+    )
+    .await;
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+    assert!(
+        observed
+            .result
+            .as_ref()
+            .is_err_and(|error| error.contains("unique index")),
+        "{observed:?}"
+    );
+    assert_eq!(
+        stored(
+            &node,
+            r#"{ UniqueIsolationProbe(filter: {key: {_eq: "uniq-blind"}}) { n } }"#,
+            "UniqueIsolationProbe"
+        )
+        .await,
+        vec![json!({"n": 2})]
+    );
+
+    for (tag, selector, expected_attempts) in [
+        ("pt-docid", "docID", 2),
+        ("pt-filter-id", "_docID filter", 2),
+        ("pt-docids", "docIDs", 2),
+        ("pt-filter-key", "filter", 1),
+    ] {
+        let observed = read_a_write_b(&node, &access, Owner::Embedded, tag, selector).await;
+        assert_eq!(observed.attempts, expected_attempts, "{tag}: {observed:?}");
+    }
+
+    // Unique-key equality filter answers from the unique index and validates like a point read
+    // (Lean `TransactionFence.a_unique_key_read_is_a_point_read`).
+    let a = create(&node, "UniqueIsolationProbe", r#"{key: "uniq-pt-a", n: 1}"#).await;
+    let b = create(&node, "IsolationProbe", r#"{key: "uniq-pt-b", n: 1, m: 1}"#).await;
     let decide = decider(move |txn, _| {
         let b = b.clone();
         Box::pin(async move {
             let found = txn
-                .execute(r#"{ UniqueIsolationProbe(filter: {key: {_eq: "a"}}, limit: 2) { n } }"#)
+                .execute(
+                    r#"{ UniqueIsolationProbe(filter: {key: {_eq: "uniq-pt-a"}}, limit: 2) { n } }"#,
+                )
                 .await?;
             let n = rows(&found, "UniqueIsolationProbe")[0]["n"]
                 .as_i64()
@@ -416,168 +561,37 @@ async fn a_unique_key_filter_is_a_point_read_that_conflicts_with_a_concurrent_up
         ),
     )
     .await;
-    node.shutdown().await.unwrap();
     assert_eq!(observed.attempts, 2, "{observed:?}");
-}
 
-/// T1 reads the members of `grp = g` and writes an unrelated document C; T2
-/// changes one member as `change` names.
-async fn set_read_then_member_changes(owner: Owner, change: &'static str) -> Observed {
-    let (node, access, _root) = match owner {
-        Owner::Embedded => {
-            let (node, access) = node().await;
-            (node, access, None)
-        }
-        Owner::ClientSigned => {
-            let (node, access, root) = client_signed_node().await;
-            (node, access, Some(root))
-        }
-    };
-    let a = create(&node, "IsolationProbe", r#"{key: "a", grp: "g", n: 1}"#).await;
-    create(&node, "IsolationProbe", r#"{key: "b", grp: "g", n: 1}"#).await;
-    let c = create(
-        &node,
-        "IsolationProbe",
-        r#"{key: "c", grp: "summary", n: 0}"#,
-    )
-    .await;
-    let concurrent = match change {
-        "leave" => format!(
-            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{grp: \"other\"}}) {{ _docID }} }}"
-        ),
-        "value" => format!(
-            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 9}}) {{ _docID }} }}"
-        ),
-        "delete" => format!("mutation {{ delete_IsolationProbe(docID: \"{a}\") {{ _docID }} }}"),
-        _ => r#"mutation { create_IsolationProbe(input: {key: "d", grp: "g", n: 1}) { _docID } }"#
-            .to_owned(),
-    };
-    let decide = decider(move |txn, _| {
-        let c = c.clone();
-        Box::pin(async move {
-            let found = txn
-                .execute(r#"{ IsolationProbe(filter: {grp: {_eq: "g"}}) { _docID n } }"#)
-                .await?;
-            let total: i64 = rows(&found, "IsolationProbe")
-                .iter()
-                .map(|row| row["n"].as_i64().unwrap_or(0))
-                .sum();
-            txn.execute(&format!(
-                "mutation {{ update_IsolationProbe(docID: \"{c}\", input: {{n: {total}}}) {{ _docID }} }}"
-            ))
-            .await?;
-            Ok(())
-        })
-    });
-    let observed = race(&access, owner, &decide, write(&node, concurrent)).await;
-    node.shutdown().await.unwrap();
-    observed
-}
+    for (grp, change, expected_attempts) in [
+        ("set-leave", "leave", 1),
+        ("set-value", "value", 1),
+        ("set-join", "join", 1),
+        ("set-delete", "delete", 2),
+    ] {
+        let observed =
+            set_read_then_member_changes(&node, &access, Owner::Embedded, grp, change).await;
+        assert_eq!(observed.attempts, expected_attempts, "{grp}: {observed:?}");
+    }
 
-#[tokio::test]
-async fn a_filtered_set_read_does_not_conflict_when_a_member_leaves_the_set() {
-    let observed = set_read_then_member_changes(Owner::Embedded, "leave").await;
-    assert_eq!(observed.attempts, 1, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_client_signed_filtered_set_read_does_not_conflict_when_a_member_leaves_the_set() {
-    let observed = set_read_then_member_changes(Owner::ClientSigned, "leave").await;
-    assert_eq!(observed.attempts, 1, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_filtered_set_read_does_not_conflict_when_a_member_value_changes() {
-    let observed = set_read_then_member_changes(Owner::Embedded, "value").await;
-    assert_eq!(observed.attempts, 1, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_filtered_set_read_does_not_conflict_when_a_member_joins_the_set() {
-    let observed = set_read_then_member_changes(Owner::Embedded, "join").await;
-    assert_eq!(observed.attempts, 1, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_filtered_set_read_conflicts_when_a_member_is_deleted() {
-    let observed = set_read_then_member_changes(Owner::Embedded, "delete").await;
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-/// T1 reads document A by `selector` and writes `t1_writes` of A; T2 writes A.n.
-async fn same_document_writers(
-    selector: &'static str,
-    t1_writes: &'static str,
-) -> (Observed, Value) {
-    let (node, access) = node().await;
-    let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
-    let read = match selector {
-        "docID" => format!("{{ IsolationProbe(docID: \"{a}\") {{ n m }} }}"),
-        _ => r#"{ IsolationProbe(filter: {n: {_eq: 1}}) { _docID n m } }"#.to_owned(),
-    };
-    let target = a.clone();
-    let decide = decider(move |txn, _| {
-        let read = read.clone();
-        let a = target.clone();
-        Box::pin(async move {
-            if rows(&txn.execute(&read).await?, "IsolationProbe").is_empty() {
-                return Ok(());
-            }
-            txn.execute(&format!(
-                "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{{t1_writes}: 7}}) {{ _docID }} }}"
-            ))
-            .await?;
-            Ok(())
-        })
-    });
-    let observed = race(
-        &access,
-        Owner::Embedded,
-        &decide,
-        write(
-            &node,
-            format!("mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 2}}) {{ _docID }} }}"),
-        ),
-    )
-    .await;
-    let after = stored(
-        &node,
-        &format!("{{ IsolationProbe(docID: \"{a}\") {{ n m }} }}"),
-        "IsolationProbe",
-    )
-    .await;
-    node.shutdown().await.unwrap();
-    (observed, after[0].clone())
-}
-
-#[tokio::test]
-async fn writers_of_one_document_conflict_whatever_fields_they_write() {
-    let (observed, after) = same_document_writers("docID", "m").await;
+    let (observed, after) = same_document_writers(&node, &access, "same-docid", "docID", "m").await;
     assert_eq!(observed.attempts, 2, "{observed:?}");
     assert_eq!(after, json!({"n": 2, "m": 7}));
-}
 
-#[tokio::test]
-async fn a_filtered_read_then_write_of_a_document_conflicts_with_a_concurrent_write_of_it() {
-    let (observed, after) = same_document_writers("filter", "m").await;
+    let (observed, after) =
+        same_document_writers(&node, &access, "same-filter-m", "filter", "m").await;
     assert_eq!(observed.attempts, 2, "{observed:?}");
     assert_eq!(after, json!({"n": 2, "m": 1}));
-}
 
-#[tokio::test]
-async fn a_filtered_read_then_write_of_one_field_conflicts_with_a_concurrent_write_of_that_field() {
-    let (observed, after) = same_document_writers("filter", "n").await;
+    let (observed, after) =
+        same_document_writers(&node, &access, "same-filter-n", "filter", "n").await;
     assert_eq!(observed.attempts, 2, "{observed:?}");
     assert_eq!(after, json!({"n": 2, "m": 1}));
-}
 
-#[tokio::test]
-async fn a_filtered_update_conflicts_with_a_concurrent_move_out_of_its_filter() {
-    let (node, access) = node().await;
-    let a = create(
+    let queued = create(
         &node,
         "IsolationProbe",
-        r#"{key: "a", grp: "queued", n: 1, m: 1}"#,
+        r#"{key: "move-a", grp: "queued", n: 1, m: 1}"#,
     )
     .await;
     let claim = decider(|txn, _| {
@@ -595,9 +609,7 @@ async fn a_filtered_update_conflicts_with_a_concurrent_move_out_of_its_filter() 
         &claim,
         write(
             &node,
-            format!(
-                "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{grp: \"cancelled\"}}) {{ _docID }} }}"
-            ),
+            format!("mutation {{ update_IsolationProbe(docID: \"{queued}\", input: {{grp: \"cancelled\"}}) {{ _docID }} }}"),
         ),
     )
     .await;
@@ -605,19 +617,19 @@ async fn a_filtered_update_conflicts_with_a_concurrent_move_out_of_its_filter() 
     assert_eq!(
         stored(
             &node,
-            &format!("{{ IsolationProbe(docID: \"{a}\") {{ grp m }} }}"),
+            &format!("{{ IsolationProbe(docID: \"{queued}\") {{ grp m }} }}"),
             "IsolationProbe"
         )
         .await,
         vec![json!({"grp": "cancelled", "m": 1})]
     );
-    node.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn a_count_below_a_limit_does_not_conflict_with_a_concurrent_insert() {
-    let (node, access) = node().await;
-    create(&node, "IsolationProbe", r#"{key: "x", grp: "slot", n: 1}"#).await;
+    create(
+        &node,
+        "IsolationProbe",
+        r#"{key: "slot-x", grp: "slot", n: 1}"#,
+    )
+    .await;
     let admit = decider(|txn, attempt| {
         Box::pin(async move {
             let found = txn
@@ -644,36 +656,32 @@ async fn a_count_below_a_limit_does_not_conflict_with_a_concurrent_insert() {
     )
     .await;
     assert_eq!(observed.attempts, 1, "{observed:?}");
-    let admitted = stored(
-        &node,
-        r#"{ IsolationProbe(filter: {grp: {_eq: "slot"}}) { _docID } }"#,
-        "IsolationProbe",
-    )
-    .await;
-    assert_eq!(admitted.len(), 3, "a limit of 2 admits 3 rows");
-    node.shutdown().await.unwrap();
-}
+    assert_eq!(
+        stored(
+            &node,
+            r#"{ IsolationProbe(filter: {grp: {_eq: "slot"}}) { _docID } }"#,
+            "IsolationProbe"
+        )
+        .await
+        .len(),
+        3,
+        "a limit of 2 admits 3 rows"
+    );
 
-const ARRIVAL_HEAD: &str =
-    r#"{ _documentArrivals(collection: "IsolationProbe", limit: 1) { head } }"#;
-
-#[tokio::test]
-async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_insert() {
-    let (node, access) = node().await;
-    create(&node, "IsolationProbe", r#"{key: "seed", n: 0}"#).await;
-    let decide = decider(|txn, attempt| {
+    let arrival_insert = decider(|txn, attempt| {
         Box::pin(async move {
             txn.execute(ARRIVAL_HEAD).await?;
-            insert_if_absent("IsolationProbe")(txn, attempt).await
+            insert_if_absent("IsolationProbe", "arrival-k")(txn, attempt).await
         })
     });
     let observed = race(
         &access,
         Owner::Embedded,
-        &decide,
+        &arrival_insert,
         write(
             &node,
-            r#"mutation { create_IsolationProbe(input: {key: "k", n: 2}) { _docID } }"#.into(),
+            r#"mutation { create_IsolationProbe(input: {key: "arrival-k", n: 2}) { _docID } }"#
+                .into(),
         ),
     )
     .await;
@@ -681,32 +689,32 @@ async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_insert() {
     assert_eq!(
         stored(
             &node,
-            r#"{ IsolationProbe(filter: {key: {_eq: "k"}}) { _docID } }"#,
+            r#"{ IsolationProbe(filter: {key: {_eq: "arrival-k"}}) { _docID } }"#,
             "IsolationProbe"
         )
         .await
         .len(),
         2
     );
-    node.shutdown().await.unwrap();
-}
 
-#[tokio::test]
-async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_update() {
-    let (node, access) = node().await;
-    let a = create(&node, "IsolationProbe", r#"{key: "a", grp: "g", n: 1}"#).await;
-    let c = create(
+    let arr_a = create(
         &node,
         "IsolationProbe",
-        r#"{key: "c", grp: "summary", n: 0}"#,
+        r#"{key: "arr-u-a", grp: "arr-g", n: 1}"#,
     )
     .await;
-    let decide = decider(move |txn, _| {
-        let c = c.clone();
+    let arr_c = create(
+        &node,
+        "IsolationProbe",
+        r#"{key: "arr-u-c", grp: "arr-summary", n: 0}"#,
+    )
+    .await;
+    let arrival_update = decider(move |txn, _| {
+        let arr_c = arr_c.clone();
         Box::pin(async move {
             txn.execute(ARRIVAL_HEAD).await?;
             txn.execute(&format!(
-                "mutation {{ update_IsolationProbe(docID: \"{c}\", input: {{n: 1}}) {{ _docID }} }}"
+                "mutation {{ update_IsolationProbe(docID: \"{arr_c}\", input: {{n: 1}}) {{ _docID }} }}"
             ))
             .await?;
             Ok(())
@@ -715,147 +723,110 @@ async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_update() {
     let observed = race(
         &access,
         Owner::Embedded,
-        &decide,
+        &arrival_update,
         write(
             &node,
-            format!(
-                "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{grp: \"other\"}}) {{ _docID }} }}"
-            ),
+            format!("mutation {{ update_IsolationProbe(docID: \"{arr_a}\", input: {{grp: \"other\"}}) {{ _docID }} }}"),
         ),
     )
     .await;
     assert_eq!(observed.attempts, 1, "{observed:?}");
-    node.shutdown().await.unwrap();
-}
 
-/// The embedded write gate admits a second writer while the first holds an
-/// open transaction: it orders nothing between local writers.
-#[tokio::test]
-async fn the_write_gate_lets_a_second_writer_commit_while_the_first_is_open() {
-    let (node, access) = node().await;
-    let committed_inside = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let committed_inside = Arc::new(AtomicBool::new(false));
     let observed_inside = Arc::clone(&committed_inside);
-    let decide = decider(|txn, _| {
+    let gate_first = decider(|txn, _| {
         Box::pin(async move {
-            txn.execute(r#"mutation { create_IsolationProbe(input: {key: "first"}) { _docID } }"#)
-                .await?;
-            Ok(())
-        })
-    });
-    let second = async {
-        write(
-            &node,
-            r#"mutation { create_IsolationProbe(input: {key: "second"}) { _docID } }"#.into(),
-        )
-        .await;
-        observed_inside.store(true, Ordering::SeqCst);
-    };
-    let observed = race(&access, Owner::Embedded, &decide, second).await;
-    assert!(observed.result.is_ok(), "{observed:?}");
-    assert!(committed_inside.load(Ordering::SeqCst));
-    assert_eq!(
-        stored(&node, "{ IsolationProbe { key } }", "IsolationProbe")
-            .await
-            .len(),
-        2
-    );
-    node.shutdown().await.unwrap();
-}
-
-/// The id a create of `input` takes in `node`: DefraDB derives it from the
-/// genesis block, so a discarded create names it without storing it.
-async fn id_of_create(node: &Arc<EmbeddedNode>, input: &str) -> String {
-    let txn = ConfigApplyTxn::begin_local(node, None).await.unwrap();
-    let created = txn
-        .execute(&format!(
-            "mutation {{ create_IsolationProbe(input: {input}) {{ _docID }} }}"
-        ))
-        .await
-        .unwrap();
-    txn.discard().await.unwrap();
-    crate::graphql::created_doc_id(&created, "IsolationProbe").unwrap()
-}
-
-/// T1 reads by id a document that does not exist yet and writes document B;
-/// T2 creates the document with that id and commits first.
-async fn absent_point_read_then_create(owner: Owner) -> (Observed, String, String) {
-    const INPUT: &str = r#"{key: "absent", n: 1, m: 1}"#;
-    let (node, access, _root) = match owner {
-        Owner::Embedded => {
-            let (node, access) = node().await;
-            (node, access, None)
-        }
-        Owner::ClientSigned => {
-            let (node, access, root) = client_signed_node().await;
-            (node, access, Some(root))
-        }
-    };
-    let absent = id_of_create(&node, INPUT).await;
-    assert!(stored(
-        &node,
-        &format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}"),
-        "IsolationProbe"
-    )
-    .await
-    .is_empty());
-    let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
-    let read = format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}");
-    let decide = decider(move |txn, _| {
-        let read = read.clone();
-        let b = b.clone();
-        Box::pin(async move {
-            let found = txn.execute(&read).await?;
-            let n = rows(&found, "IsolationProbe").len();
-            txn.execute(&format!(
-                "mutation {{ update_IsolationProbe(docID: \"{b}\", input: {{n: {n}}}) {{ _docID }} }}"
-            ))
+            txn.execute(
+                r#"mutation { create_IsolationProbe(input: {key: "gate-first", grp: "gate"}) { _docID } }"#,
+            )
             .await?;
             Ok(())
         })
     });
-    let created = std::sync::Mutex::new(None);
-    let observed = race(&access, owner, &decide, async {
-        *created.lock().unwrap() = Some(create(&node, "IsolationProbe", INPUT).await);
-    })
-    .await;
-    node.shutdown().await.unwrap();
-    (observed, absent, created.into_inner().unwrap().unwrap())
-}
-
-#[tokio::test]
-async fn a_point_read_of_an_absent_id_conflicts_with_a_concurrent_create_of_it() {
-    let (observed, absent, created) = absent_point_read_then_create(Owner::Embedded).await;
-    assert_eq!(created, absent, "the create takes the id T1 read");
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-#[tokio::test]
-async fn a_client_signed_point_read_of_an_absent_id_conflicts_with_a_concurrent_create_of_it() {
-    let (observed, absent, created) = absent_point_read_then_create(Owner::ClientSigned).await;
-    assert_eq!(created, absent, "the create takes the id T1 read");
-    assert_eq!(observed.attempts, 2, "{observed:?}");
-}
-
-/// A transaction that only reads commits whatever committed beside it: T1
-/// reads A by id, T2 updates A and commits, T1 commits.
-#[tokio::test]
-async fn a_read_only_transaction_commits_over_a_concurrent_write_of_what_it_read() {
-    let (node, _access) = node().await;
-    let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
-    let reader = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-    let read = format!("{{ IsolationProbe(docID: \"{a}\") {{ n }} }}");
+    let gate_second = async {
+        write(
+            &node,
+            r#"mutation { create_IsolationProbe(input: {key: "gate-second", grp: "gate"}) { _docID } }"#
+                .into(),
+        )
+        .await;
+        observed_inside.store(true, Ordering::SeqCst);
+    };
+    let observed = race(&access, Owner::Embedded, &gate_first, gate_second).await;
+    assert!(observed.result.is_ok(), "{observed:?}");
+    assert!(committed_inside.load(Ordering::SeqCst));
     assert_eq!(
-        rows(&reader.execute(&read).await.unwrap(), "IsolationProbe")[0]["n"],
+        stored(
+            &node,
+            r#"{ IsolationProbe(filter: {grp: {_eq: "gate"}}) { key } }"#,
+            "IsolationProbe"
+        )
+        .await
+        .len(),
+        2
+    );
+
+    let (observed, absent, created_id) =
+        absent_point_read_then_create(&node, &access, Owner::Embedded, "absent-pt").await;
+    assert_eq!(created_id, absent, "the create takes the id T1 read");
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+
+    let ro_doc = create(&node, "IsolationProbe", r#"{key: "ro-a", n: 1, m: 1}"#).await;
+    let reader = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let ro_read = format!("{{ IsolationProbe(docID: \"{ro_doc}\") {{ n }} }}");
+    assert_eq!(
+        rows(&reader.execute(&ro_read).await.unwrap(), "IsolationProbe")[0]["n"],
         1
     );
     write(
         &node,
-        format!(
-            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"
-        ),
+        format!("mutation {{ update_IsolationProbe(docID: \"{ro_doc}\", input: {{n: 5}}) {{ _docID }} }}"),
     )
     .await;
     reader.commit().await.unwrap();
+
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn client_signed_isolation_premises() {
+    let (node, access, _root) = client_signed_node().await;
+
+    let (observed, keys) = absent_key_race(
+        &node,
+        &access,
+        Owner::ClientSigned,
+        "IsolationProbe",
+        "cs-absent",
+    )
+    .await;
+    assert_eq!((observed.attempts, keys), (1, 2), "{observed:?}");
+    assert!(observed.result.is_ok(), "{observed:?}");
+
+    let (observed, keys) = absent_key_race(
+        &node,
+        &access,
+        Owner::ClientSigned,
+        "UniqueIsolationProbe",
+        "cs-uniq",
+    )
+    .await;
+    assert_eq!((observed.attempts, keys), (2, 1), "{observed:?}");
+    assert!(observed.result.is_ok(), "{observed:?}");
+
+    let observed = read_a_write_b(&node, &access, Owner::ClientSigned, "cs-pt", "docID").await;
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+
+    let observed =
+        set_read_then_member_changes(&node, &access, Owner::ClientSigned, "cs-set-leave", "leave")
+            .await;
+    assert_eq!(observed.attempts, 1, "{observed:?}");
+
+    let (observed, absent, created_id) =
+        absent_point_read_then_create(&node, &access, Owner::ClientSigned, "cs-absent-pt").await;
+    assert_eq!(created_id, absent, "the create takes the id T1 read");
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+
     node.shutdown().await.unwrap();
 }
 
