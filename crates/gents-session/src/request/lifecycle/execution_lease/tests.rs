@@ -2383,3 +2383,624 @@ async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
         .drive(Stage::Claimed)
         .await;
 }
+
+#[tokio::test]
+async fn large_request_with_derived_effects_terminalizes_in_bounded_statements() {
+    use gents_protocol::output::rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
+    };
+
+    let (node, home, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
+    let request_doc_id = lifecycle.request().doc_id.clone();
+    let session_id = lifecycle.request().session_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    let node_did = lifecycle.request().node_did.clone();
+    let requester_did = lifecycle.request().requester_did.clone();
+    let created_at = "2026-11-28T00:00:00Z".to_owned();
+
+    let turns = 150usize;
+    let flushes_per_turn = 10u32;
+    let derived_effects = 30usize;
+    let tool_payload = "x".repeat(2048);
+
+    let requester_gql = requester_did
+        .as_deref()
+        .map(|d| format!(r#""{}""#, escape_graphql_string(d)))
+        .unwrap_or_else(|| "null".to_owned());
+    let mut seq = 10u32;
+    for batch_start in (0..turns).step_by(10) {
+        let batch_end = (batch_start + 10).min(turns);
+        access
+            .transact_write("test.seed_large_request", |txn| {
+                let request_doc_id = request_doc_id.clone();
+                let session_id = session_id.clone();
+                let generation = generation.clone();
+                let node_did = node_did.clone();
+                let requester_did = requester_did.clone();
+                let requester_gql = requester_gql.clone();
+                let created_at = created_at.clone();
+                let tool_payload = tool_payload.clone();
+                let base_seq = seq;
+                Box::pin(async move {
+                    let mut s = base_seq;
+                    for turn in batch_start..batch_end {
+                        let source = OutputSource::ProviderTurn {
+                            turn_index: turn as u32,
+                            attempt: 0,
+                            scope: format!("inference.{}", turn + 1).parse().unwrap(),
+                        };
+                        let args_text = format!(r#"{{"cmd":"echo turn-{turn}"}}"#);
+                        let tool_call_id = format!("call_{turn}");
+                        let mut close_doc_id = String::new();
+                        for ord in 0..flushes_per_turn {
+                            let is_last = ord + 1 == flushes_per_turn;
+                            let seg = OutputSegment {
+                                node_did: node_did.clone(),
+                                requester_did: requester_did.clone(),
+                                session_id: session_id.clone(),
+                                request_doc_id: request_doc_id.clone(),
+                                source: source.clone(),
+                                writer: OutputWriter::RequestExecution {
+                                    execution_generation: generation.clone(),
+                                },
+                                ordinal: Some(ord),
+                                runs: if ord == 0 {
+                                    vec![SegmentRun {
+                                        stream: 0,
+                                        bytes: args_text.len() as u32,
+                                        declaration: Some(StreamDeclaration {
+                                            block_index: 0,
+                                            part_index: 0,
+                                            payload: StreamPayload::ToolArguments {
+                                                id: tool_call_id.clone(),
+                                                call_id: None,
+                                                name: "bash".into(),
+                                            },
+                                        }),
+                                    }]
+                                } else {
+                                    vec![SegmentRun {
+                                        stream: 1,
+                                        bytes: 4,
+                                        declaration: if ord == 1 {
+                                            Some(StreamDeclaration {
+                                                block_index: 1,
+                                                part_index: 0,
+                                                payload: StreamPayload::Text,
+                                            })
+                                        } else {
+                                            None
+                                        },
+                                    }]
+                                },
+                                payload: if ord == 0 {
+                                    args_text.clone()
+                                } else {
+                                    "abcd".into()
+                                },
+                                close: is_last.then(|| SourceClose::Closed {
+                                    outcome: OutputOutcome::Complete,
+                                    segments: flushes_per_turn,
+                                    stream_bytes: vec![
+                                        args_text.len() as u64,
+                                        u64::from((flushes_per_turn - 1) * 4),
+                                    ],
+                                }),
+                                created_at: created_at.clone(),
+                            };
+                            let resp = txn
+                                .execute_with_variables(
+                                    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                                    &output_segment_create_variables(&seg)?,
+                                )
+                                .await?;
+                            close_doc_id = gents_store::graphql::created_doc_id(
+                                &resp,
+                                "AgentOutputSegment",
+                            )?;
+                        }
+                        let assistant_seq = s;
+                        s += 1;
+                        let key = format!("tc:{request_doc_id}:{turn}");
+                        let create_tool = format!(
+                            r#"mutation {{ create_AgentToolCall(input: {{
+                                tool_call_key: "{key}",
+                                request_id: "{}",
+                                request_doc_id: "{request_doc_id}",
+                                session_id: "{session_id}",
+                                node_did: "{node_did}",
+                                requester_did: {requester_gql},
+                                message_sequence: {assistant_seq},
+                                tool_name: "bash",
+                                tool_call_id: "{tool_call_id}",
+                                status: "completed",
+                                lifecycle_state: "completed",
+                                started_at: "{created_at}",
+                                completed_at: "{created_at}",
+                                await_mode: "foreground"
+                            }}) {{ _docID }} }}"#,
+                            escape_graphql_string(&request_doc_id),
+                        );
+                        let tool_resp = txn.execute(&create_tool).await?;
+                        let tool_doc_id =
+                            gents_store::graphql::created_doc_id(&tool_resp, "AgentToolCall")?;
+
+                        let assistant_header = TranscriptMessage {
+                            native_request_id: None,
+                            message_key: format!("turn:{request_doc_id}:{turn}"),
+                            session_id: session_id.clone(),
+                            node_did: node_did.clone(),
+                            requester_did: requester_did.clone(),
+                            request_doc_id: Some(request_doc_id.clone()),
+                            publication: MessagePublication::RequestExecution {
+                                execution_generation: generation.clone(),
+                            },
+                            outcome: OutputOutcome::Complete,
+                            sequence: assistant_seq,
+                            role: MessageRole::Assistant,
+                            native_id: None,
+                            blocks: vec![MessageBlock::ToolCall {
+                                tool_call_doc_id: tool_doc_id.clone(),
+                                id: tool_call_id.clone(),
+                                call_id: None,
+                                name: "bash".into(),
+                                arguments: PayloadRef {
+                                    close_doc_id,
+                                    stream: 0,
+                                },
+                                signature: None,
+                                additional_params: None,
+                            }],
+                            created_at: created_at.clone(),
+                        };
+                        txn.execute_with_variables(
+                            CREATE_AGENT_MESSAGE_MUTATION,
+                            &transcript_message_create_variables(&assistant_header)?,
+                        )
+                        .await?;
+
+                        let tool_seg = OutputSegment {
+                            node_did: node_did.clone(),
+                            requester_did: requester_did.clone(),
+                            session_id: session_id.clone(),
+                            request_doc_id: request_doc_id.clone(),
+                            source: OutputSource::ToolCall {
+                                tool_call_doc_id: tool_doc_id.clone(),
+                            },
+                            writer: OutputWriter::ToolExecution {
+                                tool_call_doc_id: tool_doc_id.clone(),
+                            },
+                            ordinal: Some(0),
+                            runs: vec![SegmentRun {
+                                stream: 0,
+                                bytes: tool_payload.len() as u32,
+                                declaration: Some(StreamDeclaration {
+                                    block_index: 0,
+                                    part_index: 0,
+                                    payload: StreamPayload::ToolOutput,
+                                }),
+                            }],
+                            payload: tool_payload.clone(),
+                            close: Some(SourceClose::Closed {
+                                outcome: OutputOutcome::Complete,
+                                segments: 1,
+                                stream_bytes: vec![tool_payload.len() as u64],
+                            }),
+                            created_at: created_at.clone(),
+                        };
+                        let seg_resp = txn
+                            .execute_with_variables(
+                                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                                &output_segment_create_variables(&tool_seg)?,
+                            )
+                            .await?;
+                        let tool_close_id = gents_store::graphql::created_doc_id(
+                            &seg_resp,
+                            "AgentOutputSegment",
+                        )?;
+
+                        let delivery_seq = s;
+                        s += 1;
+                        let delivery_header = TranscriptMessage {
+                            native_request_id: None,
+                            message_key: format!("delivery:{request_doc_id}:{turn}"),
+                            session_id: session_id.clone(),
+                            node_did: node_did.clone(),
+                            requester_did: requester_did.clone(),
+                            request_doc_id: Some(request_doc_id.clone()),
+                            publication: MessagePublication::ToolDelivery {
+                                tool_call_doc_id: tool_doc_id.clone(),
+                            },
+                            outcome: OutputOutcome::Complete,
+                            sequence: delivery_seq,
+                            role: MessageRole::User,
+                            native_id: None,
+                            blocks: vec![MessageBlock::ToolResult {
+                                tool_call_doc_id: tool_doc_id.clone(),
+                                id: tool_call_id,
+                                call_id: None,
+                                parts: vec![ToolResultPart::Text {
+                                    text: PresentedPayload {
+                                        output: PayloadRef {
+                                            close_doc_id: tool_close_id,
+                                            stream: 0,
+                                        },
+                                        presentation: PayloadPresentation::Full,
+                                    },
+                                }],
+                            }],
+                            created_at: created_at.clone(),
+                        };
+                        txn.execute_with_variables(
+                            CREATE_AGENT_MESSAGE_MUTATION,
+                            &transcript_message_create_variables(&delivery_header)?,
+                        )
+                        .await?;
+
+                        if turn < derived_effects {
+                            let effect_internal_id =
+                                crate::session::plugin_effect_rows::PluginEffectBinding::internal_id(
+                                    &tool_doc_id,
+                                    1,
+                                );
+                            let create_effect = format!(
+                                r#"mutation {{ create_AgentToolCall(input: {{
+                                    tool_call_key: "{effect_internal_id}",
+                                    request_id: "{}",
+                                    request_doc_id: "{request_doc_id}",
+                                    session_id: "{session_id}",
+                                    node_did: "{node_did}",
+                                    requester_did: {requester_gql},
+                                    message_sequence: {assistant_seq},
+                                    tool_name: "effect_tool",
+                                    tool_call_id: "{effect_internal_id}",
+                                    status: "completed",
+                                    lifecycle_state: "completed",
+                                    started_at: "{created_at}",
+                                    completed_at: "{created_at}",
+                                    await_mode: "foreground",
+                                    plugin_parent_tool_call_doc_id: "{tool_doc_id}",
+                                    plugin_effect_ordinal: 1
+                                }}) {{ _docID }} }}"#,
+                                escape_graphql_string(&request_doc_id),
+                            );
+                            let eff_resp = txn.execute(&create_effect).await?;
+                            let eff_doc_id = gents_store::graphql::created_doc_id(
+                                &eff_resp,
+                                "AgentToolCall",
+                            )?;
+                            let eff_args = "{}";
+                            let eff_args_seg = OutputSegment {
+                                node_did: node_did.clone(),
+                                requester_did: requester_did.clone(),
+                                session_id: session_id.clone(),
+                                request_doc_id: request_doc_id.clone(),
+                                source: OutputSource::ToolEffectArguments {
+                                    tool_call_doc_id: eff_doc_id.clone(),
+                                },
+                                writer: OutputWriter::RequestExecution {
+                                    execution_generation: generation.clone(),
+                                },
+                                ordinal: Some(0),
+                                runs: vec![SegmentRun {
+                                    stream: 0,
+                                    bytes: eff_args.len() as u32,
+                                    declaration: Some(StreamDeclaration {
+                                        block_index: 0,
+                                        part_index: 0,
+                                        payload: StreamPayload::ToolArguments {
+                                            id: effect_internal_id,
+                                            call_id: None,
+                                            name: "effect_tool".into(),
+                                        },
+                                    }),
+                                }],
+                                payload: eff_args.into(),
+                                close: Some(SourceClose::Closed {
+                                    outcome: OutputOutcome::Complete,
+                                    segments: 1,
+                                    stream_bytes: vec![eff_args.len() as u64],
+                                }),
+                                created_at: created_at.clone(),
+                            };
+                            txn.execute_with_variables(
+                                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                                &output_segment_create_variables(&eff_args_seg)?,
+                            )
+                            .await?;
+
+                            let eff_out_seg = OutputSegment {
+                                node_did: node_did.clone(),
+                                requester_did: requester_did.clone(),
+                                session_id: session_id.clone(),
+                                request_doc_id: request_doc_id.clone(),
+                                source: OutputSource::ToolCall {
+                                    tool_call_doc_id: eff_doc_id.clone(),
+                                },
+                                writer: OutputWriter::ToolExecution {
+                                    tool_call_doc_id: eff_doc_id.clone(),
+                                },
+                                ordinal: Some(0),
+                                runs: vec![SegmentRun {
+                                    stream: 0,
+                                    bytes: 2,
+                                    declaration: Some(StreamDeclaration {
+                                        block_index: 0,
+                                        part_index: 0,
+                                        payload: StreamPayload::ToolOutput,
+                                    }),
+                                }],
+                                payload: "ok".into(),
+                                close: Some(SourceClose::Closed {
+                                    outcome: OutputOutcome::Complete,
+                                    segments: 1,
+                                    stream_bytes: vec![2],
+                                }),
+                                created_at: created_at.clone(),
+                            };
+                            let eff_out_resp = txn
+                                .execute_with_variables(
+                                    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                                    &output_segment_create_variables(&eff_out_seg)?,
+                                )
+                                .await?;
+                            let eff_out_close_id = gents_store::graphql::created_doc_id(
+                                &eff_out_resp,
+                                "AgentOutputSegment",
+                            )?;
+                            let presented = PresentedPayload {
+                                output: PayloadRef {
+                                    close_doc_id: eff_out_close_id,
+                                    stream: 0,
+                                },
+                                presentation: PayloadPresentation::Full,
+                            };
+                            txn.execute_with_variables(
+                                &format!(
+                                    r#"mutation($terminal_output: JSON) {{ update_AgentToolCall(docID: "{eff_doc_id}", input: {{ terminal_output: $terminal_output }}) {{ _docID }} }}"#
+                                ),
+                                &serde_json::json!({ "terminal_output": presented }),
+                            )
+                            .await?;
+                        }
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        seq += ((batch_end - batch_start) * 2) as u32;
+    }
+
+    let final_seq = seq;
+    let final_source = OutputSource::ProviderTurn {
+        turn_index: turns as u32,
+        attempt: 0,
+        scope: format!("inference.{}", turns + 1).parse().unwrap(),
+    };
+    let final_msg_doc_id = access
+        .transact_write("test.seed_final", |txn| {
+            let request_doc_id = request_doc_id.clone();
+            let session_id = session_id.clone();
+            let generation = generation.clone();
+            let node_did = node_did.clone();
+            let requester_did = requester_did.clone();
+            let created_at = created_at.clone();
+            let final_source = final_source.clone();
+            Box::pin(async move {
+                let seg = OutputSegment {
+                    node_did: node_did.clone(),
+                    requester_did: requester_did.clone(),
+                    session_id: session_id.clone(),
+                    request_doc_id: request_doc_id.clone(),
+                    source: final_source,
+                    writer: OutputWriter::RequestExecution {
+                        execution_generation: generation.clone(),
+                    },
+                    ordinal: Some(0),
+                    runs: vec![SegmentRun {
+                        stream: 0,
+                        bytes: 4,
+                        declaration: Some(StreamDeclaration {
+                            block_index: 0,
+                            part_index: 0,
+                            payload: StreamPayload::Text,
+                        }),
+                    }],
+                    payload: "done".into(),
+                    close: Some(SourceClose::Closed {
+                        outcome: OutputOutcome::Complete,
+                        segments: 1,
+                        stream_bytes: vec![4],
+                    }),
+                    created_at: created_at.clone(),
+                };
+                let seg_resp = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&seg)?,
+                    )
+                    .await?;
+                let close_id =
+                    gents_store::graphql::created_doc_id(&seg_resp, "AgentOutputSegment")?;
+                let header = TranscriptMessage {
+                    native_request_id: None,
+                    message_key: format!("turn:{request_doc_id}:final"),
+                    session_id,
+                    node_did,
+                    requester_did,
+                    request_doc_id: Some(request_doc_id),
+                    publication: MessagePublication::RequestExecution {
+                        execution_generation: generation,
+                    },
+                    outcome: OutputOutcome::Complete,
+                    sequence: final_seq,
+                    role: MessageRole::Assistant,
+                    native_id: None,
+                    blocks: vec![MessageBlock::Text {
+                        text: PresentedPayload {
+                            output: PayloadRef {
+                                close_doc_id: close_id,
+                                stream: 0,
+                            },
+                            presentation: PayloadPresentation::Full,
+                        },
+                    }],
+                    created_at,
+                };
+                let msg_resp = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_MESSAGE_MUTATION,
+                        &transcript_message_create_variables(&header)?,
+                    )
+                    .await?;
+                gents_store::graphql::created_doc_id(&msg_resp, "AgentMessage")
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await
+        .unwrap();
+
+    assert!(lifecycle.holds_renewal_task());
+    let (finished, statements) = gents_store::config_client::count_statements(
+        lifecycle.finish_natural_turn(&final_msg_doc_id, &[]),
+    )
+    .await;
+    assert!(finished.unwrap());
+    assert!(
+        statements.total() <= 20,
+        "terminalization statement count must stay O(1) across 150 tool turns and 30 derived effects, got {}",
+        statements.total()
+    );
+    assert!(
+        !lifecycle.holds_renewal_task(),
+        "winning terminalization must stop the background renewal task"
+    );
+    let terminal = request_row(&access, &request_doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    assert_eq!(
+        terminal.terminal_output,
+        Some(TerminalOutput::Message {
+            message_doc_id: final_msg_doc_id,
+        })
+    );
+}
+
+#[tokio::test]
+async fn terminalize_holds_renewal_gate_and_preserves_renewal_on_pending_queue_change() {
+    let (node, home, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
+    let agent_identity = agent_identity(&identity, &agent);
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent_identity.as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    writer
+        .start_provider_attempt(
+            &lifecycle.request.doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let saved = writer
+        .publish_native_turn(
+            &lifecycle,
+            0,
+            0,
+            &gents_protocol::message::Message::assistant("saved provider response"),
+        )
+        .await
+        .unwrap();
+
+    let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "queued-input",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            &agent.agent_did,
+            &agent.agent_did,
+            &lifecycle.request.session_id,
+        ),
+        "queued input",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            &agent.agent_did,
+        ),
+    );
+    crate::request::admission::sign_agent_request_create(agent_identity.as_ref(), &mut pending)
+        .await
+        .unwrap();
+    let response = access
+        .write(
+            "test.pending_for_renewal_gate",
+            &pending.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let pending_doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+
+    let renewal_gate = lifecycle
+        .renewal_task
+        .as_ref()
+        .expect("claimed request holds renewal task")
+        .gate();
+
+    // PendingQueueChanged must release the gate and keep the renewal task alive.
+    assert!(!lifecycle
+        .finish_natural_turn(&saved.message_doc_id, &[])
+        .await
+        .unwrap());
+    assert!(lifecycle.holds_renewal_task());
+    assert!(
+        renewal_gate.try_lock().is_ok(),
+        "PendingQueueChanged must release the renewal gate"
+    );
+
+    // While finish_natural_turn is inside its transaction (paused before commit),
+    // the renewal gate is held so RenewalTask cannot commit a conflicting renewal.
+    let gate_held_during_commit = std::sync::atomic::AtomicBool::new(false);
+    let (finished, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            lifecycle
+                .finish_natural_turn(&saved.message_doc_id, std::slice::from_ref(&pending_doc_id)),
+            async {
+                gate_held_during_commit.store(
+                    renewal_gate.try_lock().is_err(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            },
+        )
+        .await;
+    assert!(paused);
+    assert!(
+        gate_held_during_commit.load(std::sync::atomic::Ordering::SeqCst),
+        "renewal gate must stay held across terminalize_execution commit"
+    );
+    assert!(finished.unwrap());
+    assert!(!lifecycle.holds_renewal_task());
+    assert!(renewal_gate.try_lock().is_ok());
+}

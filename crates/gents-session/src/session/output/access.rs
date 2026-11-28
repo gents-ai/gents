@@ -5,7 +5,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents_protocol::output::rows::{request_output_segments_query, AGENT_OUTPUT_SEGMENT_FIELDS};
+use gents_protocol::output::rows::request_output_segments_query;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Clone, Copy)]
@@ -162,15 +162,6 @@ impl ReadAccess<'_, '_> {
         request_doc_id: &str,
         operation: &str,
     ) -> Result<Vec<serde_json::Value>> {
-        if let Self::Txn(txn) = self {
-            return Ok(txn
-                .cursor_rows(
-                    "AgentOutputSegment",
-                    AGENT_OUTPUT_SEGMENT_FIELDS,
-                    &gents_protocol::output::rows::request_output_segments_filter(request_doc_id),
-                )
-                .await?);
-        }
         let response = self
             .query(&request_output_segments_query(request_doc_id), operation)
             .await?;

@@ -298,22 +298,32 @@ impl RequestLifecycle {
         pending_request_doc_ids: &[String],
     ) -> Result<bool> {
         let generation = self.execution_generation()?.to_owned();
-        let result = terminalize_execution(
-            &self.access()?,
-            TerminalizeSpec {
-                request_doc_id: &self.request.doc_id,
-                authority: TerminalAuthority::Owner(&generation),
-                outcome: RequestTerminalOutcome::Completed,
-                selection: Some(TerminalOutput::Message {
-                    message_doc_id: message_doc_id.to_owned(),
-                }),
-                reason: "",
-                fixture_now: None,
-                fixture_fresh_generation: None,
-                pending_snapshot: Some((pending_request_doc_ids, self.claimed_deadline_at)),
-            },
-        )
-        .await;
+        let renewal_gate = self
+            .renewal_task
+            .as_ref()
+            .map(super::execution_renewal::RenewalTask::gate);
+        let result = {
+            let _renewal_guard = match renewal_gate.as_ref() {
+                Some(gate) => Some(gate.lock().await),
+                None => None,
+            };
+            terminalize_execution(
+                &self.access()?,
+                TerminalizeSpec {
+                    request_doc_id: &self.request.doc_id,
+                    authority: TerminalAuthority::Owner(&generation),
+                    outcome: RequestTerminalOutcome::Completed,
+                    selection: Some(TerminalOutput::Message {
+                        message_doc_id: message_doc_id.to_owned(),
+                    }),
+                    reason: "",
+                    fixture_now: None,
+                    fixture_fresh_generation: None,
+                    pending_snapshot: Some((pending_request_doc_ids, self.claimed_deadline_at)),
+                },
+            )
+            .await
+        };
         match result {
             Err(TerminalizeError::PendingQueueChanged) => Ok(false),
             Err(error) => Err(error.into_anyhow()),
@@ -322,6 +332,7 @@ impl RequestLifecycle {
             }
             Ok(_) => {
                 self.state = LocalLifecycleState::Completed;
+                self.renewal_task.take();
                 Ok(true)
             }
         }
@@ -334,27 +345,38 @@ impl RequestLifecycle {
         reason: Option<&str>,
     ) -> Result<TerminalizeResult> {
         let generation = self.execution_generation()?.to_string();
-        let result = terminalize_execution_with_access(
-            &self.access()?,
-            TerminalizeSpec {
-                request_doc_id: &self.request.doc_id,
-                authority: TerminalAuthority::Owner(&generation),
-                outcome,
-                selection: Some(selection),
-                reason: reason
-                    .or(self.failure_reason.as_deref())
-                    .unwrap_or_default(),
-                fixture_now: None,
-                fixture_fresh_generation: None,
-                pending_snapshot: None,
-            },
-        )
-        .await?;
+        let renewal_gate = self
+            .renewal_task
+            .as_ref()
+            .map(super::execution_renewal::RenewalTask::gate);
+        let result = {
+            let _renewal_guard = match renewal_gate.as_ref() {
+                Some(gate) => Some(gate.lock().await),
+                None => None,
+            };
+            terminalize_execution_with_access(
+                &self.access()?,
+                TerminalizeSpec {
+                    request_doc_id: &self.request.doc_id,
+                    authority: TerminalAuthority::Owner(&generation),
+                    outcome,
+                    selection: Some(selection),
+                    reason: reason
+                        .or(self.failure_reason.as_deref())
+                        .unwrap_or_default(),
+                    fixture_now: None,
+                    fixture_fresh_generation: None,
+                    pending_snapshot: None,
+                },
+            )
+            .await?
+        };
         if matches!(
             result,
             TerminalizeResult::Won | TerminalizeResult::AlreadySame
         ) {
             self.state = outcome.local_state();
+            self.renewal_task.take();
         }
         Ok(result)
     }
