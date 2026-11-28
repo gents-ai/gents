@@ -420,10 +420,7 @@ fn plugin_pack_dir(
 #[tokio::test]
 async fn a_plugins_pack_keeps_records_and_bytes_on_a_home_with_no_node() {
     let home = tempfile::tempdir().unwrap();
-    let afb = crate::commands::plugin::testing::build_plugin_afb(
-        "shared",
-        b"fn main() { println!(\"{{}}\"); }",
-    );
+    let afb = build_shared_plugin(b"{}");
     let digest_hex = {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(&afb))
@@ -574,14 +571,7 @@ async fn assets_pack_still_takes_the_early_path() {
 
 #[tokio::test]
 async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records() {
-    let afb = tokio::task::spawn_blocking(|| {
-        crate::commands::plugin::testing::build_plugin_afb(
-            "shared",
-            b"fn main() { println!(\"{{}}\"); }",
-        )
-    })
-    .await
-    .unwrap();
+    let afb = build_shared_plugin(b"{}");
     for documents in [true, false] {
         let home = initialized_home().await;
         let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
@@ -689,23 +679,21 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
     }
 }
 
-async fn build_shared_plugin(source: &'static [u8]) -> Vec<u8> {
-    tokio::task::spawn_blocking(move || {
-        crate::commands::plugin::testing::build_plugin_afb("shared", source)
-    })
-    .await
-    .unwrap()
+fn build_shared_plugin(output: &[u8]) -> Vec<u8> {
+    gents_pack::plugin::test_fixtures::build_plugin_afb(
+        &gents_pack::plugin::test_fixtures::constant_output_wat(output),
+    )
 }
 
 #[tokio::test]
 async fn wiring_holds_store_lock_through_pin_commit() {
+    let old = build_shared_plugin(br#"{"v":"old"}"#);
+    let new = build_shared_plugin(br#"{"v":"new"}"#);
     for case in
         gents_lean_vocab::families::contracts_pack_installation_wire_lock_install_during_wire::cases(
         )
     {
         let home = initialized_home().await;
-        let old = build_shared_plugin(b"fn main() { println!(\"old\"); }").await;
-        let new = build_shared_plugin(b"fn main() { println!(\"new\"); }").await;
         let original = plugin_pack_dir("acme", "tools", "shared", &old);
         let replacement = plugin_pack_dir("acme", "tools", "shared", &new);
         install(home.path(), original.path().to_str().unwrap().to_owned())
@@ -758,7 +746,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         let notify_access = access.clone();
         let notify_owner = owner.clone();
         let notify_home = home.path().to_owned();
-        let result = gents_pack::pack::plugin_lifecycle::install(
+        let result = gents_pack::pack::plugin_lifecycle::install_with_lease_wait(
             home.path(),
             &archive,
             false,
@@ -766,8 +754,11 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                 owner: Some(&owner),
                 bindings: &std::collections::BTreeMap::new(),
             },
-            gents_pack::pack::InstalledVia::Operator,
-            gents_pack::pack::PackSource::Local { file_name: None },
+            gents_pack::pack::plugin_lifecycle::PluginInstallOrigin {
+                installed_via: gents_pack::pack::InstalledVia::Operator,
+                source: gents_pack::pack::PackSource::Local { file_name: None },
+                lease_wait: std::time::Duration::from_millis(200),
+            },
             move |identity, _| async move {
                 gents_pack::pack::record_plugin_store_change(
                     &notify_access,
@@ -835,7 +826,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
 #[tokio::test]
 async fn documents_pack_with_schema_patch_installs_after_schema_application() {
     let home = initialized_home().await;
-    let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+    let afb = build_shared_plugin(b"{}");
     let pack = plugin_pack_dir("acme", "schema_patch", "shared", &afb);
     let manifest_path = pack.path().join("manifest.json");
     let mut manifest: Value =
@@ -1013,7 +1004,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         )
     {
         let home = initialized_home().await;
-        let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+        let afb = build_shared_plugin(b"{}");
         let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
         install(home.path(), pack.path().to_str().unwrap().to_owned())
             .await
@@ -1081,7 +1072,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
 #[tokio::test]
 async fn delegated_home_removal_uses_the_existing_store_guard() {
     let home = initialized_home().await;
-    let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+    let afb = build_shared_plugin(b"{}");
     let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
     install(home.path(), pack.path().to_str().unwrap().to_owned())
         .await
@@ -1097,7 +1088,7 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
 /// leaves the earlier pair unwritten, where one write per pair left it wired.
 #[tokio::test]
 async fn a_refused_pair_leaves_every_pair_of_its_batch_unwritten() {
-    let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+    let afb = build_shared_plugin(b"{}");
     let home = initialized_home().await;
     let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
     install(home.path(), pack.path().to_str().unwrap().to_owned())

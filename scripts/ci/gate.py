@@ -16,6 +16,7 @@ computes it against --base.
 
 import argparse
 import functools
+import hashlib
 import importlib.util
 import json
 import os
@@ -24,6 +25,7 @@ import selectors
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -249,8 +251,12 @@ TS_JOBS = {
         "npm --prefix apps/gents-desktop run typecheck",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop test",
-        # the interaction budgets drive Chromium; they run here, beside the
-        # browser lane's shards, rather than after one of them
+    ],
+    # The mobile interaction budgets drive Chromium; run them beside ts-unit and
+    # the browser shards rather than serially after Vitest.
+    "ts-mobile-perf": [
+        "npm run build:packages",
+        "npm --prefix apps/gents-desktop run build:sandbox",
         "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-browser": [
@@ -777,6 +783,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         "notary-control": everything or "notary" in tags,
         "ts-packages": ts,
         "ts-unit": ts,
+        "ts-mobile-perf": ts,
         "ts-browser": ts,
         "ts-fuzz": ts,
     }
@@ -832,13 +839,19 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             # `partitions` hash partitions; each job builds the tests from
             # its runner's compiler cache and kept target tree and runs its
             # partition there, on any free portable runner. The Vera feature
-            # tests run once, in the first job.
+            # tests run in their own parallel partition against the warm
+            # `vera` side tree instead of adding a serial tail onto partition 1.
             count_partitions = min(partitions("portable"), tested_crates) if single else 0
             if count_partitions > 1:
                 archives += [{**entry, **placement("portable"),
-                              "vera": vera if index == 1 else "",
+                              "vera": "",
                               "partition": index, "partitions": count_partitions}
                              for index in range(1, count_partitions + 1)]
+                if vera:
+                    archives.append({
+                        "archive": ARCHIVE, "run": True, "packages": "", "vera": vera,
+                        "timeout": 60, "go": False, "partition": "vera", **placement("portable"),
+                    })
             else:
                 archives.append({**entry, **placement("portable"), "vera": vera})
             # Slices alternate between host groups, so one run's slices split across hosts.
@@ -854,6 +867,8 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         jobs[f"build:{ARCHIVE}"] = True
         jobs[f"shard:{ARCHIVE}"] = bool(shards)
     desktop_ui = [{"suite": "unit", "unit": "ts-unit"}] if jobs.get("ts-unit") else []
+    if jobs.get("ts-mobile-perf"):
+        desktop_ui.append({"suite": "mobile-perf", "unit": "ts-mobile-perf"})
     if jobs.get("ts-browser"):
         desktop_ui += [{"suite": "browser", "shard": f"{index}/{BROWSER_SHARDS}",
                         "unit": f"ts-browser:{index}/{BROWSER_SHARDS}"} for index in range(1, BROWSER_SHARDS + 1)]
@@ -1142,14 +1157,21 @@ def run_lint_variants(selection):
         return
     built, profile = set(selection["built"]), profile_flags()
     # Live suites run after merge; they must still compile and lint clean.
-    for package in selection.get("live_e2e_lint", []):
-        sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
+    # Combine selected packages into one Cargo invocation so the shared runtime
+    # chain is checked once under a unified feature set instead of twice.
+    live_e2e = selection.get("live_e2e_lint", [])
+    if live_e2e:
+        packages = [flag for package in live_e2e for flag in ("-p", package)]
+        features = ",".join(f"{package}/live-e2e" for package in live_e2e)
+        sh(["cargo", "clippy", *packages, "--tests", "--features", features, *profile, "--", "-D", "warnings"],
            env={**os.environ, **side_tree_env("live-e2e")})
     if selection.get("lint_vera"):
-        sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
+        sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile],
+           env={**os.environ, **side_tree_env("vera")})
     if "gents-loop" in built:
         sh(["rustup", "target", "add", "wasm32-wasip1"])
-        sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
+        sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile],
+           env={**os.environ, **side_tree_env("wasm32-wasip1")})
     if "gents-desktop-tauri" in built:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
 
@@ -1165,6 +1187,217 @@ def run_notary_control():
     sh([python, ".github/scripts/test-release-signing-mode.py"])
 
 
+CONTRACT_JSON_BEGIN = b"---BEGIN GENTS LEAN CONTRACT JSON---"
+CONTRACT_JSON_END = b"---END GENTS LEAN CONTRACT JSON---"
+CONTRACT_CACHE_TARGET = "Proofs.Conformance.Contracts:olean"
+LEAN_ROOT_CONFIG_FILES = ("lakefile.lean", "lakefile.toml", "lake-manifest.json", "lean-toolchain")
+
+
+def lean_sources_hash(proofs):
+    """SHA-256 fingerprint of Lean sources and root build config, matching
+    crates/gents-lean-contract/src/lib.rs::compute_sources_hash."""
+    files = []
+    for current, dirs, names in os.walk(proofs, followlinks=False):
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name != "target")
+        current_path = Path(current)
+        is_root = current_path == proofs
+        for name in sorted(names):
+            if not (name.endswith(".lean") or (is_root and name in LEAN_ROOT_CONFIG_FILES)):
+                continue
+            path = current_path / name
+            if path.is_file():
+                files.append((path.relative_to(proofs).as_posix(), path))
+    files.sort(key=lambda item: item[0])
+    hasher = hashlib.sha256()
+    hasher.update(b"gents-lean-sources-v1\0")
+    for relative, path in files:
+        encoded = relative.encode("utf-8")
+        data = path.read_bytes()
+        hasher.update(struct.pack("<Q", len(encoded)))
+        hasher.update(encoded)
+        hasher.update(struct.pack("<Q", len(data)))
+        hasher.update(data)
+    return hasher.hexdigest()
+
+
+def contract_cache_paths(proofs):
+    cache_dir = proofs / ".lake/build/gents-generator-output"
+    stem = CONTRACT_CACHE_TARGET.replace(":", ".")
+    return cache_dir / stem, cache_dir / f"{stem}.built"
+
+
+def contract_cache_keys(proofs):
+    """(built_marker_key, output_cache_key) for Proofs.Conformance.Contracts:olean,
+    or None if the .olean or Lake .trace is missing/unreadable."""
+    olean = proofs / ".lake/build/lib/lean/Proofs/Conformance/Contracts.olean"
+    trace_path = proofs / ".lake/build/lib/lean/Proofs/Conformance/Contracts.trace"
+    toolchain_path = proofs / "lean-toolchain"
+    if not (olean.is_file() and trace_path.is_file() and toolchain_path.is_file()):
+        return None
+    try:
+        dep_hash = json.loads(trace_path.read_text()).get("depHash")
+        toolchain = toolchain_path.read_text()
+    except (OSError, ValueError):
+        return None
+    if not isinstance(dep_hash, str):
+        return None
+    sources_hash = lean_sources_hash(proofs)
+    built_key = json.dumps({
+        "depHash": dep_hash,
+        "sourcesHash": sources_hash,
+        "target": CONTRACT_CACHE_TARGET,
+        "toolchain": toolchain,
+    }, sort_keys=True, separators=(",", ":"))
+    output_key = json.dumps({
+        "depHash": dep_hash,
+        "input": None,
+        "sourcesHash": sources_hash,
+        "target": CONTRACT_CACHE_TARGET,
+        "toolchain": toolchain,
+    }, sort_keys=True, separators=(",", ":"))
+    return built_key, output_key
+
+
+def contract_cache_fresh(proofs):
+    """True when the persistent gents-lean-contract snapshot cache matches the
+    current Lean sources, toolchain and Lake trace."""
+    keys = contract_cache_keys(proofs)
+    if keys is None:
+        return False
+    _, output_key = keys
+    cache_path, _ = contract_cache_paths(proofs)
+    if not cache_path.is_file():
+        return False
+    try:
+        with open(cache_path, "rb") as handle:
+            first_line = handle.readline()
+    except OSError:
+        return False
+    return first_line == (output_key + "\n").encode("utf-8")
+
+
+def try_copy_fresh_contract_cache(proofs, destination):
+    """Copy the cached contract snapshot payload (without its key header line) to
+    `destination` when fresh. Returns True on cache hit."""
+    keys = contract_cache_keys(proofs)
+    if keys is None:
+        return False
+    _, output_key = keys
+    cache_path, _ = contract_cache_paths(proofs)
+    if not cache_path.is_file():
+        return False
+    expected_header = (output_key + "\n").encode("utf-8")
+    try:
+        with open(cache_path, "rb") as src:
+            if src.readline() != expected_header:
+                return False
+            with open(destination, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    except OSError:
+        return False
+    return snapshot_has_sentinels(destination)
+
+
+def write_contract_cache(proofs, snapshot_path):
+    """Populate gents-lean-contract's shared cache from `snapshot_path` atomically."""
+    keys = contract_cache_keys(proofs)
+    if keys is None:
+        return False
+    built_key, output_key = keys
+    cache_path, marker_path = contract_cache_paths(proofs)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    staged_marker = marker_path.with_name(f".{marker_path.name}.staged.{pid}")
+    staged_cache = cache_path.with_name(f".{cache_path.name}.staged.{pid}")
+    try:
+        staged_marker.write_text(built_key)
+        os.replace(staged_marker, marker_path)
+        with open(staged_cache, "wb") as dst, open(snapshot_path, "rb") as src:
+            dst.write((output_key + "\n").encode("utf-8"))
+            shutil.copyfileobj(src, dst)
+        os.replace(staged_cache, cache_path)
+    except OSError:
+        staged_marker.unlink(missing_ok=True)
+        staged_cache.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def lean_exe_env(proofs, lake="lake"):
+    """Environment for linking Lean 4.18 native executables on macOS 26+.
+
+    Lean 4.18's bundled LLVM 15 ld64.lld omits SG_READ_ONLY on __DATA_CONST,
+    which macOS 26+ dyld rejects. Linking with Apple's /usr/bin/clang and the
+    toolchain's lib directory produces a working native executable.
+    """
+    env = dict(os.environ)
+    if sys.platform != "darwin" or env.get("LEAN_CC") or not Path("/usr/bin/clang").is_file():
+        return env
+    probe = subprocess.run([lake, "env", "lean", "--print-prefix"], cwd=proofs,
+                           check=False, capture_output=True, text=True)
+    prefix = probe.stdout.strip()
+    if probe.returncode != 0 or not prefix:
+        return env
+    lib_dir = str(Path(prefix) / "lib")
+    existing = env.get("LIBRARY_PATH", "")
+    env["LEAN_CC"] = "/usr/bin/clang"
+    env["LIBRARY_PATH"] = f"{lib_dir}:{existing}" if existing else lib_dir
+    return env
+
+
+def snapshot_has_sentinels(path):
+    """True when `path` begins and ends with the Lean contract JSON sentinels."""
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return False
+        with open(path, "rb") as handle:
+            head = handle.read(4096)
+            handle.seek(max(0, size - 4096))
+            tail = handle.read(4096)
+    except OSError:
+        return False
+    return CONTRACT_JSON_BEGIN in head and CONTRACT_JSON_END in tail
+
+
+def emit_contract_snapshot(proofs, lake, snapshot_path):
+    """Materialize the Lean contract snapshot once into `snapshot_path`.
+
+    Reuses the SHA-256 verified cache when fresh; otherwise builds and runs the
+    compiled `contracts` executable (falling back to `lake env lean --run`) and
+    updates the shared cache for downstream jobs and test processes."""
+    started = time.time()
+    if try_copy_fresh_contract_cache(proofs, snapshot_path):
+        print(f"\n$ reuse fresh Lean contract snapshot cache -> {snapshot_path}", flush=True)
+        results.append(("emit contract snapshot (cached)", "ok", "", time.time() - started))
+        return True
+    exe_name = "contracts.exe" if sys.platform == "win32" else "contracts"
+    exe_path = proofs / ".lake/build/bin" / exe_name
+    build_env = lean_exe_env(proofs, lake)
+    label = "emit contract snapshot (lean_exe)"
+    print(f"\n$ {shlex.join([lake, 'build', 'contracts'])} && {exe_path} > {snapshot_path}", flush=True)
+    built = subprocess.run([lake, "build", "contracts"], cwd=proofs, env=build_env, check=False)
+    emitted = False
+    if built.returncode == 0 and exe_path.is_file():
+        with open(snapshot_path, "wb") as handle:
+            ran = subprocess.run([str(exe_path)], cwd=proofs, stdout=handle, check=False)
+        emitted = ran.returncode == 0 and snapshot_has_sentinels(snapshot_path)
+    if not emitted:
+        print("gate: compiled `contracts` executable unavailable; falling back to `lake env lean --run`", flush=True)
+        label = "emit contract snapshot (lean --run)"
+        with open(snapshot_path, "wb") as handle:
+            ran = subprocess.run([lake, "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
+                                 cwd=proofs, stdout=handle, check=False)
+        emitted = ran.returncode == 0 and snapshot_has_sentinels(snapshot_path)
+    if emitted:
+        write_contract_cache(proofs, snapshot_path)
+    verdict = "ok" if emitted else "failed to emit Lean contract snapshot"
+    results.append((label, verdict, "", time.time() - started))
+    if not emitted:
+        print(f"::error::{label}: {verdict}", flush=True)
+    return emitted
+
+
 def run_contract(selection):
     proofs = ROOT / PROOFS
     lake = os.environ.get("LAKE", "lake")
@@ -1173,28 +1406,44 @@ def run_contract(selection):
     sh("python3 .github/scripts/test-lean-import-layers.py")
     # lakefile.lean marks importClosure, importLayers, canonicalOutputMap and Proofs as default targets.
     sh([lake, "build"], cwd=proofs)
-    sh("python3 .github/scripts/test-canonical-output-map.py && "
-       "python3 .github/scripts/check-canonical-output-map.py --check-export")
-    sh("python3 .github/scripts/test-lean-rust-decoders.py && python3 .github/scripts/check-lean-rust-decoders.py")
-    # Generated decoders, the family schema and the one-consumer-per-family scan.
-    cargo_test("gents-lean-vocab", ["-p", "gents-lean-vocab", "--lib", "--examples"])
-    # The `cargo test` above already built this example; under `dev` it would
-    # build its dependencies again.
-    sh(["cargo", "run", *(profile_flags() or ["--profile", "test"]), "-p", "gents-lean-vocab", "--example",
-        "regenerate_household_policy", "--", "--check"])
-    if selection["contract"]["ratchets"]:
-        cargo_test("gents-lean-vocab write_owner_structure",
-                   ["-p", "gents-lean-vocab", "--test", "write_owner_structure"])
-    tla = selection["contract"].get("tla", [])
-    if tla:
-        sh(["python3", str(TLA_CHECK), "check-headers"])
-        sh(["python3", str(TLA_CHECK.with_name("test_tlc_trace.py"))])
-        sh(["python3", str(TLA_CHECK), "traces", "--check"])
-        selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
-        sh(["python3", str(TLA_CHECK), "run", *selected])
-    if selection["contract"]["ts_lean"]:
-        for command in TS_LEAN:
-            sh(command)
+    with tempfile.TemporaryDirectory(prefix="gents-contract-snapshot-") as scratch:
+        snapshot_path = Path(scratch) / "contracts.snapshot"
+        if not emit_contract_snapshot(proofs, lake, snapshot_path):
+            return
+        previous_contract = os.environ.get("GENTS_LEAN_CONTRACT_FILE")
+        os.environ["GENTS_LEAN_CONTRACT_FILE"] = str(snapshot_path)
+        try:
+            quoted = shlex.quote(str(snapshot_path))
+            sh(f"python3 .github/scripts/test-canonical-output-map.py && "
+               f"python3 .github/scripts/check-canonical-output-map.py --check-export --contract {quoted}")
+            sh(f"python3 .github/scripts/test-lean-rust-decoders.py && "
+               f"python3 .github/scripts/check-lean-rust-decoders.py --contract {quoted}")
+            # Generated decoders, the family schema and the one-consumer-per-family scan.
+            cargo_test("gents-lean-vocab", ["-p", "gents-lean-vocab", "--lib", "--examples"])
+            # The `cargo test` above already built this example; under `dev` it would
+            # build its dependencies again.
+            sh(["cargo", "run", *(profile_flags() or ["--profile", "test"]), "-p", "gents-lean-vocab", "--example",
+                "regenerate_household_policy", "--", "--check"])
+            if selection["contract"]["ratchets"]:
+                cargo_test("gents-lean-vocab write_owner_structure",
+                           ["-p", "gents-lean-vocab", "--test", "write_owner_structure"])
+            tla = selection["contract"].get("tla", [])
+            if tla:
+                sh(["python3", str(TLA_CHECK), "check-headers"])
+                sh(["python3", str(TLA_CHECK.with_name("test_tlc_trace.py"))])
+                sh(["python3", str(TLA_CHECK), "traces", "--check"])
+                selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
+                sh(["python3", str(TLA_CHECK), "run", *selected])
+            if selection["contract"]["ts_lean"]:
+                sh(["cargo", "build", *(profile_flags() or ["--profile", "test"]),
+                    "-p", "gents-lean-contract", "--bin", "gents-lean-generator"])
+                for command in TS_LEAN:
+                    sh(command)
+        finally:
+            if previous_contract is None:
+                os.environ.pop("GENTS_LEAN_CONTRACT_FILE", None)
+            else:
+                os.environ["GENTS_LEAN_CONTRACT_FILE"] = previous_contract
 
 
 def run_ts(job):
@@ -1322,25 +1571,25 @@ def macos_filterset(packages):
 
 def run_vera_tests(packages):
     """The `vera` tests of an archive's packages, built apart from the archive in
-    one `cargo nextest run` per target kind: enabling the feature in the archive
-    would build every archived crate against a gents-store with the Vera node,
-    and naming one package's test target would build every package's."""
+    one `cargo nextest run` per target kind against the persistent `vera` side
+    tree: enabling the feature in the archive would build every archived crate
+    against a gents-store with the Vera node, and naming one package's test
+    target would build every package's."""
     if not packages:
         return
     os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+    vera_env = side_tree_env("vera")
     for target in sorted({VERA_TESTS[package][0] for package in packages}):
         members = [package for package in packages if VERA_TESTS[package][0] == target]
         features = ",".join(f"{package}/vera" for package in members)
         filterset = " | ".join(f"(binary_id(={binary_id(package, target)}) & test(~{VERA_TESTS[package][1]}))"
                                for package in members)
-        # The archive's profile and target tree: in the `test` profile the feature
-        # build recompiled about 1,083 dependencies the archive had just built.
         native_tests(f"{' '.join(members)} {' '.join(target)} (vera)", members, [*target, "--features", features],
                      filterset, {binary_id(package, target) for package in members},
-                     profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE)
+                     profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE, extra_env=vera_env)
 
 
-def native_tests(label, packages, flags, filterset, expected, profile=None):
+def native_tests(label, packages, flags, filterset, expected, profile=None, extra_env=None):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
     Its JUnit report then fails a crate, or a macOS-only target, that ran no
@@ -1355,9 +1604,11 @@ def native_tests(label, packages, flags, filterset, expected, profile=None):
     if profile:
         arguments += ["--cargo-profile", profile]
     # Tests that spawn Cargo for plugin builds must not inherit the job's target directory.
+    run_env = dict(extra_env or {})
+    target_dir = run_env.pop("CARGO_TARGET_DIR", None) or os.environ.get("CARGO_TARGET_DIR")
     drop = ()
-    if os.environ.get("CARGO_TARGET_DIR"):
-        arguments += ["--target-dir", os.environ["CARGO_TARGET_DIR"]]
+    if target_dir:
+        arguments += ["--target-dir", target_dir]
         drop = ("CARGO_TARGET_DIR",)
     if filterset:
         arguments += ["-E", filterset]
@@ -1366,7 +1617,7 @@ def native_tests(label, packages, flags, filterset, expected, profile=None):
         arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
     junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
     junit.unlink(missing_ok=True)
-    nextest(["run", *arguments], label=label, drop_env=drop)
+    nextest(["run", *arguments], label=label, extra_env=run_env or None, drop_env=drop)
     if not junit.exists():
         return
     ran = junit_outcomes(junit)
@@ -1527,7 +1778,10 @@ def run_build(selection, name, partition=None):
     """
     entries = [entry for entry in selection["archives"] if entry["archive"] == name]
     if partition is None:
-        entry = {key: value for key, value in entries[0].items() if key not in ("partition", "partitions")}
+        base = next((entry for entry in entries if entry.get("packages")), entries[0])
+        entry = {key: value for key, value in base.items() if key not in ("partition", "partitions")}
+        vera = " ".join(dict.fromkeys(pkg for item in entries for pkg in item.get("vera", "").split()))
+        entry["vera"] = vera
     else:
         entry = next((entry for entry in entries if entry.get("partition") == partition), None)
         if entry is None:
@@ -1560,40 +1814,89 @@ class LeanContract:
     the Rust compile rather than before it (rust-runner `lean-contract: deferred`):
     it took 2.5 to 10 minutes ahead of the compile in PR #3926's runs. Tests
     must not start before it is built: they would each build it on first use
-    under a shared lock, with their output captured."""
+    under a shared lock, with their output captured.
 
-    TARGET = "Proofs.Conformance.Contracts:olean"
+    When the persistent SHA-256 cache already holds a fresh snapshot for the
+    current Lean sources, skips `lake build` completely so Cargo gets 100% of
+    the host's CPUs; when cold, builds `contracts` (falling back to `:olean`)
+    and warms the shared cache once before tests start."""
 
-    def __init__(self, process, log):
-        self.process, self.log, self.started = process, log, time.time()
+    TARGET = "contracts"
+    FALLBACK_TARGET = "Proofs.Conformance.Contracts:olean"
+
+    def __init__(self, process, log, cached=False, started=None):
+        self.process = process
+        self.log = log
+        self.cached = cached
+        self.started = time.time() if started is None else started
 
     @classmethod
     def start(cls):
         if not shutil.which("lake"):
             return None
+        started = time.time()
+        proofs = ROOT / PROOFS
+        if contract_cache_fresh(proofs):
+            print("\n$ Lean contract snapshot cache is fresh; skipping lake build", flush=True)
+            return cls(None, None, cached=True, started=started)
         log = tempfile.NamedTemporaryFile(prefix="gate-lean-contract-", suffix=".log", delete=False)
         print(f"\n$ lake build {cls.TARGET} (beside the Rust compile; output in {log.name})", flush=True)
-        process = subprocess.Popen(["lake", "build", cls.TARGET], cwd=ROOT / PROOFS, stdout=log,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
-        return cls(process, log)
+        process = subprocess.Popen(["lake", "build", cls.TARGET], cwd=proofs, env=lean_exe_env(proofs),
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        return cls(process, log, cached=False, started=started)
 
     def wait(self):
-        """True once the contract is built; on failure, its output and the gate's error."""
+        """True once the contract snapshot is warm; falls back to the olean target if native linking fails."""
+        if self.cached:
+            results.append(("lean contract (cached)", "ok", "", time.time() - self.started))
+            return True
         code = self.process.wait()
         self.log.close()
+        target = self.TARGET
+        proofs = ROOT / PROOFS
+        if code != 0:
+            print(f"gate: lake build {self.TARGET} exited {code}; falling back to {self.FALLBACK_TARGET}", flush=True)
+            with open(self.log.name, "ab") as handle:
+                fallback = subprocess.run(["lake", "build", self.FALLBACK_TARGET], cwd=proofs,
+                                          stdout=handle, stderr=subprocess.STDOUT, check=False)
+            code = fallback.returncode
+            target = self.FALLBACK_TARGET
+        if code == 0 and not contract_cache_fresh(proofs):
+            # Materialize the snapshot once into gents-lean-contract's shared cache
+            # so parallel test processes hit the warm cache immediately.
+            with tempfile.NamedTemporaryFile(prefix="gate-lean-snap-", suffix=".txt", delete=False) as snap:
+                snap_path = Path(snap.name)
+            try:
+                exe_name = "contracts.exe" if sys.platform == "win32" else "contracts"
+                exe_path = proofs / ".lake/build/bin" / exe_name
+                emitted = False
+                if exe_path.is_file():
+                    with open(snap_path, "wb") as handle:
+                        ran = subprocess.run([str(exe_path)], cwd=proofs, stdout=handle, check=False)
+                    emitted = ran.returncode == 0 and snapshot_has_sentinels(snap_path)
+                if not emitted:
+                    with open(snap_path, "wb") as handle:
+                        ran = subprocess.run(["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
+                                             cwd=proofs, stdout=handle, check=False)
+                    emitted = ran.returncode == 0 and snapshot_has_sentinels(snap_path)
+                if emitted:
+                    write_contract_cache(proofs, snap_path)
+            finally:
+                snap_path.unlink(missing_ok=True)
         verdict = "ok" if code == 0 else f"exit {code}"
-        results.append((f"lake build {self.TARGET}", verdict, "", time.time() - self.started))
+        results.append((f"lake build {target}", verdict, "", time.time() - self.started))
         if code != 0:
             sys.stdout.write(Path(self.log.name).read_text(errors="replace")[-20000:])
-            print(f"::error::lake build {self.TARGET}: {verdict}", flush=True)
+            print(f"::error::lake build {target}: {verdict}", flush=True)
         return code == 0
 
     def stop(self):
-        if self.process.poll() is None:
+        if self.process is not None and self.process.poll() is None:
             os.killpg(self.process.pid, signal.SIGTERM)
             self.process.wait()
-        self.log.close()
-        Path(self.log.name).unlink(missing_ok=True)
+        if self.log is not None:
+            self.log.close()
+            Path(self.log.name).unlink(missing_ok=True)
 
 
 # Packages whose tests run another package's binary from beside the test
@@ -1634,6 +1937,11 @@ def build_and_run(entry, name, lean):
 
 
 def build_here(entry, name, lean, packages):
+    if not packages:
+        built = lean is None or lean.wait()
+        if built:
+            run_vera_tests(entry.get("vera", "").split())
+        return
     selection = build_arguments(packages)
     # `cargo nextest list` builds every test binary of the selection, as `archive` did.
     built = nextest(["list", *selection, "--timings", "--list-type", "binaries-only"],
@@ -1743,14 +2051,14 @@ def run_shard(selection, name, index=None):
 
 
 def side_tree_env(name):
-    """A lint build's own target tree inside the kept one, built incrementally.
+    """A lint variant's own target tree inside the kept one, built incrementally.
 
-    The live-e2e lints build every crate below gents and gents-cli under a
-    feature set no other build shares (11 min from scratch on a Studio,
-    #3926), which sccache does not serve. They get their own incremental
-    tree: incremental units in the shared tree would replace the
-    non-incremental ones the other builds reuse. Inside the kept tree, it
-    survives the checkout's `git clean` and counts toward the runner's
+    The live-e2e, vera and wasm32-wasip1 builds each compile under a feature
+    set or target no other build shares (11 min from scratch on a Studio,
+    #3926), which sccache does not serve well under host contention. They get
+    their own incremental tree: incremental units in the shared tree would
+    replace the non-incremental ones the other builds reuse. Inside the kept
+    tree, it survives the checkout's `git clean` and counts toward the runner's
     reclamation.
     """
     target = os.environ.get("CARGO_TARGET_DIR")
@@ -1782,11 +2090,12 @@ def keep_core_packs_fresh():
 def run(selection, job):
     keep_core_packs_fresh()
     if job.startswith(("shard:", "build:")) and job.count(":") == 2:
-        prefix, name, index = job.split(":")
+        prefix, name, raw_index = job.split(":")
         if f"{prefix}:{name}" not in selection["jobs"]:
             print(f"gate: {prefix}:{name} is not selected by this plan; nothing to do")
             return
-        (run_shard if prefix == "shard" else run_build)(selection, name, int(index))
+        index = int(raw_index) if raw_index.isdigit() else raw_index
+        (run_shard if prefix == "shard" else run_build)(selection, name, index)
         return
     if job not in selection["jobs"]:
         print(f"gate: {job} is not selected by this plan; nothing to do")
@@ -1817,7 +2126,8 @@ def run(selection, job):
 WORKFLOW_JOBS = {
     "fmt": "fmt", "lint": "lint", "lint-variants": "lint-variants", "contract": "contract",
     "notary-control": "notary-control-tests", "ts-packages": "desktop-packages",
-    "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
+    "ts-unit": "desktop-ui", "ts-mobile-perf": "desktop-ui", "ts-browser": "desktop-ui",
+    "ts-fuzz": "desktop-ui-bombadil",
 }
 # Matrix jobs: a plan job `<prefix>:<name>` runs in the workflow job `<prefix>`.
 MATRIX_JOBS = ("test", "build", "shard")
@@ -2024,10 +2334,14 @@ def emit(selection):
                 extra += "; the native client journey" if entry.get("journey") else ""
                 handle.write(f"- `{entry['job']}`: {entry['packages'] or 'no crates of its own'}{extra}\n")
             for entry in selection["archives"]:
-                if entry.get("partition"):
+                if entry.get("partition") and entry.get("partitions"):
                     handle.write(f"- `build:{entry['archive']}:{entry['partition']}`, running partition "
                                  f"{entry['partition']} of {entry['partitions']} on {entry['runs_on'][-1]}: "
                                  f"{entry['packages']}\n")
+                    continue
+                if entry.get("partition"):
+                    handle.write(f"- `build:{entry['archive']}:{entry['partition']}`, running vera tests "
+                                 f"on {entry['runs_on'][-1]}: {entry['vera']}\n")
                     continue
                 handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
                              f"`shard:{entry['archive']}` slices: {entry['packages']}\n")

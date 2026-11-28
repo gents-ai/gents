@@ -472,7 +472,7 @@ impl<'a> RustConsumerScanner<'a> {
 
 impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
-        if has_cfg_false(&file.attrs) {
+        if is_disabled(&file.attrs) {
             return;
         }
         self.scopes.push(BTreeMap::new());
@@ -485,21 +485,21 @@ impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     }
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if has_cfg_false(item_attrs(item)) {
+        if is_disabled(item_attrs(item)) {
             return;
         }
         visit::visit_item(self, item);
     }
 
     fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
-        if has_cfg_false(impl_item_attrs(item)) {
+        if is_disabled(impl_item_attrs(item)) {
             return;
         }
         visit::visit_impl_item(self, item);
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if has_cfg_false(&module.attrs) {
+        if is_disabled(&module.attrs) {
             return;
         }
         let Some((_, items)) = &module.content else {
@@ -525,26 +525,26 @@ impl<'ast> Visit<'ast> for RustConsumerScanner<'_> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        if has_cfg_false(stmt_attrs(stmt)) {
+        if is_disabled(stmt_attrs(stmt)) {
             return;
         }
         visit::visit_stmt(self, stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast syn::Expr) {
-        if has_cfg_false(expr_attrs(expr)) {
+        if is_disabled(expr_attrs(expr)) {
             return;
         }
         visit::visit_expr(self, expr);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if has_cfg_false(&call.attrs) {
+        if is_disabled(&call.attrs) {
             return;
         }
         self.record_path(&call.func);
         for arg in &call.args {
-            if !has_cfg_false(expr_attrs(arg)) {
+            if !is_disabled(expr_attrs(arg)) {
                 self.record_path(arg);
             }
         }
@@ -947,6 +947,31 @@ mod tests {
             fn live_fn() {
                 #[cfg(false)]
                 gents_lean_vocab::families::baz::cases();
+            }
+        "#;
+        assert!(rust_consumer_counts(source, &keys).is_empty());
+    }
+
+    #[test]
+    fn ignored_test_call_is_not_counted() {
+        let keys = BTreeSet::from(["foo".to_owned(), "bar".to_owned(), "baz".to_owned()]);
+        let source = r#"
+            #[test]
+            #[ignore]
+            fn skipped_bare() {
+                gents_lean_vocab::families::foo::replay(|_| ());
+            }
+
+            #[test]
+            #[ignore = "requires manual setup"]
+            fn skipped_reason() {
+                let _ = gents_lean_vocab::families::bar::cases();
+            }
+
+            #[test]
+            #[cfg_attr(not(feature = "live"), ignore = "live only")]
+            fn skipped_cfg_attr() {
+                let _ = gents_lean_vocab::families::baz::cases();
             }
         "#;
         assert!(rust_consumer_counts(source, &keys).is_empty());

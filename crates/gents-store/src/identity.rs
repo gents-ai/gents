@@ -213,7 +213,7 @@ struct KnownPublicKey {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyIdentity {
     did: String,
     service_account: Option<ServiceAccount>,
@@ -221,6 +221,16 @@ pub struct KeyIdentity {
 }
 
 impl KeyIdentity {
+    /// Generates an ephemeral Ed25519 identity in memory and registers it with
+    /// DefraDB without writing a key file to disk.
+    pub fn generate() -> Result<Self> {
+        use crypto::Key as _;
+        let private_key = crypto::generate_ed25519()?;
+        let raw = RawIdentity::from_bytes(crypto::KeyType::Ed25519, private_key.raw())
+            .map_err(IdentityError::LoadNodeSigning)?;
+        Self::from_raw_identity(raw, None)
+    }
+
     pub fn load_or_create(
         key_path: impl Into<PathBuf>,
         service_account: Option<ServiceAccount>,

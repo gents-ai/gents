@@ -8,11 +8,8 @@ use std::sync::Once;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::{DocumentRuntimeOptions, Gents};
 use gents_automation::goal::seed_goal_from_access;
-use gents_documents::{AgentTargetDocument, BashMode};
-use gents_documents::{AgentTools, BashTools, HostTools, Tools};
-use gents_observe::observe::run_timeline_fetch::load_run_timeline_rows;
+use gents_documents::{AgentTargetDocument, AgentTools, BashMode, BashTools, HostTools, Tools};
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -23,20 +20,64 @@ use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::support::fixtures::{agent_target, configure_agent_tools};
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
+    boot_live_agent, boot_live_agent_with_ceiling, live_target, request_lifecycle,
+    terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
     InferenceTarget, LiveAgentSpec, LiveUser,
 };
-use crate::support::{first_optional_row, snapshots::fetch_runtime_snapshot, trial_store};
+use crate::support::{snapshots::fetch_runtime_snapshot, trial_store};
 use gents_store::test_support::snapshot_reader::{SnapshotChanges, SnapshotReader};
-use gents_store::test_support::TestStore;
-use gents_store::test_support::STALL_CEILING;
+use gents_store::test_support::{TestStore, STALL_CEILING};
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
 const BACKGROUND_WORKER_AGENT_NAME: &str = "live-background-worker";
 const RESEARCHER_TARGET_NAME: &str = "researcher";
 const BACKGROUND_WORKER_TARGET_NAME: &str = "background-worker";
+const ALPHA_AGENT_NAME: &str = "live-alpha";
+const BETA_AGENT_NAME: &str = "live-beta";
+const BLOCKER_AGENT_NAME: &str = "live-blocker";
+const RELAY_AGENT_NAME: &str = "live-relay";
+const MIDDLE_AGENT_NAME: &str = "live-middle";
+const LEAF_AGENT_NAME: &str = "live-leaf";
+const STEERED_AGENT_NAME: &str = "live-steered";
+const GOAL_WORKER_AGENT_NAME: &str = "live-goal-worker";
+const BLOCKED_COMMAND_TIMEOUT_SECS: u64 = 600;
+
+async fn canonical_run_timeline_rows(
+    access: &gents_store::config_client::ConfigAccess,
+    request_id: &str,
+) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
+    gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+        access,
+        request_id,
+        gents_observe::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("load canonical run timeline for {request_id}: {error:#}"))
+}
+const SOAK_GATES: usize = 3;
+const SOAK_PRELUDE: usize = 5;
+
+const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You can start a session on \
+an agent named `researcher`. For ANY research or factual lookup the user asks for, you MUST call the \
+`agent_new` tool with agent exactly \"researcher\" and a `prompt` describing the question, then \
+tell the user the research is under way without calling any other tool. Do not answer factual \
+questions yourself. When a background completion notification arrives, relay its answer to the user \
+without calling any tool.";
+
+const DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration \
+test. Follow the latest user instruction exactly, calling only the tools it names. Never answer \
+a code-word question yourself. When background completion notifications arrive, do not call any \
+tool: reply with one short sentence that repeats, verbatim, every code word reported in all the \
+notifications you have received so far in this conversation.";
+
+const GOAL_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration test. \
+Follow the latest user instruction exactly, calling only the tools it names. Never call agent_new \
+more than once in this conversation. When you are asked to continue working toward your goal and \
+no background completion notification has arrived yet, call no tool and reply exactly \
+WAITING_FOR_WORKER. Once a background completion notification has arrived, call no tool and reply \
+with the code word it reports, verbatim.";
 
 static LIVE_TRACE_INIT: Once = Once::new();
 
@@ -51,759 +92,16 @@ fn init_live_test_tracing() {
     });
 }
 
+async fn temp_workspace(label: &str) -> tempfile::TempDir {
+    tokio::task::spawn_blocking(tempfile::tempdir)
+        .await
+        .expect("create temporary workspace task")
+        .unwrap_or_else(|error| panic!("{label} workspace: {error}"))
+}
+
 fn completion_marker(tool_call_id: &str, tool_name: &str) -> String {
     format!(r#"<tool-completion tool_call_id="{tool_call_id}" tool_name="{tool_name}""#)
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_local_create_session() -> Result<()> {
-    let target = live_target().await;
-
-    let db = trial_store("session-message-live-local").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let node_did = identity.did().to_string();
-    let profile_id = format!("{node_did}:orchestrator-inference");
-    let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: "Orchestrator",
-                inference_profile_id: &profile_id,
-                system_prompt: ORCHESTRATOR_SYSTEM_PROMPT,
-                description: None,
-                default_for_node: true,
-            },
-        )
-        .await;
-    let researcher_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: RESEARCHER_AGENT_NAME,
-                inference_profile_id: &profile_id,
-                system_prompt:
-                    "You answer the user's question concisely and factually in one short sentence.",
-                description: Some(
-                    "Researches factual questions and returns a concise factual answer.",
-                ),
-                default_for_node: false,
-            },
-        )
-        .await;
-    authorize_session_targets(
-        &db,
-        &node_did,
-        &orchestrator_agent_did,
-        vec![AgentTargetDocument {
-            description: Some("Researches factual questions.".to_string()),
-            ..agent_target(
-                &node_did,
-                RESEARCHER_TARGET_NAME,
-                node_did.clone(),
-                researcher_agent_did.as_str(),
-            )
-        }],
-    )
-    .await;
-
-    let agent = boot_document_agent(&db, identity).await?;
-
-    let request_id = "req-live-local-create-session";
-    let session_id = "session-live-local-create-session";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        request_id,
-        session_id,
-        "Use your research agent to find the capital of France, then tell me the answer.",
-    )
-    .await;
-
-    wait_for_background_tool_call(
-        &live,
-        request_id,
-        session_id,
-        AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(180),
-    )
-    .await;
-    let Some(caused) = wait_for_caused_request(&live, request_id, Duration::from_secs(120)).await
-    else {
-        dump_session_diagnostics(&live, session_id).await;
-        panic!("agent_new must cause an AgentRequest linked to the orchestrator request");
-    };
-    tracing::info!("[live-local] caused request = {caused:?}");
-    assert_eq!(
-        caused.caused_by_parent_request_id.as_deref(),
-        Some(request_id)
-    );
-    let row = fetch_tool_call(
-        &live,
-        request_id,
-        session_id,
-        caused
-            .caused_by_parent_tool_call_id
-            .as_deref()
-            .expect("a caused request names its agent_new call"),
-    )
-    .await
-    .expect("the caused request must name an agent_new call of the orchestrator request");
-    assert_eq!(caused.agent_did, researcher_agent_did.as_str());
-    assert_eq!(caused.node_did, node_did);
-    // A caused request's requester is the Agent whose tool call caused it.
-    assert_eq!(
-        caused.requester_did.as_deref(),
-        Some(orchestrator_agent_did.as_str())
-    );
-    assert_eq!(caused.request_hop, Some(1));
-    assert_ne!(
-        caused.session_id, session_id,
-        "agent_new must start a new session"
-    );
-
-    let caused_terminal = wait_for_request_terminal(&live, &caused.request_id).await;
-    assert_eq!(caused_terminal, "completed");
-    let caused_answer = wait_for_assistant_answer(&live, &caused.request_id, STALL_CEILING).await;
-    tracing::info!("[live-local] started session answer = {caused_answer:?}");
-    assert!(
-        !caused_answer.trim().is_empty(),
-        "the started session must produce a non-empty assistant response"
-    );
-    if !caused_answer.to_lowercase().contains("paris") {
-        tracing::warn!("[live-local] SOFT-WARN: answer did not contain 'Paris': {caused_answer:?}");
-    }
-
-    let settled = wait_for_tool_call_state(
-        &live,
-        request_id,
-        session_id,
-        &row.tool_call_id,
-        "completed",
-        Duration::from_secs(60),
-    )
-    .await;
-    assert_eq!(
-        settled.child_request_id.as_deref(),
-        Some(caused.request_id.as_str()),
-        "the run timeline must link the agent_new row to the request it caused"
-    );
-    let messages = load_session_messages(&live, request_id, session_id).await;
-    let receipt = session_receipt(&messages, &caused.request_id)
-        .unwrap_or_else(|| panic!("agent_new receipt missing; transcript={messages:#?}"));
-    assert_eq!(receipt["session_id"], caused.session_id.as_str());
-    assert_eq!(receipt["tool_call_id"], row.tool_call_id.as_str());
-    assert_eq!(receipt["await_mode"], "background");
-    wait_for_message_containing(
-        &live,
-        request_id,
-        session_id,
-        &completion_marker(&row.tool_call_id, AGENT_NEW_TOOL_NAME),
-        Duration::from_secs(60),
-    )
-    .await;
-    let wake =
-        wait_for_background_wake(&live, session_id, request_id, Duration::from_secs(60)).await;
-    let wake_state = wait_for_request_terminal(&live, &wake.request_id).await;
-    assert_eq!(wake_state, "completed");
-
-    let parent_terminal = wait_for_request_terminal(&live, request_id).await;
-    assert_eq!(parent_terminal, "completed");
-
-    agent.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
-    init_live_test_tracing();
-
-    let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("backgrounding live workspace");
-    let child_release = ProcessGate::new(workspace.path()).await;
-    let tool_release = ProcessGate::new(workspace.path()).await;
-    let managed_child_release = ProcessGate::new(workspace.path()).await;
-    let managed_tool_release = ProcessGate::new(workspace.path()).await;
-    let blocked_command = |started: &str, release: &ProcessGate, done: &str| {
-        serde_json::json!({
-            "command": release.command(started, done),
-            "args": [],
-            "timeout_secs": 180
-        })
-    };
-    let child_tool_args = blocked_command(
-        "CHILD_BACKGROUND_STARTED",
-        &child_release,
-        "CHILD_BACKGROUND_DONE",
-    );
-    let native_tool_args = blocked_command(
-        "NATIVE_BACKGROUND_STARTED",
-        &tool_release,
-        "NATIVE_BACKGROUND_DONE",
-    );
-    let managed_child_tool_args = blocked_command(
-        "CHILD_MANAGED_STARTED",
-        &managed_child_release,
-        "CHILD_MANAGED_DONE",
-    );
-    let managed_native_tool_args = blocked_command(
-        "NATIVE_MANAGED_STARTED",
-        &managed_tool_release,
-        "NATIVE_MANAGED_DONE",
-    );
-
-    let parent_system_prompt = "Follow the user's requested tool and arguments. Do not await a background job unless the user explicitly requests wait_process. After the requested tool returns, acknowledge briefly and call no other tool. When a background completion notification arrives, acknowledge it without calling tools.";
-    let child_system_prompt = format!(
-        r#"You are the deterministic background worker in an integration test.
-When the latest request is exactly RUN_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {child_tool_args}
-Wait for that foreground tool call to finish, then reply exactly CHILD_BACKGROUND_DONE. Do not call any other tool.
-When the latest request is exactly RUN_MANAGED_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {managed_child_tool_args}
-Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_STARTED CHILD_MANAGED_DONE. Do not call any other tool.
-If you receive a message STEERING_NOTE, do not call any tool for it; append STEERING_ACK to your final reply."#
-    );
-
-    let db = trial_store("backgrounding-live-standard-path").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let node_did = identity.did().to_string();
-    let profile_id = format!("{node_did}:orchestrator-inference");
-    let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: "Orchestrator",
-                inference_profile_id: &profile_id,
-                system_prompt: parent_system_prompt,
-                description: None,
-                default_for_node: true,
-            },
-        )
-        .await;
-    let background_worker_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: BACKGROUND_WORKER_AGENT_NAME,
-                inference_profile_id: &profile_id,
-                system_prompt: &child_system_prompt,
-                description: Some("Runs a deliberately blocked background integration-test job."),
-                default_for_node: false,
-            },
-        )
-        .await;
-    configure_standard_backgrounding_tools(
-        &db,
-        &node_did,
-        &orchestrator_agent_did,
-        &background_worker_agent_did,
-        workspace.path(),
-    )
-    .await;
-
-    gents_inference::backends::registry::probe_and_promote_enabled_backends(&db.node).await;
-    let loaded_agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
-            tool_ceiling: ToolCeiling::readwrite(workspace.path()).with_command_timeout_secs(180),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    let agent = boot_loaded_document_agent(&db, loaded_agent).await;
-    let agent_request_id = "req-live-standard-background-agent";
-    let agent_session_id = "session-live-standard-background-agent";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        agent_request_id,
-        agent_session_id,
-        "RUN_BACKGROUND_AGENT: invoke agent_new now for background-worker with prompt RUN_CHILD_BACKGROUND_JOB. Do not answer until its running receipt arrives.",
-    )
-    .await;
-
-    let session_row = wait_for_background_tool_call(
-        &live,
-        agent_request_id,
-        agent_session_id,
-        AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(180),
-    )
-    .await;
-    let parent_state = wait_for_request_terminal(&live, agent_request_id).await;
-    assert_eq!(parent_state, "completed");
-    let parent_answer = wait_for_assistant_answer(&live, agent_request_id, STALL_CEILING).await;
-    assert!(
-        !parent_answer.trim().is_empty(),
-        "parent did not persist a reply after the agent_new receipt: {parent_answer:?}"
-    );
-    let caused = wait_for_caused_request(&live, agent_request_id, Duration::from_secs(60))
-        .await
-        .expect("agent_new must cause a request");
-    assert_eq!(caused.agent_did, background_worker_agent_did.as_str());
-    assert_eq!(
-        caused.caused_by_parent_tool_call_id.as_deref(),
-        Some(session_row.tool_call_id.as_str())
-    );
-    let caused_state = caused
-        .lifecycle_state
-        .as_ref()
-        .expect("caused request lifecycle")
-        .as_str()
-        .to_owned();
-    assert!(
-        !is_terminal(&caused_state),
-        "parent blocked on the started session; it was already {caused_state}"
-    );
-    assert!(
-        fetch_runtime_snapshot(&db.node, &node_did)
-            .await
-            .is_some_and(|snapshot| snapshot.process_state == "ready"),
-        "runtime must remain ready while the started session runs; caused={caused:?}"
-    );
-    let running_row = fetch_tool_call(
-        &live,
-        agent_request_id,
-        agent_session_id,
-        &session_row.tool_call_id,
-    )
-    .await
-    .expect("agent_new row after parent completion");
-    assert_eq!(
-        running_row.lifecycle_state, "running",
-        "the agent_new row must stay running until its caused request terminalizes"
-    );
-    let messages = load_session_messages(&live, agent_request_id, agent_session_id).await;
-    let receipt = session_receipt(&messages, &caused.request_id)
-        .unwrap_or_else(|| panic!("agent_new receipt missing; transcript={messages:#?}"));
-    assert_eq!(receipt["status"], "running");
-    assert_eq!(receipt["session_id"], caused.session_id.as_str());
-
-    child_release.release();
-    let caused_terminal = wait_for_request_terminal(&live, &caused.request_id).await;
-    assert_eq!(caused_terminal, "completed");
-
-    let caused_answer = terminal_assistant_answer(&live, &caused.request_id).await;
-    assert!(
-        !caused_answer.trim().is_empty(),
-        "completed session lacks its selected canonical terminal output: {caused_answer:?}"
-    );
-    wait_for_tool_call_state(
-        &live,
-        agent_request_id,
-        agent_session_id,
-        &session_row.tool_call_id,
-        "completed",
-        Duration::from_secs(60),
-    )
-    .await;
-    wait_for_completion_notification(&live, &session_row.doc_id, Duration::from_secs(60)).await;
-    assert_wake_observed(&live, agent_session_id, agent_request_id).await;
-    let tool_request_id = "req-live-standard-background-tool";
-    let tool_session_id = "session-live-standard-background-tool";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        tool_request_id,
-        tool_session_id,
-        &format!("Call spawn_process with tool_name bash_unrestricted and args {native_tool_args}. After its running receipt, acknowledge briefly without waiting or calling other tools."),
-    )
-    .await;
-
-    let background_tool = wait_for_background_tool_call(
-        &live,
-        tool_request_id,
-        tool_session_id,
-        "bash_unrestricted",
-        Duration::from_secs(180),
-    )
-    .await;
-    assert!(
-        background_tool.child_request_id.is_none(),
-        "native background tool must use the childless lane"
-    );
-    let tool_parent_state = wait_for_request_terminal(&live, tool_request_id).await;
-    assert_eq!(tool_parent_state, "completed");
-    let tool_parent_answer = wait_for_assistant_answer(&live, tool_request_id, STALL_CEILING).await;
-    assert!(
-        !tool_parent_answer.trim().is_empty(),
-        "parent did not persist a reply after the background process receipt: {tool_parent_answer:?}"
-    );
-    let still_running = fetch_tool_call(
-        &live,
-        tool_request_id,
-        tool_session_id,
-        &background_tool.tool_call_id,
-    )
-    .await
-    .expect("background tool after parent completion");
-    assert_eq!(
-        still_running.lifecycle_state, "running",
-        "parent blocked on the native background tool"
-    );
-
-    tool_release.release();
-    let completed_tool = wait_for_tool_call_state(
-        &live,
-        tool_request_id,
-        tool_session_id,
-        &background_tool.tool_call_id,
-        "completed",
-        Duration::from_secs(60),
-    )
-    .await;
-    let tool_result = completed_tool.result.as_deref().unwrap_or_default();
-    assert!(
-        tool_result.contains("NATIVE_BACKGROUND_STARTED")
-            && tool_result.contains("NATIVE_BACKGROUND_DONE"),
-        "native background result was not durably persisted: {tool_result:?}"
-    );
-    wait_for_completion_notification(&live, &background_tool.doc_id, Duration::from_secs(60)).await;
-    assert_wake_observed(&live, tool_session_id, tool_request_id).await;
-
-    assert!(!managed_child_release.is_released());
-    let managed_agent_session_id = "session-live-managed-background-agent";
-    let managed_create_request_id = "req-live-managed-background-agent-create";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_create_request_id,
-        managed_agent_session_id,
-        "MANAGE_BACKGROUND_AGENT_CREATE: Call agent_new exactly once now with agent background-worker and prompt RUN_MANAGED_CHILD_BACKGROUND_JOB. Do not call any other tool.",
-    )
-    .await;
-    let managed_row = wait_for_background_tool_call(
-        &live,
-        managed_create_request_id,
-        managed_agent_session_id,
-        AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_create_request_id).await,
-        "completed"
-    );
-    let managed_caused =
-        wait_for_caused_request(&live, managed_create_request_id, Duration::from_secs(60))
-            .await
-            .expect("managed agent_new must cause a request");
-    wait_for_model_tool_call(
-        &live,
-        &managed_caused.request_id,
-        &managed_caused.session_id,
-        "bash_unrestricted",
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_started_marker(&live, "CHILD_MANAGED_STARTED", Duration::from_secs(120)).await;
-
-    let managed_list_request_id = "req-live-managed-background-agent-list";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_list_request_id,
-        managed_agent_session_id,
-        "MANAGE_BACKGROUND_AGENT_LIST: Call list_processes exactly once now. Do not call any other tool.",
-    )
-    .await;
-    wait_for_tool_result_containing(
-        &live,
-        managed_list_request_id,
-        managed_agent_session_id,
-        &[managed_row.tool_call_id.as_str(), AGENT_NEW_TOOL_NAME],
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_list_request_id).await,
-        "completed"
-    );
-
-    let managed_state = fetch_request_lifecycle(&live, &managed_caused.request_id)
-        .await
-        .expect("managed caused lifecycle");
-    assert!(
-        !is_terminal(&managed_state),
-        "the started session finished ({managed_state}) before it could be steered: the live model did not run the blocking command"
-    );
-    let managed_message_request_id = "req-live-managed-background-agent-message";
-    let managed_message_prompt = format!(
-        "MANAGE_BACKGROUND_AGENT_MESSAGE: Call agent_message exactly once now with session_id {:?} and message \"STEERING_NOTE\". Do not call any other tool.",
-        managed_caused.session_id
-    );
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_message_request_id,
-        managed_agent_session_id,
-        &managed_message_prompt,
-    )
-    .await;
-    let message_row = wait_for_background_tool_call(
-        &live,
-        managed_message_request_id,
-        managed_agent_session_id,
-        AGENT_MESSAGE_TOOL_NAME,
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_message_request_id).await,
-        "completed"
-    );
-    let messages =
-        load_session_messages(&live, managed_message_request_id, managed_agent_session_id).await;
-    let message_receipt = session_receipts(&messages)
-        .into_iter()
-        .find(|receipt| receipt["tool_call_id"] == message_row.tool_call_id.as_str())
-        .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
-    assert_eq!(
-        message_receipt["session_id"],
-        managed_caused.session_id.as_str()
-    );
-    assert_eq!(
-        message_receipt["delivery"], "queue",
-        "a message to a busy started session must be queued behind its active turn"
-    );
-    assert!(
-        !is_terminal(
-            &fetch_request_lifecycle(&live, &managed_caused.request_id)
-                .await
-                .expect("managed caused lifecycle")
-        ),
-        "agent_message must have been exercised against a live session"
-    );
-    assert_eq!(
-        fetch_tool_call(
-            &live,
-            managed_create_request_id,
-            managed_agent_session_id,
-            &managed_row.tool_call_id,
-        )
-        .await
-        .expect("managed agent_new row")
-        .lifecycle_state,
-        "running"
-    );
-
-    managed_child_release.release();
-    assert_eq!(
-        wait_for_request_terminal(&live, &managed_caused.request_id).await,
-        "completed"
-    );
-    let managed_answer = terminal_assistant_answer(&live, &managed_caused.request_id).await;
-    assert!(
-        !managed_answer.trim().is_empty(),
-        "managed session lacks its terminal output: {managed_answer:?}"
-    );
-
-    wait_for_tool_call_state(
-        &live,
-        managed_create_request_id,
-        managed_agent_session_id,
-        &managed_row.tool_call_id,
-        "completed",
-        Duration::from_secs(60),
-    )
-    .await;
-    wait_for_tool_call_settled(
-        &live,
-        managed_message_request_id,
-        managed_agent_session_id,
-        &message_row.tool_call_id,
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_completion_notification(&live, &managed_row.doc_id, Duration::from_secs(60)).await;
-    wait_for_completion_notification(&live, &message_row.doc_id, Duration::from_secs(60)).await;
-
-    let managed_tool_spawn_prompt = format!(
-        "MANAGE_BACKGROUND_TOOL_SPAWN: Call spawn_process exactly once now with tool_name bash_unrestricted and args exactly {managed_native_tool_args}. Do not call any other tool."
-    );
-    let managed_tool_request_id = "req-live-managed-background-tool-spawn";
-    let managed_tool_session_id = "session-live-managed-background-tool";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_tool_request_id,
-        managed_tool_session_id,
-        &managed_tool_spawn_prompt,
-    )
-    .await;
-
-    let managed_tool = wait_for_background_tool_call(
-        &live,
-        managed_tool_request_id,
-        managed_tool_session_id,
-        "bash_unrestricted",
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_tool_request_id,).await,
-        "completed"
-    );
-    let managed_process_handle = managed_tool.tool_call_id.clone();
-
-    let managed_tool_list_request_id = "req-live-managed-background-tool-list";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_tool_list_request_id,
-        managed_tool_session_id,
-        "MANAGE_BACKGROUND_TOOL_LIST: Call list_processes exactly once now. Do not call any other tool.",
-    )
-    .await;
-    wait_for_tool_result_containing(
-        &live,
-        managed_tool_list_request_id,
-        managed_tool_session_id,
-        &[managed_process_handle.as_str(), "bash_unrestricted"],
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_tool_list_request_id).await,
-        "completed"
-    );
-
-    let managed_tool_read_request_id = "req-live-managed-background-tool-read-running";
-    let managed_tool_read_prompt = format!(
-        "MANAGE_BACKGROUND_TOOL_READ_RUNNING: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call wait_process or any other tool."
-    );
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_tool_read_request_id,
-        managed_tool_session_id,
-        &managed_tool_read_prompt,
-    )
-    .await;
-    wait_for_model_tool_call(
-        &live,
-        managed_tool_read_request_id,
-        managed_tool_session_id,
-        "read_process",
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_tool_result_containing(
-        &live,
-        managed_tool_read_request_id,
-        managed_tool_session_id,
-        &["NATIVE_MANAGED_STARTED"],
-        Duration::from_secs(60),
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, managed_tool_read_request_id).await,
-        "completed"
-    );
-
-    let managed_tool_wait_request_id = "req-live-managed-background-tool-wait";
-    let managed_tool_wait_prompt = format!(
-        "MANAGE_BACKGROUND_TOOL_WAIT: Call wait_process exactly once now with tool_call_id {managed_process_handle:?}. Do not call any other tool."
-    );
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_tool_wait_request_id,
-        managed_tool_session_id,
-        &managed_tool_wait_prompt,
-    )
-    .await;
-    wait_for_model_tool_call(
-        &live,
-        managed_tool_wait_request_id,
-        managed_tool_session_id,
-        "wait_process",
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        fetch_tool_call(
-            &live,
-            managed_tool_request_id,
-            managed_tool_session_id,
-            &managed_tool.tool_call_id,
-        )
-        .await
-        .expect("managed native tool during read_process")
-        .lifecycle_state,
-        "running",
-        "read_process must observe output before the native process exits"
-    );
-    managed_tool_release.release();
-
-    let managed_tool_wait_state =
-        wait_for_request_terminal(&live, managed_tool_wait_request_id).await;
-    assert_eq!(managed_tool_wait_state, "completed");
-
-    let managed_tool_terminal_read_request_id = "req-live-managed-background-tool-read-terminal";
-    let managed_tool_terminal_read_prompt = format!(
-        "MANAGE_BACKGROUND_TOOL_READ_TERMINAL: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call any other tool."
-    );
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        managed_tool_terminal_read_request_id,
-        managed_tool_session_id,
-        &managed_tool_terminal_read_prompt,
-    )
-    .await;
-    wait_for_model_tool_call(
-        &live,
-        managed_tool_terminal_read_request_id,
-        managed_tool_session_id,
-        "read_process",
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_tool_result_containing(
-        &live,
-        managed_tool_terminal_read_request_id,
-        managed_tool_session_id,
-        &["NATIVE_MANAGED_DONE"],
-        Duration::from_secs(60),
-    )
-    .await;
-    let managed_tool_state =
-        wait_for_request_terminal(&live, managed_tool_terminal_read_request_id).await;
-    assert_eq!(managed_tool_state, "completed");
-    let managed_tool_answer =
-        wait_for_assistant_answer(&live, managed_tool_terminal_read_request_id, STALL_CEILING)
-            .await;
-    assert!(
-        !managed_tool_answer.trim().is_empty(),
-        "the inspection request did not persist a reply: {managed_tool_answer:?}"
-    );
-
-    agent.shutdown().await;
-    Ok(())
-}
-
-const ALPHA_AGENT_NAME: &str = "live-alpha";
-const BETA_AGENT_NAME: &str = "live-beta";
-const BLOCKER_AGENT_NAME: &str = "live-blocker";
-const RELAY_AGENT_NAME: &str = "live-relay";
 
 fn code_word(prefix: &str) -> String {
     format!(
@@ -820,645 +118,36 @@ reply with only {second}. Never call any tool."
     )
 }
 
-const DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration \
-test. Follow the latest user instruction exactly, calling only the tools it names. Never answer \
-a code-word question yourself. When background completion notifications arrive, do not call any \
-tool: reply with one short sentence that repeats, verbatim, every code word reported in all the \
-notifications you have received so far in this conversation.";
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_fan_out_list_and_continue() -> Result<()> {
-    init_live_test_tracing();
-    let target = live_target().await;
-
-    let alpha_first = code_word("ALPHA");
-    let alpha_second = code_word("ALPHATWO");
-    let beta_first = code_word("BETA");
-
-    let db = trial_store("session-message-live-fan-out").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let node_did = identity.did().to_string();
-    let profile_id = format!("{node_did}:orchestrator-inference");
-    let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: "Orchestrator",
-                inference_profile_id: &profile_id,
-                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-                description: None,
-                default_for_node: true,
-            },
-        )
-        .await;
-    let alpha_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: ALPHA_AGENT_NAME,
-                inference_profile_id: &profile_id,
-                system_prompt: &code_worker_prompt("alpha", &alpha_first, &alpha_second),
-                description: Some("Knows a code word."),
-                default_for_node: false,
-            },
-        )
-        .await;
-    let beta_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: BETA_AGENT_NAME,
-                inference_profile_id: &profile_id,
-                system_prompt: &code_worker_prompt("beta", &beta_first, &code_word("BETATWO")),
-                description: Some("Knows a code word."),
-                default_for_node: false,
-            },
-        )
-        .await;
-    authorize_session_targets(
-        &db,
-        &node_did,
-        &orchestrator_agent_did,
-        vec![
-            agent_target(
-                &node_did,
-                "alpha",
-                node_did.clone(),
-                alpha_agent_did.as_str(),
-            ),
-            agent_target(&node_did, "beta", node_did.clone(), beta_agent_did.as_str()),
-        ],
+fn blocked_worker_prompt(
+    name: &str,
+    trigger: &str,
+    args: &serde_json::Value,
+    code: &str,
+) -> String {
+    format!(
+        "You are agent {name} in an integration test. Your code word is {code}. When the latest \
+request is exactly {trigger}, call bash_unrestricted exactly once with these arguments: {args}. \
+Wait for that command to finish, then reply with only your code word. If the latest request \
+begins STEER:, do not call any tool: reply exactly STEERED followed by the text after STEER:. \
+Never call any other tool."
     )
-    .await;
-    let agent = boot_document_agent(&db, identity).await?;
-
-    let session_id = "session-live-fan-out";
-    let fan_out_request_id = "req-live-fan-out";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        fan_out_request_id,
-        session_id,
-        "Call agent_new twice in this turn: once with agent \"alpha\" and prompt \"What is your code word?\", and once with agent \"beta\" and prompt \"What is your code word?\". After both running receipts arrive, reply exactly STARTED_BOTH and call no other tool.",
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&live, fan_out_request_id).await,
-        "completed"
-    );
-    let caused =
-        wait_for_caused_requests(&live, fan_out_request_id, 2, Duration::from_secs(60)).await;
-    let rows = session_tool_rows(&live, session_id, AGENT_NEW_TOOL_NAME).await;
-    assert_eq!(
-        caused.len(),
-        2,
-        "each agent_new call must cause exactly one request: {caused:?}"
-    );
-    let alpha = caused
-        .iter()
-        .find(|row| row.agent_did == alpha_agent_did.as_str())
-        .unwrap_or_else(|| panic!("no alpha session was started; caused={caused:?}"))
-        .clone();
-    let beta = caused
-        .iter()
-        .find(|row| row.agent_did == beta_agent_did.as_str())
-        .unwrap_or_else(|| panic!("no beta session was started; caused={caused:?}"))
-        .clone();
-    for started in [&alpha, &beta] {
-        assert_eq!(started.request_hop, Some(1));
-        // agent_new admits the child as a client request of the calling Agent.
-        assert_eq!(started.admission_kind.as_deref(), Some("client"));
-        assert_ne!(started.session_id, session_id);
-        let row = rows
-            .iter()
-            .find(|row| {
-                Some(row.tool_call_id.as_str()) == started.caused_by_parent_tool_call_id.as_deref()
-            })
-            .unwrap_or_else(|| panic!("caused request names no agent_new row: {started:?}"));
-        assert_eq!(row.await_mode.as_deref(), Some("background"));
-    }
-    assert_ne!(alpha.session_id, beta.session_id);
-    for started in [&alpha, &beta] {
-        assert_eq!(
-            wait_for_request_terminal(&live, &started.request_id).await,
-            "completed"
-        );
-        wait_for_completion_notification(
-            &live,
-            &rows
-                .iter()
-                .find(|row| {
-                    Some(row.tool_call_id.as_str())
-                        == started.caused_by_parent_tool_call_id.as_deref()
-                })
-                .expect("the child is linked to its tool")
-                .doc_id,
-            Duration::from_secs(60),
-        )
-        .await;
-    }
-    wait_for_session_quiescent(&live, session_id, Duration::from_secs(240)).await;
-    let delivered = rows
-        .iter()
-        .map(|row| row.doc_id.as_str())
-        .collect::<Vec<_>>();
-    let wakes = assert_deliveries_bound_to_completed_wakes(&live, session_id, &delivered).await;
-    tracing::info!(
-        parent_session = session_id,
-        alpha_session = %alpha.session_id,
-        beta_session = %beta.session_id,
-        wakes = ?wakes,
-        "[live-fan-out] each result reached the parent through a completed wake"
-    );
-    let list_request_id = "req-live-fan-out-list";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        list_request_id,
-        session_id,
-        "Call agent_list exactly once and agent_session_list exactly once now, then reply exactly LISTED and call no other tool.",
-    )
-    .await;
-    let listed = wait_for_json_tool_result(
-        &live,
-        list_request_id,
-        session_id,
-        |value| value.get("sessions").is_some(),
-        Duration::from_secs(240),
-    )
-    .await;
-    for started in [&alpha, &beta] {
-        let entry = listed["sessions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|entry| entry["session_id"] == started.session_id.as_str())
-            .unwrap_or_else(|| {
-                panic!(
-                    "agent_session_list omitted started session {}: {listed}",
-                    started.session_id
-                )
-            });
-        assert_eq!(entry["relationship"], "started_by_you");
-        assert_eq!(entry["node_did"], node_did.as_str());
-        assert_eq!(entry["can_message"], true);
-        assert_eq!(entry["can_interrupt"], true);
-        assert_eq!(entry["status"], "idle");
-    }
-    let targets = wait_for_json_tool_result(
-        &live,
-        list_request_id,
-        session_id,
-        |value| value.get("agents").is_some(),
-        Duration::from_secs(240),
-    )
-    .await;
-    let listed_agents = targets["agents"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry["agent"].as_str())
-        .collect::<RapidHashSet<_>>();
-    assert_eq!(listed_agents, RapidHashSet::from_iter(["alpha", "beta"]));
-    assert_eq!(
-        wait_for_request_terminal(&live, list_request_id).await,
-        "completed"
-    );
-    wait_for_session_quiescent(&live, session_id, Duration::from_secs(120)).await;
-    let message_request_id = "req-live-fan-out-message";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        message_request_id,
-        session_id,
-        &format!(
-            "Call agent_message exactly once now with session_id {:?} and message \"What is your second code word?\". After its receipt arrives, reply exactly MESSAGED and call no other tool.",
-            alpha.session_id
-        ),
-    )
-    .await;
-    let message_row = wait_for_background_tool_call(
-        &live,
-        message_request_id,
-        session_id,
-        AGENT_MESSAGE_TOOL_NAME,
-        Duration::from_secs(240),
-    )
-    .await;
-    let continued = wait_for_caused_request(&live, message_request_id, Duration::from_secs(120))
-        .await
-        .expect("agent_message must cause a request in the idle session");
-    assert_eq!(continued.session_id, alpha.session_id);
-    assert_eq!(continued.agent_did, alpha_agent_did.as_str());
-    assert_eq!(
-        continued.caused_by_parent_tool_call_id.as_deref(),
-        Some(message_row.tool_call_id.as_str())
-    );
-    let messages = load_session_messages(&live, message_request_id, session_id).await;
-    let receipt = session_receipt(&messages, &continued.request_id)
-        .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
-    assert_eq!(receipt["delivery"], "request");
-    assert_eq!(
-        wait_for_request_terminal(&live, &continued.request_id).await,
-        "completed"
-    );
-    wait_for_completion_notification(&live, &message_row.doc_id, Duration::from_secs(60)).await;
-    let continued_wake = wait_for_completion_wake(
-        &live,
-        session_id,
-        message_request_id,
-        Duration::from_secs(300),
-    )
-    .await;
-    assert_eq!(
-        continued_wake.lifecycle_state.as_deref(),
-        Some("completed"),
-        "the wake for the agent_message completion must run: {continued_wake:?}"
-    );
-    let continued_answer = terminal_assistant_answer(&live, &continued_wake.request_id).await;
-    assert!(
-        !continued_answer.trim().is_empty(),
-        "the completion wake must persist a reply"
-    );
-    tracing::info!(
-        continued_request = %continued.request_id,
-        message_tool_call = %message_row.tool_call_id,
-        wake = %continued_wake.request_id,
-        "[live-fan-out] agent_message continued the idle session and its result reached the parent"
-    );
-
-    agent.shutdown().await;
-    Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
-    init_live_test_tracing();
-    let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("interrupt live workspace");
-    let release = ProcessGate::new(workspace.path()).await;
-    let blocked_args = blocked_bash_args("BLOCKER_STARTED", &release, "BLOCKER_DONE");
-
-    let db = trial_store("session-message-live-interrupt").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let node_did = identity.did().to_string();
-    let profile_id = format!("{node_did}:orchestrator-inference");
-    let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: "Orchestrator",
-                inference_profile_id: &profile_id,
-                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-                description: None,
-                default_for_node: true,
-            },
-        )
-        .await;
-    let blocker_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: BLOCKER_AGENT_NAME,
-                inference_profile_id: &profile_id,
-                system_prompt: &format!(
-            "You are a worker in an integration test. When asked to run the blocked job, call \
-bash_unrestricted exactly once with these arguments: {blocked_args}. Wait for it to finish, then \
-reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
-        ),
-                description: Some("Runs a blocked job."),
-                default_for_node: false,
-            },
-        )
-        .await;
-    authorize_session_targets(
-        &db,
-        &node_did,
-        &orchestrator_agent_did,
-        vec![agent_target(
-            &node_did,
-            "blocker",
-            node_did.clone(),
-            blocker_agent_did.as_str(),
-        )],
-    )
-    .await;
-    configure_bash_agent_tools(
-        &db,
-        &node_did,
-        blocker_agent_did.as_str(),
-        workspace.path(),
-        Vec::new(),
-    )
-    .await;
-    let agent = boot_workspace_agent(&db, identity, workspace.path()).await?;
-
-    assert!(!release.is_released());
-    let spawner_session = "session-live-interrupt-spawner";
-    let start_request_id = "req-live-interrupt-start";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        start_request_id,
-        spawner_session,
-        "Call agent_new exactly once now with agent \"blocker\" and prompt \"Run the blocked job.\". After its running receipt arrives, reply exactly BLOCKER_STARTED and call no other tool.",
-    )
-    .await;
-    let start_row = wait_for_background_tool_call(
-        &live,
-        start_request_id,
-        spawner_session,
-        AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(240),
-    )
-    .await;
-    let worker = wait_for_caused_request(&live, start_request_id, Duration::from_secs(120))
-        .await
-        .expect("agent_new must start the blocker");
-    assert_eq!(worker.agent_did, blocker_agent_did.as_str());
-    wait_for_model_tool_call(
-        &live,
-        &worker.request_id,
-        &worker.session_id,
-        "bash_unrestricted",
-        Duration::from_secs(240),
-    )
-    .await;
-    wait_for_started_marker(&live, "BLOCKER_STARTED", Duration::from_secs(120)).await;
-    assert_eq!(
-        wait_for_request_terminal(&live, start_request_id).await,
-        "completed"
-    );
-    let other_session = "session-live-interrupt-other";
-    let refused_request_id = "req-live-interrupt-refused";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        refused_request_id,
-        other_session,
-        &format!(
-            "Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly INTERRUPT_ATTEMPTED and call no other tool.",
-            worker.session_id
-        ),
-    )
-    .await;
-    let refusal = wait_for_json_tool_result(
-        &live,
-        refused_request_id,
-        other_session,
-        |value| value["tool_name"] == AGENT_INTERRUPT_TOOL_NAME,
-        Duration::from_secs(240),
-    )
-    .await;
-    assert_eq!(refusal["ok"], false, "non-spawner interrupt: {refusal}");
-    assert_eq!(refusal["code"], "interrupt_not_permitted");
-    assert_eq!(
-        wait_for_request_terminal(&live, refused_request_id).await,
-        "completed"
-    );
-    let still = fetch_request_lifecycle(&live, &worker.request_id)
-        .await
-        .expect("worker lifecycle");
-    assert!(
-        !is_terminal(&still),
-        "a refused interrupt must leave the worker's turn running; it is {still}"
-    );
-    let interrupt_request_id = "req-live-interrupt-spawner";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        interrupt_request_id,
-        spawner_session,
-        &format!(
-            "Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly INTERRUPT_SENT and call no other tool.",
-            worker.session_id
-        ),
-    )
-    .await;
-    let accepted = wait_for_json_tool_result(
-        &live,
-        interrupt_request_id,
-        spawner_session,
-        |value| {
-            value["session_id"] == worker.session_id.as_str()
-                && matches!(value["status"].as_str(), Some("interrupting" | "idle"))
-        },
-        Duration::from_secs(240),
-    )
-    .await;
-    assert_eq!(accepted["ok"], true, "spawner interrupt: {accepted}");
-    assert_eq!(accepted["status"], "interrupting");
-    assert_eq!(accepted["request_id"], worker.request_id.as_str());
-    let worker_terminal = wait_for_request_terminal(&live, &worker.request_id).await;
-    assert_eq!(worker_terminal, "interrupted");
-    assert!(
-        !release.is_released(),
-        "the worker must have been interrupted while still blocked"
-    );
-    release.release();
-    let settled = wait_for_tool_call_settled(
-        &live,
-        start_request_id,
-        spawner_session,
-        &start_row.tool_call_id,
-        Duration::from_secs(120),
-    )
-    .await;
-    wait_for_completion_notification(&live, &start_row.doc_id, Duration::from_secs(120)).await;
-    let wake = wait_for_completion_wake(
-        &live,
-        spawner_session,
-        start_request_id,
-        Duration::from_secs(240),
-    )
-    .await;
-    assert_eq!(
-        wake.lifecycle_state.as_deref(),
-        Some("completed"),
-        "the interrupted result must wake the spawner: {wake:?}"
-    );
-    tracing::info!(
-        worker_session = %worker.session_id,
-        worker_request = %worker.request_id,
-        agent_new_row = %start_row.tool_call_id,
-        row_state = %settled.lifecycle_state,
-        wake = %wake.request_id,
-        "[live-interrupt] non-spawner refused; spawner interrupted; notification delivered and wake completed"
-    );
-
-    wait_for_session_quiescent(&live, spawner_session, Duration::from_secs(240)).await;
-    agent.shutdown().await;
-    Ok(())
+fn blocked_bash_args_with_timeout(
+    started: &str,
+    release: &ProcessGate,
+    done: &str,
+    timeout_secs: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "command": release.command(started, done),
+        "args": [],
+        "timeout_secs": timeout_secs
+    })
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_hop_bound_stops_chain() -> Result<()> {
-    init_live_test_tracing();
-    let target = live_target().await;
-
-    let db = trial_store("session-message-live-hop").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let node_did = identity.did().to_string();
-    let profile_id = format!("{node_did}:orchestrator-inference");
-    let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = live
-        .agent(
-            &target,
-            LiveAgentSpec {
-                display_name: "Orchestrator",
-                inference_profile_id: &profile_id,
-                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-                description: None,
-                default_for_node: true,
-            },
-        )
-        .await;
-    let relay_agent_did = live.agent(&target, LiveAgentSpec { display_name: RELAY_AGENT_NAME, inference_profile_id: &profile_id, system_prompt: "You are a relay in an integration test. For any request: first call agent_session_list exactly \
-once. Then call agent_new exactly once with agent \"relay\" and prompt \"relay onward\". Whatever \
-agent_new returns, including an error, then reply exactly RELAY_DONE and call no other tool.", description: Some("Relays work onward."), default_for_node: false, })
-    .await;
-    let relay = || {
-        agent_target(
-            &node_did,
-            "relay",
-            node_did.clone(),
-            relay_agent_did.as_str(),
-        )
-    };
-    authorize_session_targets(&db, &node_did, &orchestrator_agent_did, vec![relay()]).await;
-    authorize_session_targets(&db, &node_did, relay_agent_did.as_str(), vec![relay()]).await;
-    let mut node_config = live.node_config().await;
-    node_config.max_request_hop = Some(1);
-    live.apply(
-        "test.live_session_message.hop_bound",
-        vec![(
-            Collection::Node,
-            serde_json::to_value(node_config).expect("serialize node_config"),
-        )],
-    )
-    .await;
-    let agent = boot_document_agent(&db, identity).await?;
-
-    let root_session = "session-live-hop-root";
-    let root_request_id = "req-live-hop-root";
-    create_runtime_request(
-        &live,
-        &node_did,
-        &orchestrator_agent_did,
-        root_request_id,
-        root_session,
-        "Call agent_new exactly once now with agent \"relay\" and prompt \"start the relay\". After its running receipt arrives, reply exactly RELAY_STARTED and call no other tool.",
-    )
-    .await;
-    let root_row = wait_for_background_tool_call(
-        &live,
-        root_request_id,
-        root_session,
-        AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(240),
-    )
-    .await;
-    let first = wait_for_caused_request(&live, root_request_id, Duration::from_secs(120))
-        .await
-        .expect("the root must start the relay");
-    assert_eq!(first.agent_did, relay_agent_did.as_str());
-    assert_eq!(first.request_hop, Some(1));
-    assert_eq!(
-        wait_for_request_terminal(&live, &first.request_id).await,
-        "completed",
-        "the relay must finish its turn after its onward start is refused"
-    );
-    let refused = wait_for_json_tool_result(
-        &live,
-        &first.request_id,
-        &first.session_id,
-        |value| value["tool_name"] == AGENT_NEW_TOOL_NAME,
-        STALL_CEILING,
-    )
-    .await;
-    assert_eq!(refused["ok"], false);
-    assert_eq!(refused["code"], "request_hop_exceeded");
-    assert_eq!(refused["hop"], 2);
-    assert_eq!(refused["max_request_hop"], 1);
-    let caused_by_relay = fetch_caused_requests(&live, &first.request_id).await;
-    assert!(
-        caused_by_relay.is_empty(),
-        "no session may be started beyond the hop bound: {caused_by_relay:?}"
-    );
-    wait_for_completion_notification(&live, &root_row.doc_id, Duration::from_secs(120)).await;
-    let settled = wait_for_tool_call_settled(
-        &live,
-        root_request_id,
-        root_session,
-        &root_row.tool_call_id,
-        Duration::from_secs(60),
-    )
-    .await;
-    assert_eq!(settled.lifecycle_state, "completed");
-    wait_for_session_quiescent(&live, root_session, Duration::from_secs(240)).await;
-    let wakes = session_requests(&live, root_session)
-        .await
-        .into_iter()
-        .filter(SessionRequestRow::is_background_completion_wake)
-        .collect::<Vec<_>>();
-    assert!(
-        !wakes.is_empty(),
-        "the notification must attempt a completion wake"
-    );
-    // `CausalHop.nextHop .returnEdge own = own`: the wake returning the relay's
-    // result keeps the root's hop, so the bound that refused the relay's
-    // onward start admits it.
-    for wake in &wakes {
-        assert_eq!(
-            wake.request_hop,
-            Some(0),
-            "the return wake keeps the root hop: {wake:?}"
-        );
-        assert_eq!(
-            wake.lifecycle_state.as_deref(),
-            Some("completed"),
-            "a return wake within the hop bound runs: {wake:?}"
-        );
-    }
-    let listed = wait_for_json_tool_result(
-        &live,
-        &first.request_id,
-        &first.session_id,
-        |value| value.get("sessions").is_some(),
-        STALL_CEILING,
-    )
-    .await;
-    let started_by = listed["sessions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|entry| entry["session_id"] == root_session)
-        .unwrap_or_else(|| panic!("the relay's agent_session_list omitted its starter: {listed}"));
-    assert_eq!(started_by["relationship"], "started_you");
-    assert_eq!(started_by["can_interrupt"], false);
-    tracing::info!(
-        root_session,
-        relay_session = %first.session_id,
-        relay_request = %first.request_id,
-        root_agent_new = %root_row.tool_call_id,
-        wakes = ?wakes.iter().map(|wake| (&wake.request_id, &wake.lifecycle_state, wake.request_hop, &wake.failure_reason)).collect::<Vec<_>>(),
-        "[live-hop] chain stopped at the bound; notification delivered"
-    );
-
-    agent.shutdown().await;
-    Ok(())
+fn blocked_bash_args(started: &str, release: &ProcessGate, done: &str) -> serde_json::Value {
+    blocked_bash_args_with_timeout(started, release, done, BLOCKED_COMMAND_TIMEOUT_SECS)
 }
 
 struct LiveNode {
@@ -1499,10 +188,6 @@ impl LiveNode {
         }
     }
 
-    fn db(&self) -> &TestStore {
-        &self.db
-    }
-
     async fn agent(
         &self,
         target: &InferenceTarget,
@@ -1528,50 +213,1320 @@ impl LiveNode {
         agent_target(&self.did, name, self.did.clone(), agent_did)
     }
 
-    async fn request(&self, request_id: &str, session_id: &str, content: &str) {
-        create_runtime_request(
-            &self.live,
+    async fn authorize_targets(&self, agent_did: &str, targets: Vec<AgentTargetDocument>) {
+        self.configure_tools(agent_did, None, false, targets).await;
+    }
+
+    async fn configure_bash_tools(
+        &self,
+        agent_did: &str,
+        workspace: &Path,
+        background_enabled: bool,
+        targets: Vec<AgentTargetDocument>,
+    ) {
+        self.configure_tools(agent_did, Some(workspace), background_enabled, targets)
+            .await;
+    }
+
+    async fn configure_tools(
+        &self,
+        agent_did: &str,
+        workspace: Option<&Path>,
+        background_enabled: bool,
+        targets: Vec<AgentTargetDocument>,
+    ) {
+        let agents = (!targets.is_empty()).then(|| AgentTools {
+            target_ids: targets
+                .iter()
+                .map(|target| target.target_id.clone())
+                .collect(),
+            enabled: Some(true),
+        });
+        let host = workspace.map(|root| HostTools {
+            root: Some(root.display().to_string()),
+            bash: Some(BashTools {
+                mode: BashMode::Unrestricted,
+                background_enabled,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let docs = targets
+            .into_iter()
+            .map(|target| {
+                (
+                    Collection::AgentTarget,
+                    serde_json::to_value(target).expect("serialize session target"),
+                )
+            })
+            .collect();
+        configure_agent_tools(
+            &self.db,
             &self.did,
-            &self.orchestrator,
-            request_id,
-            session_id,
-            content,
+            agent_did,
+            None,
+            Tools {
+                tools_id: format!("{agent_did}-tools"),
+                node_did: self.did.clone(),
+                host,
+                agents,
+                ..Default::default()
+            },
+            docs,
         )
         .await;
     }
 
+    async fn request(&self, request_id: &str, session_id: &str, content: &str) {
+        self.live
+            .request(&self.orchestrator, request_id, session_id, content)
+            .await;
+    }
+
+    async fn boot_meta(&self) -> Result<BootedAgent> {
+        boot_live_agent(&self.db, self.identity.clone()).await
+    }
+
+    async fn boot_workspace(&self, workspace: &Path, timeout_secs: u64) -> Result<BootedAgent> {
+        boot_live_agent_with_ceiling(
+            &self.db,
+            self.identity.clone(),
+            ToolCeiling::readwrite(workspace).with_command_timeout_secs(timeout_secs),
+        )
+        .await
+    }
+
     async fn boot(&self, workspace: &Path) -> Result<BootedAgent> {
-        boot_workspace_agent(&self.db, self.identity.clone(), workspace).await
+        self.boot_workspace(workspace, BLOCKED_COMMAND_TIMEOUT_SECS)
+            .await
     }
 }
 
-fn blocked_worker_prompt(
-    name: &str,
-    trigger: &str,
-    args: &serde_json::Value,
-    code: &str,
-) -> String {
-    format!(
-        "You are agent {name} in an integration test. Your code word is {code}. When the latest \
-request is exactly {trigger}, call bash_unrestricted exactly once with these arguments: {args}. \
-Wait for that command to finish, then reply with only your code word. If the latest request \
-begins STEER:, do not call any tool: reply exactly STEERED followed by the text after STEER:. \
-Never call any other tool."
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_local_create_session() -> Result<()> {
+    let target = live_target().await;
+    let fx = LiveNode::new(
+        "session-message-live-local",
+        &target,
+        ORCHESTRATOR_SYSTEM_PROMPT,
     )
+    .await;
+    let researcher_agent_did = fx
+        .agent(
+            &target,
+            RESEARCHER_AGENT_NAME,
+            "You answer the user's question concisely and factually in one short sentence.",
+            "Researches factual questions and returns a concise factual answer.",
+        )
+        .await;
+    fx.authorize_targets(
+        &fx.orchestrator,
+        vec![AgentTargetDocument {
+            description: Some("Researches factual questions.".to_string()),
+            ..fx.target(RESEARCHER_TARGET_NAME, &researcher_agent_did)
+        }],
+    )
+    .await;
+
+    let agent = fx.boot_meta().await?;
+
+    let request_id = "req-live-local-create-session";
+    let session_id = "session-live-local-create-session";
+    fx.request(
+        request_id,
+        session_id,
+        "Use your research agent to find the capital of France, then tell me the answer.",
+    )
+    .await;
+
+    wait_for_background_tool_call(
+        &fx.live,
+        request_id,
+        session_id,
+        AGENT_NEW_TOOL_NAME,
+        Duration::from_secs(180),
+    )
+    .await;
+    let Some(caused) =
+        wait_for_caused_request(&fx.live, request_id, Duration::from_secs(120)).await
+    else {
+        dump_session_diagnostics(&fx.live, session_id).await;
+        panic!("agent_new must cause an AgentRequest linked to the orchestrator request");
+    };
+    tracing::info!("[live-local] caused request = {caused:?}");
+    assert_eq!(
+        caused.caused_by_parent_request_id.as_deref(),
+        Some(request_id)
+    );
+    let row = fetch_tool_call(
+        &fx.live,
+        request_id,
+        session_id,
+        caused
+            .caused_by_parent_tool_call_id
+            .as_deref()
+            .expect("a caused request names its agent_new call"),
+    )
+    .await
+    .expect("the caused request must name an agent_new call of the orchestrator request");
+    assert_eq!(caused.agent_did, researcher_agent_did.as_str());
+    assert_eq!(caused.node_did, fx.did);
+    // A caused request's requester is the Agent whose tool call caused it.
+    assert_eq!(
+        caused.requester_did.as_deref(),
+        Some(fx.orchestrator.as_str())
+    );
+    assert_eq!(caused.request_hop, Some(1));
+    assert_ne!(
+        caused.session_id, session_id,
+        "agent_new must start a new session"
+    );
+
+    let caused_terminal = wait_for_request_terminal(&fx.live, &caused.request_id).await;
+    assert_eq!(caused_terminal, "completed");
+    let caused_answer =
+        wait_for_assistant_answer(&fx.live, &caused.request_id, STALL_CEILING).await;
+    tracing::info!("[live-local] started session answer = {caused_answer:?}");
+    assert!(
+        !caused_answer.trim().is_empty(),
+        "the started session must produce a non-empty assistant response"
+    );
+    if !caused_answer.to_lowercase().contains("paris") {
+        tracing::warn!("[live-local] SOFT-WARN: answer did not contain 'Paris': {caused_answer:?}");
+    }
+
+    let settled = wait_for_tool_call_state(
+        &fx.live,
+        request_id,
+        session_id,
+        &row.tool_call_id,
+        "completed",
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(
+        settled.child_request_id.as_deref(),
+        Some(caused.request_id.as_str()),
+        "the run timeline must link the agent_new row to the request it caused"
+    );
+    let messages = load_session_messages(&fx.live, request_id, session_id).await;
+    let receipt = session_receipt(&messages, &caused.request_id)
+        .unwrap_or_else(|| panic!("agent_new receipt missing; transcript={messages:#?}"));
+    assert_eq!(receipt["session_id"], caused.session_id.as_str());
+    assert_eq!(receipt["tool_call_id"], row.tool_call_id.as_str());
+    assert_eq!(receipt["await_mode"], "background");
+    wait_for_message_containing(
+        &fx.live,
+        request_id,
+        session_id,
+        &completion_marker(&row.tool_call_id, AGENT_NEW_TOOL_NAME),
+        Duration::from_secs(60),
+    )
+    .await;
+    let wake =
+        wait_for_background_wake(&fx.live, session_id, request_id, Duration::from_secs(60)).await;
+    let wake_state = wait_for_request_terminal(&fx.live, &wake.request_id).await;
+    assert_eq!(wake_state, "completed");
+
+    let parent_terminal = wait_for_request_terminal(&fx.live, request_id).await;
+    assert_eq!(parent_terminal, "completed");
+
+    agent.shutdown().await;
+    Ok(())
 }
 
-const MIDDLE_AGENT_NAME: &str = "live-middle";
-const LEAF_AGENT_NAME: &str = "live-leaf";
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
+    init_live_test_tracing();
+    let target = live_target().await;
+    let workspace = temp_workspace("backgrounding live").await;
+    let child_release = ProcessGate::new(workspace.path()).await;
+    let tool_release = ProcessGate::new(workspace.path()).await;
+    let managed_child_release = ProcessGate::new(workspace.path()).await;
+    let managed_tool_release = ProcessGate::new(workspace.path()).await;
+    let child_tool_args = blocked_bash_args_with_timeout(
+        "CHILD_BACKGROUND_STARTED",
+        &child_release,
+        "CHILD_BACKGROUND_DONE",
+        180,
+    );
+    let native_tool_args = blocked_bash_args_with_timeout(
+        "NATIVE_BACKGROUND_STARTED",
+        &tool_release,
+        "NATIVE_BACKGROUND_DONE",
+        180,
+    );
+    let managed_child_tool_args = blocked_bash_args_with_timeout(
+        "CHILD_MANAGED_STARTED",
+        &managed_child_release,
+        "CHILD_MANAGED_DONE",
+        180,
+    );
+    let managed_native_tool_args = blocked_bash_args_with_timeout(
+        "NATIVE_MANAGED_STARTED",
+        &managed_tool_release,
+        "NATIVE_MANAGED_DONE",
+        180,
+    );
+
+    let parent_system_prompt = "Follow the user's requested tool and arguments. Do not await a background job unless the user explicitly requests wait_process. After the requested tool returns, acknowledge briefly and call no other tool. When a background completion notification arrives, acknowledge it without calling tools.";
+    let child_system_prompt = format!(
+        r#"You are the deterministic background worker in an integration test.
+When the latest request is exactly RUN_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {child_tool_args}
+Wait for that foreground tool call to finish, then reply exactly CHILD_BACKGROUND_DONE. Do not call any other tool.
+When the latest request is exactly RUN_MANAGED_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {managed_child_tool_args}
+Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_STARTED CHILD_MANAGED_DONE. Do not call any other tool.
+If you receive a message STEERING_NOTE, do not call any tool for it; append STEERING_ACK to your final reply."#
+    );
+
+    let fx = LiveNode::new(
+        "backgrounding-live-standard-path",
+        &target,
+        parent_system_prompt,
+    )
+    .await;
+    let background_worker_agent_did = fx
+        .agent(
+            &target,
+            BACKGROUND_WORKER_AGENT_NAME,
+            &child_system_prompt,
+            "Runs a deliberately blocked background integration-test job.",
+        )
+        .await;
+    fx.configure_bash_tools(
+        &fx.orchestrator,
+        workspace.path(),
+        true,
+        vec![AgentTargetDocument {
+            description: Some("Runs a deliberately blocked background job.".to_string()),
+            ..fx.target(BACKGROUND_WORKER_TARGET_NAME, &background_worker_agent_did)
+        }],
+    )
+    .await;
+    fx.configure_bash_tools(
+        &background_worker_agent_did,
+        workspace.path(),
+        false,
+        Vec::new(),
+    )
+    .await;
+
+    gents_inference::backends::registry::probe_and_promote_enabled_backends(&fx.db.node).await;
+    let agent = fx.boot_workspace(workspace.path(), 180).await?;
+
+    let agent_request_id = "req-live-standard-background-agent";
+    let agent_session_id = "session-live-standard-background-agent";
+    fx.request(
+        agent_request_id,
+        agent_session_id,
+        "RUN_BACKGROUND_AGENT: invoke agent_new now for background-worker with prompt RUN_CHILD_BACKGROUND_JOB. Do not answer until its running receipt arrives.",
+    )
+    .await;
+
+    let session_row = wait_for_background_tool_call(
+        &fx.live,
+        agent_request_id,
+        agent_session_id,
+        AGENT_NEW_TOOL_NAME,
+        Duration::from_secs(180),
+    )
+    .await;
+    let parent_state = wait_for_request_terminal(&fx.live, agent_request_id).await;
+    assert_eq!(parent_state, "completed");
+    let parent_answer = wait_for_assistant_answer(&fx.live, agent_request_id, STALL_CEILING).await;
+    assert!(
+        !parent_answer.trim().is_empty(),
+        "parent did not persist a reply after the agent_new receipt: {parent_answer:?}"
+    );
+    let caused = wait_for_caused_request(&fx.live, agent_request_id, Duration::from_secs(60))
+        .await
+        .expect("agent_new must cause a request");
+    assert_eq!(caused.agent_did, background_worker_agent_did.as_str());
+    assert_eq!(
+        caused.caused_by_parent_tool_call_id.as_deref(),
+        Some(session_row.tool_call_id.as_str())
+    );
+    let caused_state = caused
+        .lifecycle_state
+        .as_ref()
+        .expect("caused request lifecycle")
+        .as_str()
+        .to_owned();
+    assert!(
+        !is_terminal(&caused_state),
+        "parent blocked on the started session; it was already {caused_state}"
+    );
+    assert!(
+        fetch_runtime_snapshot(&fx.db.node, &fx.did)
+            .await
+            .is_some_and(|snapshot| snapshot.process_state == "ready"),
+        "runtime must remain ready while the started session runs; caused={caused:?}"
+    );
+    let running_row = fetch_tool_call(
+        &fx.live,
+        agent_request_id,
+        agent_session_id,
+        &session_row.tool_call_id,
+    )
+    .await
+    .expect("agent_new row after parent completion");
+    assert_eq!(
+        running_row.lifecycle_state, "running",
+        "the agent_new row must stay running until its caused request terminalizes"
+    );
+    let messages = load_session_messages(&fx.live, agent_request_id, agent_session_id).await;
+    let receipt = session_receipt(&messages, &caused.request_id)
+        .unwrap_or_else(|| panic!("agent_new receipt missing; transcript={messages:#?}"));
+    assert_eq!(receipt["status"], "running");
+    assert_eq!(receipt["session_id"], caused.session_id.as_str());
+
+    child_release.release();
+    let caused_terminal = wait_for_request_terminal(&fx.live, &caused.request_id).await;
+    assert_eq!(caused_terminal, "completed");
+
+    let caused_answer = terminal_assistant_answer(&fx.live, &caused.request_id).await;
+    assert!(
+        !caused_answer.trim().is_empty(),
+        "completed session lacks its selected canonical terminal output: {caused_answer:?}"
+    );
+    wait_for_tool_call_state(
+        &fx.live,
+        agent_request_id,
+        agent_session_id,
+        &session_row.tool_call_id,
+        "completed",
+        Duration::from_secs(60),
+    )
+    .await;
+    wait_for_completion_notification(&fx.live, &session_row.doc_id, Duration::from_secs(60)).await;
+    assert_wake_observed(&fx.live, agent_session_id, agent_request_id).await;
+
+    let tool_request_id = "req-live-standard-background-tool";
+    let tool_session_id = "session-live-standard-background-tool";
+    fx.request(
+        tool_request_id,
+        tool_session_id,
+        &format!("Call spawn_process with tool_name bash_unrestricted and args {native_tool_args}. After its running receipt, acknowledge briefly without waiting or calling other tools."),
+    )
+    .await;
+
+    let background_tool = wait_for_background_tool_call(
+        &fx.live,
+        tool_request_id,
+        tool_session_id,
+        "bash_unrestricted",
+        Duration::from_secs(180),
+    )
+    .await;
+    assert!(
+        background_tool.child_request_id.is_none(),
+        "native background tool must use the childless lane"
+    );
+    let tool_parent_state = wait_for_request_terminal(&fx.live, tool_request_id).await;
+    assert_eq!(tool_parent_state, "completed");
+    let tool_parent_answer =
+        wait_for_assistant_answer(&fx.live, tool_request_id, STALL_CEILING).await;
+    assert!(
+        !tool_parent_answer.trim().is_empty(),
+        "parent did not persist a reply after the background process receipt: {tool_parent_answer:?}"
+    );
+    let still_running = fetch_tool_call(
+        &fx.live,
+        tool_request_id,
+        tool_session_id,
+        &background_tool.tool_call_id,
+    )
+    .await
+    .expect("background tool after parent completion");
+    assert_eq!(
+        still_running.lifecycle_state, "running",
+        "parent blocked on the native background tool"
+    );
+
+    tool_release.release();
+    let completed_tool = wait_for_tool_call_state(
+        &fx.live,
+        tool_request_id,
+        tool_session_id,
+        &background_tool.tool_call_id,
+        "completed",
+        Duration::from_secs(60),
+    )
+    .await;
+    let tool_result = completed_tool.result.as_deref().unwrap_or_default();
+    assert!(
+        tool_result.contains("NATIVE_BACKGROUND_STARTED")
+            && tool_result.contains("NATIVE_BACKGROUND_DONE"),
+        "native background result was not durably persisted: {tool_result:?}"
+    );
+    wait_for_completion_notification(&fx.live, &background_tool.doc_id, Duration::from_secs(60))
+        .await;
+    assert_wake_observed(&fx.live, tool_session_id, tool_request_id).await;
+
+    assert!(!managed_child_release.is_released());
+    let managed_agent_session_id = "session-live-managed-background-agent";
+    let managed_create_request_id = "req-live-managed-background-agent-create";
+    fx.request(
+        managed_create_request_id,
+        managed_agent_session_id,
+        "MANAGE_BACKGROUND_AGENT_CREATE: Call agent_new exactly once now with agent background-worker and prompt RUN_MANAGED_CHILD_BACKGROUND_JOB. Do not call any other tool.",
+    )
+    .await;
+    let managed_row = wait_for_background_tool_call(
+        &fx.live,
+        managed_create_request_id,
+        managed_agent_session_id,
+        AGENT_NEW_TOOL_NAME,
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_create_request_id).await,
+        "completed"
+    );
+    let managed_caused =
+        wait_for_caused_request(&fx.live, managed_create_request_id, Duration::from_secs(60))
+            .await
+            .expect("managed agent_new must cause a request");
+    wait_for_model_tool_call(
+        &fx.live,
+        &managed_caused.request_id,
+        &managed_caused.session_id,
+        "bash_unrestricted",
+        Duration::from_secs(180),
+    )
+    .await;
+    wait_for_started_marker(&fx.live, "CHILD_MANAGED_STARTED", Duration::from_secs(120)).await;
+
+    let managed_list_request_id = "req-live-managed-background-agent-list";
+    fx.request(
+        managed_list_request_id,
+        managed_agent_session_id,
+        "MANAGE_BACKGROUND_AGENT_LIST: Call list_processes exactly once now. Do not call any other tool.",
+    )
+    .await;
+    wait_for_tool_result_containing(
+        &fx.live,
+        managed_list_request_id,
+        managed_agent_session_id,
+        &[managed_row.tool_call_id.as_str(), AGENT_NEW_TOOL_NAME],
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_list_request_id).await,
+        "completed"
+    );
+
+    let managed_state = fetch_request_lifecycle(&fx.live, &managed_caused.request_id)
+        .await
+        .expect("managed caused lifecycle");
+    assert!(
+        !is_terminal(&managed_state),
+        "the started session finished ({managed_state}) before it could be steered: the live model did not run the blocking command"
+    );
+    let managed_message_request_id = "req-live-managed-background-agent-message";
+    fx.request(
+        managed_message_request_id,
+        managed_agent_session_id,
+        &format!(
+            "MANAGE_BACKGROUND_AGENT_MESSAGE: Call agent_message exactly once now with session_id {:?} and message \"STEERING_NOTE\". Do not call any other tool.",
+            managed_caused.session_id
+        ),
+    )
+    .await;
+    let message_row = wait_for_background_tool_call(
+        &fx.live,
+        managed_message_request_id,
+        managed_agent_session_id,
+        AGENT_MESSAGE_TOOL_NAME,
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_message_request_id).await,
+        "completed"
+    );
+    let messages = load_session_messages(
+        &fx.live,
+        managed_message_request_id,
+        managed_agent_session_id,
+    )
+    .await;
+    let message_receipt = session_receipts(&messages)
+        .into_iter()
+        .find(|receipt| receipt["tool_call_id"] == message_row.tool_call_id.as_str())
+        .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
+    assert_eq!(
+        message_receipt["session_id"],
+        managed_caused.session_id.as_str()
+    );
+    assert_eq!(
+        message_receipt["delivery"], "queue",
+        "a message to a busy started session must be queued behind its active turn"
+    );
+    assert!(
+        !is_terminal(
+            &fetch_request_lifecycle(&fx.live, &managed_caused.request_id)
+                .await
+                .expect("managed caused lifecycle")
+        ),
+        "agent_message must have been exercised against a live session"
+    );
+    assert_eq!(
+        fetch_tool_call(
+            &fx.live,
+            managed_create_request_id,
+            managed_agent_session_id,
+            &managed_row.tool_call_id,
+        )
+        .await
+        .expect("managed agent_new row")
+        .lifecycle_state,
+        "running"
+    );
+
+    managed_child_release.release();
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, &managed_caused.request_id).await,
+        "completed"
+    );
+    let managed_answer = terminal_assistant_answer(&fx.live, &managed_caused.request_id).await;
+    assert!(
+        !managed_answer.trim().is_empty(),
+        "managed session lacks its terminal output: {managed_answer:?}"
+    );
+
+    wait_for_tool_call_state(
+        &fx.live,
+        managed_create_request_id,
+        managed_agent_session_id,
+        &managed_row.tool_call_id,
+        "completed",
+        Duration::from_secs(60),
+    )
+    .await;
+    wait_for_tool_call_settled(
+        &fx.live,
+        managed_message_request_id,
+        managed_agent_session_id,
+        &message_row.tool_call_id,
+        Duration::from_secs(180),
+    )
+    .await;
+    wait_for_completion_notification(&fx.live, &managed_row.doc_id, Duration::from_secs(60)).await;
+    wait_for_completion_notification(&fx.live, &message_row.doc_id, Duration::from_secs(60)).await;
+
+    let managed_tool_request_id = "req-live-managed-background-tool-spawn";
+    let managed_tool_session_id = "session-live-managed-background-tool";
+    fx.request(
+        managed_tool_request_id,
+        managed_tool_session_id,
+        &format!(
+            "MANAGE_BACKGROUND_TOOL_SPAWN: Call spawn_process exactly once now with tool_name bash_unrestricted and args exactly {managed_native_tool_args}. Do not call any other tool."
+        ),
+    )
+    .await;
+
+    let managed_tool = wait_for_background_tool_call(
+        &fx.live,
+        managed_tool_request_id,
+        managed_tool_session_id,
+        "bash_unrestricted",
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_tool_request_id).await,
+        "completed"
+    );
+    let managed_process_handle = managed_tool.tool_call_id.clone();
+
+    let managed_tool_list_request_id = "req-live-managed-background-tool-list";
+    fx.request(
+        managed_tool_list_request_id,
+        managed_tool_session_id,
+        "MANAGE_BACKGROUND_TOOL_LIST: Call list_processes exactly once now. Do not call any other tool.",
+    )
+    .await;
+    wait_for_tool_result_containing(
+        &fx.live,
+        managed_tool_list_request_id,
+        managed_tool_session_id,
+        &[managed_process_handle.as_str(), "bash_unrestricted"],
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_tool_list_request_id).await,
+        "completed"
+    );
+
+    let managed_tool_read_request_id = "req-live-managed-background-tool-read-running";
+    fx.request(
+        managed_tool_read_request_id,
+        managed_tool_session_id,
+        &format!(
+            "MANAGE_BACKGROUND_TOOL_READ_RUNNING: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call wait_process or any other tool."
+        ),
+    )
+    .await;
+    wait_for_model_tool_call(
+        &fx.live,
+        managed_tool_read_request_id,
+        managed_tool_session_id,
+        "read_process",
+        Duration::from_secs(180),
+    )
+    .await;
+    wait_for_tool_result_containing(
+        &fx.live,
+        managed_tool_read_request_id,
+        managed_tool_session_id,
+        &["NATIVE_MANAGED_STARTED"],
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_tool_read_request_id).await,
+        "completed"
+    );
+
+    let managed_tool_wait_request_id = "req-live-managed-background-tool-wait";
+    fx.request(
+        managed_tool_wait_request_id,
+        managed_tool_session_id,
+        &format!(
+            "MANAGE_BACKGROUND_TOOL_WAIT: Call wait_process exactly once now with tool_call_id {managed_process_handle:?}. Do not call any other tool."
+        ),
+    )
+    .await;
+    wait_for_model_tool_call(
+        &fx.live,
+        managed_tool_wait_request_id,
+        managed_tool_session_id,
+        "wait_process",
+        Duration::from_secs(180),
+    )
+    .await;
+    assert_eq!(
+        fetch_tool_call(
+            &fx.live,
+            managed_tool_request_id,
+            managed_tool_session_id,
+            &managed_tool.tool_call_id,
+        )
+        .await
+        .expect("managed native tool during read_process")
+        .lifecycle_state,
+        "running",
+        "read_process must observe output before the native process exits"
+    );
+    managed_tool_release.release();
+
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_tool_wait_request_id).await,
+        "completed"
+    );
+
+    let managed_tool_terminal_read_request_id = "req-live-managed-background-tool-read-terminal";
+    fx.request(
+        managed_tool_terminal_read_request_id,
+        managed_tool_session_id,
+        &format!(
+            "MANAGE_BACKGROUND_TOOL_READ_TERMINAL: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call any other tool."
+        ),
+    )
+    .await;
+    wait_for_model_tool_call(
+        &fx.live,
+        managed_tool_terminal_read_request_id,
+        managed_tool_session_id,
+        "read_process",
+        Duration::from_secs(180),
+    )
+    .await;
+    wait_for_tool_result_containing(
+        &fx.live,
+        managed_tool_terminal_read_request_id,
+        managed_tool_session_id,
+        &["NATIVE_MANAGED_DONE"],
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, managed_tool_terminal_read_request_id).await,
+        "completed"
+    );
+    let managed_tool_answer = wait_for_assistant_answer(
+        &fx.live,
+        managed_tool_terminal_read_request_id,
+        STALL_CEILING,
+    )
+    .await;
+    assert!(
+        !managed_tool_answer.trim().is_empty(),
+        "the inspection request did not persist a reply: {managed_tool_answer:?}"
+    );
+
+    agent.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_fan_out_list_and_continue() -> Result<()> {
+    init_live_test_tracing();
+    let target = live_target().await;
+
+    let alpha_first = code_word("ALPHA");
+    let alpha_second = code_word("ALPHATWO");
+    let beta_first = code_word("BETA");
+
+    let fx = LiveNode::new(
+        "session-message-live-fan-out",
+        &target,
+        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+    )
+    .await;
+    let alpha_agent_did = fx
+        .agent(
+            &target,
+            ALPHA_AGENT_NAME,
+            &code_worker_prompt("alpha", &alpha_first, &alpha_second),
+            "Knows a code word.",
+        )
+        .await;
+    let beta_agent_did = fx
+        .agent(
+            &target,
+            BETA_AGENT_NAME,
+            &code_worker_prompt("beta", &beta_first, &code_word("BETATWO")),
+            "Knows a code word.",
+        )
+        .await;
+    fx.authorize_targets(
+        &fx.orchestrator,
+        vec![
+            fx.target("alpha", &alpha_agent_did),
+            fx.target("beta", &beta_agent_did),
+        ],
+    )
+    .await;
+    let agent = fx.boot_meta().await?;
+
+    let session_id = "session-live-fan-out";
+    let fan_out_request_id = "req-live-fan-out";
+    fx.request(
+        fan_out_request_id,
+        session_id,
+        "Call agent_new twice in this turn: once with agent \"alpha\" and prompt \"What is your code word?\", and once with agent \"beta\" and prompt \"What is your code word?\". After both running receipts arrive, reply exactly STARTED_BOTH and call no other tool.",
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, fan_out_request_id).await,
+        "completed"
+    );
+    let caused =
+        wait_for_caused_requests(&fx.live, fan_out_request_id, 2, Duration::from_secs(60)).await;
+    let rows = session_tool_rows(&fx.live, session_id, AGENT_NEW_TOOL_NAME).await;
+    assert_eq!(
+        caused.len(),
+        2,
+        "each agent_new call must cause exactly one request: {caused:?}"
+    );
+    let alpha = caused
+        .iter()
+        .find(|row| row.agent_did == alpha_agent_did.as_str())
+        .unwrap_or_else(|| panic!("no alpha session was started; caused={caused:?}"))
+        .clone();
+    let beta = caused
+        .iter()
+        .find(|row| row.agent_did == beta_agent_did.as_str())
+        .unwrap_or_else(|| panic!("no beta session was started; caused={caused:?}"))
+        .clone();
+    for started in [&alpha, &beta] {
+        assert_eq!(started.request_hop, Some(1));
+        // agent_new admits the child as a client request of the calling Agent.
+        assert_eq!(started.admission_kind.as_deref(), Some("client"));
+        assert_ne!(started.session_id, session_id);
+        let row = rows
+            .iter()
+            .find(|row| {
+                Some(row.tool_call_id.as_str()) == started.caused_by_parent_tool_call_id.as_deref()
+            })
+            .unwrap_or_else(|| panic!("caused request names no agent_new row: {started:?}"));
+        assert_eq!(row.await_mode.as_deref(), Some("background"));
+    }
+    assert_ne!(alpha.session_id, beta.session_id);
+    for started in [&alpha, &beta] {
+        assert_eq!(
+            wait_for_request_terminal(&fx.live, &started.request_id).await,
+            "completed"
+        );
+        wait_for_completion_notification(
+            &fx.live,
+            &rows
+                .iter()
+                .find(|row| {
+                    Some(row.tool_call_id.as_str())
+                        == started.caused_by_parent_tool_call_id.as_deref()
+                })
+                .expect("the child is linked to its tool")
+                .doc_id,
+            Duration::from_secs(60),
+        )
+        .await;
+    }
+    wait_for_session_quiescent(&fx.live, session_id, Duration::from_secs(240)).await;
+    let delivered = rows
+        .iter()
+        .map(|row| row.doc_id.as_str())
+        .collect::<Vec<_>>();
+    let wakes = assert_deliveries_bound_to_completed_wakes(&fx.live, session_id, &delivered).await;
+    tracing::info!(
+        parent_session = session_id,
+        alpha_session = %alpha.session_id,
+        beta_session = %beta.session_id,
+        wakes = ?wakes,
+        "[live-fan-out] each result reached the parent through a completed wake"
+    );
+
+    let list_request_id = "req-live-fan-out-list";
+    fx.request(
+        list_request_id,
+        session_id,
+        "Call agent_list exactly once and agent_session_list exactly once now, then reply exactly LISTED and call no other tool.",
+    )
+    .await;
+    let listed = wait_for_json_tool_result(
+        &fx.live,
+        list_request_id,
+        session_id,
+        |value| value.get("sessions").is_some(),
+        Duration::from_secs(240),
+    )
+    .await;
+    for started in [&alpha, &beta] {
+        let entry = listed["sessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["session_id"] == started.session_id.as_str())
+            .unwrap_or_else(|| {
+                panic!(
+                    "agent_session_list omitted started session {}: {listed}",
+                    started.session_id
+                )
+            });
+        assert_eq!(entry["relationship"], "started_by_you");
+        assert_eq!(entry["node_did"], fx.did.as_str());
+        assert_eq!(entry["can_message"], true);
+        assert_eq!(entry["can_interrupt"], true);
+        assert_eq!(entry["status"], "idle");
+    }
+    let targets = wait_for_json_tool_result(
+        &fx.live,
+        list_request_id,
+        session_id,
+        |value| value.get("agents").is_some(),
+        Duration::from_secs(240),
+    )
+    .await;
+    let listed_agents = targets["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["agent"].as_str())
+        .collect::<RapidHashSet<_>>();
+    assert_eq!(listed_agents, RapidHashSet::from_iter(["alpha", "beta"]));
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, list_request_id).await,
+        "completed"
+    );
+    wait_for_session_quiescent(&fx.live, session_id, Duration::from_secs(120)).await;
+
+    let message_request_id = "req-live-fan-out-message";
+    fx.request(
+        message_request_id,
+        session_id,
+        &format!(
+            "Call agent_message exactly once now with session_id {:?} and message \"What is your second code word?\". After its receipt arrives, reply exactly MESSAGED and call no other tool.",
+            alpha.session_id
+        ),
+    )
+    .await;
+    let message_row = wait_for_background_tool_call(
+        &fx.live,
+        message_request_id,
+        session_id,
+        AGENT_MESSAGE_TOOL_NAME,
+        Duration::from_secs(240),
+    )
+    .await;
+    let continued = wait_for_caused_request(&fx.live, message_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_message must cause a request in the idle session");
+    assert_eq!(continued.session_id, alpha.session_id);
+    assert_eq!(continued.agent_did, alpha_agent_did.as_str());
+    assert_eq!(
+        continued.caused_by_parent_tool_call_id.as_deref(),
+        Some(message_row.tool_call_id.as_str())
+    );
+    let messages = load_session_messages(&fx.live, message_request_id, session_id).await;
+    let receipt = session_receipt(&messages, &continued.request_id)
+        .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
+    assert_eq!(receipt["delivery"], "request");
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, &continued.request_id).await,
+        "completed"
+    );
+    wait_for_completion_notification(&fx.live, &message_row.doc_id, Duration::from_secs(60)).await;
+    let continued_wake = wait_for_completion_wake(
+        &fx.live,
+        session_id,
+        message_request_id,
+        Duration::from_secs(300),
+    )
+    .await;
+    assert_eq!(
+        continued_wake.lifecycle_state.as_deref(),
+        Some("completed"),
+        "the wake for the agent_message completion must run: {continued_wake:?}"
+    );
+    let continued_answer = terminal_assistant_answer(&fx.live, &continued_wake.request_id).await;
+    assert!(
+        !continued_answer.trim().is_empty(),
+        "the completion wake must persist a reply"
+    );
+    tracing::info!(
+        continued_request = %continued.request_id,
+        message_tool_call = %message_row.tool_call_id,
+        wake = %continued_wake.request_id,
+        "[live-fan-out] agent_message continued the idle session and its result reached the parent"
+    );
+
+    agent.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
+    init_live_test_tracing();
+    let target = live_target().await;
+    let workspace = temp_workspace("interrupt live").await;
+    let release = ProcessGate::new(workspace.path()).await;
+    let blocked_args = blocked_bash_args("BLOCKER_STARTED", &release, "BLOCKER_DONE");
+
+    let fx = LiveNode::new(
+        "session-message-live-interrupt",
+        &target,
+        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+    )
+    .await;
+    let blocker_agent_did = fx
+        .agent(
+            &target,
+            BLOCKER_AGENT_NAME,
+            &format!(
+                "You are a worker in an integration test. When asked to run the blocked job, call \
+bash_unrestricted exactly once with these arguments: {blocked_args}. Wait for it to finish, then \
+reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
+            ),
+            "Runs a blocked job.",
+        )
+        .await;
+    fx.authorize_targets(
+        &fx.orchestrator,
+        vec![fx.target("blocker", &blocker_agent_did)],
+    )
+    .await;
+    fx.configure_bash_tools(&blocker_agent_did, workspace.path(), false, Vec::new())
+        .await;
+    let agent = fx.boot(workspace.path()).await?;
+
+    assert!(!release.is_released());
+    let spawner_session = "session-live-interrupt-spawner";
+    let start_request_id = "req-live-interrupt-start";
+    fx.request(
+        start_request_id,
+        spawner_session,
+        "Call agent_new exactly once now with agent \"blocker\" and prompt \"Run the blocked job.\". After its running receipt arrives, reply exactly BLOCKER_STARTED and call no other tool.",
+    )
+    .await;
+    let start_row = wait_for_background_tool_call(
+        &fx.live,
+        start_request_id,
+        spawner_session,
+        AGENT_NEW_TOOL_NAME,
+        Duration::from_secs(240),
+    )
+    .await;
+    let worker = wait_for_caused_request(&fx.live, start_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_new must start the blocker");
+    assert_eq!(worker.agent_did, blocker_agent_did.as_str());
+    wait_for_model_tool_call(
+        &fx.live,
+        &worker.request_id,
+        &worker.session_id,
+        "bash_unrestricted",
+        Duration::from_secs(240),
+    )
+    .await;
+    wait_for_started_marker(&fx.live, "BLOCKER_STARTED", Duration::from_secs(120)).await;
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, start_request_id).await,
+        "completed"
+    );
+
+    let other_session = "session-live-interrupt-other";
+    let refused_request_id = "req-live-interrupt-refused";
+    fx.request(
+        refused_request_id,
+        other_session,
+        &format!(
+            "Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly INTERRUPT_ATTEMPTED and call no other tool.",
+            worker.session_id
+        ),
+    )
+    .await;
+    let refusal = wait_for_json_tool_result(
+        &fx.live,
+        refused_request_id,
+        other_session,
+        |value| value["tool_name"] == AGENT_INTERRUPT_TOOL_NAME,
+        Duration::from_secs(240),
+    )
+    .await;
+    assert_eq!(refusal["ok"], false, "non-spawner interrupt: {refusal}");
+    assert_eq!(refusal["code"], "interrupt_not_permitted");
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, refused_request_id).await,
+        "completed"
+    );
+    let still = fetch_request_lifecycle(&fx.live, &worker.request_id)
+        .await
+        .expect("worker lifecycle");
+    assert!(
+        !is_terminal(&still),
+        "a refused interrupt must leave the worker's turn running; it is {still}"
+    );
+
+    let interrupt_request_id = "req-live-interrupt-spawner";
+    fx.request(
+        interrupt_request_id,
+        spawner_session,
+        &format!(
+            "Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly INTERRUPT_SENT and call no other tool.",
+            worker.session_id
+        ),
+    )
+    .await;
+    let accepted = wait_for_json_tool_result(
+        &fx.live,
+        interrupt_request_id,
+        spawner_session,
+        |value| {
+            value["session_id"] == worker.session_id.as_str()
+                && matches!(value["status"].as_str(), Some("interrupting" | "idle"))
+        },
+        Duration::from_secs(240),
+    )
+    .await;
+    assert_eq!(accepted["ok"], true, "spawner interrupt: {accepted}");
+    assert_eq!(accepted["status"], "interrupting");
+    assert_eq!(accepted["request_id"], worker.request_id.as_str());
+    let worker_terminal = wait_for_request_terminal(&fx.live, &worker.request_id).await;
+    assert_eq!(worker_terminal, "interrupted");
+    assert!(
+        !release.is_released(),
+        "the worker must have been interrupted while still blocked"
+    );
+    release.release();
+    let settled = wait_for_tool_call_settled(
+        &fx.live,
+        start_request_id,
+        spawner_session,
+        &start_row.tool_call_id,
+        Duration::from_secs(120),
+    )
+    .await;
+    wait_for_completion_notification(&fx.live, &start_row.doc_id, Duration::from_secs(120)).await;
+    let wake = wait_for_completion_wake(
+        &fx.live,
+        spawner_session,
+        start_request_id,
+        Duration::from_secs(240),
+    )
+    .await;
+    assert_eq!(
+        wake.lifecycle_state.as_deref(),
+        Some("completed"),
+        "the interrupted result must wake the spawner: {wake:?}"
+    );
+    tracing::info!(
+        worker_session = %worker.session_id,
+        worker_request = %worker.request_id,
+        agent_new_row = %start_row.tool_call_id,
+        row_state = %settled.lifecycle_state,
+        wake = %wake.request_id,
+        "[live-interrupt] non-spawner refused; spawner interrupted; notification delivered and wake completed"
+    );
+
+    wait_for_session_quiescent(&fx.live, spawner_session, Duration::from_secs(240)).await;
+    agent.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_hop_bound_stops_chain() -> Result<()> {
+    init_live_test_tracing();
+    let target = live_target().await;
+    let fx = LiveNode::new(
+        "session-message-live-hop",
+        &target,
+        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+    )
+    .await;
+    let relay_agent_did = fx
+        .agent(
+            &target,
+            RELAY_AGENT_NAME,
+            "You are a relay in an integration test. For any request: first call agent_session_list exactly \
+once. Then call agent_new exactly once with agent \"relay\" and prompt \"relay onward\". Whatever \
+agent_new returns, including an error, then reply exactly RELAY_DONE and call no other tool.",
+            "Relays work onward.",
+        )
+        .await;
+    fx.authorize_targets(&fx.orchestrator, vec![fx.target("relay", &relay_agent_did)])
+        .await;
+    fx.authorize_targets(&relay_agent_did, vec![fx.target("relay", &relay_agent_did)])
+        .await;
+    let mut node_config = fx.live.node_config().await;
+    node_config.max_request_hop = Some(1);
+    fx.live
+        .apply(
+            "test.live_session_message.hop_bound",
+            vec![(
+                Collection::Node,
+                serde_json::to_value(node_config).expect("serialize node_config"),
+            )],
+        )
+        .await;
+    let agent = fx.boot_meta().await?;
+
+    let root_session = "session-live-hop-root";
+    let root_request_id = "req-live-hop-root";
+    fx.request(
+        root_request_id,
+        root_session,
+        "Call agent_new exactly once now with agent \"relay\" and prompt \"start the relay\". After its running receipt arrives, reply exactly RELAY_STARTED and call no other tool.",
+    )
+    .await;
+    let root_row = wait_for_background_tool_call(
+        &fx.live,
+        root_request_id,
+        root_session,
+        AGENT_NEW_TOOL_NAME,
+        Duration::from_secs(240),
+    )
+    .await;
+    let first = wait_for_caused_request(&fx.live, root_request_id, Duration::from_secs(120))
+        .await
+        .expect("the root must start the relay");
+    assert_eq!(first.agent_did, relay_agent_did.as_str());
+    assert_eq!(first.request_hop, Some(1));
+    assert_eq!(
+        wait_for_request_terminal(&fx.live, &first.request_id).await,
+        "completed",
+        "the relay must finish its turn after its onward start is refused"
+    );
+    let refused = wait_for_json_tool_result(
+        &fx.live,
+        &first.request_id,
+        &first.session_id,
+        |value| value["tool_name"] == AGENT_NEW_TOOL_NAME,
+        STALL_CEILING,
+    )
+    .await;
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["code"], "request_hop_exceeded");
+    assert_eq!(refused["hop"], 2);
+    assert_eq!(refused["max_request_hop"], 1);
+    let caused_by_relay = fetch_caused_requests(&fx.live, &first.request_id).await;
+    assert!(
+        caused_by_relay.is_empty(),
+        "no session may be started beyond the hop bound: {caused_by_relay:?}"
+    );
+    wait_for_completion_notification(&fx.live, &root_row.doc_id, Duration::from_secs(120)).await;
+    let settled = wait_for_tool_call_settled(
+        &fx.live,
+        root_request_id,
+        root_session,
+        &root_row.tool_call_id,
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(settled.lifecycle_state, "completed");
+    wait_for_session_quiescent(&fx.live, root_session, Duration::from_secs(240)).await;
+    let wakes = session_requests(&fx.live, root_session)
+        .await
+        .into_iter()
+        .filter(SessionRequestRow::is_background_completion_wake)
+        .collect::<Vec<_>>();
+    assert!(
+        !wakes.is_empty(),
+        "the notification must attempt a completion wake"
+    );
+    // `CausalHop.nextHop .returnEdge own = own`: the wake returning the relay's
+    // result keeps the root's hop, so the bound that refused the relay's
+    // onward start admits it.
+    for wake in &wakes {
+        assert_eq!(
+            wake.request_hop,
+            Some(0),
+            "the return wake keeps the root hop: {wake:?}"
+        );
+        assert_eq!(
+            wake.lifecycle_state.as_deref(),
+            Some("completed"),
+            "a return wake within the hop bound runs: {wake:?}"
+        );
+    }
+    let listed = wait_for_json_tool_result(
+        &fx.live,
+        &first.request_id,
+        &first.session_id,
+        |value| value.get("sessions").is_some(),
+        STALL_CEILING,
+    )
+    .await;
+    let started_by = listed["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["session_id"] == root_session)
+        .unwrap_or_else(|| panic!("the relay's agent_session_list omitted its starter: {listed}"));
+    assert_eq!(started_by["relationship"], "started_you");
+    assert_eq!(started_by["can_interrupt"], false);
+    tracing::info!(
+        root_session,
+        relay_session = %first.session_id,
+        relay_request = %first.request_id,
+        root_agent_new = %root_row.tool_call_id,
+        wakes = ?wakes.iter().map(|wake| (&wake.request_id, &wake.lifecycle_state, wake.request_hop, &wake.failure_reason)).collect::<Vec<_>>(),
+        "[live-hop] chain stopped at the bound; notification delivered"
+    );
+
+    agent.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_interrupt_does_not_cascade() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("no-cascade workspace");
+    let workspace = temp_workspace("no-cascade").await;
     let middle_release = ProcessGate::new(workspace.path()).await;
     let leaf_release = ProcessGate::new(workspace.path()).await;
     let leaf_code = code_word("LEAF");
@@ -1607,29 +1562,20 @@ sentence that repeats, verbatim, every code word reported in the notifications."
             "Runs a blocked job and reports its code word.",
         )
         .await;
-    authorize_session_targets(
-        fx.db(),
-        &fx.did,
+    fx.authorize_targets(
         &fx.orchestrator,
-        vec![fx.target("middle", middle_agent_did.as_str())],
+        vec![fx.target("middle", &middle_agent_did)],
     )
     .await;
-    configure_bash_agent_tools(
-        fx.db(),
-        &fx.did,
-        middle_agent_did.as_str(),
+    fx.configure_bash_tools(
+        &middle_agent_did,
         workspace.path(),
-        vec![fx.target("leaf", leaf_agent_did.as_str())],
+        false,
+        vec![fx.target("leaf", &leaf_agent_did)],
     )
     .await;
-    configure_bash_agent_tools(
-        fx.db(),
-        &fx.did,
-        leaf_agent_did.as_str(),
-        workspace.path(),
-        Vec::new(),
-    )
-    .await;
+    fx.configure_bash_tools(&leaf_agent_did, workspace.path(), false, Vec::new())
+        .await;
     let agent = fx.boot(workspace.path()).await?;
 
     assert!(!middle_release.is_released());
@@ -1771,7 +1717,6 @@ sentence that repeats, verbatim, every code word reported in the notifications."
         Duration::from_secs(60),
     )
     .await;
-    wait_for_completion_notification(&fx.live, &leaf_row.doc_id, Duration::from_secs(60)).await;
     let notification =
         wait_for_completion_notification(&fx.live, &leaf_row.doc_id, Duration::from_secs(60)).await;
     assert_eq!(
@@ -1813,17 +1758,11 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     Ok(())
 }
 
-const STEERED_AGENT_NAME: &str = "live-steered";
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_agent_message_interrupt_steers() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("steer workspace");
+    let workspace = temp_workspace("steer").await;
     let release = ProcessGate::new(workspace.path()).await;
     let steer_code = code_word("STEER");
     let args = blocked_bash_args("STEERED_STARTED", &release, "STEERED_DONE");
@@ -1841,21 +1780,13 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
             "Runs a long job and accepts steering.",
         )
         .await;
-    authorize_session_targets(
-        fx.db(),
-        &fx.did,
+    fx.authorize_targets(
         &fx.orchestrator,
-        vec![fx.target("worker", steered_agent_did.as_str())],
+        vec![fx.target("worker", &steered_agent_did)],
     )
     .await;
-    configure_bash_agent_tools(
-        fx.db(),
-        &fx.did,
-        steered_agent_did.as_str(),
-        workspace.path(),
-        Vec::new(),
-    )
-    .await;
+    fx.configure_bash_tools(&steered_agent_did, workspace.path(), false, Vec::new())
+        .await;
     let agent = fx.boot(workspace.path()).await?;
 
     assert!(!release.is_released());
@@ -1987,24 +1918,11 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     Ok(())
 }
 
-const GOAL_WORKER_AGENT_NAME: &str = "live-goal-worker";
-
-const GOAL_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration test. \
-Follow the latest user instruction exactly, calling only the tools it names. Never call agent_new \
-more than once in this conversation. When you are asked to continue working toward your goal and \
-no background completion notification has arrived yet, call no tool and reply exactly \
-WAITING_FOR_WORKER. Once a background completion notification has arrived, call no tool and reply \
-with the code word it reports, verbatim.";
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("goal workspace");
+    let workspace = temp_workspace("goal").await;
     let release = ProcessGate::new(workspace.path()).await;
     let worker_code = code_word("GOALWORKER");
     let args = blocked_bash_args("GOAL_WORKER_STARTED", &release, "GOAL_WORKER_DONE");
@@ -2022,21 +1940,13 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
             "Runs a blocked job and reports its code word.",
         )
         .await;
-    authorize_session_targets(
-        fx.db(),
-        &fx.did,
+    fx.authorize_targets(
         &fx.orchestrator,
-        vec![fx.target("worker", goal_worker_agent_did.as_str())],
+        vec![fx.target("worker", &goal_worker_agent_did)],
     )
     .await;
-    configure_bash_agent_tools(
-        fx.db(),
-        &fx.did,
-        goal_worker_agent_did.as_str(),
-        workspace.path(),
-        Vec::new(),
-    )
-    .await;
+    fx.configure_bash_tools(&goal_worker_agent_did, workspace.path(), false, Vec::new())
+        .await;
     let agent = fx.boot(workspace.path()).await?;
 
     let session = "session-live-goal-parent";
@@ -2172,159 +2082,6 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     Ok(())
 }
 
-struct SessionChanges {
-    requests: SnapshotChanges,
-    tools: SnapshotChanges,
-    messages: SnapshotChanges,
-    output: SnapshotChanges,
-}
-
-impl SessionChanges {
-    async fn new(node: &LiveUser) -> Self {
-        Self {
-            requests: node.subscribe_changes("AgentRequest").await,
-            tools: node.subscribe_changes("AgentToolCall").await,
-            messages: node.subscribe_changes("AgentMessage").await,
-            output: node.subscribe_changes("AgentOutputSegment").await,
-        }
-    }
-
-    async fn wait(&mut self, deadline: tokio::time::Instant) {
-        let _ = tokio::time::timeout_at(deadline, async {
-            tokio::select! {
-                _ = self.requests.recv() => (),
-                _ = self.tools.recv() => (),
-                _ = self.messages.recv() => (),
-                _ = self.output.recv() => (),
-            }
-        })
-        .await;
-    }
-}
-
-async fn wait_for_session_request(
-    node: &LiveUser,
-    session_id: &str,
-    matches: impl Fn(&SessionRequestRow) -> bool,
-    timeout: Duration,
-) -> SessionRequestRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let requests = session_requests(node, session_id).await;
-        if let Some(found) = requests.iter().find(|row| matches(row)) {
-            return found.clone();
-        }
-        if tokio::time::Instant::now() >= deadline {
-            dump_session_diagnostics(node, session_id).await;
-            panic!("no matching request in session {session_id}; requests={requests:?}");
-        }
-        changes.wait(deadline).await;
-    }
-}
-
-fn rfc3339(value: &Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
-    value
-        .as_deref()
-        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-        .map(|time| time.with_timezone(&chrono::Utc))
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NotificationRow {
-    session_id: Option<String>,
-    request_doc_id: Option<String>,
-    publication: serde_json::Value,
-}
-
-async fn completion_notifications(node: &LiveUser, tool_call_doc_id: &str) -> Vec<NotificationRow> {
-    let data = node
-        .read_data("{ AgentMessage { session_id request_doc_id publication } }")
-        .await;
-    let candidates = data["AgentMessage"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|row| {
-            serde_json::from_value::<NotificationRow>(row.clone())
-                .expect("decode completion publication")
-        })
-        .filter(|row| {
-            row.publication["kind"] == "tool_delivery"
-                && row.publication["tool_call_doc_id"] == tool_call_doc_id
-        })
-        .collect::<Vec<_>>();
-    let mut notifications = Vec::new();
-    for candidate in candidates {
-        let Some(session_id) = candidate.session_id.as_deref() else {
-            continue;
-        };
-        let requests = session_requests(node, session_id).await;
-        if requests.iter().any(|request| {
-            candidate.request_doc_id.as_deref() == Some(request.doc_id.as_str())
-                && request.is_background_completion_wake()
-        }) {
-            notifications.push(candidate);
-        }
-    }
-    notifications
-}
-
-async fn wait_for_bound_wake(
-    node: &LiveUser,
-    session_id: &str,
-    notification: &NotificationRow,
-) -> SessionRequestRow {
-    let bound = notification
-        .request_doc_id
-        .as_deref()
-        .expect("a completion notification binds its wake");
-    let wake = wait_for_session_request(
-        node,
-        session_id,
-        |row| row.doc_id == bound && row.lifecycle_state.as_deref().is_some_and(is_terminal),
-        Duration::from_secs(300),
-    )
-    .await;
-    assert!(
-        wake.is_background_completion_wake(),
-        "the notification must bind a completion wake: {wake:?}"
-    );
-    assert_eq!(
-        wake.lifecycle_state.as_deref(),
-        Some("completed"),
-        "the bound completion wake must run: {wake:?}"
-    );
-    wake
-}
-
-async fn wait_for_completion_notification(
-    node: &LiveUser,
-    tool_call_doc_id: &str,
-    timeout: Duration,
-) -> NotificationRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let rows = completion_notifications(node, tool_call_doc_id).await;
-        assert!(
-            rows.len() <= 1,
-            "a settled row must publish at most one notification: {rows:?}"
-        );
-        if let Some(row) = rows.into_iter().next() {
-            return row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no completion notification for row {tool_call_doc_id}"
-        );
-        changes.wait(deadline).await;
-    }
-}
-
-const SOAK_GATES: usize = 3;
-const SOAK_PRELUDE: usize = 5;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "stress scenario: select GENTS_LIVE_TARGET and GENTS_LIVE_SOAK_SEED, then pass --ignored"]
 async fn live_randomized_soak() -> Result<()> {
@@ -2348,11 +2105,7 @@ async fn live_randomized_soak() -> Result<()> {
         "[live-soak] start; reproduce with GENTS_LIVE_SOAK_SEED={seed}"
     );
     let target = live_target().await;
-
-    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .expect("create temporary workspace task")
-        .expect("soak workspace");
+    let workspace = temp_workspace("soak").await;
     let mut gates = Vec::new();
     for _ in 0..SOAK_GATES {
         gates.push(ProcessGate::new(workspace.path()).await);
@@ -2385,42 +2138,39 @@ async fn live_randomized_soak() -> Result<()> {
         .map(|(gate, release)| {
             format!(
                 "When the latest request is exactly BLOCK_GATE_{gate}, call bash_unrestricted exactly once with these arguments: {}. Wait for it to finish, then reply exactly GATE_{gate}_PASSED.",
-                blocked_bash_args(&format!("GATE_{gate}_STARTED"), release, &format!("GATE_{gate}_PASSED"))
+                blocked_bash_args(
+                    &format!("GATE_{gate}_STARTED"),
+                    release,
+                    &format!("GATE_{gate}_PASSED")
+                )
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let blocker_agent_did = fx.agent(
-        &target,
-        BLOCKER_AGENT_NAME,
-        &format!(
-            "You are agent blocker in an integration test.\n{gate_rules}\nFor any other request, call no tool and reply exactly BLOCKER_IDLE."
-        ),
-        "Runs gated jobs.",
-    )
-    .await;
+    let blocker_agent_did = fx
+        .agent(
+            &target,
+            BLOCKER_AGENT_NAME,
+            &format!(
+                "You are agent blocker in an integration test.\n{gate_rules}\nFor any other request, call no tool and reply exactly BLOCKER_IDLE."
+            ),
+            "Runs gated jobs.",
+        )
+        .await;
     let pool = [
         ("alpha", alpha_agent_did.as_str()),
         ("beta", beta_agent_did.as_str()),
         ("blocker", blocker_agent_did.as_str()),
     ];
-    authorize_session_targets(
-        fx.db(),
-        &fx.did,
+    fx.authorize_targets(
         &fx.orchestrator,
         pool.iter()
             .map(|(name, agent_did)| fx.target(name, agent_did))
             .collect(),
     )
     .await;
-    configure_bash_agent_tools(
-        fx.db(),
-        &fx.did,
-        blocker_agent_did.as_str(),
-        workspace.path(),
-        Vec::new(),
-    )
-    .await;
+    fx.configure_bash_tools(&blocker_agent_did, workspace.path(), false, Vec::new())
+        .await;
     let agent = fx.boot(workspace.path()).await?;
 
     let roots = ["session-live-soak-root-0", "session-live-soak-root-1"];
@@ -2475,12 +2225,18 @@ async fn live_randomized_soak() -> Result<()> {
                 2 => {
                     wait_for_started_marker(&fx.live, "GATE_0_STARTED", Duration::from_secs(240))
                         .await;
-                    format!("Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly OP_DONE and call no other tool.", session_of(&started, 0))
+                    format!(
+                        "Call agent_interrupt exactly once now with session_id {:?}. Then reply exactly OP_DONE and call no other tool.",
+                        session_of(&started, 0)
+                    )
                 }
                 3 => {
                     wait_for_started_marker(&fx.live, "GATE_1_STARTED", Duration::from_secs(240))
                         .await;
-                    format!("Call agent_message exactly once now with session_id {:?}, message \"BLOCK_GATE_2\" and interrupt false. After its receipt arrives, reply exactly OP_DONE and call no other tool.", session_of(&started, 1))
+                    format!(
+                        "Call agent_message exactly once now with session_id {:?}, message \"BLOCK_GATE_2\" and interrupt false. After its receipt arrives, reply exactly OP_DONE and call no other tool.",
+                        session_of(&started, 1)
+                    )
                 }
                 _ => "Call agent_session_list exactly once now, then reply exactly OP_DONE and call no other tool.".to_owned(),
             };
@@ -2496,10 +2252,16 @@ async fn live_randomized_soak() -> Result<()> {
                 started[rng.random_range(0..started.len())].clone()
             };
             let message = message_for(name, &mut rng);
-            (root, format!("Call agent_message exactly once now with session_id {session:?}, message {message:?} and interrupt {interrupt}. After its receipt arrives, reply exactly OP_DONE and call no other tool."))
+            (
+                root,
+                format!("Call agent_message exactly once now with session_id {session:?}, message {message:?} and interrupt {interrupt}. After its receipt arrives, reply exactly OP_DONE and call no other tool."),
+            )
         } else if roll < 72 {
             let (session, _) = pick_for_interrupt(&started, &mut rng);
-            (root, format!("Call agent_interrupt exactly once now with session_id {session:?}. Then reply exactly OP_DONE and call no other tool."))
+            (
+                root,
+                format!("Call agent_interrupt exactly once now with session_id {session:?}. Then reply exactly OP_DONE and call no other tool."),
+            )
         } else if roll < 88 {
             (
                 root,
@@ -2563,6 +2325,205 @@ async fn live_randomized_soak() -> Result<()> {
     Ok(())
 }
 
+struct SessionChanges {
+    requests: SnapshotChanges,
+    tools: SnapshotChanges,
+    messages: SnapshotChanges,
+    output: SnapshotChanges,
+}
+
+impl SessionChanges {
+    async fn new(node: &LiveUser) -> Self {
+        Self {
+            requests: node.subscribe_changes("AgentRequest").await,
+            tools: node.subscribe_changes("AgentToolCall").await,
+            messages: node.subscribe_changes("AgentMessage").await,
+            output: node.subscribe_changes("AgentOutputSegment").await,
+        }
+    }
+
+    async fn wait(&mut self, deadline: tokio::time::Instant) {
+        let _ = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                _ = self.requests.recv() => (),
+                _ = self.tools.recv() => (),
+                _ = self.messages.recv() => (),
+                _ = self.output.recv() => (),
+            }
+        })
+        .await;
+    }
+}
+
+async fn poll_until_opt<T, F, Fut>(node: &LiveUser, timeout: Duration, mut check: F) -> Option<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = SessionChanges::new(node).await;
+    loop {
+        if let Some(found) = check().await {
+            return Some(found);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        changes.wait(deadline).await;
+    }
+}
+
+async fn poll_until<T, E, F, Fut>(
+    node: &LiveUser,
+    timeout: Duration,
+    diag_session: Option<&str>,
+    what: &str,
+    mut check: F,
+) -> T
+where
+    E: std::fmt::Display,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = SessionChanges::new(node).await;
+    loop {
+        match check().await {
+            Ok(found) => return found,
+            Err(last) if tokio::time::Instant::now() >= deadline => {
+                if let Some(session_id) = diag_session {
+                    dump_session_diagnostics(node, session_id).await;
+                }
+                panic!("timed out waiting for {what}; last={last}");
+            }
+            Err(_) => changes.wait(deadline).await,
+        }
+    }
+}
+
+async fn query_rows<T>(node: &LiveUser, key: &str, query: &str) -> Vec<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let data = node.read_data(query).await;
+    data.get(key)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            serde_json::from_value::<T>(row.clone())
+                .unwrap_or_else(|error| panic!("decode {key} row {row}: {error}"))
+        })
+        .collect()
+}
+
+fn rfc3339(value: &Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .as_deref()
+        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
+fn is_terminal(state: &str) -> bool {
+    RequestLifecycleState::is_terminal_str(Some(state))
+}
+
+async fn fetch_request_lifecycle(node: &LiveUser, request_id: &str) -> Option<String> {
+    let escaped = escape_graphql_string(request_id);
+    let data = node
+        .read_data(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{ lifecycle_state }} }}"#
+        ))
+        .await;
+    request_lifecycle(&data, request_id)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NotificationRow {
+    session_id: Option<String>,
+    request_doc_id: Option<String>,
+    publication: serde_json::Value,
+}
+
+async fn completion_notifications(node: &LiveUser, tool_call_doc_id: &str) -> Vec<NotificationRow> {
+    let candidates: Vec<NotificationRow> = query_rows::<NotificationRow>(
+        node,
+        "AgentMessage",
+        "{ AgentMessage { session_id request_doc_id publication } }",
+    )
+    .await
+    .into_iter()
+    .filter(|row| {
+        row.publication["kind"] == "tool_delivery"
+            && row.publication["tool_call_doc_id"] == tool_call_doc_id
+    })
+    .collect();
+    let mut notifications = Vec::new();
+    for candidate in candidates {
+        let Some(session_id) = candidate.session_id.as_deref() else {
+            continue;
+        };
+        let requests = session_requests(node, session_id).await;
+        if requests.iter().any(|request| {
+            candidate.request_doc_id.as_deref() == Some(request.doc_id.as_str())
+                && request.is_background_completion_wake()
+        }) {
+            notifications.push(candidate);
+        }
+    }
+    notifications
+}
+
+async fn wait_for_bound_wake(
+    node: &LiveUser,
+    session_id: &str,
+    notification: &NotificationRow,
+) -> SessionRequestRow {
+    let bound = notification
+        .request_doc_id
+        .as_deref()
+        .expect("a completion notification binds its wake");
+    let wake = wait_for_session_request(
+        node,
+        session_id,
+        |row| row.doc_id == bound && row.lifecycle_state.as_deref().is_some_and(is_terminal),
+        Duration::from_secs(300),
+    )
+    .await;
+    assert!(
+        wake.is_background_completion_wake(),
+        "the notification must bind a completion wake: {wake:?}"
+    );
+    assert_eq!(
+        wake.lifecycle_state.as_deref(),
+        Some("completed"),
+        "the bound completion wake must run: {wake:?}"
+    );
+    wake
+}
+
+async fn wait_for_completion_notification(
+    node: &LiveUser,
+    tool_call_doc_id: &str,
+    timeout: Duration,
+) -> NotificationRow {
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("completion notification for row {tool_call_doc_id}"),
+        || async {
+            let rows = completion_notifications(node, tool_call_doc_id).await;
+            assert!(
+                rows.len() <= 1,
+                "a settled row must publish at most one notification: {rows:?}"
+            );
+            rows.into_iter().next().ok_or("none")
+        },
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct SessionMessageToolRow {
     #[serde(rename = "_docID")]
@@ -2573,292 +2534,44 @@ struct SessionMessageToolRow {
 }
 
 async fn session_message_tool_rows(node: &LiveUser, node_did: &str) -> Vec<SessionMessageToolRow> {
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ node_did: {{ _eq: "{}" }}, tool_name: {{ _in: ["{}", "{}"] }} }}) {{ _docID session_id lifecycle_state completion_notification_delivered_at }} }}"#,
-        escape_graphql_string(node_did),
-        AGENT_NEW_TOOL_NAME,
-        AGENT_MESSAGE_TOOL_NAME,
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query session-message rows failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentToolCall"].as_array())
-        .into_iter()
-        .flatten()
-        .map(|row| serde_json::from_value(row.clone()).expect("decode session-message row"))
-        .collect()
+    query_rows(
+        node,
+        "AgentToolCall",
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ node_did: {{ _eq: "{}" }}, tool_name: {{ _in: ["{}", "{}"] }} }}) {{ _docID session_id lifecycle_state completion_notification_delivered_at }} }}"#,
+            escape_graphql_string(node_did),
+            AGENT_NEW_TOOL_NAME,
+            AGENT_MESSAGE_TOOL_NAME,
+        ),
+    )
+    .await
 }
 
 async fn wait_for_node_quiescent(node: &LiveUser, node_did: &str, timeout: Duration) {
     let condition = format!(r#"{{ _eq: "{}" }}"#, escape_graphql_string(node_did));
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let requests = requests_where(node, "node_did", &condition).await;
-        let rows = session_message_tool_rows(node, node_did).await;
-        let busy_requests = requests
-            .iter()
-            .filter(|row| !row.lifecycle_state.as_deref().is_some_and(is_terminal))
-            .collect::<Vec<_>>();
-        let busy_rows = rows
-            .iter()
-            .filter(|row| {
-                row.lifecycle_state.as_deref() == Some("running")
-                    || row.lifecycle_state.as_deref() == Some("pending")
-            })
-            .collect::<Vec<_>>();
-        if busy_requests.is_empty() && busy_rows.is_empty() {
-            return;
+    poll_until(node, timeout, None, "node quiescent", || {
+        let condition = &condition;
+        async move {
+            let requests = requests_where(node, "node_did", condition).await;
+            let rows = session_message_tool_rows(node, node_did).await;
+            let busy_requests: Vec<_> = requests
+                .iter()
+                .filter(|row| !row.lifecycle_state.as_deref().is_some_and(is_terminal))
+                .collect();
+            let busy_rows: Vec<_> = rows
+                .iter()
+                .filter(|row| matches!(row.lifecycle_state.as_deref(), Some("running" | "pending")))
+                .collect();
+            if busy_requests.is_empty() && busy_rows.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "busy requests={busy_requests:?}; busy rows={busy_rows:?}"
+                ))
+            }
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "node_config never became quiescent; busy requests={busy_requests:?}; busy rows={busy_rows:?}"
-        );
-        changes.wait(deadline).await;
-    }
-}
-
-const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You can start a session on \
-an agent named `researcher`. For ANY research or factual lookup the user asks for, you MUST call the \
-`agent_new` tool with agent exactly \"researcher\" and a `prompt` describing the question, then \
-tell the user the research is under way without calling any other tool. Do not answer factual \
-questions yourself. When a background completion notification arrives, relay its answer to the user \
-without calling any tool.";
-
-async fn boot_document_agent(
-    db: &TestStore,
-    identity: Arc<dyn NodeIdentity>,
-) -> Result<BootedAgent> {
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await?;
-    Ok(boot_loaded_document_agent(db, agent).await)
-}
-
-async fn boot_loaded_document_agent(db: &TestStore, agent: Gents) -> BootedAgent {
-    let node_did = agent.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(&db.node, &node_did).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
-}
-
-async fn boot_workspace_agent(
-    db: &TestStore,
-    identity: Arc<dyn NodeIdentity>,
-    workspace: &Path,
-) -> Result<BootedAgent> {
-    let loaded = Gents::from_default_agent_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.backend_admission()),
-            tool_ceiling: ToolCeiling::readwrite(workspace)
-                .with_command_timeout_secs(BLOCKED_COMMAND_TIMEOUT_SECS),
-            ..Default::default()
-        },
-    )
-    .await?;
-    Ok(boot_loaded_document_agent(db, loaded).await)
-}
-
-const BLOCKED_COMMAND_TIMEOUT_SECS: u64 = 600;
-
-fn blocked_bash_args(started: &str, release: &ProcessGate, done: &str) -> serde_json::Value {
-    serde_json::json!({
-        "command": release.command(started, done),
-        "args": [],
-        "timeout_secs": BLOCKED_COMMAND_TIMEOUT_SECS
     })
-}
-
-async fn configure_bash_agent_tools(
-    db: &TestStore,
-    node_did: &str,
-    agent_did: &str,
-    workspace: &Path,
-    targets: Vec<AgentTargetDocument>,
-) {
-    configure_agent_tools(
-        db,
-        node_did,
-        agent_did,
-        None,
-        Tools {
-            tools_id: format!("{agent_did}-bash-tools"),
-            node_did: node_did.to_string(),
-            host: Some(HostTools {
-                root: Some(workspace.display().to_string()),
-                bash: Some(BashTools {
-                    mode: BashMode::Unrestricted,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            agents: (!targets.is_empty()).then(|| session_targets_group(&targets)),
-            ..Default::default()
-        },
-        target_documents(targets),
-    )
     .await;
-}
-
-/// The User submits a request to `agent_did`, as desktop and the CLI do.
-async fn create_runtime_request(
-    live: &LiveUser,
-    node_did: &str,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    content: &str,
-) -> String {
-    assert_eq!(
-        node_did, live.node_did,
-        "a live request targets its User's node"
-    );
-    live.request(agent_did, request_id, session_id, content)
-        .await
-}
-
-fn session_targets_group(targets: &[AgentTargetDocument]) -> AgentTools {
-    AgentTools {
-        target_ids: targets
-            .iter()
-            .map(|target| target.target_id.clone())
-            .collect(),
-        enabled: Some(true),
-    }
-}
-
-fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde_json::Value)> {
-    targets
-        .into_iter()
-        .map(|target| {
-            (
-                Collection::AgentTarget,
-                serde_json::to_value(target).expect("serialize session target"),
-            )
-        })
-        .collect()
-}
-
-async fn authorize_session_targets(
-    db: &TestStore,
-    node_did: &str,
-    agent_did: &str,
-    targets: Vec<AgentTargetDocument>,
-) {
-    configure_agent_tools(
-        db,
-        node_did,
-        agent_did,
-        None,
-        Tools {
-            tools_id: format!("{agent_did}-session-tools"),
-            node_did: node_did.to_string(),
-            agents: Some(session_targets_group(&targets)),
-            ..Default::default()
-        },
-        target_documents(targets),
-    )
-    .await;
-}
-
-async fn configure_standard_backgrounding_tools(
-    db: &TestStore,
-    node_did: &str,
-    parent_agent_did: &str,
-    child_agent_did: &str,
-    workspace: &Path,
-) {
-    let targets = vec![AgentTargetDocument {
-        description: Some("Runs a deliberately blocked background job.".to_string()),
-        ..agent_target(
-            node_did,
-            BACKGROUND_WORKER_TARGET_NAME,
-            node_did,
-            child_agent_did,
-        )
-    }];
-    configure_agent_tools(
-        db,
-        node_did,
-        parent_agent_did,
-        None,
-        Tools {
-            tools_id: format!("{parent_agent_did}-standard-background-tools"),
-            node_did: node_did.to_string(),
-            host: Some(HostTools {
-                root: Some(workspace.display().to_string()),
-                bash: Some(BashTools {
-                    mode: BashMode::Unrestricted,
-                    background_enabled: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            agents: Some(session_targets_group(&targets)),
-            ..Default::default()
-        },
-        target_documents(targets),
-    )
-    .await;
-
-    configure_agent_tools(
-        db,
-        node_did,
-        child_agent_did,
-        None,
-        Tools {
-            tools_id: format!("{child_agent_did}-foreground-bash-tools"),
-            node_did: node_did.to_string(),
-            host: Some(HostTools {
-                root: Some(workspace.display().to_string()),
-                bash: Some(BashTools {
-                    mode: BashMode::Unrestricted,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        Vec::new(),
-    )
-    .await;
-}
-
-fn is_terminal(state: &str) -> bool {
-    RequestLifecycleState::is_terminal_str(Some(state))
-}
-
-async fn fetch_request_lifecycle(node: &LiveUser, request_id: &str) -> Option<String> {
-    let escaped = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                lifecycle_state
-            }}
-        }}"#
-    );
-    #[derive(Deserialize)]
-    struct Row {
-        lifecycle_state: Option<String>,
-    }
-    let resp = node.execute(&query).await;
-    first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2875,36 +2588,16 @@ struct CausedRequestRow {
     caused_by_parent_tool_call_id: Option<String>,
 }
 
-const CAUSED_REQUEST_FIELDS: &str = "request_id session_id node_did requester_did agent_did \
-    lifecycle_state admission_kind request_hop caused_by_parent_request_id \
-    caused_by_parent_tool_call_id";
-
-fn caused_request_rows(response: &gents::defra_node::QueryResponse) -> Vec<CausedRequestRow> {
-    assert!(
-        !response.has_errors(),
-        "query caused requests failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|row| {
-            serde_json::from_value::<CausedRequestRow>(row.clone())
-                .unwrap_or_else(|error| panic!("decode caused request {row}: {error}"))
-        })
-        .collect()
-}
-
 async fn fetch_caused_requests(node: &LiveUser, parent_request_id: &str) -> Vec<CausedRequestRow> {
     let escaped = escape_graphql_string(parent_request_id);
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }}, caused_by_parent_tool_call_id: {{ _ne: null }} }}) {{ {CAUSED_REQUEST_FIELDS} }} }}"#
-    );
-    caused_request_rows(&node.execute(&query).await)
+    query_rows(
+        node,
+        "AgentRequest",
+        &format!(
+            r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }}, caused_by_parent_tool_call_id: {{ _ne: null }} }}) {{ request_id session_id node_did requester_did agent_did lifecycle_state admission_kind request_hop caused_by_parent_request_id caused_by_parent_tool_call_id }} }}"#
+        ),
+    )
+    .await
 }
 
 async fn wait_for_caused_request(
@@ -2912,21 +2605,36 @@ async fn wait_for_caused_request(
     parent_request_id: &str,
     timeout: Duration,
 ) -> Option<CausedRequestRow> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = node.subscribe_changes("AgentRequest").await;
-    loop {
-        if let Some(caused) = fetch_caused_requests(node, parent_request_id)
+    poll_until_opt(node, timeout, || async {
+        fetch_caused_requests(node, parent_request_id)
             .await
             .into_iter()
             .next()
-        {
-            return Some(caused);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return None;
-        }
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
+    })
+    .await
+}
+
+async fn wait_for_caused_requests(
+    node: &LiveUser,
+    parent_request_id: &str,
+    count: usize,
+    timeout: Duration,
+) -> Vec<CausedRequestRow> {
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("{count} requests caused by {parent_request_id}"),
+        || async {
+            let caused = fetch_caused_requests(node, parent_request_id).await;
+            if caused.len() >= count {
+                Ok(caused)
+            } else {
+                Err(format!("{caused:?}"))
+            }
+        },
+    )
+    .await
 }
 
 struct ProcessGate {
@@ -2967,7 +2675,11 @@ impl ProcessGate {
                     {
                         return;
                     }
-                    let _ = connection.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                    let _ = connection
+                        .write_all(
+                            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
                     let _ = connection.shutdown().await;
                 });
             }
@@ -2980,7 +2692,10 @@ impl ProcessGate {
     }
 
     fn command(&self, started: &str, done: &str) -> String {
-        format!("printf {started}; curl --silent --show-error --fail --unix-socket '{}' http://localhost/ && printf {done}", self.socket.display())
+        format!(
+            "printf {started}; curl --silent --show-error --fail --unix-socket '{}' http://localhost/ && printf {done}",
+            self.socket.display()
+        )
     }
 
     fn release(&self) {
@@ -2999,60 +2714,48 @@ impl Drop for ProcessGate {
 }
 
 async fn wait_for_started_marker(node: &LiveUser, marker: &str, timeout: Duration) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let data = node
-            .read_data(
-                r#"{ AgentToolCall(filter: {tool_name: {_eq: "bash_unrestricted"}}) {
-            _docID request_doc_id session_id node_did requester_did
-        } }"#,
-            )
-            .await;
-        for row in data["AgentToolCall"].as_array().into_iter().flatten() {
-            let (Some(tool), Some(request), Some(session), Some(owner)) = (
-                row["_docID"].as_str(),
-                row["request_doc_id"].as_str(),
-                row["session_id"].as_str(),
-                row["node_did"].as_str(),
-            ) else {
-                continue;
-            };
-            let output = gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
-                &node.access, tool, request, session, owner,
-                row["requester_did"].as_str().filter(|did| !did.is_empty()),
-            ).await.expect("read the running process output").into_text();
-            if output.contains(marker) {
-                return;
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("process marker {marker}"),
+        || async {
+            let data = node
+                .read_data(
+                    r#"{ AgentToolCall(filter: {tool_name: {_eq: "bash_unrestricted"}}) {
+                    _docID request_doc_id session_id node_did requester_did
+                } }"#,
+                )
+                .await;
+            for row in data["AgentToolCall"].as_array().into_iter().flatten() {
+                let (Some(tool), Some(request), Some(session), Some(owner)) = (
+                    row["_docID"].as_str(),
+                    row["request_doc_id"].as_str(),
+                    row["session_id"].as_str(),
+                    row["node_did"].as_str(),
+                ) else {
+                    continue;
+                };
+                let output =
+                gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+                    &node.access,
+                    tool,
+                    request,
+                    session,
+                    owner,
+                    row["requester_did"].as_str().filter(|did| !did.is_empty()),
+                )
+                .await
+                .expect("read the running process output")
+                .into_text();
+                if output.contains(marker) {
+                    return Ok(());
+                }
             }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the process never produced {marker}"
-        );
-        changes.wait(deadline).await;
-    }
-}
-
-async fn wait_for_caused_requests(
-    node: &LiveUser,
-    parent_request_id: &str,
-    count: usize,
-    timeout: Duration,
-) -> Vec<CausedRequestRow> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let caused = fetch_caused_requests(node, parent_request_id).await;
-        if caused.len() >= count {
-            return caused;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {count} requests caused by {parent_request_id}; have {caused:?}"
-        );
-        changes.wait(deadline).await;
-    }
+            Err("marker not yet observed")
+        },
+    )
+    .await;
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3068,25 +2771,16 @@ async fn session_tool_rows(
     session_id: &str,
     tool_name: &str,
 ) -> Vec<SessionToolRow> {
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID tool_call_id await_mode }} }}"#,
-        escape_graphql_string(session_id),
-        escape_graphql_string(tool_name),
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query session tool rows failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentToolCall"].as_array())
-        .into_iter()
-        .flatten()
-        .map(|row| serde_json::from_value(row.clone()).expect("decode session tool row"))
-        .collect()
+    query_rows(
+        node,
+        "AgentToolCall",
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID tool_call_id await_mode }} }}"#,
+            escape_graphql_string(session_id),
+            escape_graphql_string(tool_name),
+        ),
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3130,26 +2824,40 @@ async fn session_requests(node: &LiveUser, session_id: &str) -> Vec<SessionReque
 }
 
 async fn requests_where(node: &LiveUser, field: &str, condition: &str) -> Vec<SessionRequestRow> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ {field}: {condition} }}, order: {{ created_at: ASC }}) {{ _docID request_id session_id lifecycle_state request_hop failure_reason input caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id caused_by_trigger_kind purpose created_at claimed_at terminalized_at }} }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query requests failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentRequest"].as_array())
-        .into_iter()
-        .flatten()
-        .map(|row| {
-            serde_json::from_value(row.clone())
-                .unwrap_or_else(|error| panic!("decode session request {row}: {error}"))
-        })
-        .collect()
+    query_rows(
+        node,
+        "AgentRequest",
+        &format!(
+            r#"{{ AgentRequest(filter: {{ {field}: {condition} }}, order: {{ created_at: ASC }}) {{ _docID request_id session_id lifecycle_state request_hop failure_reason input caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id caused_by_trigger_kind purpose created_at claimed_at terminalized_at }} }}"#
+        ),
+    )
+    .await
+}
+
+async fn wait_for_session_request<F>(
+    node: &LiveUser,
+    session_id: &str,
+    matches: F,
+    timeout: Duration,
+) -> SessionRequestRow
+where
+    F: Fn(&SessionRequestRow) -> bool,
+{
+    poll_until(
+        node,
+        timeout,
+        Some(session_id),
+        &format!("matching request in session {session_id}"),
+        || async {
+            let requests = session_requests(node, session_id).await;
+            requests
+                .iter()
+                .find(|row| matches(row))
+                .cloned()
+                .ok_or_else(|| format!("{requests:?}"))
+        },
+    )
+    .await
 }
 
 async fn wait_for_completion_wake(
@@ -3158,54 +2866,53 @@ async fn wait_for_completion_wake(
     owning_request_id: &str,
     timeout: Duration,
 ) -> SessionRequestRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let requests = session_requests(node, session_id).await;
-        let wakes = requests
-            .iter()
-            .filter(|row| {
-                row.is_background_completion_wake()
-                    && row.caused_by_parent_request_id.as_deref() == Some(owning_request_id)
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            wakes.len() <= 1,
-            "one completion must cause at most one wake: {wakes:?}"
-        );
-        if let Some(wake) = wakes
-            .first()
-            .filter(|row| row.lifecycle_state.as_deref().is_some_and(is_terminal))
-        {
-            return (*wake).clone();
-        }
-        if tokio::time::Instant::now() >= deadline {
-            dump_session_diagnostics(node, session_id).await;
-            panic!(
-                "no terminal completion wake caused by {owning_request_id} in session {session_id}; requests={requests:?}"
+    poll_until(
+        node,
+        timeout,
+        Some(session_id),
+        &format!("terminal completion wake caused by {owning_request_id} in session {session_id}"),
+        || async {
+            let requests = session_requests(node, session_id).await;
+            let wakes: Vec<_> = requests
+                .iter()
+                .filter(|row| {
+                    row.is_background_completion_wake()
+                        && row.caused_by_parent_request_id.as_deref() == Some(owning_request_id)
+                })
+                .collect();
+            assert!(
+                wakes.len() <= 1,
+                "one completion must cause at most one wake: {wakes:?}"
             );
-        }
-        changes.wait(deadline).await;
-    }
+            wakes
+                .first()
+                .filter(|row| row.lifecycle_state.as_deref().is_some_and(is_terminal))
+                .map(|row| (*row).clone())
+                .ok_or_else(|| format!("{requests:?}"))
+        },
+    )
+    .await
 }
 
 async fn wait_for_session_quiescent(node: &LiveUser, session_id: &str, timeout: Duration) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let requests = session_requests(node, session_id).await;
-        if requests
-            .iter()
-            .all(|row| row.lifecycle_state.as_deref().is_some_and(is_terminal))
-        {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for session {session_id} to settle; requests={requests:?}"
-        );
-        changes.wait(deadline).await;
-    }
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("session {session_id} to settle"),
+        || async {
+            let requests = session_requests(node, session_id).await;
+            if requests
+                .iter()
+                .all(|row| row.lifecycle_state.as_deref().is_some_and(is_terminal))
+            {
+                Ok(())
+            } else {
+                Err(format!("{requests:?}"))
+            }
+        },
+    )
+    .await;
 }
 
 async fn assert_deliveries_bound_to_completed_wakes(
@@ -3219,65 +2926,34 @@ async fn assert_deliveries_bound_to_completed_wakes(
         wait_for_bound_wake(node, session_id, &notification).await;
     }
 
-    #[derive(Deserialize)]
-    struct WakeRow {
-        #[serde(rename = "_docID")]
-        doc_id: String,
-        request_id: String,
-        lifecycle_state: Option<String>,
-        input: Option<RequestInput>,
-    }
-    #[derive(Deserialize)]
-    struct DeliveryRow {
-        request_doc_id: Option<String>,
-        publication: serde_json::Value,
-    }
-    let escaped = escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
-            r#"{{
-                AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{
-                    _docID request_id lifecycle_state input
-                }}
-                AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{
-                    request_doc_id publication
-                }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query completion deliveries failed: {:?}",
-        response.errors
-    );
-    let data = response.data.as_ref().expect("completion delivery data");
-    let wakes = serde_json::from_value::<Vec<WakeRow>>(data["AgentRequest"].clone())
-        .expect("decode session requests")
+    let wakes: Vec<_> = session_requests(node, session_id)
+        .await
         .into_iter()
-        .filter(|row| {
-            row.input
-                .as_ref()
-                .and_then(|input| input.queue.as_ref())
-                .is_some_and(|queue| queue.source == QueueSource::BackgroundCompletion)
-        })
-        .collect::<Vec<_>>();
-    let messages = serde_json::from_value::<Vec<DeliveryRow>>(data["AgentMessage"].clone())
-        .expect("decode session messages");
+        .filter(SessionRequestRow::is_background_completion_wake)
+        .collect();
+    let escaped = escape_graphql_string(session_id);
+    let messages: Vec<NotificationRow> = query_rows(
+        node,
+        "AgentMessage",
+        &format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ session_id request_doc_id publication }} }}"#
+        ),
+    )
+    .await;
     let mut deliveries = Vec::new();
     for tool_call_doc_id in tool_call_doc_ids {
-        let bound = messages
+        let bound: Vec<_> = messages
             .iter()
             .filter(|message| {
                 message.publication["kind"] == "tool_delivery"
                     && message.publication["tool_call_doc_id"] == *tool_call_doc_id
             })
             .filter_map(|message| {
-                let wake = wakes
+                wakes
                     .iter()
-                    .find(|wake| message.request_doc_id.as_deref() == Some(wake.doc_id.as_str()))?;
-                Some(wake)
+                    .find(|wake| message.request_doc_id.as_deref() == Some(wake.doc_id.as_str()))
             })
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(
             bound.len(),
             1,
@@ -3295,51 +2971,50 @@ async fn assert_deliveries_bound_to_completed_wakes(
     deliveries
 }
 
-async fn wait_for_json_tool_result(
+async fn wait_for_json_tool_result<F>(
     node: &LiveUser,
     request_id: &str,
     session_id: &str,
-    matches: impl Fn(&serde_json::Value) -> bool,
+    matches: F,
     timeout: Duration,
-) -> serde_json::Value {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let messages = load_session_messages(node, request_id, session_id).await;
-        if let Some(found) = tool_result_texts(&messages)
-            .into_iter()
-            .filter_map(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-            .find(|value| matches(value))
-        {
-            return found;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            dump_session_diagnostics(node, session_id).await;
-            panic!(
-                "timed out waiting for a matching tool result of {request_id} in session {session_id}; results={:?}",
-                tool_result_texts(&messages)
-            );
-        }
-        changes.wait(deadline).await;
-    }
+) -> serde_json::Value
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    poll_until(
+        node,
+        timeout,
+        Some(session_id),
+        &format!("matching tool result of {request_id} in session {session_id}"),
+        || async {
+            let messages = load_session_messages(node, request_id, session_id).await;
+            tool_result_texts(&messages)
+                .into_iter()
+                .filter_map(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                .find(|value| matches(value))
+                .ok_or_else(|| format!("{:?}", tool_result_texts(&messages)))
+        },
+    )
+    .await
 }
 
 async fn dump_session_diagnostics(node: &LiveUser, session_id: &str) {
     let escaped = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped}" }} }}, order: {{ message_sequence: ASC }}) {{
-                _docID tool_name tool_call_id lifecycle_state status await_mode tool_failure_class
-            }}
-            AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}, order: {{ sequence: ASC }}) {{
-                _docID sequence role publication outcome native_id blocks request_doc_id
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
+    let data = node
+        .read_data(&format!(
+            r#"{{
+                AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped}" }} }}, order: {{ message_sequence: ASC }}) {{
+                    _docID tool_name tool_call_id lifecycle_state status await_mode tool_failure_class
+                }}
+                AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}, order: {{ sequence: ASC }}) {{
+                    _docID sequence role publication outcome native_id blocks request_doc_id
+                }}
+            }}"#
+        ))
+        .await;
     tracing::info!(
         "[diag] session {session_id}: {}",
-        serde_json::to_string_pretty(&resp.data.unwrap_or_default()).unwrap_or_default()
+        serde_json::to_string_pretty(&data).unwrap_or_default()
     );
 }
 
@@ -3356,41 +3031,9 @@ async fn timeline_tools(
     node: &LiveUser,
     request_id: &str,
 ) -> Vec<gents_observe::observe::run_timeline::rows::TimelineToolCallRow> {
-    load_timeline(node, request_id).await.tool_calls
-}
-
-/// The request's canonical run timeline as the User reads it.
-async fn load_timeline(
-    node: &LiveUser,
-    request_id: &str,
-) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
-    // A published header can name a closing segment whose parent link the
-    // writer has not committed yet; that dependency is incomplete, not denied.
-    let deadline = tokio::time::Instant::now() + STALL_CEILING;
-    let mut changes = node.subscribe_changes("AgentOutputSegment").await;
-    let mut messages = node.subscribe_changes("AgentMessage").await;
-    loop {
-        match load_run_timeline_rows(&node.access, request_id).await {
-            Ok(rows) => return rows,
-            Err(error)
-                if tokio::time::Instant::now() < deadline
-                    && error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
-                    }) =>
-            {
-                let _ = tokio::time::timeout_at(deadline, async {
-                    tokio::select! {
-                        _ = changes.recv() => (),
-                        _ = messages.recv() => (),
-                    }
-                })
-                .await;
-            }
-            Err(error) => panic!("load canonical timeline for {request_id}: {error:#}"),
-        }
-    }
+    canonical_run_timeline_rows(&node.access, request_id)
+        .await
+        .tool_calls
 }
 
 fn tool_row(row: gents_observe::observe::run_timeline::rows::TimelineToolCallRow) -> ToolCallRow {
@@ -3419,6 +3062,27 @@ async fn fetch_tool_call(
         .next()
 }
 
+async fn wait_for_tool_call_matching<F>(
+    node: &LiveUser,
+    request_id: &str,
+    session_id: &str,
+    tool_call_id: &str,
+    what: &str,
+    predicate: F,
+    timeout: Duration,
+) -> ToolCallRow
+where
+    F: Fn(&ToolCallRow) -> bool,
+{
+    poll_until(node, timeout, None, what, || async {
+        match fetch_tool_call(node, request_id, session_id, tool_call_id).await {
+            Some(row) if predicate(&row) => Ok(row),
+            last => Err(format!("{last:?}")),
+        }
+    })
+    .await
+}
+
 async fn wait_for_tool_call_state(
     node: &LiveUser,
     request_id: &str,
@@ -3427,22 +3091,16 @@ async fn wait_for_tool_call_state(
     expected_state: &str,
     timeout: Duration,
 ) -> ToolCallRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut last = None;
-    let mut changes = node.subscribe_changes("AgentToolCall").await;
-    loop {
-        if let Some(row) = fetch_tool_call(node, request_id, session_id, tool_call_id).await {
-            if row.lifecycle_state == expected_state {
-                return row;
-            }
-            last = Some(row);
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for tool call {tool_call_id} state={expected_state}; last={last:?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
+    wait_for_tool_call_matching(
+        node,
+        request_id,
+        session_id,
+        tool_call_id,
+        &format!("tool call {tool_call_id} state={expected_state}"),
+        |row| row.lifecycle_state == expected_state,
+        timeout,
+    )
+    .await
 }
 
 async fn wait_for_tool_call_settled(
@@ -3452,25 +3110,21 @@ async fn wait_for_tool_call_settled(
     tool_call_id: &str,
     timeout: Duration,
 ) -> ToolCallRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut last = None;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        if let Some(row) = fetch_tool_call(node, request_id, session_id, tool_call_id).await {
-            if matches!(
+    wait_for_tool_call_matching(
+        node,
+        request_id,
+        session_id,
+        tool_call_id,
+        &format!("tool call {tool_call_id} to settle"),
+        |row| {
+            matches!(
                 row.lifecycle_state.as_str(),
                 "completed" | "failed" | "cancelled"
-            ) {
-                return row;
-            }
-            last = Some(row);
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for tool call {tool_call_id} to settle; last={last:?}"
-        );
-        changes.wait(deadline).await;
-    }
+            )
+        },
+        timeout,
+    )
+    .await
 }
 
 async fn wait_for_background_tool_call(
@@ -3480,36 +3134,37 @@ async fn wait_for_background_tool_call(
     tool_name: &str,
     timeout: Duration,
 ) -> ToolCallRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = node.subscribe_changes("AgentToolCall").await;
-    loop {
-        if let Some(row) = timeline_tools(node, request_id)
-            .await
-            .into_iter()
-            .filter(|row| {
-                row.session_id == session_id
-                    && row.tool_name == tool_name
-                    && row.await_mode.as_deref() == Some("background")
-            })
-            .map(tool_row)
-            .next()
-        {
-            return row;
-        }
-        if let Some(state) = fetch_request_lifecycle(node, request_id).await {
-            if is_terminal(&state) {
-                dump_session_diagnostics(node, session_id).await;
-                panic!(
-                    "request {request_id} terminalized as {state} before accepted background tool {tool_name} in session {session_id}"
-                );
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("background tool {tool_name} in session {session_id}"),
+        || async {
+            if let Some(row) = timeline_tools(node, request_id)
+                .await
+                .into_iter()
+                .filter(|row| {
+                    row.session_id == session_id
+                        && row.tool_name == tool_name
+                        && row.await_mode.as_deref() == Some("background")
+                })
+                .map(tool_row)
+                .next()
+            {
+                return Ok(row);
             }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for background tool {tool_name} in session {session_id}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
+            if let Some(state) = fetch_request_lifecycle(node, request_id).await {
+                if is_terminal(&state) {
+                    dump_session_diagnostics(node, session_id).await;
+                    panic!(
+                        "request {request_id} terminalized as {state} before accepted background tool {tool_name} in session {session_id}"
+                    );
+                }
+            }
+            Err("not yet visible")
+        },
+    )
+    .await
 }
 
 async fn load_session_messages(
@@ -3517,7 +3172,7 @@ async fn load_session_messages(
     request_id: &str,
     session_id: &str,
 ) -> Vec<gents_protocol::message::Message> {
-    load_timeline(node, request_id)
+    canonical_run_timeline_rows(&node.access, request_id)
         .await
         .messages
         .into_iter()
@@ -3571,50 +3226,46 @@ async fn wait_for_model_tool_call(
     tool_name: &str,
     timeout: Duration,
 ) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_tool_name = escape_graphql_string(tool_name);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_request_id}" }},
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    tool_name: {{ _eq: "{escaped_tool_name}" }}
+                    request_id: {{ _eq: "{}" }},
+                    session_id: {{ _eq: "{}" }},
+                    tool_name: {{ _eq: "{}" }}
                 }}
             ) {{ tool_call_id }}
-        }}"#
+        }}"#,
+        escape_graphql_string(request_id),
+        escape_graphql_string(session_id),
+        escape_graphql_string(tool_name),
     );
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query accepted model tool call {tool_name} failed: {:?}",
-            response.errors
-        );
-        let observed = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|rows| !rows.is_empty());
-        if observed {
-            return;
-        }
-        if let Some(state) = fetch_request_lifecycle(node, request_id).await {
-            assert!(
-                !is_terminal(&state),
-                "request {request_id} terminalized as {state} before model tool call {tool_name} in session {session_id}"
-            );
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for model tool call {tool_name} in session {session_id}"
-        );
-        changes.wait(deadline).await;
-    }
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("model tool call {tool_name} in session {session_id}"),
+        || {
+            let query = &query;
+            async move {
+                let data = node.read_data(query).await;
+                if data["AgentToolCall"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    return Ok(());
+                }
+                if let Some(state) = fetch_request_lifecycle(node, request_id).await {
+                    assert!(
+                        !is_terminal(&state),
+                        "request {request_id} terminalized as {state} before model tool call {tool_name} in session {session_id}"
+                    );
+                }
+                Err("not yet visible")
+            }
+        },
+    )
+    .await;
 }
 
 async fn wait_for_tool_result_containing(
@@ -3624,28 +3275,29 @@ async fn wait_for_tool_result_containing(
     needles: &[&str],
     timeout: Duration,
 ) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = SessionChanges::new(node).await;
-    loop {
-        let messages = load_session_messages(node, request_id, session_id).await;
-        if tool_result_texts(&messages)
-            .iter()
-            .any(|text| needles.iter().all(|needle| text.contains(needle)))
-        {
-            return;
-        }
-        if let Some(state) = fetch_request_lifecycle(node, request_id).await {
-            assert!(
-                !is_terminal(&state),
-                "request {request_id} terminalized as {state} before a tool result contained {needles:?}; transcript={messages:#?}"
-            );
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for a tool result containing {needles:?} in session {session_id}"
-        );
-        changes.wait(deadline).await;
-    }
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("tool result containing {needles:?} in session {session_id}"),
+        || async {
+            let messages = load_session_messages(node, request_id, session_id).await;
+            if tool_result_texts(&messages)
+                .iter()
+                .any(|text| needles.iter().all(|needle| text.contains(needle)))
+            {
+                return Ok(());
+            }
+            if let Some(state) = fetch_request_lifecycle(node, request_id).await {
+                assert!(
+                    !is_terminal(&state),
+                    "request {request_id} terminalized as {state} before a tool result contained {needles:?}; transcript={messages:#?}"
+                );
+            }
+            Err("not yet visible")
+        },
+    )
+    .await;
 }
 
 async fn wait_for_message_containing(
@@ -3655,29 +3307,25 @@ async fn wait_for_message_containing(
     needle: &str,
     timeout: Duration,
 ) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = node.subscribe_changes("AgentMessage").await;
-    loop {
-        let found = load_session_messages(node, request_id, session_id)
-            .await
-            .iter()
-            .map(|message| gents_protocol::transcript::present_message(message).body_markdown)
-            .any(|body| body.contains(needle));
-        if found {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for session {session_id} message containing {needle:?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WakeRequestRow {
-    request_id: String,
-    input: Option<RequestInput>,
+    poll_until(
+        node,
+        timeout,
+        None,
+        &format!("session {session_id} message containing {needle:?}"),
+        || async {
+            let found = load_session_messages(node, request_id, session_id)
+                .await
+                .iter()
+                .map(|message| gents_protocol::transcript::present_message(message).body_markdown)
+                .any(|body| body.contains(needle));
+            if found {
+                Ok(())
+            } else {
+                Err("not yet visible")
+            }
+        },
+    )
+    .await;
 }
 
 async fn wait_for_background_wake(
@@ -3685,55 +3333,25 @@ async fn wait_for_background_wake(
     session_id: &str,
     queued_after_request_id: &str,
     timeout: Duration,
-) -> WakeRequestRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let escaped_session_id = escape_graphql_string(session_id);
+) -> SessionRequestRow {
     let expected_queue_key = format!("background_completion:{session_id}");
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{ request_id input }}
-        }}"#
-    );
-    let mut changes = node.subscribe_changes("AgentRequest").await;
-    loop {
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query background wake requests failed: {:?}",
-            response.errors
-        );
-        let wake = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|row| serde_json::from_value::<WakeRequestRow>(row.clone()).ok())
-            .find(|row| {
-                row.input
-                    .as_ref()
-                    .and_then(|input| input.queue.as_ref())
-                    .is_some_and(|queue| {
-                        queue.source == QueueSource::BackgroundCompletion
-                            && queue.policy == QueuePolicy::Coalesce
-                            && queue.key.as_deref() == Some(expected_queue_key.as_str())
-                            && queue.queued_after_request_id.as_deref()
-                                == Some(queued_after_request_id)
-                    })
-            });
-        if let Some(wake) = wake {
-            return wake;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for coalesced background wake in session {session_id}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
+    wait_for_session_request(
+        node,
+        session_id,
+        |row| {
+            row.input
+                .as_ref()
+                .and_then(|input| input.queue.as_ref())
+                .is_some_and(|queue| {
+                    queue.source == QueueSource::BackgroundCompletion
+                        && queue.policy == QueuePolicy::Coalesce
+                        && queue.key.as_deref() == Some(expected_queue_key.as_str())
+                        && queue.queued_after_request_id.as_deref() == Some(queued_after_request_id)
+                })
+        },
+        timeout,
+    )
+    .await
 }
 
 async fn assert_wake_observed(node: &LiveUser, session_id: &str, parent_request_id: &str) {

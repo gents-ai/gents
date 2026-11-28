@@ -142,6 +142,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
                 },
             ],
             output_obligation: None,
+            key_fields: None,
         },
     );
     let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
@@ -178,7 +179,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         .clone();
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0]["run_id"], "resumed-run-correlation");
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("resumed correlated output delivery timed out")
         .expect("resumed correlated output should pass the event trigger filter");

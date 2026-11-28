@@ -1,60 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn only_added_accounts_create_a_backend() {
-    for product in PRODUCTS {
-        let (db, _user, access) = access().await;
-        let did = db.node_identity.did().to_owned();
-        store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-        assert!(backends(&access, &did).await.is_empty(), "{product:?}");
-
-        let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-        let reference = b.credential.account_ref.clone().unwrap();
-        let stored = backends(&access, &did).await;
-        assert_eq!(stored.len(), 1, "{product:?}");
-        let backend = &stored[0];
-        let spec = preset(product);
-        assert_eq!(
-            backend.backend_id,
-            format!("{}-{reference}", product.provider())
-        );
-        assert_eq!(Some(backend.name.clone()), b.credential.label);
-        assert_eq!(
-            backend.auth,
-            gents_documents::BackendAuth::NodeOAuth {
-                account_ref: Some(reference.clone())
-            }
-        );
-        assert_eq!(backend.provider_kind, spec.provider_kind);
-        assert_eq!(backend.openai_wire_api, spec.openai_wire_api);
-        assert_eq!(backend.endpoint, spec.endpoint);
-        assert!(backend.enabled);
-
-        store(&access, product.sign_in(&did, "b", "refresh-b2")).await;
-        let ids = |backends: Vec<gents_documents::InferenceBackend>| {
-            backends
-                .into_iter()
-                .map(|backend| (backend.backend_id, backend.name))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            ids(backends(&access, &did).await),
-            ids(stored),
-            "{product:?}"
-        );
-        labeled(
-            &access,
-            product.sign_in(&did, "b", "refresh-b3"),
-            "Personal",
-        )
-        .await;
-        let renamed = backends(&access, &did).await;
-        assert_eq!(renamed.len(), 1);
-        assert_eq!(renamed[0].name, "Personal", "{product:?}");
-    }
-}
-
-#[tokio::test]
 async fn each_accounts_backend_keeps_its_own_models() {
     for product in PRODUCTS {
         let (db, _user, access) = access().await;

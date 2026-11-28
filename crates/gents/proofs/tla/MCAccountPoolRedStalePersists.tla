@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedStalePersists ----
+EXTENDS AccountPool
+====

@@ -56,6 +56,7 @@ pub struct ManagedExecRequest {
     pub live_output: Option<LiveToolOutputWriter>,
     /// Records the spawned process for the tool call or hook that owns it.
     pub process_recorder: Option<super::ownership::ProcessRecorder>,
+    pub linux_sandbox: Option<crate::workspace::sandbox::LinuxSandboxConfig>,
 }
 
 impl ManagedExecRequest {
@@ -80,6 +81,7 @@ pub async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExecOutcome
         &request.cwd,
         request.environment.as_ref(),
         !request.stdin.is_empty(),
+        request.linux_sandbox.as_ref(),
     ) {
         Ok(child) => ManagedChild::new(child),
         Err(error) => {
@@ -437,6 +439,7 @@ pub struct SpawnManagedProcessRequest {
     pub environment: Option<RapidHashMap<String, String>>,
     pub tool_name: Option<String>,
     pub kind: ManagedExecKind,
+    pub linux_sandbox: Option<crate::workspace::sandbox::LinuxSandboxConfig>,
 }
 
 pub struct ManagedProcess {
@@ -496,6 +499,7 @@ pub async fn spawn_managed_process(
         &request.cwd,
         request.environment.as_ref(),
         true,
+        request.linux_sandbox.as_ref(),
     )
     .map(ManagedChild::new)
     .map_err(|error| error.to_string())?;

@@ -30,6 +30,8 @@ mod agent_tool_config;
 pub mod automation;
 pub mod backend_credential;
 pub(crate) mod desired_state;
+#[cfg(test)]
+mod detached_grant_fence_tests;
 pub mod event_consumer;
 pub mod event_source_cursor;
 mod node_document_publication;

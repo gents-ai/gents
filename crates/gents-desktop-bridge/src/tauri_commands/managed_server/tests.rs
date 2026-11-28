@@ -124,6 +124,7 @@ fn orchestration_state() -> (tempfile::TempDir, DesktopAppState) {
             managed_server: ManagedServerPolicy::Allowed,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             service_executable: None,
+            registry: None,
             client_host: false,
         },
         None,

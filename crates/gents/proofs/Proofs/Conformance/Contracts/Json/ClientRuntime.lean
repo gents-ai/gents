@@ -65,12 +65,6 @@ def agentSteerDisposition :
     { active, compatible }
   model := fun i => QueuedSteering.agentSteerDisposition i.active i.compatible
 
-private def boundaryKindJson : SessionQueue.BoundaryInputKind → String
-  | .queued => jsonString "queued"
-  | .userSteer => jsonString "user_steer"
-  | .agentSteer => jsonString "agent_steer"
-  | .blocked => jsonString "blocked"
-
 structure AgentSteerTargetInput where
   plannedHead : Nat
   activeHead : Nat
@@ -198,10 +192,6 @@ def pendingUserTurn : Family PendingUserTurn.Input PendingUserTurn.Output where
 
 private def tagged (kind fields : String) : String :=
   "{\"kind\":" ++ jsonString kind ++ fields ++ "}"
-
-private def optionalNatJson : Option Nat → String
-  | none => "null"
-  | some value => toString value
 
 def byteArrayJson (bytes : List UInt8) : String :=
   jsonArray (bytes.map (fun byte => toString byte.toNat))
@@ -348,7 +338,7 @@ def reconstructedMessageJson (native : CanonicalOutput.ReconstructedMessage) : S
 def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
   let h := message.header
   "{\"header\":{\"id\":" ++ toString h.id ++ ",\"session\":" ++ toString h.session ++
-    ",\"request\":" ++ optionalNatJson h.request ++ ",\"origin\":" ++ optionalNatJson h.origin ++
+    ",\"request\":" ++ jsonOptionalNat h.request ++ ",\"origin\":" ++ jsonOptionalNat h.origin ++
     ",\"refs\":" ++ jsonArray (h.refs.map payloadRefJson) ++ ",\"outcome\":" ++ outcomeJson h.outcome ++
     ",\"role\":" ++ jsonString (roleJson h.role) ++ ",\"publication\":" ++ publicationJson h.publication ++
     "},\"key\":" ++ jsonString message.key ++ ",\"sequence\":" ++ toString message.sequence ++
@@ -570,7 +560,7 @@ def outputObservationJson (observation : StreamingResponse.Observation) : String
     ",\"live_tools\":" ++ jsonArray (observation.owner.liveTools.map toString) ++ "}," ++
     "\"target\":{\"coordinate\":{\"request\":" ++ toString observation.target.coordinate.request ++
     ",\"source\":" ++ sourceJson observation.target.coordinate.source ++ "},\"writer\":" ++
-    writerJson observation.target.writer ++ ",\"message_id\":" ++ optionalNatJson observation.target.messageId ++ "}," ++
+    writerJson observation.target.writer ++ ",\"message_id\":" ++ jsonOptionalNat observation.target.messageId ++ "}," ++
     "\"request_terminal\":" ++ boolString observation.requestTerminal ++
     ",\"terminal_selection\":" ++ (match observation.terminalSelection with
       | none => "null" | some .noMessage => tagged "no_message" ""

@@ -1,0 +1,3 @@
+---- MODULE MCDetachedGrantRevocationFenceFailedRevokeBumps ----
+EXTENDS DetachedGrantRevocationFence
+====

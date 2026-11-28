@@ -114,14 +114,14 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">
                   This home&apos;s keys were created by an older Gents version with
                   unsafe file permissions, so other users on this computer could read
-                  them. This release does not use a key that may have been exposed;
-                  start fresh with a new identity.
+                  them. Nothing in it has been changed. This release does not use a key
+                  that may have been exposed; start fresh with a new identity.
                 </p>
               ) : older ? (
                 <p className="text-sm">
-                  This home was created by an older Gents version. This release
-                  can&apos;t open or convert it. Back it up or delete it to start fresh;
-                  nothing is carried over.
+                  This home was created by an older Gents version, which this release
+                  can&apos;t open or convert. Nothing in it has been changed. Back it up
+                  or delete it to start fresh; nothing is carried over.
                 </p>
               ) : (
                 <p
@@ -129,8 +129,8 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                   data-testid="incompatible-home-different-version"
                 >
                   This home was written by a different Gents version, possibly a newer
-                  one, and this version can&apos;t open it. Use the version that wrote
-                  it, or back it up to start fresh.
+                  one, and this version can&apos;t open it. Nothing in it has been
+                  changed. Use the version that wrote it, or back it up to start fresh.
                 </p>
               )}
             </div>
@@ -161,11 +161,15 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 ))}
               </p>
             ) : null}
-            {confirmingDelete ? null : (
+            {confirmingDelete ? null : report.plannedPaths.length > 0 ? (
               <div className="grid gap-1 text-sm">
                 <p>Starting fresh moves or deletes exactly these:</p>
                 {pathList(report.plannedPaths, "incompatible-home-planned")}
               </div>
+            ) : (
+              <p className="text-sm" data-testid="incompatible-home-nothing-planned">
+                No node or desktop app files were found to move or delete.
+              </p>
             )}
             {report.browserPaths.length > 0 ? (
               <div className="grid gap-1 text-sm" data-testid="reset-browser-clear">
@@ -230,7 +234,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
               </div>
             ) : (
               <div className="grid gap-3">
-                <div className="grid gap-1">
+                <div className="grid gap-2">
                   <button
                     className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground disabled:opacity-50"
                     data-testid="incompatible-home-backup"

@@ -432,3 +432,79 @@ async fn an_unreadable_preference_is_refused_without_discarding_it() {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), value);
     }
 }
+
+#[tokio::test]
+async fn repair_store_refusal_records_incompatible_home_for_status_and_reset() {
+    use gents_protocol::operations::install_repair::{Blocker, IncompatibleStore};
+
+    for (kind, deletable) in [
+        (IncompatibleStoreKind::UnknownLineage, true),
+        (IncompatibleStoreKind::ForeignVersion, false),
+    ] {
+        let (temp, state) = orchestration_state();
+        let home = state.policy.node_home.clone().unwrap();
+        let data = home.join("data");
+        write(&home.join("init.json"), r#"{"node_name":"Forge"}"#);
+        write(&data.join("MANIFEST"), "REGOMAN other version");
+        let before = tree(temp.path());
+
+        let store = IncompatibleStore {
+            kind,
+            data_path: data.clone(),
+        };
+        let message = store.to_string();
+        let result = repair_with(&state, true, |_| async {
+            report(
+                Vec::new(),
+                RepairOutcome::Blocked(Blocker::StoreRefused {
+                    kind,
+                    message: message.clone(),
+                }),
+            )
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.outcome, ManagedServerRepairOutcome::Blocked);
+        assert!(result.blocker.is_some());
+        assert_eq!(
+            tree(temp.path()),
+            before,
+            "refusal leaves the home untouched"
+        );
+
+        let status = {
+            let managed = state.managed_server.lock().await;
+            assert_eq!(
+                managed.incompatible_store.as_ref().map(|s| s.kind),
+                Some(kind)
+            );
+            status_from(&managed, None, None, None, None)
+        };
+        assert_eq!(status.state, ManagedServerState::Failed);
+        assert_eq!(
+            status.error_code,
+            Some(BridgeErrorCode::IncompatibleLocalStore)
+        );
+
+        let runtime_store = state.managed_server.lock().await.incompatible_store.clone();
+        let preview = plan_home_reset(
+            Some(&home),
+            runtime_store,
+            None,
+            &state.policy.desktop_paths,
+            not_the_user_home(),
+            ClientBinding::Unbound,
+            false,
+        )
+        .unwrap()
+        .preview();
+        assert_eq!(preview.delete_confirmation.is_some(), deletable);
+        assert!(!preview.confirmation.is_empty());
+        assert_eq!(
+            tree(temp.path()),
+            before,
+            "preview leaves the home untouched"
+        );
+    }
+}

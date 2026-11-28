@@ -32,15 +32,6 @@ where
     serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
 }
 
-fn first_optional_data_row<T>(data: &serde_json::Value, key: &str) -> Option<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    data_rows(data, key).into_iter().next().map(|row| {
-        serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
-    })
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub lifecycle_state: RequestLifecycleState,
@@ -80,14 +71,6 @@ impl From<AgentRequestRow> for RequestSnapshot {
             failure_reason: row.failure_reason.unwrap_or_default(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct RequestLineageSnapshot {
-    #[serde(default)]
-    pub caused_by_trigger_id: Option<String>,
-    #[serde(default)]
-    pub caused_by_trigger_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -139,100 +122,6 @@ where
                 claimed_at
                 deadline
                 failure_reason
-            }}
-        }}"#
-    );
-    let data = node.read_data(&query).await;
-    first_data_row::<AgentRequestRow>(&data, "AgentRequest").into()
-}
-
-pub async fn fetch_request_lineage_snapshot<R>(node: &R, doc_id: &str) -> RequestLineageSnapshot
-where
-    R: SnapshotReader + ?Sized,
-{
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                caused_by_trigger_id
-                caused_by_trigger_kind
-            }}
-        }}"#
-    );
-    let data = node.read_data(&query).await;
-    let row = first_data_row::<AgentRequestRow>(&data, "AgentRequest");
-    RequestLineageSnapshot {
-        caused_by_trigger_id: row.caused_by_trigger_id,
-        caused_by_trigger_kind: row.caused_by_trigger_kind,
-    }
-}
-
-pub async fn fetch_request_lineage_snapshot_by_tuple<R>(
-    node: &R,
-    trigger_id: &str,
-    trigger_kind: &str,
-) -> Option<RequestLineageSnapshot>
-where
-    R: SnapshotReader + ?Sized,
-{
-    let trigger_id = escape_graphql_string(trigger_id);
-    let trigger_kind = escape_graphql_string(trigger_kind);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    _and: [
-                        {{ caused_by_trigger_id: {{ _eq: "{trigger_id}" }} }},
-                        {{ caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }} }}
-                    ]
-                }},
-                limit: 1
-            ) {{
-                request_id
-                caused_by_trigger_id
-                caused_by_trigger_kind
-            }}
-        }}"#
-    );
-    let data = node.read_data(&query).await;
-    first_optional_data_row::<AgentRequestRow>(&data, "AgentRequest").map(|row| {
-        RequestLineageSnapshot {
-            caused_by_trigger_id: row.caused_by_trigger_id,
-            caused_by_trigger_kind: row.caused_by_trigger_kind,
-        }
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestSnapshotRaw {
-    pub valid_until: Option<String>,
-}
-
-impl From<AgentRequestRow> for RequestSnapshotRaw {
-    fn from(row: AgentRequestRow) -> Self {
-        Self {
-            valid_until: row.valid_until.filter(|value| !value.is_empty()),
-        }
-    }
-}
-
-pub async fn fetch_request_snapshot_raw<R>(node: &R, doc_id: &str) -> RequestSnapshotRaw
-where
-    R: SnapshotReader + ?Sized,
-{
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                valid_until
             }}
         }}"#
     );
@@ -360,33 +249,6 @@ where
     decode_runtime_snapshot(&data, node_did).expect("runtime snapshot satisfied its predicate")
 }
 
-pub async fn fetch_node_readiness_snapshot(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> Option<gents_protocol::node_readiness::NodeReadinessSnapshot> {
-    let node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                snapshot_json
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("NodeReadiness"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("snapshot_json"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|json| serde_json::from_str(json).ok())
-}
-
 #[derive(Debug, PartialEq)]
 pub struct MessageSnapshot {
     pub message_key: String,
@@ -396,49 +258,6 @@ pub struct MessageSnapshot {
     pub content: String,
     pub timestamp: String,
     pub native: gents_protocol::message::Message,
-}
-
-pub async fn fetch_message_snapshots_for_session(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Vec<MessageSnapshot> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                order: {{ sequence: ASC }}
-            ) {{
-                _docID
-                node_did
-                requester_did
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_message_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
-    let rows = data["AgentMessage"].as_array().expect("message rows");
-    let mut snapshots = Vec::with_capacity(rows.len());
-    for row in rows {
-        let header_id = row["_docID"].as_str().expect("physical message identity");
-        let node_did = row["node_did"].as_str().expect("message principal");
-        let requester_did = row["requester_did"].as_str();
-        let (header, native) = gents_session::session::load_canonical_message_from_node(
-            node,
-            header_id,
-            node_did,
-            requester_did,
-        )
-        .await
-        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
-        snapshots.push(message_snapshot(header, native));
-    }
-    snapshots
 }
 
 /// The session's transcript as `access` reconstructs it.
@@ -540,20 +359,6 @@ pub struct ToolCallSnapshot {
 }
 
 impl ToolCallSnapshot {
-    pub async fn load_result(&self, node: std::sync::Arc<EmbeddedNode>) -> String {
-        self.try_load_result(node)
-            .await
-            .expect("snapshot tool must have an exact canonical invocation reply")
-    }
-
-    pub async fn try_load_result(
-        &self,
-        node: std::sync::Arc<EmbeddedNode>,
-    ) -> anyhow::Result<String> {
-        self.try_load_result_as(&gents_store::config_client::ConfigAccess::local(node))
-            .await
-    }
-
     /// The call's exact invocation reply as `access` reads it.
     pub async fn try_load_result_as(
         &self,
@@ -568,14 +373,6 @@ impl ToolCallSnapshot {
         )
         .await?;
         gents_session::tool_call::query::result::render_tool_result(&message)
-    }
-
-    pub async fn try_load_arguments(
-        &self,
-        node: std::sync::Arc<EmbeddedNode>,
-    ) -> anyhow::Result<String> {
-        self.try_load_arguments_as(&gents_store::config_client::ConfigAccess::local(node))
-            .await
     }
 
     /// The call's exact arguments as `access` reads them.
@@ -604,29 +401,7 @@ pub struct ToolCallPayload {
     pub result: Option<String>,
 }
 
-pub async fn fetch_tool_call_payloads_for_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-) -> Vec<ToolCallPayload> {
-    let filter = format!(
-        r#"request_id: {{ _eq: "{}" }}"#,
-        escape_graphql_string(request_id)
-    );
-    let mut payloads = Vec::new();
-    for call in fetch_tool_call_snapshots(node, &filter).await {
-        payloads.push(ToolCallPayload {
-            tool_call_id: call.tool_call_id.clone(),
-            arguments: call.try_load_arguments(node.clone()).await.ok(),
-            result: call.try_load_result(node.clone()).await.ok(),
-            tool_name: call.tool_name,
-            status: call.status,
-            lifecycle_state: call.lifecycle_state,
-        });
-    }
-    payloads
-}
-
-/// [`fetch_tool_call_payloads_for_request`] read as `access`, one of the
+/// Tool call payloads for `request_id`, read as `access`, one of the
 /// call's related actors or the node's native admin.
 pub async fn fetch_tool_call_payloads_for_request_as(
     access: &gents_store::config_client::ConfigAccess,
@@ -684,45 +459,6 @@ where
     );
     let data = node.read_data(&query).await;
     serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
-}
-
-#[derive(Debug, PartialEq, Eq, Deserialize)]
-pub struct ToolResultSnapshot {
-    pub node_did: String,
-    pub session_id: String,
-    pub tool_name: String,
-    pub tool_input: String,
-    pub output_text: String,
-    pub truncated: bool,
-    pub truncation_metadata: Option<String>,
-    pub tool_call_doc_id: Option<String>,
-    pub created_at: String,
-}
-
-pub async fn fetch_tool_result_snapshots_for_session(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Vec<ToolResultSnapshot> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentToolResult(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                node_did session_id tool_name tool_input output_text
-                truncated truncation_metadata tool_call_doc_id created_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_tool_result_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
-    serde_json::from_value(data["AgentToolResult"].clone()).expect("parse ToolResultSnapshot")
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]

@@ -1,7 +1,6 @@
-use super::tagged_history::tagged_from_sourced;
+use super::tagged_history::{tagged_from_sourced, SourceTagError};
 use super::*;
 use crate::claude_messages_body::{ReasoningWitness, ReplayIssuer, ReplayOrigin};
-use crate::provider_input::ProviderInputProfile;
 use gents_protocol::message::Text;
 
 fn provider_tag(turn_index: u32) -> ReplayTag {
@@ -13,185 +12,6 @@ fn provider_tag(turn_index: u32) -> ReplayTag {
             attempt: 0,
         },
     }
-}
-
-#[test]
-fn replay_prefix_bound_rejects_tagged_non_assistant() {
-    let required = provider_tag(0);
-    let rows = vec![TaggedMessage {
-        message: Message::user("input"),
-        source: Some(required.clone()),
-        physical_header: None,
-        block_indices: Vec::new(),
-        stub_receipts: Vec::new(),
-    }];
-    assert_eq!(
-        replay_compaction_prefix_bound(&rows, &[required]),
-        Err(ReplayCheckpointError::InvalidAssociation)
-    );
-}
-
-#[test]
-fn provider_projection_composes_original_physical_block_indices() {
-    let tag = provider_tag(0);
-    let originals = vec![TaggedMessage {
-        message: Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![
-                AssistantContent::Text(Text {
-                    text: "first".into(),
-                }),
-                AssistantContent::Text(Text {
-                    text: "second".into(),
-                }),
-            ],
-        },
-        source: Some(tag.clone()),
-        physical_header: Some("physical-header".into()),
-        block_indices: vec![2, 4],
-        stub_receipts: Vec::new(),
-    }];
-    let shaped = vec![crate::compaction::history::SourcedMessage {
-        source_index: 0,
-        block_indices: vec![1],
-        message: Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![AssistantContent::Text(Text {
-                text: "second".into(),
-            })],
-        },
-    }];
-    let actual = tagged_from_sourced(&originals, shaped).expect("source-index mapping");
-    assert_eq!(actual[0].source, Some(tag));
-    assert_eq!(
-        actual[0].physical_header.as_deref(),
-        Some("physical-header")
-    );
-    assert_eq!(actual[0].block_indices, [4]);
-}
-
-#[test]
-fn association_rejects_a_provider_order_applied_before_it() {
-    let original = TaggedMessage {
-        message: Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![
-                AssistantContent::Reasoning(gents_protocol::message::Reasoning {
-                    id: None,
-                    content: vec![gents_protocol::message::ReasoningContent::Summary(
-                        "summary".into(),
-                    )],
-                }),
-                AssistantContent::Text(Text {
-                    text: "visible".into(),
-                }),
-            ],
-        },
-        source: Some(provider_tag(0)),
-        physical_header: Some("physical-header".into()),
-        block_indices: vec![2, 4],
-        stub_receipts: Vec::new(),
-    };
-    let sourced = crate::compaction::history::normalize_assistant_content_order_sourced(
-        ProviderInputProfile::OpenAiResponsesNormalized,
-        vec![crate::compaction::history::SourcedMessage {
-            source_index: 0,
-            block_indices: vec![0, 1],
-            message: original.message.clone(),
-        }],
-    );
-    assert!(
-        tagged_from_sourced(&[original], sourced).is_err(),
-        "a grouped reorder cannot be carried on persisted block identity"
-    );
-}
-
-#[test]
-fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
-    use gents_protocol::message::{ToolCall, ToolFunction, ToolResult, ToolResultContent};
-    let tag = provider_tag(0);
-    let persisted = vec![
-        TaggedMessage::unassociated(Message::user("start")),
-        TaggedMessage {
-            message: Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![
-                    AssistantContent::Reasoning(gents_protocol::message::Reasoning::new(
-                        "thinking",
-                    )),
-                    AssistantContent::Text(Text {
-                        text: "visible".into(),
-                    }),
-                    AssistantContent::ToolCall(ToolCall {
-                        raw_arguments: None,
-                        id: "call-1".into(),
-                        call_id: Some("call-1".into()),
-                        function: ToolFunction {
-                            name: "read".into(),
-                            arguments: serde_json::json!({}),
-                        },
-                        signature: None,
-                        additional_params: None,
-                    }),
-                ],
-            },
-            source: Some(tag.clone()),
-            physical_header: Some("physical-header".into()),
-            block_indices: vec![0, 1, 2],
-            stub_receipts: Vec::new(),
-        },
-        TaggedMessage::unassociated(Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: "call-1".into(),
-                call_id: Some("call-1".into()),
-                content: vec![ToolResultContent::text("ok")],
-            })],
-        }),
-        TaggedMessage::unassociated(Message::user("wake")),
-    ];
-    let once = provider_view_tagged(persisted.clone()).expect("first projection");
-    assert_eq!(
-        once[1], persisted[1],
-        "association keeps native order and indices"
-    );
-    let entry = sanitize_tagged_history(once.clone())
-        .expect("loop entry re-sanitizes the daemon's projection");
-    assert_eq!(entry, once);
-    let repaired = sanitize_tagged_history(entry.clone()).expect("repair re-sanitizes");
-    assert_eq!(repaired, once);
-    assert_eq!(provider_view_tagged(entry).expect("re-projection"), once);
-
-    let native = message_values(&once);
-    for profile in [
-        ProviderInputProfile::OpenAiChatCompletions,
-        ProviderInputProfile::OpenAiResponsesNormalized,
-    ] {
-        let ordered = provider_messages(profile, &once);
-        let Message::Assistant { content, .. } = &ordered[1] else {
-            panic!("assistant row")
-        };
-        assert!(
-            matches!(
-                content.as_slice(),
-                [
-                    AssistantContent::Text(_),
-                    AssistantContent::Reasoning(_),
-                    AssistantContent::ToolCall(_)
-                ]
-            ),
-            "{profile:?} orders at the send boundary"
-        );
-        assert_eq!(ordered.len(), native.len());
-    }
-    assert_eq!(
-        provider_messages(ProviderInputProfile::ClaudeMessages, &once),
-        native,
-        "Claude keeps native block order"
-    );
 }
 
 #[tokio::test]
@@ -1358,4 +1178,194 @@ async fn responses_reasoning_returns_only_to_its_issuer_whatever_the_prefix_beca
             "{text}"
         );
     }
+}
+
+#[test]
+fn source_tagging_matches_the_lean_model() {
+    use crate::compaction::history::{SourcedMessage, StubReceipt, StubSizes};
+    use gents_lean_vocab::families::request_assembly_source_tagging::{
+        self as family, SourceTagWire, SourceTaggingOutput, TaggedRowWire,
+    };
+    use gents_protocol::message::{ToolResult, ToolResultContent};
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let to_native_tag = |tag: &SourceTagWire| ReplayTag {
+        request_doc_id: format!("req-{}", tag.request),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: tag.scope,
+            },
+            turn_index: u32::try_from(tag.turn).expect("turn fits"),
+            attempt: u32::try_from(tag.attempt).expect("attempt fits"),
+        },
+    };
+    let to_wire_tag = |tag: &ReplayTag| match &tag.source {
+        OutputSource::ProviderTurn {
+            scope,
+            turn_index,
+            attempt,
+        } => SourceTagWire {
+            request: tag
+                .request_doc_id
+                .strip_prefix("req-")
+                .expect("synthetic request prefix")
+                .parse()
+                .expect("request id"),
+            scope: scope.seq,
+            turn: u64::from(*turn_index),
+            attempt: u64::from(*attempt),
+        },
+        other => panic!("unexpected replay source {other:?}"),
+    };
+    let to_wire_role = |message: &Message| match message {
+        Message::User { .. } => "user".to_string(),
+        Message::Assistant { .. } => "assistant".to_string(),
+        Message::System { .. } => "system".to_string(),
+    };
+    let to_wire_error = |error: SourceTagError| match error {
+        SourceTagError::NonAssistantSource => "non_assistant_source",
+        SourceTagError::ReorderedOrDuplicatedSourceRow => "reordered_or_duplicated_source_row",
+        SourceTagError::OutOfRangeSourceIndex => "out_of_range_source_index",
+        SourceTagError::RoleMismatch => "role_mismatch",
+        SourceTagError::MisalignedAssistantBlockIndices => "misaligned_assistant_block_indices",
+        SourceTagError::ReorderedAssistantBlocks => "reordered_assistant_blocks",
+        SourceTagError::OutOfRangeAssistantBlockIndex => "out_of_range_assistant_block_index",
+        SourceTagError::InvalidOriginalAssociation => "invalid_original_association",
+    };
+
+    family::replay::<String, String>(|case| {
+        let originals = case
+            .originals
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let message = match row.role.as_str() {
+                    "user" => Message::user(format!("u-{index}")),
+                    "system" => Message::System {
+                        content: format!("s-{index}"),
+                    },
+                    "assistant" => Message::Assistant {
+                        request_id: None,
+                        id: None,
+                        content: (0..row.block_count)
+                            .map(|block| {
+                                AssistantContent::Text(Text {
+                                    text: format!("a-{index}-{block}"),
+                                })
+                            })
+                            .collect(),
+                    },
+                    other => panic!("unknown role {other}"),
+                };
+                TaggedMessage {
+                    message,
+                    source: row.source.as_ref().map(to_native_tag),
+                    physical_header: row.physical_header.clone(),
+                    block_indices: row
+                        .block_indices
+                        .iter()
+                        .map(|position| usize::try_from(*position).expect("block index fits"))
+                        .collect(),
+                    stub_receipts: row
+                        .stub_receipt_keys
+                        .iter()
+                        .map(|key| StubReceipt {
+                            source_index: index,
+                            result_key: key.clone(),
+                            sizes: StubSizes {
+                                original_bytes: 128,
+                                stub_bytes: 16,
+                                stub_shaped: false,
+                            },
+                        })
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let sourced = case
+            .sourced
+            .iter()
+            .map(|item| {
+                let message = match item.role.as_str() {
+                    "user" => {
+                        if item.kept_tool_result_keys.is_empty() {
+                            Message::user("projected-user")
+                        } else {
+                            Message::User {
+                                content: item
+                                    .kept_tool_result_keys
+                                    .iter()
+                                    .map(|key| {
+                                        UserContent::ToolResult(ToolResult {
+                                            id: key.clone(),
+                                            call_id: Some(key.clone()),
+                                            content: vec![ToolResultContent::text("ok")],
+                                        })
+                                    })
+                                    .collect(),
+                            }
+                        }
+                    }
+                    "system" => Message::System {
+                        content: "projected-system".to_string(),
+                    },
+                    "assistant" => Message::Assistant {
+                        request_id: None,
+                        id: None,
+                        content: (0..item.block_count)
+                            .map(|block| {
+                                AssistantContent::Text(Text {
+                                    text: format!("projected-{block}"),
+                                })
+                            })
+                            .collect(),
+                    },
+                    other => panic!("unknown role {other}"),
+                };
+                SourcedMessage {
+                    source_index: usize::try_from(item.source_index).expect("source index fits"),
+                    block_indices: item
+                        .block_indices
+                        .iter()
+                        .map(|position| usize::try_from(*position).expect("block index fits"))
+                        .collect(),
+                    message,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        match tagged_from_sourced(&originals, sourced) {
+            Err(error) => {
+                let tag_error = *SourceTagError::in_chain(&error).unwrap_or_else(|| {
+                    panic!("{}: unexpected non-SourceTagError {error:?}", case.name)
+                });
+                SourceTaggingOutput {
+                    error: Some(to_wire_error(tag_error).to_string()),
+                    rows: Vec::new(),
+                }
+            }
+            Ok(rows) => SourceTaggingOutput {
+                error: None,
+                rows: rows
+                    .into_iter()
+                    .map(|row| TaggedRowWire {
+                        role: to_wire_role(&row.message),
+                        source: row.source.as_ref().map(to_wire_tag),
+                        physical_header: row.physical_header,
+                        block_indices: row
+                            .block_indices
+                            .into_iter()
+                            .map(|position| u64::try_from(position).expect("block index fits"))
+                            .collect(),
+                        stub_receipt_keys: row
+                            .stub_receipts
+                            .into_iter()
+                            .map(|receipt| receipt.result_key)
+                            .collect(),
+                    })
+                    .collect(),
+            },
+        }
+    });
 }

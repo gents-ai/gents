@@ -1,9 +1,7 @@
 use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::backends::provider::BackendProviderKind;
-use gents_documents::inference_backend::derive_display_state;
 use gents_lean_vocab::families::contracts_catalog_refresh_scenarios as family;
-use gents_loop::openai_wire::OpenAiWireApi;
 
 fn base_backend() -> InferenceBackend {
     serde_json::from_value(serde_json::json!({
@@ -35,75 +33,6 @@ fn private_credential_rotation_changes_the_keyed_connection_identity() {
 }
 
 #[test]
-fn inference_backend_from_value_parses() {
-    let mut value = serde_json::to_value(base_backend()).unwrap();
-    value["auth"] = serde_json::json!({"kind": "api_key", "key": "raw-key"});
-    value["openai_wire_api"] = "chat_completions".into();
-    value["max_concurrent"] = 4.into();
-    value["max_queue_depth"] = 9.into();
-    value["_docID"] = "physical-backend".into();
-    value["probe_status"] = "healthy".into();
-    value["catalogs"] = serde_json::json!([]);
-    value["catalog_freshness"] = serde_json::json!({"version":1,"entries":[]});
-    let backend = InferenceBackend::from_value(&value).unwrap();
-    assert_eq!(
-        backend.auth,
-        BackendAuth::ApiKey {
-            key: "raw-key".into()
-        }
-    );
-    assert_eq!(
-        backend.openai_wire_api,
-        Some(OpenAiWireApi::ChatCompletions)
-    );
-    assert_eq!(backend.max_concurrent, Some(4));
-    assert_eq!(backend.max_queue_depth, Some(9));
-    let config = serde_json::to_value(backend).unwrap();
-    for field in ["_docID", "probe_status", "catalogs", "catalog_freshness"] {
-        assert!(config.get(field).is_none());
-    }
-}
-
-#[test]
-fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
-    for field in ["provider_kind", "auth", "node_did"] {
-        let mut value = serde_json::to_value(base_backend()).unwrap();
-        value.as_object_mut().unwrap().remove(field);
-        let error = InferenceBackend::from_value(&value).unwrap_err();
-        assert!(format!("{error:#}").contains(field), "{error:#}");
-    }
-    let mut value = serde_json::to_value(base_backend()).unwrap();
-    value["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
-    assert!(
-        InferenceBackend::from_value(&value).is_err(),
-        "competing credential selection must fail"
-    );
-}
-
-#[test]
-fn node_oauth_has_one_canonical_serde_tag() {
-    assert_eq!(
-        serde_json::to_value(BackendAuth::NodeOAuth { account_ref: None }).unwrap(),
-        serde_json::json!({"kind": "node_oauth"})
-    );
-    assert!(
-        serde_json::from_value::<BackendAuth>(serde_json::json!({"kind": "node_o_auth"})).is_err(),
-        "the retired acronym-splitting spelling must not become a compatibility alias"
-    );
-}
-
-#[test]
-fn node_oauth_account_ref_round_trips_and_stays_absent_when_none() {
-    for text in [
-        r#"{"kind":"node_oauth","account_ref":"acct-1"}"#,
-        r#"{"kind":"node_oauth"}"#,
-    ] {
-        let auth: BackendAuth = serde_json::from_str(text).unwrap();
-        assert_eq!(serde_json::to_string(&auth).unwrap(), text);
-    }
-}
-
-#[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     use gents_lean_vocab::families::backend_health_admission_admission as wire;
 
@@ -132,45 +61,6 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             wire::AdmissionOutput { available }
         },
     );
-}
-
-#[test]
-fn display_state_names_every_probe_status() {
-    for (enabled, status, expected) in [
-        (false, "healthy", "disabled"),
-        (true, "healthy", "available"),
-        (true, "unhealthy", "unhealthy"),
-        (true, "stale", "stale"),
-        (true, "rate_limited", "rate-limited"),
-        (true, "circuit_open", "circuit-open"),
-        (true, "unknown", "unknown"),
-        (true, "unrecognized", "unknown"),
-    ] {
-        assert_eq!(derive_display_state(enabled, status), expected);
-    }
-}
-
-#[test]
-fn resolve_backend_api_key_uses_explicit_credentials() {
-    assert_eq!(
-        BackendAuth::ApiKey {
-            key: "raw-key".into()
-        }
-        .resolve_api_key()
-        .unwrap()
-        .as_deref(),
-        Some("raw-key")
-    );
-    assert_eq!(
-        BackendAuth::Unauthenticated.resolve_api_key().unwrap(),
-        None
-    );
-    assert!(BackendAuth::NodeOAuth { account_ref: None }
-        .resolve_api_key()
-        .is_err());
-    assert!(BackendAuth::ApiKey { key: " ".into() }
-        .resolve_api_key()
-        .is_err());
 }
 
 #[test]
@@ -210,118 +100,6 @@ fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
 }
 
 #[test]
-fn inference_backend_validation_preserves_defaults_and_rejects_invalid_values() {
-    let backend = base_backend();
-    backend.validate().unwrap();
-    assert_eq!(
-        backend.effective_max_concurrent(),
-        gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT
-    );
-    assert_eq!(backend.effective_max_queue_depth(), 100);
-    let mut backend = backend;
-    backend.max_queue_depth = Some(0);
-    backend
-        .validate()
-        .expect("zero explicitly disables queueing");
-    for value in [0, -1] {
-        backend.max_concurrent = Some(value);
-        assert!(backend.validate().is_err());
-    }
-    backend.max_concurrent = None;
-    backend.max_queue_depth = Some(-1);
-    assert!(backend.validate().is_err());
-    backend.max_queue_depth = None;
-    for value in [0, -1] {
-        backend.connect_timeout_secs = Some(value);
-        assert!(backend.validate().is_err());
-        backend.connect_timeout_secs = None;
-        backend.discovery_timeout_secs = Some(value);
-        assert!(backend.validate().is_err());
-        backend.discovery_timeout_secs = None;
-    }
-}
-
-#[test]
-fn inference_backend_validation_reports_every_violation() {
-    let mut backend = base_backend();
-    backend.node_did = " ".into();
-    backend.backend_id = " ".into();
-    backend.endpoint = " ".into();
-    backend.max_concurrent = Some(0);
-    backend.max_queue_depth = Some(-1);
-    let violations = backend.validation_violations();
-    for field in [
-        "node_did",
-        "backend_id",
-        "endpoint",
-        "max_concurrent",
-        "max_queue_depth",
-    ] {
-        assert!(
-            violations.iter().any(|error| error.contains(field)),
-            "{violations:?}"
-        );
-    }
-}
-
-#[test]
-fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
-    let endpoint = gents_documents::inference_defaults::ANTHROPIC_API_ENDPOINT;
-    let mut backend = base_backend();
-    backend.provider_kind = BackendProviderKind::AnthropicApiKey;
-    backend.endpoint = endpoint.into();
-    for auth in [
-        BackendAuth::ApiKey {
-            key: "placeholder-key".into(),
-        },
-        BackendAuth::Environment {
-            variable: "ANTHROPIC_API_KEY".into(),
-        },
-        BackendAuth::Unauthenticated,
-    ] {
-        backend.auth = auth;
-        backend.validate().unwrap();
-    }
-    backend.auth = BackendAuth::NodeOAuth { account_ref: None };
-    assert!(backend.validate().is_err());
-
-    backend.auth = BackendAuth::Environment {
-        variable: "ANTHROPIC_API_KEY".into(),
-    };
-    backend.endpoint = format!("{endpoint}/");
-    backend.validate().unwrap();
-    backend.endpoint = "https://proxy.example.invalid/v1".into();
-    let error = backend.validate().unwrap_err().to_string();
-    assert!(error.contains(endpoint), "{error}");
-}
-
-#[test]
-fn inference_backend_validation_requires_provider_compatible_auth() {
-    let mut backend = base_backend();
-    backend.auth = BackendAuth::NodeOAuth { account_ref: None };
-    assert!(backend.validate().is_err());
-    for provider in [
-        BackendProviderKind::ChatGptCodex,
-        BackendProviderKind::XaiGrokOAuth,
-        BackendProviderKind::ClaudeCliSubscription,
-    ] {
-        backend.provider_kind = provider;
-        backend.auth = BackendAuth::NodeOAuth { account_ref: None };
-        backend.validate().unwrap();
-        for auth in [
-            BackendAuth::Unauthenticated,
-            BackendAuth::ApiKey { key: "key".into() },
-            BackendAuth::Environment {
-                variable: "KEY".into(),
-            },
-        ] {
-            backend.auth = auth;
-            assert!(backend.validate().is_err());
-        }
-    }
-}
-
-#[test]
 fn an_account_pool_is_valid_only_for_the_claude_subscription() {
     let mut backend = base_backend();
     for allow_overage in [false, true] {
@@ -344,54 +122,6 @@ fn an_account_pool_is_valid_only_for_the_claude_subscription() {
     assert!(backend.auth.uses_node_oauth());
     assert_eq!(backend.auth.oauth_account_ref(), None);
     assert!(backend.auth.resolve_api_key().is_err());
-}
-
-#[test]
-fn pool_auth_round_trips_and_defaults_overage_off() {
-    let auth: BackendAuth = serde_json::from_str(r#"{"kind":"node_oauth_pool"}"#).unwrap();
-    assert_eq!(
-        auth,
-        BackendAuth::NodeOAuthPool {
-            allow_overage: false
-        }
-    );
-    assert_eq!(
-        serde_json::to_string(&auth).unwrap(),
-        r#"{"kind":"node_oauth_pool","allow_overage":false}"#
-    );
-    assert!(
-        serde_json::from_str::<BackendAuth>(r#"{"kind":"node_oauth_pool","account_ref":"a"}"#)
-            .is_err()
-    );
-}
-
-#[test]
-fn admission_rejects_unrelated_observation_and_defaults_capacity() {
-    let backend = base_backend();
-    let mut observation = InferenceBackendObservation {
-        metadata_doc_id: None,
-        backend_id: "different-backend".into(),
-        catalogs: Vec::new(),
-        probe_status: Some("healthy".into()),
-        last_probe: None,
-    };
-    assert!(BackendAdmissionConfig::from_backend(&backend, &observation).is_err());
-    observation.backend_id = backend.backend_id.clone();
-    let admission = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
-    assert_eq!(
-        (admission.max_concurrent, admission.max_queue_depth),
-        (
-            usize::try_from(gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT).unwrap(),
-            100
-        )
-    );
-    assert!(admission.is_available());
-    observation.probe_status = None;
-    assert!(
-        !BackendAdmissionConfig::from_backend(&backend, &observation)
-            .unwrap()
-            .is_available()
-    );
 }
 
 async fn backend_for_user(

@@ -1,8 +1,7 @@
 import Proofs.Session.Workspace.EditorUndo
-import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.EditorUndo
-open Workspace.EditorUndo Conformance.Contracts
+open Workspace.EditorUndo
 
 private def target : Target :=
   {reference := "node/session/request/tool/root/file", actions := ["physical-action"], uri := "file:///project/file",
@@ -72,93 +71,7 @@ def cases : List ApplyCase :=
 theorem expected_eligibility :
     cases.all (fun c => eligible c.targets c.documents c.observations == c.accepted) = true := by native_decide
 
-private def boolJson (value : Bool) := if value then "true" else "false"
-private def targetJson (t : Target) :=
-  "{\"reference\":" ++ jsonString t.reference ++ ",\"actions\":" ++ jsonArray (t.actions.map jsonString) ++ ",\"uri\":" ++ jsonString t.uri ++
-  ",\"before\":" ++ jsonString t.before ++ ",\"after\":" ++ jsonString t.after ++
-  ",\"version\":" ++ toString t.version ++ ",\"encoding\":" ++ jsonString t.encoding ++
-  ",\"eol\":" ++ jsonString t.eol ++ "}"
-private def documentJson (d : Document) :=
-  "{\"uri\":" ++ jsonString d.uri ++ ",\"content\":" ++ jsonString d.content ++
-  ",\"version\":" ++ toString d.version ++ ",\"encoding\":" ++ jsonString d.encoding ++
-  ",\"eol\":" ++ jsonString d.eol ++ ",\"dirty\":" ++ boolJson d.dirty ++
-  ",\"closed\":" ++ boolJson d.closed ++ ",\"writable\":" ++ boolJson d.writable ++ "}"
-private def observationsJson (o : Observations) :=
-  "{\"trusted\":" ++ boolJson o.trusted ++ ",\"selectionCurrent\":" ++ boolJson o.selectionCurrent ++
-  ",\"sourcesVerified\":" ++ boolJson o.sourcesVerified ++
-  ",\"mappingsCurrent\":" ++ boolJson o.mappingsCurrent ++
-  ",\"preservesConflicts\":" ++ boolJson o.preservesConflicts ++ "}"
-private def stateJson : State → String
-  | .fresh => "\"fresh\"" | .pending => "\"pending\"" | .applied => "\"applied\""
-  | .rejected => "\"rejected\"" | .unknown => "\"unknown\""
-private def completionJson : Completion → String
-  | .applied => "\"applied\"" | .rejected => "\"rejected\"" | .unknown => "\"unknown\""
-private def applyJson (c : ApplyCase) :=
-  "{\"kind\":\"apply\",\"name\":" ++ jsonString c.name ++
-  ",\"targets\":" ++ jsonArray (c.targets.map targetJson) ++
-  ",\"documents\":" ++ jsonArray (c.documents.map documentJson) ++
-  ",\"observations\":" ++ observationsJson c.observations ++
-  ",\"accepted\":" ++ boolJson (eligible c.targets c.documents c.observations) ++ "}"
-private def states : List State := [.fresh, .pending, .applied, .rejected, .unknown]
-private def bools := [false, true]
-private def beginCases := states.flatMap fun state => bools.flatMap fun allowed => bools.map fun persisted =>
-  let result := begin state allowed persisted
-  "{\"kind\":\"begin\",\"state\":" ++ stateJson state ++
-  ",\"allowed\":" ++ boolJson allowed ++ ",\"persisted\":" ++ boolJson persisted ++
-  ",\"expected\":" ++ stateJson result.1 ++ ",\"effect\":" ++ boolJson result.2 ++ "}"
-private def completionCases := states.flatMap fun state =>
-  ([Completion.applied, .rejected, .unknown]).flatMap fun completion =>
-  bools.flatMap fun observed => bools.map fun persisted =>
-  "{\"kind\":\"complete\",\"state\":" ++ stateJson state ++
-  ",\"completion\":" ++ completionJson completion ++
-  ",\"observed\":" ++ boolJson observed ++ ",\"persisted\":" ++ boolJson persisted ++
-  ",\"expected\":" ++ stateJson (complete state completion observed persisted) ++ "}"
-
-private def saveStateJson : SaveState → String
-  | .pending => "\"pending\"" | .saving => "\"saving\"" | .saved => "\"saved\""
-  | .conflict => "\"conflict\"" | .failed => "\"failed\"" | .unknown => "\"unknown\""
-private def saveJson (m : SaveMarker) :=
-  "{\"state\":" ++ saveStateJson m.state ++ ",\"exact\":" ++ boolJson m.exact ++ "}"
-private def saveObservationsJson (o : SaveObservations) :=
-  "{\"preservesConflicts\":" ++ boolJson o.preservesConflicts ++
-  ",\"documentCurrent\":" ++ boolJson o.documentCurrent ++
-  ",\"diskPostimageCurrent\":" ++ boolJson o.diskPostimageCurrent ++
-  ",\"bufferRecoverable\":" ++ boolJson o.bufferRecoverable ++ "}"
-private def saveStates : List SaveState := [.pending, .saving, .saved, .conflict, .failed, .unknown]
 private def safeSave : SaveObservations := ⟨true, true, true, true⟩
-private def saveGuards : List SaveObservations :=
-  [safeSave, {safeSave with preservesConflicts := false},
-   {safeSave with documentCurrent := false}, {safeSave with diskPostimageCurrent := false},
-   {safeSave with bufferRecoverable := false}]
-private def saveBeginCases := saveStates.flatMap fun state =>
-  saveGuards.flatMap fun observations => bools.map fun persisted =>
-  let marker : SaveMarker := ⟨state, false⟩
-  let result := beginSave marker observations persisted
-  "{\"kind\":\"beginSave\",\"marker\":" ++ saveJson marker ++
-  ",\"observations\":" ++ saveObservationsJson observations ++
-  ",\"persisted\":" ++ boolJson persisted ++ ",\"expected\":" ++ saveJson result.1 ++
-  ",\"effect\":" ++ boolJson result.2 ++ "}"
-private def saveResults : List SaveMarker :=
-  [⟨.saved, true⟩, ⟨.saved, false⟩, ⟨.conflict, false⟩, ⟨.failed, false⟩, ⟨.unknown, false⟩]
-private def saveCompleteCases := saveStates.flatMap fun state =>
-  saveResults.flatMap fun result => bools.map fun persisted =>
-  let marker : SaveMarker := ⟨state, false⟩
-  "{\"kind\":\"finishSave\",\"marker\":" ++ saveJson marker ++
-  ",\"result\":" ++ saveJson result ++ ",\"persisted\":" ++ boolJson persisted ++
-  ",\"expected\":" ++ saveJson (finishSave marker result persisted) ++ "}"
-private def saveReopenCases := saveStates.map fun state =>
-  let marker : SaveMarker := ⟨state, false⟩
-  "{\"kind\":\"reopenSave\",\"marker\":" ++ saveJson marker ++
-  ",\"expected\":" ++ saveJson (reopenSave marker) ++ "}"
-
-private def composeCases : List (List (String × String)) :=
-  [[], [("a", "b")], [("a", "b"), ("b", "c")],
-   [("", "a"), ("a", "b"), ("b", "c")], [("a", "b"), ("other", "c")],
-   [("a", "a")], [("a", "b"), ("b", "b")], [("a", "b"), ("b", "a")]]
-private def pairJson (pair : String × String) := jsonArray [jsonString pair.1, jsonString pair.2]
-private def composeJson := composeCases.map fun edits =>
-  "{\"kind\":\"compose\",\"edits\":" ++ jsonArray (edits.map pairJson) ++
-  ",\"expected\":" ++ ((composeTextEdits edits).map pairJson).getD "null" ++ "}"
 
 theorem missing_intermediate_image_is_not_composable :
     composeTextEdits [("a", "b"), ("missing", "c")] = none := by decide
@@ -180,73 +93,6 @@ private def sequence : Sequence :=
 private def successful (index : Nat) : List Action :=
   [.startRestore index true true, .observeRestore index .applied true true,
    .startSave index safeSave true, .observeSave index ⟨.saved, true⟩ true]
-private def traces : List (String × List Action) :=
-  [ ("ordered_two_file_restore_and_save", successful 0 ++ successful 1)
-  , ("later_target_changed", successful 0 ++ [.startRestore 1 false true] ++ successful 1)
-  , ("editor_lock_refused", [.startRestore 0 true true,
-      .observeRestore 0 .rejected false true] ++ successful 1)
-  , ("restore_transport_unknown", [.startRestore 0 true true,
-      .observeRestore 0 .unknown false true] ++ successful 1)
-  , ("restore_result_marker_failed", [.startRestore 0 true true,
-      .observeRestore 0 .applied true false] ++ successful 1)
-  , ("restore_start_marker_failed", [.startRestore 0 true false] ++ successful 1)
-  , ("save_start_marker_failed", (successful 0).take 2 ++ [.startSave 0 safeSave false] ++ successful 1)
-  , ("save_receipt_marker_failed", (successful 0).take 3 ++
-      [.observeSave 0 ⟨.saved, true⟩ false] ++ successful 1)
-  , ("save_conflict_preserves_remaining_targets", (successful 0).take 2 ++
-      [.startSave 0 {safeSave with diskPostimageCurrent := false} true] ++ successful 1)
-  , ("save_failed_preserves_remaining_targets", (successful 0).take 3 ++
-      [.observeSave 0 ⟨.failed, false⟩ true] ++ successful 1)
-  , ("save_participant_change_is_reported", (successful 0).take 3 ++
-      [.observeSave 0 ⟨.saved, false⟩ true] ++ successful 1)
-  , ("cannot_skip_unsaved_first_target", [.startRestore 1 true true] ++ successful 0 ++ successful 1)
-  , ("completed_replay_is_inert", successful 0 ++ successful 1 ++ successful 0)
-  , ("normal_editor_auto_save_observed", (successful 0).take 2 ++
-      [.observeSavedByEditor 0 ⟨.saved, true⟩ true] ++ successful 1)
-  , ("normal_editor_save_receipt_write_failed", (successful 0).take 2 ++
-      [.observeSavedByEditor 0 ⟨.saved, true⟩ false] ++ successful 1)
-  ]
-private def sequenceJson (s : Sequence) :=
-  "{\"items\":" ++ jsonArray (s.items.map fun p =>
-    "{\"reference\":" ++ jsonString p.reference ++ ",\"actions\":" ++ jsonArray (p.actions.map jsonString) ++ ",\"uri\":" ++ jsonString p.uri ++
-    ",\"restore\":" ++ stateJson p.restore ++ ",\"save\":" ++ saveJson p.save ++ "}") ++
-  ",\"closed\":" ++ boolJson s.closed ++ "}"
-private def admissionCases := cases.flatMap fun c => bools.map fun persisted =>
-  "{\"kind\":\"admitSequence\",\"name\":" ++ jsonString c.name ++
-  ",\"targets\":" ++ jsonArray (c.targets.map targetJson) ++
-  ",\"documents\":" ++ jsonArray (c.documents.map documentJson) ++
-  ",\"observations\":" ++ observationsJson c.observations ++
-  ",\"persisted\":" ++ boolJson persisted ++ ",\"expected\":" ++
-  ((admitSequence c.targets c.documents c.observations persisted).map sequenceJson).getD "null" ++ "}"
-private def effectJson : Effect → String
-  | .none => "\"none\"" | .restore => "\"restore\"" | .save => "\"save\""
-private def actionJson : Action → String
-  | .startRestore index allowed persisted =>
-    "{\"kind\":\"startRestore\",\"index\":" ++ toString index ++
-    ",\"allowed\":" ++ boolJson allowed ++ ",\"persisted\":" ++ boolJson persisted ++ "}"
-  | .observeRestore index completion observed persisted =>
-    "{\"kind\":\"observeRestore\",\"index\":" ++ toString index ++
-    ",\"completion\":" ++ completionJson completion ++ ",\"observed\":" ++ boolJson observed ++
-    ",\"persisted\":" ++ boolJson persisted ++ "}"
-  | .startSave index observations persisted =>
-    "{\"kind\":\"startSave\",\"index\":" ++ toString index ++
-    ",\"observations\":" ++ saveObservationsJson observations ++
-    ",\"persisted\":" ++ boolJson persisted ++ "}"
-  | .observeSave index result persisted =>
-    "{\"kind\":\"observeSave\",\"index\":" ++ toString index ++
-    ",\"result\":" ++ saveJson result ++ ",\"persisted\":" ++ boolJson persisted ++ "}"
-  | .observeSavedByEditor index result persisted =>
-    "{\"kind\":\"observeSavedByEditor\",\"index\":" ++ toString index ++
-    ",\"result\":" ++ saveJson result ++ ",\"persisted\":" ++ boolJson persisted ++ "}"
-private def traceJson (name : String) (s : Sequence) : List Action → List String
-  | [] => ["{\"kind\":\"reopenSequence\",\"name\":" ++ jsonString name ++
-      ",\"sequence\":" ++ sequenceJson s ++ ",\"expected\":" ++ sequenceJson (reopen s) ++ "}"]
-  | action :: rest =>
-    let result := step s action
-    ("{\"kind\":\"step\",\"name\":" ++ jsonString name ++
-      ",\"sequence\":" ++ sequenceJson s ++ ",\"action\":" ++ actionJson action ++
-      ",\"expected\":" ++ sequenceJson result.1 ++ ",\"effect\":" ++ effectJson result.2 ++ "}") ::
-      traceJson name result.1 rest
 
 theorem later_target_cannot_skip_first : (step sequence (.startRestore 1 true true)).2 = .none := by decide
 
@@ -256,10 +102,6 @@ theorem partial_conflict_keeps_first_saved :
     failed.items[0]?.map (fun p => p.restore == .applied && p.save.state == .saved) = some true ∧
     failed.items[1]?.map (fun p => p.restore == .fresh) = some true ∧ failed.closed = true := by decide
 
-
-private def ledgerJson (ledger : Ledger) :=
-  jsonArray (ledger.map fun operation =>
-    "{\"id\":" ++ jsonString operation.id ++ ",\"sequence\":" ++ sequenceJson operation.sequence ++ "}")
 private def completedSequence : Sequence :=
   (successful 0 ++ successful 1).foldl (fun s action => (step s action).1) sequence
 private def oneSequence (t : Target) (restore : State) (closed : Bool) : Sequence :=
@@ -311,18 +153,4 @@ theorem expected_cross_group_reservations : reservationCases.all (fun c =>
     (reserve c.ledger c.id c.targets c.documents c.observations c.persisted).isSome == c.accepted) = true := by
   native_decide
 
-private def reservationJson := reservationCases.map fun c =>
-  "{\"kind\":\"reserve\",\"name\":" ++ jsonString c.name ++
-  ",\"ledger\":" ++ ledgerJson c.ledger ++ ",\"id\":" ++ jsonString c.id ++
-  ",\"targets\":" ++ jsonArray (c.targets.map targetJson) ++
-  ",\"documents\":" ++ jsonArray (c.documents.map documentJson) ++
-  ",\"observations\":" ++ observationsJson c.observations ++
-  ",\"persisted\":" ++ boolJson c.persisted ++ ",\"expected\":" ++
-  ((reserve c.ledger c.id c.targets c.documents c.observations c.persisted).map ledgerJson).getD "null" ++ "}"
-
-def casesJson := jsonArray (cases.map applyJson ++ beginCases ++ completionCases ++
-  saveBeginCases ++ saveCompleteCases ++ saveReopenCases ++ composeJson ++ admissionCases ++
-  (traces.flatMap fun (name, actions) => traceJson name sequence actions) ++ reservationJson)
 end Conformance.EditorUndo
-
-def main : IO Unit := IO.println Conformance.EditorUndo.casesJson

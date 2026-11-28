@@ -67,6 +67,7 @@ pub(crate) use gents_loop::execution_policy;
 pub use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub mod materialize;
+pub(crate) mod pending_settlement;
 mod session_message_presentation;
 pub(crate) use session_message_presentation::session_message_display_body_with_content;
 pub use session_message_presentation::{

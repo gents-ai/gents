@@ -1,11 +1,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::template_pool::{clone_template_home, TemplateHomePool, TemplateLease};
 use crate::config_client::{ConfigAccess, GraphqlEndpoint};
 use crate::identity::NodeIdentity;
 use crate::local::home::{HomeServing, NodeConfigure, NodeProjection, ServedHome};
 use crate::local::{ProjectedOperationSource, ProjectedPluginRef, ToolSourcePolicy};
 use crate::node_extension::Extensions;
+
+static TEST_STORE_TEMPLATES: TemplateHomePool<()> = TemplateHomePool::new();
 
 pub struct NoToolSources;
 
@@ -34,6 +37,7 @@ pub struct TestStore {
     tool_policy: Arc<dyn ToolSourcePolicy>,
     composition: Extensions,
     pub process_generation: u64,
+    _template_lease: Option<TemplateLease>,
 }
 
 impl std::ops::Deref for TestStore {
@@ -120,9 +124,12 @@ impl TestStore {
         Self::open(path, None, composition, tool_policy).await
     }
 
-    async fn start_in(
+    /// Opens a fresh isolated store cloned from a pre-initialized template
+    /// directory, holding `lease` for this store's lifetime.
+    pub async fn start_from_template(
         name: &str,
-        node_did: Option<&str>,
+        template_dir: &Path,
+        lease: TemplateLease,
         configure: Option<NodeConfigure>,
         composition: Extensions,
         tool_policy: Arc<dyn ToolSourcePolicy>,
@@ -131,17 +138,80 @@ impl TestStore {
             .prefix(&format!("gents-{name}-"))
             .tempdir()
             .expect("tempdir");
+        let src = template_dir.to_path_buf();
+        let dst = tempdir.path().to_path_buf();
+        tokio::task::spawn_blocking(move || clone_template_home(&src, &dst))
+            .await
+            .expect("clone template task")
+            .expect("clone template home");
+        let mut store =
+            Self::open_inner(tempdir.path(), configure, composition, tool_policy, false)
+                .await
+                .expect("test store from template");
+        store.home.hold_tempdir(tempdir);
+        store._template_lease = Some(lease);
+        store
+    }
+
+    async fn start_in(
+        name: &str,
+        node_did: Option<&str>,
+        configure: Option<NodeConfigure>,
+        composition: Extensions,
+        tool_policy: Arc<dyn ToolSourcePolicy>,
+    ) -> Self {
         if let Some(node_did) = node_did {
+            let tempdir = tempfile::Builder::new()
+                .prefix(&format!("gents-{name}-"))
+                .tempdir()
+                .expect("tempdir");
             let (did, key) = (node_did.to_owned(), tempdir.path().join("node.key"));
             tokio::task::spawn_blocking(move || super::write_held_identity_key(&did, &key))
                 .await
                 .expect("write the node key");
+            let mut store =
+                Self::open_inner(tempdir.path(), configure, composition, tool_policy, true)
+                    .await
+                    .expect("test store");
+            store.home.hold_tempdir(tempdir);
+            return store;
         }
-        let mut store = Self::open(tempdir.path(), configure, composition, tool_policy)
-            .await
-            .expect("test store");
-        store.home.hold_tempdir(tempdir);
-        store
+        let (lease, template_dir, ()) = TEST_STORE_TEMPLATES
+            .checkout(|| async {
+                let dir = tempfile::Builder::new()
+                    .prefix("gents-test-template-")
+                    .tempdir()
+                    .expect("template tempdir");
+                let store = Self::open_inner(
+                    dir.path(),
+                    None,
+                    Extensions::none(),
+                    Arc::new(NoToolSources),
+                    false,
+                )
+                .await
+                .expect("template test store");
+                store
+                    .node
+                    .shutdown()
+                    .await
+                    .expect("shutdown template store");
+                drop(store);
+                crate::local::home::wait_for_store_release(dir.path(), &dir.path().join("data"))
+                    .await
+                    .expect("release template store");
+                (dir, ())
+            })
+            .await;
+        Self::start_from_template(
+            name,
+            &template_dir,
+            lease,
+            configure,
+            composition,
+            tool_policy,
+        )
+        .await
     }
 
     async fn open(
@@ -150,23 +220,38 @@ impl TestStore {
         composition: Extensions,
         tool_policy: Arc<dyn ToolSourcePolicy>,
     ) -> anyhow::Result<Self> {
+        Self::open_inner(path, configure, composition, tool_policy, true).await
+    }
+
+    async fn open_inner(
+        path: &Path,
+        configure: Option<NodeConfigure>,
+        composition: Extensions,
+        tool_policy: Arc<dyn ToolSourcePolicy>,
+        ensure_retained_schemas: bool,
+    ) -> anyhow::Result<Self> {
         let projection = NodeProjection {
             tool_policy: tool_policy.clone(),
             plugins: Vec::new(),
             composition: composition.clone(),
         };
         tokio::fs::create_dir_all(path).await?;
+        let fresh = !tokio::fs::try_exists(path.join("data").join("MANIFEST")).await?;
         let serving = HomeServing {
             routes: None,
             configure,
+            durability: storage::backends::DurabilityMode::Eventual,
         };
         let home = ServedHome::open_at(path.to_path_buf(), serving, projection).await?;
-        crate::schema::ensure_runtime_schemas(&home.node).await?;
+        if !fresh && ensure_retained_schemas {
+            crate::schema::ensure_runtime_schemas(&home.node).await?;
+        }
         Ok(Self {
             home,
             tool_policy,
             composition,
             process_generation: 0,
+            _template_lease: None,
         })
     }
 

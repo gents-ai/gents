@@ -1,0 +1,360 @@
+{
+  "case_id": "clinic-triage-plugin-pack",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "build_and_pack",
+      "prompt": "Create TriageNote(caseId, score: Int, level), build and test JS plugin score_triage (level 'urgent' if score >= 8 else 'routine', inserts TriageNote), add and lint page \"Triage Board\" listing TriageNote, and export + build pack clinic/triage 1.0.0 in clinic_triage.",
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "TriageNote"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "plugin_source",
+          "collection": "PluginSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "plugin_id": {
+              "_eq": "score_triage"
+            }
+          },
+          "fields": [
+            "plugin_id",
+            "language",
+            "source",
+            "input_schema",
+            "data",
+            "tests"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/score_triage"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type TriageNote { caseId: String score: Int level: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "plugin_source",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "plugin_source",
+                "key": "plugin_id",
+                "id": "score_triage",
+                "expect": [
+                  {
+                    "field": "language",
+                    "matches": "(?i)^(?:js|javascript)$"
+                  },
+                  {
+                    "field": "source",
+                    "matches": "module\\.exports"
+                  },
+                  {
+                    "field": "tests",
+                    "matches": "\"input\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"TriageNote\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"insert\""
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/score_triage",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "matches": "^\\d+\\.\\d+\\.\\d+$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)triage[- ]?board"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:caseId|level)\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              }
+            ],
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "clinic_triage/manifest.json",
+                "matches": "(?s)\"name\"\\s*:\\s*\"triage\".*\"namespace\"\\s*:\\s*\"clinic\"|\"namespace\"\\s*:\\s*\"clinic\".*\"name\"\\s*:\\s*\"triage\""
+              },
+              {
+                "path": "clinic_triage/pack_config.json",
+                "matches": "\"pages\""
+              },
+              {
+                "path": "clinic.triage-1.0.0.pack",
+                "exists": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Update score_triage so urgent starts at score >= 7, rebuild it, run it for caseId c1 score 7 and caseId c2 score 5, and report both levels.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "rows",
+          "collection": "TriageNote",
+          "filter": {},
+          "fields": [
+            "caseId",
+            "score",
+            "level"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "node/score_triage"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "plugins"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "rows",
+                "min": 2
+              },
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "rows",
+                "key": "caseId",
+                "id": "c1",
+                "expect": [
+                  {
+                    "field": "score",
+                    "equals": 7
+                  },
+                  {
+                    "field": "level",
+                    "equals": "urgent"
+                  }
+                ]
+              },
+              {
+                "capture": "rows",
+                "key": "caseId",
+                "id": "c2",
+                "expect": [
+                  {
+                    "field": "score",
+                    "equals": 5
+                  },
+                  {
+                    "field": "level",
+                    "equals": "routine"
+                  }
+                ]
+              },
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "node/score_triage",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "field": "version",
+                    "matches": "^(?:0\\.1\\.[1-9]\\d*|0\\.[2-9]\\d*\\.\\d+|[1-9]\\d*\\.\\d+\\.\\d+)$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)urgent"
+              },
+              {
+                "matches": "(?i)routine"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

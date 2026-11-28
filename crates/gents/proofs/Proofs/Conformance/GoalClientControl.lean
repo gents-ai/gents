@@ -166,10 +166,76 @@ def ControlInput.after (i : ControlInput) : Option GoalSnapshot :=
   (apply? i.before.toModel i.expectedRevision i.nextComposite i.operation.toModel
     i.facts.toModel).map GoalSnapshot.ofModel
 
-/-- One signed command persisted directly and answered by the runtime command owner. -/
+/-- Every combination of status, authorization, session busyness, revision fence
+and operation, checked exhaustively against the production decision owner. -/
 @[conformance_family]
 def control : Family ControlInput (Option GoalSnapshot) where
   inputs := cases.map ControlInput.ofCase
+  model := ControlInput.after
+
+def isPrimaryOperation : Operation → Bool
+  | .pause | .stop | .edit ⟨some "  verify  ", none⟩ | .edit ⟨none, some 2000⟩ => true
+  | _ => false
+
+def isInvalidEdit : Operation → Bool
+  | .edit ⟨some "\u3000\u00A0", none⟩
+  | .edit ⟨none, none⟩
+  | .edit ⟨none, some 0⟩
+  | .edit ⟨none, some (-1)⟩ => true
+  | _ => false
+
+def isSignedTransactionCase (c : Case) : Bool :=
+  let status := c.before.execution.goal.status
+  let current := c.expectedRevision == c.before.revision
+  let busy := c.facts.unfinishedRequest
+  if c.facts.authorized && current then
+    match c.operation with
+    | .resume => true
+    | op =>
+      if isPrimaryOperation op then !busy || status == .active
+      else isInvalidEdit op && !busy &&
+        (status == .active || status == .paused || status == .complete)
+  else if !c.facts.authorized && current then
+    (c.operation == .resume && status == .paused) ||
+      (isPrimaryOperation c.operation && status == .active && !busy)
+  else if c.facts.authorized && !current then
+    (c.operation == .resume && status == .paused) ||
+      (isPrimaryOperation c.operation && status == .active && !busy)
+  else false
+
+def signedTransactionCases : List Case :=
+  cases.filter isSignedTransactionCase
+
+example : signedTransactionCases.length = 76 := by native_decide
+
+theorem signed_transactions_cover_control_matrix :
+    ([Goals.Status.active, .paused, .blocked, .usageLimited, .budgetLimited, .complete, .stopped].all
+      fun status =>
+        [true, false].all (fun busy =>
+          signedTransactionCases.any fun c =>
+            c.before.execution.goal.status == status && c.facts.authorized &&
+              c.expectedRevision == c.before.revision &&
+              c.facts.unfinishedRequest == busy && c.operation == .resume) &&
+        operations.all (fun (_, op) =>
+          !isPrimaryOperation op ||
+            signedTransactionCases.any fun c =>
+              c.before.execution.goal.status == status && c.facts.authorized &&
+                c.expectedRevision == c.before.revision && c.operation == op)) &&
+    operations.all (fun (_, op) =>
+      (!isPrimaryOperation op && op != .resume) ||
+        (signedTransactionCases.any (fun c => !c.facts.authorized && c.operation == op) &&
+          revisions.all (fun (_, rev) =>
+            rev == ⟨"goal-document", "revision-current"⟩ ||
+              signedTransactionCases.any fun c =>
+                c.facts.authorized && c.expectedRevision == rev && c.operation == op))) = true := by
+  native_decide
+
+/-- Covering matrix of signed commands persisted and answered end-to-end by
+the runtime command owner across every status transition, busy/idle resume,
+edit validation refusal, ACP denial, and stale/foreign revision fence. -/
+@[conformance_family]
+def signedControlTransactions : Family ControlInput (Option GoalSnapshot) where
+  inputs := signedTransactionCases.map ControlInput.ofCase
   model := ControlInput.after
 
 /-- The client submission owner publishes a command, waits for the runtime's

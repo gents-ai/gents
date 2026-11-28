@@ -243,6 +243,8 @@ pub(crate) async fn init_home_with_core_packs(
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
     let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite).await?;
+    let recorded_registry = gents_store::local::home::normalize_registry(registry.as_deref())
+        .or_else(|| gents_store::local::home::recorded_registry(&home_dir));
     let fresh_store = tokio::fs::read_dir(&data_dir)
         .await?
         .next_entry()
@@ -291,6 +293,7 @@ pub(crate) async fn init_home_with_core_packs(
             store_lock: &store_lock,
             owner: owner.did(),
             client_identity: client_identity.recorded.clone(),
+            registry: recorded_registry.clone(),
         })
         .await?;
         let output = json!({
@@ -431,6 +434,7 @@ pub(crate) async fn init_home_with_core_packs(
         store_encryption: None,
         document_acp,
         client_identity: client_identity_record,
+        registry: recorded_registry.clone(),
     };
     let store_key = initialize_home_store(
         &home_dir,
@@ -490,9 +494,13 @@ pub(crate) async fn init_home_with_core_packs(
     // Init publishes through this loopback endpoint as the client, so its
     // owner-staged changes are decided by the node's own route.
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let fence_route = owner_staged.clone();
     node_builder = node_builder.with_http(
         gents::defra_node::HttpConfig::with_listener(listener)?
-            .with_extra_routes(owner_staged.router()),
+            .with_extra_routes(owner_staged.router())
+            .with_router_transform(Arc::new(move |router| {
+                fence_route.wrap_relationship_fence(router)
+            })),
     );
     let node_arc = gents_store::local::backend_protection::build_configured(
         node_builder,
@@ -696,8 +704,13 @@ pub(crate) async fn init_home_with_core_packs(
             .as_str()
             .context("init reports no default agent")?
             .to_owned();
-        output["default_packs"] =
-            default_packs::install(&home_dir, &engineer, core_packs, registry.as_deref()).await;
+        output["default_packs"] = default_packs::install(
+            &home_dir,
+            &engineer,
+            core_packs,
+            recorded_registry.as_deref(),
+        )
+        .await;
         default_packs::record_installed(&home_dir)?;
     }
     Ok(output)
@@ -1031,6 +1044,8 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) owner: &'a str,
     /// The folder holding `owner`'s key, recorded when it is not the default.
     pub(crate) client_identity: Option<String>,
+    /// The pack registry base URL this home records, when not the public default.
+    pub(crate) registry: Option<String>,
 }
 
 /// The CLI client identity `init` sets a home up with: `--desktop-home`'s
@@ -1158,6 +1173,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         store_encryption: None,
         document_acp,
         client_identity: options.client_identity.clone(),
+        registry: options.registry.clone(),
     };
     let store_key = initialize_home_store(
         options.home,
@@ -2265,6 +2281,7 @@ mod tests {
             store_lock: &lock,
             owner: owner.did(),
             client_identity: None,
+            registry: None,
         };
         assert!(write_identity_only_home_metadata(options()).await.is_err());
         assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
@@ -2294,6 +2311,7 @@ mod tests {
             store_lock: &lock,
             owner: owner.did(),
             client_identity: None,
+            registry: None,
         })
         .await
         .unwrap();
@@ -2508,8 +2526,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
+    async fn initialized_runtime_home(
+        engineer: bool,
+    ) -> (
+        EmbeddedHome,
+        tempfile::TempDir,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+        InitSummary,
+    ) {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
         let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
@@ -2517,112 +2541,26 @@ mod tests {
         let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
+        let binding = provision_fresh_home(&node, identity.as_ref(), user.did())
             .await
             .unwrap();
         let access = gents_host::test_support::user_access(&graphql, &user);
-
-        let binding = fresh_binding;
-        let agent_did = binding.agent_did;
-        let profile_id = default_inference_profile_id_for_agent(&agent_did);
-        let execution_id = default_inference_execution_id_for_profile(&profile_id);
-        let backend_id = default_backend_id_for_agent(&owner);
-        let backend = json!({"node_did": owner, "backend_id": backend_id, "name": "Local",
-            "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
-            "auth": {"kind": "unauthenticated"}, "enabled": true});
-        let agent = json!({"node_did": owner, "agent_did": agent_did, "creation_nonce": binding.creation_nonce,
-            "inference_profile_id": profile_id, "enabled": true});
-        let mut profile = standard_inference_profile(&owner, &profile_id, &backend_id, "model");
-        profile.execution_id = Some(execution_id.clone());
-        let documents = vec![
-            DesiredStateApplyDocument {
-                collection: Collection::InferenceBackend,
-                add: backend.clone(),
-                update: backend,
-            },
-            replacement(
-                Collection::InferenceExecution,
-                &standard_inference_execution(&owner, &execution_id),
-            )
-            .unwrap(),
-            replacement(Collection::InferenceProfile, &profile).unwrap(),
-            DesiredStateApplyDocument {
-                collection: Collection::Agent,
-                add: agent.clone(),
-                update: agent,
-            },
-        ];
-        publish_home_config(&access, &owner, "Agent", &agent_did, true, documents)
-            .await
-            .unwrap();
-        gents_inference::backends::registry::set_backend_probe_status_with_last_probe_as(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
-            &owner,
-            &backend_id,
-            gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-
-        let agent = gents::Gents::from_default_agent_documents(
-            node.clone(),
-            identity,
-            gents::DocumentRuntimeOptions {
-                backend_admission: Some(home.backend_admission()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let resolved = agent
-            .agents()
-            .iter()
-            .find(|resolved| resolved.agent.agent_did == agent_did)
-            .expect("init default agent resolves");
-        assert_eq!(
-            resolved.agent.max_turns,
-            gents_inference::resolved::DEFAULT_MAX_TURNS
-        );
-        assert_eq!(resolved.agent.max_turns, 1_000);
-        assert_eq!(
-            resolved.agent.max_turns_provenance,
-            gents_inference::resolved::MaxTurnsProvenance::Default
-        );
-    }
-
-    #[tokio::test]
-    async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
-        let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.node_identity.clone();
-        let owner = home.did().to_owned();
-        let node = home.node.clone();
-        let graphql = home.graphql_endpoint().to_owned();
-        let user_home = tempfile::tempdir().unwrap();
-        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
-            .await
-            .unwrap();
-        let access = gents_host::test_support::user_access(&graphql, &user);
-
-        let args = init_args();
+        let mut args = init_args();
+        args.engineer = engineer;
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let binding = fresh_binding;
-        let agent_identity =
-            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let summary = initialize_runtime_home(
             &access,
             &node,
             &args,
             identity.as_ref(),
             tool_package,
-            Some(binding),
+            Some(binding.clone()),
             None,
         )
         .await
         .expect("a fresh home initializes");
         gents_inference::backends::registry::set_backend_probe_status_with_last_probe_as(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            &gents_store::config_client::ConfigAccess::local(node),
             &owner,
             &summary.backend_id,
             gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
@@ -2630,7 +2568,54 @@ mod tests {
         )
         .await
         .unwrap();
+        (home, user_home, binding, summary)
+    }
 
+    #[tokio::test]
+    async fn the_engineer_starts_at_default_max_turns_and_can_update_them() {
+        let (home, _user_home, binding, summary) = initialized_runtime_home(false).await;
+        let identity = home.node_identity.clone();
+        let owner = home.did().to_owned();
+        let node = home.node.clone();
+        let load_default = || {
+            let (node, identity, admission, agent_did) = (
+                node.clone(),
+                identity.clone(),
+                home.backend_admission(),
+                summary.default_agent_did.clone(),
+            );
+            async move {
+                gents::Gents::from_default_agent_documents(
+                    node,
+                    identity,
+                    gents::DocumentRuntimeOptions {
+                        backend_admission: Some(admission),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .agents()
+                .iter()
+                .find(|resolved| resolved.agent.agent_did == agent_did)
+                .expect("init default agent resolves")
+                .clone()
+            }
+        };
+
+        let initial = load_default().await;
+        assert_eq!(
+            initial.agent.max_turns,
+            gents_inference::resolved::DEFAULT_MAX_TURNS
+        );
+        assert_eq!(initial.agent.max_turns, 1_000);
+        assert_eq!(
+            initial.agent.max_turns_provenance,
+            gents_inference::resolved::MaxTurnsProvenance::Default
+        );
+
+        let agent_identity =
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let categories = engineer_self_config()
             .self_config_categories
             .expect("the configurator grant names its categories");
@@ -2638,7 +2623,7 @@ mod tests {
         let tools = gents_tools::builtin::self_config::build_self_config_tools(
             std::sync::Arc::default(),
             node.clone(),
-            owner.clone(),
+            owner,
             Some(agent_identity),
             &gents_tools::surface::SelfConfigToolConfig {
                 enabled: true,
@@ -2661,22 +2646,7 @@ mod tests {
             .await
             .expect("a freshly initialized home binds an execution the configurator can edit");
 
-        let agent = gents::Gents::from_default_agent_documents(
-            node.clone(),
-            identity,
-            gents::DocumentRuntimeOptions {
-                backend_admission: Some(home.backend_admission()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let resolved = agent
-            .agents()
-            .iter()
-            .find(|resolved| resolved.agent.agent_did == summary.default_agent_did)
-            .expect("init default agent resolves")
-            .clone();
+        let resolved = load_default().await;
         assert_eq!(resolved.agent.max_turns, 250);
         assert_eq!(
             resolved.agent.max_turns_provenance,
@@ -2687,46 +2657,11 @@ mod tests {
     async fn explain_initialized_default_agent(
         engineer: bool,
     ) -> gents_tools::surface::ToolSurfaceExplanation {
-        let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.node_identity.clone();
+        let (home, _user_home, _binding, summary) = initialized_runtime_home(engineer).await;
         let owner = home.did().to_owned();
-        let node = home.node.clone();
-        let graphql = home.graphql_endpoint().to_owned();
-        let user_home = tempfile::tempdir().unwrap();
-        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
-        let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
-            .await
-            .unwrap();
-        let access = gents_host::test_support::user_access(&graphql, &user);
-
-        let mut args = init_args();
-        args.engineer = engineer;
-        let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let binding = fresh_binding;
-        let summary = initialize_runtime_home(
-            &access,
-            &node,
-            &args,
-            identity.as_ref(),
-            tool_package,
-            Some(binding),
-            None,
-        )
-        .await
-        .expect("a fresh home initializes");
-        gents_inference::backends::registry::set_backend_probe_status_with_last_probe_as(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
-            &owner,
-            &summary.backend_id,
-            gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-
         let agent = gents::Gents::from_default_agent_documents(
-            node.clone(),
-            identity,
+            home.node.clone(),
+            home.node_identity.clone(),
             gents::DocumentRuntimeOptions {
                 backend_admission: Some(home.backend_admission()),
                 ..Default::default()
@@ -2748,26 +2683,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fresh_engineer_can_start_its_own_agent() {
+    async fn a_fresh_engineer_gets_agent_new_and_p2p_and_other_presets_do_not() {
+        let p2p = gents_tools::builtin::p2p::P2P_TOOL_NAME;
+
         let engineer = explain_initialized_default_agent(true).await;
         assert!(
             engineer.tool_names.iter().any(|name| name == "agent_new"),
             "{:?}",
             engineer.tool_names
         );
-        let other = explain_initialized_default_agent(false).await;
-        assert!(
-            !other.tool_names.iter().any(|name| name == "agent_new"),
-            "{:?}",
-            other.tool_names
-        );
-    }
-
-    #[tokio::test]
-    async fn the_engineer_gets_the_p2p_tool_and_other_presets_do_not() {
-        let p2p = gents_tools::builtin::p2p::P2P_TOOL_NAME;
-
-        let engineer = explain_initialized_default_agent(true).await;
         assert!(
             engineer.tool_names.iter().any(|name| name == p2p),
             "{:?}",
@@ -2780,6 +2704,11 @@ mod tests {
         );
 
         let default = explain_initialized_default_agent(false).await;
+        assert!(
+            !default.tool_names.iter().any(|name| name == "agent_new"),
+            "{:?}",
+            default.tool_names
+        );
         assert!(
             !default.tool_names.iter().any(|name| name == p2p),
             "{:?}",
@@ -3434,6 +3363,7 @@ mod tests {
                 store_encryption: None,
                 document_acp,
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();

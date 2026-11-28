@@ -40,7 +40,31 @@ enum Lineage {
     ManualFire,
 }
 
-struct Harness {
+fn hook_spec(
+    hook_id: &str,
+    phase: &str,
+    command: impl Into<String>,
+    timeout_secs: u64,
+) -> serde_json::Value {
+    json!({
+        "hook_id": hook_id,
+        "phase": phase,
+        "command": ["sh", "-c", command.into()],
+        "timeout_secs": timeout_secs,
+    })
+}
+
+fn skip_gate_hook(hook_id: &str, exit_code: i32) -> serde_json::Value {
+    json!({
+        "hook_id": hook_id,
+        "phase": "before",
+        "skip_exit_codes": [exit_code],
+        "command": ["sh", "-c", format!("exit {exit_code}")],
+        "timeout_secs": 30,
+    })
+}
+
+struct TaskHookEnv {
     node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
@@ -52,7 +76,7 @@ struct Harness {
     agent_access: ConfigAccess,
 }
 
-impl Harness {
+impl TaskHookEnv {
     async fn new() -> Self {
         Self::with_deadline(Duration::from_secs(60)).await
     }
@@ -130,6 +154,25 @@ impl Harness {
         format!("printf 'ready\\n' > {}", path.display())
     }
 
+    fn held_script(&self, started: &str, finished: &str) -> String {
+        format!("{}; sleep 30; {}", self.fifo(started), self.touch(finished))
+    }
+
+    fn log_lines(&self) -> Vec<String> {
+        std::fs::read_to_string(self.mark("hooks.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn logging(&self, hook_id: &str, then: &str) -> String {
+        format!(
+            "printf '%s\\n' {hook_id} >> {}; {then}",
+            self.mark("hooks.log").display()
+        )
+    }
+
     async fn apply(&self, documents: Vec<(Collection, serde_json::Value)>) {
         let plan = DesiredStateApplyPlan::new(
             documents
@@ -193,11 +236,15 @@ impl Harness {
     }
 
     async fn trigger_doc_id(&self) -> String {
-        let response = self.user_access.execute(&format!(
-            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-            gents_store::graphql::escape_graphql_string(self.owner()),
-            gents_store::graphql::escape_graphql_string(TRIGGER_ID),
-        )).await.unwrap();
+        let response = self
+            .user_access
+            .execute(&format!(
+                r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(self.owner()),
+                gents_store::graphql::escape_graphql_string(TRIGGER_ID),
+            ))
+            .await
+            .unwrap();
         let rows = response["data"]["Trigger"].as_array().unwrap();
         let [row] = rows.as_slice() else {
             panic!("installed Trigger must be unique")
@@ -239,14 +286,17 @@ impl Harness {
             Some(fire) => (
                 fire.request_id.clone(),
                 fire.session_id.clone(),
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&self.agent_config.agent_did),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    &self.agent_config.agent_did,
+                ),
                 "interactive",
             ),
             None => (
                 uuid::Uuid::new_v4().to_string(),
                 uuid::Uuid::new_v4().to_string(),
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
-                    &self.agent_config.agent_did, TRIGGER_ID,
+                    &self.agent_config.agent_did,
+                    TRIGGER_ID,
                 ),
                 "scheduled",
             ),
@@ -322,7 +372,7 @@ impl Harness {
     }
 
     fn daemon(&self, fail: bool) -> AgentDaemon<ScriptedProvider> {
-        self.daemon_with(fail, BackgroundExecutionRegistry::default())
+        self.daemon_model(fail, false, BackgroundExecutionRegistry::default())
     }
 
     fn daemon_with(
@@ -383,15 +433,32 @@ impl Harness {
     }
 
     async fn request_row(&self, doc_id: &str) -> serde_json::Value {
-        let response = self.agent_access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
-            gents_store::graphql::escape_graphql_string(doc_id),
-        )).await.unwrap();
+        let response = self
+            .agent_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
+                gents_store::graphql::escape_graphql_string(doc_id),
+            ))
+            .await
+            .unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         let [row] = rows.as_slice() else {
             panic!("held Agent request must be unique")
         };
         row.clone()
+    }
+
+    async fn replace_generation(&self, doc_id: &str) {
+        self.agent_access
+            .write(
+                "test.replace_task_hook_generation",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(doc_id),
+                ),
+            )
+            .await
+            .expect("replace the execution generation");
     }
 
     async fn run(&self, request: AgentRequest, fail: bool) -> serde_json::Value {
@@ -417,549 +484,65 @@ impl Harness {
             .expect("request processing returned");
         self.request_row(&doc_id).await
     }
-}
 
-async fn wait_for_fifo(marker: &Path) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    struct UnblockFifo(PathBuf);
-    impl Drop for UnblockFifo {
-        fn drop(&mut self) {
-            let _ = std::fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&self.0);
-        }
-    }
-
-    let path = marker.to_path_buf();
-    let _unblock = UnblockFifo(path.clone());
-    tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
-        .await
-        .expect("hook marker reader task")
-        .expect("read hook started fifo");
-}
-
-impl Harness {
-    async fn run_interrupting_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
+    async fn run_at_fifo<F, Fut>(
+        &self,
+        request: AgentRequest,
+        marker: &Path,
+        timeout: Duration,
+        on_fifo: F,
+    ) -> serde_json::Value
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(false);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let interrupt = async {
+        let action = async {
             wait_for_fifo(marker).await;
-            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
-                &self.agent_access,
-                &doc_id,
-                self.owner(),
-                Some(&self.agent_config.agent_did),
-            )
-            .await
-            .expect("interrupt the running request");
+            on_fifo(doc_id.clone()).await;
         };
-        let (processed, ()) = tokio::time::timeout(Duration::from_secs(90), async {
-            tokio::join!(daemon.process_request(request, shutdown_rx), interrupt)
+        let (processed, ()) = tokio::time::timeout(timeout, async {
+            tokio::join!(daemon.process_request(request, shutdown_rx), action)
         })
         .await
-        .expect("interrupted request processing finished");
+        .expect("fifo-synchronized request processing finished");
         processed.expect("request processing returned");
         self.request_row(&doc_id).await
     }
 
-    /// Provider calls across every daemon this harness built.
-    fn calls(&self) -> usize {
-        self.models
-            .lock()
-            .unwrap()
-            .iter()
-            .map(ScriptedProvider::calls)
-            .sum()
-    }
-}
-
-fn reason(row: &serde_json::Value) -> &str {
-    row["failure_reason"].as_str().unwrap_or_default()
-}
-
-#[tokio::test]
-async fn retirement_leaves_the_same_physical_request_pending_until_a_new_runtime_claims_it() {
-    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
-
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([{
-            "hook_id": "prepare", "phase": "before",
-            "command": ["sh", "-c", harness.touch("admitted")], "timeout_secs": 30,
-        }]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let before = harness.request_row(&request.doc_id).await;
-    let executions = BackgroundExecutionRegistry::default();
-    executions
-        .service_admission()
-        .retire(RetirementAuthority {
-            operator_authenticated: true,
-            observed_build_matches: true,
-        })
-        .unwrap();
-    let mut retired = harness.daemon_with(false, executions);
-    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
-    retired
-        .process_request(request.clone(), receiver)
-        .await
-        .unwrap();
-    assert_eq!(harness.request_row(&request.doc_id).await, before);
-    assert_eq!(harness.calls(), 0);
-    assert!(!harness.mark("admitted").exists());
-
-    let row = harness.run(request, false).await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(harness.calls(), 1);
-    assert!(harness.mark("admitted").exists());
-}
-
-#[tokio::test]
-async fn a_failing_before_hook_stops_the_request_before_the_provider() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([{
-            "hook_id": "prepare",
-            "phase": "before",
-            "command": ["sh", "-c", "echo blocked >&2; exit 1"],
-            "timeout_secs": 30,
-        }]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(
-        reason(&row).contains("prepare") && reason(&row).contains("blocked"),
-        "{row}"
-    );
-}
-
-#[tokio::test]
-async fn configured_gate_skip_completes_without_provider_or_failure_hooks() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "gate", "phase": "before", "skip_exit_codes": [10],
-             "command": ["sh", "-c", "exit 10"], "timeout_secs": 30},
-            {"hook_id": "next", "phase": "before",
-             "command": ["sh", "-c", harness.touch("next")], "timeout_secs": 30},
-            {"hook_id": "report", "phase": "after_failure",
-             "command": ["sh", "-c", harness.touch("report")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("sweep")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert!(reason(&row).is_empty(), "{row}");
-    assert!(!harness.mark("next").exists());
-    assert!(!harness.mark("report").exists());
-    assert!(harness.mark("sweep").exists());
-}
-
-#[tokio::test]
-async fn cleanup_failure_after_a_gate_skip_fails_the_request() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "gate", "phase": "before", "skip_exit_codes": [10],
-             "command": ["sh", "-c", "exit 10"], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", "echo cleanup-broke >&2; exit 1"], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert!(reason(&row).contains("sweep"), "{row}");
-    assert!(reason(&row).contains("cleanup-broke"), "{row}");
-}
-
-#[tokio::test]
-async fn passing_hooks_leave_a_manual_task_run_completed() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", harness.touch("prepared")], "timeout_secs": 30},
-            {"hook_id": "verify", "phase": "after_success",
-             "command": ["sh", "-c", harness.touch("verified")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let fire_query = format!(
-        r#"{{ TriggerFire(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID task_id}} }}"#,
-        gents_store::graphql::escape_graphql_string(&request.request_id),
-    );
-    let selected = harness.agent_access.execute(&fire_query).await.unwrap();
-    assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
-    let reader = gents_store::test_support::unrelated_document_reader(&harness.node).await;
-    let node_view = reader.execute(&fire_query).await;
-    assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 1, "{row}");
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    for mark in ["prepared", "verified", "swept"] {
-        assert!(harness.mark(mark).exists(), "{mark} hook did not run");
-    }
-}
-
-#[tokio::test]
-async fn a_failing_cleanup_keeps_the_agent_failure_as_the_primary_error() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "report", "phase": "after_failure",
-             "command": ["sh", "-c", harness.touch("reported")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", "exit 1"], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness.run(request, true).await;
-    assert!(harness.calls() > 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    let reason = reason(&row);
-    assert!(!reason.starts_with("task hook"), "{reason:?}");
-    assert!(
-        reason.contains("task cleanup hooks failed: sweep"),
-        "{reason:?}"
-    );
-    assert!(harness.mark("reported").exists());
-}
-
-#[tokio::test]
-async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_request() {
-    let harness = Harness::new().await;
-    let held = format!(
-        "{}; sleep 30; {}",
-        harness.fifo("verify-started"),
-        harness.touch("verify-finished")
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "verify", "phase": "after_success",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let capture = InterruptionCapture::default();
-    let row = harness
-        .run_interrupting_at(request, &harness.mark("verify-started"))
-        .with_subscriber(capture.subscriber())
-        .await;
-    capture.assert_source("task_hook");
-    assert_eq!(harness.calls(), 1, "{row}");
-    assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
-    assert!(!harness.mark("verify-finished").exists());
-    assert!(
-        harness.mark("swept").exists(),
-        "an interrupt never skips cleanup"
-    );
-}
-
-#[tokio::test]
-async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
-    let harness = Harness::new().await;
-    let held = format!(
-        "{}; sleep 30; {}",
-        harness.fifo("prepare-started"),
-        harness.touch("prepare-finished")
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let capture = InterruptionCapture::default();
-    let row = harness
-        .run_interrupting_at(request, &harness.mark("prepare-started"))
-        .with_subscriber(capture.subscriber())
-        .await;
-    capture.assert_source("task_hook");
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
-    assert!(!harness.mark("prepare-finished").exists());
-    assert!(harness.mark("swept").exists());
-}
-
-#[tokio::test]
-async fn task_bindings_follow_the_lean_model() {
-    use gents_toolcalls::call::task_hooks::TaskBindingRefusal;
-    for case in gents_lean_vocab::families::task_hooks_hookless_bound_request::cases::<
-        String,
-        gents_protocol::request_lifecycle::RequestLifecycleState,
-        String,
-    >() {
-        let harness = Harness::new().await;
-        if case.input.binding != "missing" {
-            harness.install_task(json!([])).await;
-        }
-        let request = harness.create_request(Lineage::ManualFire, false).await;
-        if case.input.binding == "disabled" {
-            harness
-                .apply(vec![(
-                    Collection::Task,
-                    json!({
-                        "node_did": harness.owner(),
-                        "task_id": TASK_ID,
-                        "agent_did": harness.agent_config.agent_did,
-                        "prompt_template": "run the gate",
-                        "enabled": false,
-                    }),
-                )])
-                .await;
-        }
-        let row = harness.run(request, false).await;
-        let refusals = [
-            (
-                "missing",
-                TaskBindingRefusal::Missing {
-                    task_id: TASK_ID.into(),
-                },
-            ),
-            (
-                "disabled",
-                TaskBindingRefusal::Disabled {
-                    task_id: TASK_ID.into(),
-                },
-            ),
-        ];
-        let refusal = refusals
-            .iter()
-            .filter(|(_, refusal)| reason(&row).contains(&refusal.to_string()))
-            .map(|(name, _)| (*name).to_owned())
-            .next();
-        case.check(
-            gents_lean_vocab::families::task_hooks_hookless_bound_request::BoundRequest {
-                agent_ran: harness.calls() > 0,
-                request_state: serde_json::from_value(row["lifecycle_state"].clone())
-                    .expect("persisted lifecycle state"),
-                refusal,
+    async fn run_interrupting_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
+        self.run_at_fifo(
+            request,
+            marker,
+            Duration::from_secs(90),
+            |doc_id| async move {
+                gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
+                    &self.agent_access,
+                    &doc_id,
+                    self.owner(),
+                    Some(&self.agent_config.agent_did),
+                )
+                .await
+                .expect("interrupt the running request");
             },
-        );
+        )
+        .await
     }
-}
 
-async fn install_workspace(harness: &Harness, host_path: &Path) {
-    let owner = harness.owner().to_string();
-    let workspace = gents_session::workspace::IsolatedWorkspaceDoc {
-        path_capability: gents_session::workspace::WorkspacePathCapability::exact_paths(vec![
-            "patch.rs".to_string(),
-        ])
-        .unwrap(),
-        workspace_id: WORKSPACE_ID.to_string(),
-        work_unit_id: TASK_ID.to_string(),
-        repository_id: "hook-repo".to_string(),
-        base_sha: "0".repeat(40),
-        branch: "gents/hook-task".to_string(),
-        creation_policy: gents_session::workspace::CreationPolicy::GitWorktreeDiff
-            .as_str()
-            .to_string(),
-        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
-            .as_str()
-            .to_string(),
-        owner_node_did: owner.clone(),
-        writer_principal: harness.agent_config.agent_did.clone(),
-        integrator_principal: harness.agent_config.agent_did.clone(),
-        instruction_manifest: String::new(),
-        seal_hash: None,
-        lifecycle_state: "ready".to_string(),
-        caused_by_invocation_id: "hook-invocation".to_string(),
-        caused_by_correlation: "hook-correlation".to_string(),
-        route: Default::default(),
-    };
-    let placement = gents_session::workspace::WorkspacePlacementDoc {
-        workspace_id: WORKSPACE_ID.to_string(),
-        owner_node_did: owner,
-        host_path: host_path.to_str().expect("utf-8 path").to_string(),
-        repository_placement_id: "hook-repo".to_string(),
-        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
-            .as_str()
-            .to_string(),
-        adapter_version: "gents-workspace-adapter/1".to_string(),
-        dirty_base: false,
-        dirty_base_summary: String::new(),
-        provisioning_state: "provisioned".to_string(),
-        observed_tree_hash: String::new(),
-    };
-    let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    for mutation in [
-        gents_session::workspace::isolated_workspace_upsert_mutation(&workspace),
-        gents_session::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
-    ] {
-        harness
-            .agent_access
-            .write("test.task_hook_workspace", &mutation)
-            .await
-            .expect("install isolated workspace and placement");
+    async fn run_superseding_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
+        self.run_at_fifo(
+            request,
+            marker,
+            Duration::from_secs(25),
+            |doc_id| async move {
+                self.replace_generation(&doc_id).await;
+            },
+        )
+        .await
     }
-}
 
-async fn workspace_bindings(
-    harness: &Harness,
-) -> Vec<gents_session::workspace::WorkspaceBindingDoc> {
-    let response = harness.agent_access.execute(
-        &format!(
-            r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
-            gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
-            gents_store::graphql::escape_graphql_string(harness.owner()),
-        ),
-    )
-    .await
-    .unwrap();
-    let response: query::QueryResponse = serde_json::from_value(response).unwrap();
-    gents_store::graphql::rows(&response, "WorkspaceBinding").unwrap()
-}
-
-async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
-    gents_session::workspace::materialize_workspace_binding(
-        &harness.node,
-        &request.request_id,
-        &request.doc_id,
-        harness.agent_config.agent_identity.as_ref(),
-        &gents_session::request::lifecycle::WorkspaceLineage {
-            workspace_id: request.workspace_id.clone(),
-            workspace_authority: request.workspace_authority.clone(),
-            workspace_owner_node_did: request.workspace_owner_node_did.clone(),
-            workspace_seal_hash: request.workspace_seal_hash.clone(),
-        },
-    )
-    .await
-    .expect("materialize the writer binding");
-}
-
-#[tokio::test]
-async fn claim_admission_rejection_releases_the_bound_workspace() {
-    let harness = Harness::new().await;
-    let placement = tempfile::tempdir().expect("workspace placement directory");
-    install_workspace(&harness, placement.path()).await;
-    harness.install_task(json!([])).await;
-    let request = harness.create_request(Lineage::Trigger, true).await;
-    materialize_writer_binding(&harness, &request).await;
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .any(|binding| binding.is_active_read_write()));
-    harness.agent_access.write(
-        "test.remove_workspace_placement",
-        &format!(
-            r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
-            gents_store::graphql::escape_graphql_string(harness.owner()),
-        ),
-    )
-    .await
-    .unwrap();
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("workspace"), "{row}");
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .all(|binding| !binding.is_active()));
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
-    use crate::runtime::agent::worker_capacity::{RequestGuard, WorkerCapacity, WorkerTicket};
-
-    let harness = Harness::new().await;
-    let placement = tempfile::tempdir().expect("workspace placement directory");
-    install_workspace(&harness, placement.path()).await;
-    harness.install_task(json!([])).await;
-    let request = harness.create_request(Lineage::Trigger, true).await;
-    materialize_writer_binding(&harness, &request).await;
-    let mut guard = Some(RequestGuard::Unbound(
-        WorkerCapacity::new(1).try_acquire_unbound().unwrap(),
-    ));
-    RequestGuard::bind_claim(
-        &mut guard,
-        WorkerTicket::new("previous-request", "previous-generation"),
-    )
-    .unwrap();
-    let row = harness.run_with_capacity(request, false, guard).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("worker guard"), "{row}");
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .all(|binding| !binding.is_active()));
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn a_skipped_gate_releases_the_bound_workspace() {
-    let harness = Harness::new().await;
-    let placement = tempfile::tempdir().expect("workspace placement directory");
-    install_workspace(&harness, placement.path()).await;
-    harness
-        .install_task(json!([{"hook_id": "gate", "phase": "before",
-        "skip_exit_codes": [10], "command": ["sh", "-c", "exit 10"], "timeout_secs": 30}]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, true).await;
-    materialize_writer_binding(&harness, &request).await;
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
-    let row = harness.run(request, false).await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .all(|binding| !binding.is_active()));
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn a_failing_before_hook_releases_the_bound_workspace() {
-    let harness = Harness::new().await;
-    let placement = tempfile::tempdir().expect("workspace placement directory");
-    install_workspace(&harness, placement.path()).await;
-    harness
-        .install_task(json!([{"hook_id": "prepare", "phase": "before",
-            "command": ["sh", "-c", "exit 1"], "timeout_secs": 30}]))
-        .await;
-    let request = harness.create_request(Lineage::Trigger, true).await;
-    materialize_writer_binding(&harness, &request).await;
-    assert!(workspace_bindings(&harness)
-        .await
-        .iter()
-        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("prepare"), "{row}");
-    let bindings = workspace_bindings(&harness).await;
-    assert!(
-        !bindings
-            .iter()
-            .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write),
-        "{bindings:?}"
-    );
-}
-
-impl Harness {
     async fn crash_at(&self, request: AgentRequest, marker: &Path, records: &Path) {
         let mut daemon = self.daemon_with(
             false,
@@ -1027,207 +610,376 @@ impl Harness {
         assert!(again.task_hooks.expect("second pass") == 0);
     }
 
-    fn log_lines(&self) -> Vec<String> {
-        std::fs::read_to_string(self.mark("hooks.log"))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
+    async fn setup_bound_workspace_request(
+        &self,
+        hooks: serde_json::Value,
+    ) -> (tempfile::TempDir, AgentRequest) {
+        let placement = tempfile::tempdir().expect("workspace placement directory");
+        install_workspace(self, placement.path()).await;
+        self.install_task(hooks).await;
+        let request = self.create_request(Lineage::Trigger, true).await;
+        materialize_writer_binding(self, &request).await;
+        (placement, request)
     }
 
-    fn logging(&self, hook_id: &str, then: &str) -> String {
-        format!(
-            "printf '%s\\n' {hook_id} >> {}; {then}",
-            self.mark("hooks.log").display()
-        )
+    /// Provider calls across every daemon this harness built.
+    fn calls(&self) -> usize {
+        self.models
+            .lock()
+            .unwrap()
+            .iter()
+            .map(ScriptedProvider::calls)
+            .sum()
     }
 }
 
+async fn wait_for_fifo(marker: &Path) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    struct UnblockFifo(PathBuf);
+    impl Drop for UnblockFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.0);
+        }
+    }
+
+    let path = marker.to_path_buf();
+    let _unblock = UnblockFifo(path.clone());
+    tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
+        .await
+        .expect("hook marker reader task")
+        .expect("read hook started fifo");
+}
+
+fn reason(row: &serde_json::Value) -> &str {
+    row["failure_reason"].as_str().unwrap_or_default()
+}
+
 #[tokio::test]
-async fn a_restart_during_a_before_hook_runs_cleanup_once_without_rerunning_it() {
-    let harness = Harness::new().await;
-    let held = harness.logging(
+async fn retirement_leaves_the_same_physical_request_pending_until_a_new_runtime_claims_it() {
+    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([hook_spec(
         "prepare",
-        &format!(
-            "{}; sleep 30; {}",
-            harness.fifo("prepare-started"),
-            harness.touch("prepare-finished")
-        ),
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.logging("sweep", "true")], "timeout_secs": 30},
-        ]))
-        .await;
-    let records = harness.mark("task-hooks");
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let doc_id = request.doc_id.clone();
-    harness
-        .crash_at(request, &harness.mark("prepare-started"), &records)
-        .await;
-    harness.restart(&records, &doc_id).await;
-    assert_eq!(harness.log_lines(), vec!["prepare", "sweep"]);
-    assert!(!harness.mark("prepare-finished").exists());
-    assert_eq!(harness.calls(), 0);
-}
-
-#[tokio::test]
-async fn a_restart_during_cleanup_runs_only_the_remaining_cleanup() {
-    let harness = Harness::new().await;
-    let held = harness.logging(
-        "first",
-        &format!("{}; sleep 30", harness.fifo("first-started")),
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "first", "phase": "finally",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "second", "phase": "finally",
-             "command": ["sh", "-c", harness.logging("second", "true")], "timeout_secs": 30},
-        ]))
-        .await;
-    let records = harness.mark("task-hooks");
-    let request = harness.create_request(Lineage::Trigger, false).await;
-    let doc_id = request.doc_id.clone();
-    harness
-        .crash_at(request, &harness.mark("first-started"), &records)
-        .await;
-    harness.restart(&records, &doc_id).await;
-    assert_eq!(harness.log_lines(), vec!["first", "second"]);
-}
-
-#[tokio::test]
-async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "report", "phase": "after_failure",
-             "command": ["sh", "-c", harness.touch("reported")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let doc_id = request.doc_id.clone();
-    let mut daemon = harness.daemon_model(false, true, BackgroundExecutionRegistry::default());
-    let model = harness
-        .models
-        .lock()
-        .unwrap()
-        .last()
-        .cloned()
-        .expect("daemon model");
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let replace = async {
-        model.wait_for_calls(1).await;
-        harness.agent_access.write(
-            "test.replace_task_hook_generation",
-            &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                gents_store::graphql::escape_graphql_string(&doc_id),
-            ),
-        )
+        "before",
+        env.touch("admitted"),
+        30
+    )]))
+    .await;
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let before = env.request_row(&request.doc_id).await;
+    let executions = BackgroundExecutionRegistry::default();
+    executions
+        .service_admission()
+        .retire(RetirementAuthority {
+            operator_authenticated: true,
+            observed_build_matches: true,
+        })
+        .unwrap();
+    let mut retired = env.daemon_with(false, executions);
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    retired
+        .process_request(request.clone(), receiver)
         .await
-        .expect("replace the execution generation");
-    };
-    let (processed, ()) = tokio::time::timeout(Duration::from_secs(60), async {
-        tokio::join!(daemon.process_request(request, shutdown_rx), replace)
-    })
-    .await
-    .expect("lease loss is observed");
-    processed.expect("request processing returned");
-    let row = harness.request_row(&doc_id).await;
-    assert!(
-        !harness.mark("reported").exists(),
-        "a lost lease is not this execution's failure: {row}"
-    );
-    assert!(harness.mark("swept").exists(), "cleanup still runs live");
-    assert_eq!(
-        row["lifecycle_state"], "processing",
-        "the current owner keeps the terminal: {row}"
-    );
+        .unwrap();
+    assert_eq!(env.request_row(&request.doc_id).await, before);
+    assert_eq!(env.calls(), 0);
+    assert!(!env.mark("admitted").exists());
+
+    let row = env.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(env.calls(), 1);
+    assert!(env.mark("admitted").exists());
 }
 
 #[tokio::test]
-async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
-    let harness = Harness::new().await;
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", harness.logging("prepare", "true")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.logging("sweep", "true")], "timeout_secs": 30},
-        ]))
-        .await;
-    let records = harness.mark("task-hooks");
-    let executions = BackgroundExecutionRegistry::default().with_task_hook_records(records.clone());
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let mut daemon = harness.daemon_model(false, false, executions.clone());
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(true);
-    daemon
-        .process_request(request, shutdown_rx)
-        .await
-        .expect("request processing returned");
-    assert!(harness.log_lines().is_empty(), "no hook launched");
-    assert!(harness.calls() == 0);
-    assert!(
-        executions.task_hook_records().list().is_empty(),
-        "an execution that never started leaves nothing for recovery"
-    );
-    let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome =
-        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
-            &harness.node,
-            harness.owner(),
-            std::slice::from_ref(&harness.agent_config.agent_identity),
-            &restarted,
-        )
-        .await;
-    assert!(outcome.task_hooks.unwrap() == 0);
-}
-
-#[tokio::test]
-async fn a_before_hook_that_outlives_the_request_deadline_fails_the_request_clearly() {
-    let harness = Harness::with_deadline(Duration::from_secs(2)).await;
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", "sleep 3"], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
-        .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
+async fn a_failing_before_hook_stops_the_request_before_the_provider() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([hook_spec(
+        "prepare",
+        "before",
+        "echo blocked >&2; exit 1",
+        30
+    )]))
+    .await;
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("request deadline exceeded"), "{row}");
-    assert!(harness.mark("swept").exists());
+    assert!(
+        reason(&row).contains("prepare") && reason(&row).contains("blocked"),
+        "{row}"
+    );
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
-async fn workspace_seal_completes_before_the_after_phase_is_selected() {
-    let harness = Harness::new().await;
-    let placement = tempfile::tempdir().expect("workspace placement directory");
-    install_workspace(&harness, placement.path()).await;
-    harness
-        .install_task(json!([
-            {"hook_id": "verify", "phase": "after_success",
-             "command": ["sh", "-c", harness.touch("verified")], "timeout_secs": 30},
-            {"hook_id": "report", "phase": "after_failure",
-             "command": ["sh", "-c", harness.touch("reported")], "timeout_secs": 30},
-        ]))
+async fn configured_gate_skip_completes_without_provider_or_failure_hooks() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        skip_gate_hook("gate", 10),
+        hook_spec("next", "before", env.touch("next"), 30),
+        hook_spec("report", "after_failure", env.touch("report"), 30),
+        hook_spec("sweep", "finally", env.touch("sweep"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let row = env.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(env.calls(), 0, "{row}");
+    assert!(reason(&row).is_empty(), "{row}");
+    assert!(!env.mark("next").exists());
+    assert!(!env.mark("report").exists());
+    assert!(env.mark("sweep").exists());
+}
+
+#[tokio::test]
+async fn cleanup_failure_after_a_gate_skip_fails_the_request() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        skip_gate_hook("gate", 10),
+        hook_spec("sweep", "finally", "echo cleanup-broke >&2; exit 1", 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let row = env.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert_eq!(env.calls(), 0, "{row}");
+    assert!(reason(&row).contains("sweep"), "{row}");
+    assert!(reason(&row).contains("cleanup-broke"), "{row}");
+}
+
+#[tokio::test]
+async fn passing_hooks_leave_a_manual_task_run_completed() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        hook_spec("prepare", "before", env.touch("prepared"), 30),
+        hook_spec("verify", "after_success", env.touch("verified"), 30),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let fire_query = format!(
+        r#"{{ TriggerFire(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID task_id}} }}"#,
+        gents_store::graphql::escape_graphql_string(&request.request_id),
+    );
+    let selected = env.agent_access.execute(&fire_query).await.unwrap();
+    assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
+    let reader = gents_store::test_support::unrelated_document_reader(&env.node).await;
+    let node_view = reader.execute(&fire_query).await;
+    assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 1, "{row}");
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    for mark in ["prepared", "verified", "swept"] {
+        assert!(env.mark(mark).exists(), "{mark} hook did not run");
+    }
+}
+
+#[tokio::test]
+async fn a_failing_cleanup_keeps_the_agent_failure_as_the_primary_error() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        hook_spec("report", "after_failure", env.touch("reported"), 30),
+        hook_spec("sweep", "finally", "exit 1", 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let row = env.run(request, true).await;
+    assert!(env.calls() > 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    let reason = reason(&row);
+    assert!(!reason.starts_with("task hook"), "{reason:?}");
+    assert!(
+        reason.contains("task cleanup hooks failed: sweep"),
+        "{reason:?}"
+    );
+    assert!(env.mark("reported").exists());
+}
+
+#[tokio::test]
+async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_request() {
+    let env = TaskHookEnv::new().await;
+    let held = env.held_script("verify-started", "verify-finished");
+    env.install_task(json!([
+        hook_spec("verify", "after_success", held, 60),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let capture = InterruptionCapture::default();
+    let row = env
+        .run_interrupting_at(request, &env.mark("verify-started"))
+        .with_subscriber(capture.subscriber())
         .await;
-    let request = harness.create_request(Lineage::Trigger, true).await;
+    capture.assert_source("task_hook");
+    assert_eq!(env.calls(), 1, "{row}");
+    assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
+    assert!(!env.mark("verify-finished").exists());
+    assert!(
+        env.mark("swept").exists(),
+        "an interrupt never skips cleanup"
+    );
+}
+
+#[tokio::test]
+async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
+    let env = TaskHookEnv::new().await;
+    let held = env.held_script("prepare-started", "prepare-finished");
+    env.install_task(json!([
+        hook_spec("prepare", "before", held, 60),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let capture = InterruptionCapture::default();
+    let row = env
+        .run_interrupting_at(request, &env.mark("prepare-started"))
+        .with_subscriber(capture.subscriber())
+        .await;
+    capture.assert_source("task_hook");
+    assert_eq!(env.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
+    assert!(!env.mark("prepare-finished").exists());
+    assert!(env.mark("swept").exists());
+}
+
+#[tokio::test]
+async fn task_bindings_follow_the_lean_model() {
+    use gents_toolcalls::call::task_hooks::TaskBindingRefusal;
+    for case in gents_lean_vocab::families::task_hooks_hookless_bound_request::cases::<
+        String,
+        gents_protocol::request_lifecycle::RequestLifecycleState,
+        String,
+    >() {
+        let env = TaskHookEnv::new().await;
+        if case.input.binding != "missing" {
+            env.install_task(json!([])).await;
+        }
+        let request = env.create_request(Lineage::ManualFire, false).await;
+        if case.input.binding == "disabled" {
+            env.apply(vec![(
+                Collection::Task,
+                json!({
+                    "node_did": env.owner(),
+                    "task_id": TASK_ID,
+                    "agent_did": env.agent_config.agent_did,
+                    "prompt_template": "run the gate",
+                    "enabled": false,
+                }),
+            )])
+            .await;
+        }
+        let row = env.run(request, false).await;
+        let refusals = [
+            (
+                "missing",
+                TaskBindingRefusal::Missing {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+            (
+                "disabled",
+                TaskBindingRefusal::Disabled {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+        ];
+        let refusal = refusals
+            .iter()
+            .filter(|(_, refusal)| reason(&row).contains(&refusal.to_string()))
+            .map(|(name, _)| (*name).to_owned())
+            .next();
+        case.check(
+            gents_lean_vocab::families::task_hooks_hookless_bound_request::BoundRequest {
+                agent_ran: env.calls() > 0,
+                request_state: serde_json::from_value(row["lifecycle_state"].clone())
+                    .expect("persisted lifecycle state"),
+                refusal,
+            },
+        );
+    }
+}
+
+async fn install_workspace(env: &TaskHookEnv, host_path: &Path) {
+    let owner = env.owner().to_string();
+    let workspace = gents_session::workspace::IsolatedWorkspaceDoc {
+        path_capability: gents_session::workspace::WorkspacePathCapability::exact_paths(vec![
+            "patch.rs".to_string(),
+        ])
+        .unwrap(),
+        workspace_id: WORKSPACE_ID.to_string(),
+        work_unit_id: TASK_ID.to_string(),
+        repository_id: "hook-repo".to_string(),
+        base_sha: "0".repeat(40),
+        branch: "gents/hook-task".to_string(),
+        creation_policy: gents_session::workspace::CreationPolicy::GitWorktreeDiff
+            .as_str()
+            .to_string(),
+        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
+            .as_str()
+            .to_string(),
+        owner_node_did: owner.clone(),
+        writer_principal: env.agent_config.agent_did.clone(),
+        integrator_principal: env.agent_config.agent_did.clone(),
+        instruction_manifest: String::new(),
+        seal_hash: None,
+        lifecycle_state: "ready".to_string(),
+        caused_by_invocation_id: "hook-invocation".to_string(),
+        caused_by_correlation: "hook-correlation".to_string(),
+        route: Default::default(),
+    };
+    let placement = gents_session::workspace::WorkspacePlacementDoc {
+        workspace_id: WORKSPACE_ID.to_string(),
+        owner_node_did: owner,
+        host_path: host_path.to_str().expect("utf-8 path").to_string(),
+        repository_placement_id: "hook-repo".to_string(),
+        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
+            .as_str()
+            .to_string(),
+        adapter_version: "gents-workspace-adapter/1".to_string(),
+        dirty_base: false,
+        dirty_base_summary: String::new(),
+        provisioning_state: "provisioned".to_string(),
+        observed_tree_hash: String::new(),
+    };
+    let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    for mutation in [
+        gents_session::workspace::isolated_workspace_upsert_mutation(&workspace),
+        gents_session::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
+    ] {
+        env.agent_access
+            .write("test.task_hook_workspace", &mutation)
+            .await
+            .expect("install isolated workspace and placement");
+    }
+}
+
+async fn workspace_bindings(
+    env: &TaskHookEnv,
+) -> Vec<gents_session::workspace::WorkspaceBindingDoc> {
+    let response = env
+        .agent_access
+        .execute(&format!(
+            r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
+            gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
+            gents_store::graphql::escape_graphql_string(env.owner()),
+        ))
+        .await
+        .unwrap();
+    let response: query::QueryResponse = serde_json::from_value(response).unwrap();
+    gents_store::graphql::rows(&response, "WorkspaceBinding").unwrap()
+}
+
+async fn materialize_writer_binding(env: &TaskHookEnv, request: &AgentRequest) {
     gents_session::workspace::materialize_workspace_binding(
-        &harness.node,
+        &env.node,
         &request.request_id,
         &request.doc_id,
-        harness.agent_config.agent_identity.as_ref(),
+        env.agent_config.agent_identity.as_ref(),
         &gents_session::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
@@ -1237,81 +989,289 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
     )
     .await
     .expect("materialize the writer binding");
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 1, "{row}");
+}
+
+#[tokio::test]
+async fn claim_admission_rejection_releases_the_bound_workspace() {
+    let env = TaskHookEnv::new().await;
+    let (_placement, request) = env.setup_bound_workspace_request(json!([])).await;
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .any(|binding| binding.is_active_read_write()));
+    env.agent_access
+        .write(
+            "test.remove_workspace_placement",
+            &format!(
+                r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
+                gents_store::graphql::escape_graphql_string(env.owner()),
+            ),
+        )
+        .await
+        .unwrap();
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("workspace"), "{row}");
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
+    use crate::runtime::agent::worker_capacity::{RequestGuard, WorkerCapacity, WorkerTicket};
+
+    let env = TaskHookEnv::new().await;
+    let (_placement, request) = env.setup_bound_workspace_request(json!([])).await;
+    let mut guard = Some(RequestGuard::Unbound(
+        WorkerCapacity::new(1).try_acquire_unbound().unwrap(),
+    ));
+    RequestGuard::bind_claim(
+        &mut guard,
+        WorkerTicket::new("previous-request", "previous-generation"),
+    )
+    .unwrap();
+    let row = env.run_with_capacity(request, false, guard).await;
+    assert_eq!(env.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("worker guard"), "{row}");
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_skipped_gate_releases_the_bound_workspace() {
+    let env = TaskHookEnv::new().await;
+    let (_placement, request) = env
+        .setup_bound_workspace_request(json!([skip_gate_hook("gate", 10)]))
+        .await;
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
+    let row = env.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(env.calls(), 0, "{row}");
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_failing_before_hook_releases_the_bound_workspace() {
+    let env = TaskHookEnv::new().await;
+    let (_placement, request) = env
+        .setup_bound_workspace_request(json!([hook_spec("prepare", "before", "exit 1", 30)]))
+        .await;
+    assert!(workspace_bindings(&env)
+        .await
+        .iter()
+        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("prepare"), "{row}");
+    let bindings = workspace_bindings(&env).await;
+    assert!(
+        !bindings
+            .iter()
+            .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write),
+        "{bindings:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_during_a_before_hook_runs_cleanup_once_without_rerunning_it() {
+    let env = TaskHookEnv::new().await;
+    let held = env.logging(
+        "prepare",
+        &env.held_script("prepare-started", "prepare-finished"),
+    );
+    env.install_task(json!([
+        hook_spec("prepare", "before", held, 60),
+        hook_spec("sweep", "finally", env.logging("sweep", "true"), 30),
+    ]))
+    .await;
+    let records = env.mark("task-hooks");
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let doc_id = request.doc_id.clone();
+    env.crash_at(request, &env.mark("prepare-started"), &records)
+        .await;
+    env.restart(&records, &doc_id).await;
+    assert_eq!(env.log_lines(), vec!["prepare", "sweep"]);
+    assert!(!env.mark("prepare-finished").exists());
+    assert_eq!(env.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_restart_during_cleanup_runs_only_the_remaining_cleanup() {
+    let env = TaskHookEnv::new().await;
+    let held = env.logging("first", &format!("{}; sleep 30", env.fifo("first-started")));
+    env.install_task(json!([
+        hook_spec("first", "finally", held, 60),
+        hook_spec("second", "finally", env.logging("second", "true"), 30),
+    ]))
+    .await;
+    let records = env.mark("task-hooks");
+    let request = env.create_request(Lineage::Trigger, false).await;
+    let doc_id = request.doc_id.clone();
+    env.crash_at(request, &env.mark("first-started"), &records)
+        .await;
+    env.restart(&records, &doc_id).await;
+    assert_eq!(env.log_lines(), vec!["first", "second"]);
+}
+
+#[tokio::test]
+async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        hook_spec("report", "after_failure", env.touch("reported"), 30),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let doc_id = request.doc_id.clone();
+    let mut daemon = env.daemon_model(false, true, BackgroundExecutionRegistry::default());
+    let model = env
+        .models
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("daemon model");
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let replace = async {
+        model.wait_for_calls(1).await;
+        env.replace_generation(&doc_id).await;
+    };
+    let (processed, ()) = tokio::time::timeout(Duration::from_secs(60), async {
+        tokio::join!(daemon.process_request(request, shutdown_rx), replace)
+    })
+    .await
+    .expect("lease loss is observed");
+    processed.expect("request processing returned");
+    let row = env.request_row(&doc_id).await;
+    assert!(
+        !env.mark("reported").exists(),
+        "a lost lease is not this execution's failure: {row}"
+    );
+    assert!(env.mark("swept").exists(), "cleanup still runs live");
+    assert_eq!(
+        row["lifecycle_state"], "processing",
+        "the current owner keeps the terminal: {row}"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
+    let env = TaskHookEnv::new().await;
+    env.install_task(json!([
+        hook_spec("prepare", "before", env.logging("prepare", "true"), 30),
+        hook_spec("sweep", "finally", env.logging("sweep", "true"), 30),
+    ]))
+    .await;
+    let records = env.mark("task-hooks");
+    let executions = BackgroundExecutionRegistry::default().with_task_hook_records(records.clone());
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let mut daemon = env.daemon_model(false, false, executions.clone());
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(true);
+    daemon
+        .process_request(request, shutdown_rx)
+        .await
+        .expect("request processing returned");
+    assert!(env.log_lines().is_empty(), "no hook launched");
+    assert!(env.calls() == 0);
+    assert!(
+        executions.task_hook_records().list().is_empty(),
+        "an execution that never started leaves nothing for recovery"
+    );
+    let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &env.node,
+            env.owner(),
+            std::slice::from_ref(&env.agent_config.agent_identity),
+            &restarted,
+        )
+        .await;
+    assert!(outcome.task_hooks.unwrap() == 0);
+}
+
+#[tokio::test]
+async fn a_before_hook_that_outlives_the_request_deadline_fails_the_request_clearly() {
+    let env = TaskHookEnv::with_deadline(Duration::from_secs(2)).await;
+    env.install_task(json!([
+        hook_spec("prepare", "before", "sleep 3", 30),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("request deadline exceeded"), "{row}");
+    assert!(env.mark("swept").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn workspace_seal_completes_before_the_after_phase_is_selected() {
+    let env = TaskHookEnv::new().await;
+    let (_placement, request) = env
+        .setup_bound_workspace_request(json!([
+            hook_spec("verify", "after_success", env.touch("verified"), 30),
+            hook_spec("report", "after_failure", env.touch("reported"), 30),
+        ]))
+        .await;
+    let row = env.run(request, false).await;
+    assert_eq!(env.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "failed", "{row}");
     assert!(reason(&row).contains("placement"), "the seal failed: {row}");
     assert!(
-        harness.mark("reported").exists(),
+        env.mark("reported").exists(),
         "the seal's failure selected after_failure"
     );
     assert!(
-        !harness.mark("verified").exists(),
+        !env.mark("verified").exists(),
         "after_success never saw the sealed work"
     );
 }
 
-impl Harness {
-    async fn run_superseding_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
-        let doc_id = request.doc_id.clone();
-        let mut daemon = self.daemon(false);
-        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let supersede = async {
-            wait_for_fifo(marker).await;
-            self.agent_access.write(
-                "test.supersede_task_hook_execution",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                    gents_store::graphql::escape_graphql_string(&doc_id),
-                ),
-            )
-            .await
-            .expect("replace the execution generation");
-        };
-        let (processed, ()) = tokio::time::timeout(Duration::from_secs(25), async {
-            tokio::join!(daemon.process_request(request, shutdown_rx), supersede)
-        })
-        .await
-        .expect("revocation cancels the held hook");
-        processed.expect("request processing returned");
-        self.request_row(&doc_id).await
-    }
-}
-
 #[tokio::test]
 async fn revocation_during_a_before_hook_cancels_it_and_still_cleans_up() {
-    let mut harness = Harness::new().await;
+    let mut env = TaskHookEnv::new().await;
     // A revocation writes no interrupt latch; the execution observes it at its
     // next lease renewal poll (a quarter of the lease), inside the 25s bound.
-    Arc::get_mut(&mut harness.agent_config)
+    Arc::get_mut(&mut env.agent_config)
         .unwrap()
         .stream_liveness_timeout = Duration::from_secs(8);
-    let held = format!(
-        "{}; sleep 30; {}",
-        harness.fifo("prepare-started"),
-        harness.touch("prepare-finished")
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "prepare", "phase": "before",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "second", "phase": "before",
-             "command": ["sh", "-c", harness.touch("second")], "timeout_secs": 30},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
+    let held = env.held_script("prepare-started", "prepare-finished");
+    env.install_task(json!([
+        hook_spec("prepare", "before", held, 60),
+        hook_spec("second", "before", env.touch("second"), 30),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let row = env
+        .run_superseding_at(request, &env.mark("prepare-started"))
         .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness
-        .run_superseding_at(request, &harness.mark("prepare-started"))
-        .await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert!(!harness.mark("prepare-finished").exists());
+    assert_eq!(env.calls(), 0, "{row}");
+    assert!(!env.mark("prepare-finished").exists());
     assert!(
-        !harness.mark("second").exists(),
+        !env.mark("second").exists(),
         "no ordinary hook launches after revocation"
     );
-    assert!(harness.mark("swept").exists(), "cleanup still runs");
+    assert!(env.mark("swept").exists(), "cleanup still runs");
     assert_eq!(
         row["lifecycle_state"], "claimed",
         "the revoking owner keeps the terminal: {row}"
@@ -1320,32 +1280,25 @@ async fn revocation_during_a_before_hook_cancels_it_and_still_cleans_up() {
 
 #[tokio::test]
 async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up() {
-    let mut harness = Harness::new().await;
+    let mut env = TaskHookEnv::new().await;
     // A revocation writes no interrupt latch; the execution observes it at its
     // next lease renewal poll (a quarter of the lease), inside the 25s bound.
-    Arc::get_mut(&mut harness.agent_config)
+    Arc::get_mut(&mut env.agent_config)
         .unwrap()
         .stream_liveness_timeout = Duration::from_secs(8);
-    let held = format!(
-        "{}; sleep 30; {}",
-        harness.fifo("verify-started"),
-        harness.touch("verify-finished")
-    );
-    harness
-        .install_task(json!([
-            {"hook_id": "verify", "phase": "after_success",
-             "command": ["sh", "-c", held], "timeout_secs": 60},
-            {"hook_id": "sweep", "phase": "finally",
-             "command": ["sh", "-c", harness.touch("swept")], "timeout_secs": 30},
-        ]))
+    let held = env.held_script("verify-started", "verify-finished");
+    env.install_task(json!([
+        hook_spec("verify", "after_success", held, 60),
+        hook_spec("sweep", "finally", env.touch("swept"), 30),
+    ]))
+    .await;
+    let request = env.create_request(Lineage::ManualFire, false).await;
+    let row = env
+        .run_superseding_at(request, &env.mark("verify-started"))
         .await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness
-        .run_superseding_at(request, &harness.mark("verify-started"))
-        .await;
-    assert_eq!(harness.calls(), 1, "{row}");
-    assert!(!harness.mark("verify-finished").exists());
-    assert!(harness.mark("swept").exists(), "cleanup still runs");
+    assert_eq!(env.calls(), 1, "{row}");
+    assert!(!env.mark("verify-finished").exists());
+    assert!(env.mark("swept").exists(), "cleanup still runs");
     assert_eq!(
         row["lifecycle_state"], "processing",
         "the revoking owner keeps the terminal: {row}"
@@ -1359,11 +1312,11 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         String,
         gents_documents::TaskHookPhase,
     >() {
-        let mut harness = Harness::new().await;
-        Arc::get_mut(&mut harness.agent_config)
+        let mut env = TaskHookEnv::new().await;
+        Arc::get_mut(&mut env.agent_config)
             .unwrap()
             .stream_liveness_timeout = Duration::from_secs(120);
-        let gate = harness.mark("revoked");
+        let gate = env.mark("revoked");
         let gated = case
             .input
             .hooks
@@ -1382,47 +1335,43 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
                 let command = if hook.hook_id == gated {
                     format!(
                         "sleep 0.3; {}; {}; while [ ! -e {} ]; do sleep 0.01; done",
-                        harness.touch(&hook.hook_id),
-                        harness.fifo("ready"),
+                        env.touch(&hook.hook_id),
+                        env.fifo("ready"),
                         gate.display()
                     )
                 } else {
-                    harness.touch(&hook.hook_id)
+                    env.touch(&hook.hook_id)
                 };
-                json!({"hook_id": hook.hook_id, "phase": hook.phase,
-                       "command": ["sh", "-c", command], "timeout_secs": 10})
+                json!({
+                    "hook_id": hook.hook_id, "phase": hook.phase,
+                    "command": ["sh", "-c", command], "timeout_secs": 10
+                })
             })
             .collect::<Vec<_>>();
-        harness.install_task(json!(hooks)).await;
-        let request = harness.create_request(Lineage::ManualFire, false).await;
-        let doc_id = request.doc_id.clone();
-        let mut daemon = harness.daemon(false);
-        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let revoke = async {
-            wait_for_fifo(&harness.mark("ready")).await;
-            harness.agent_access.write("test.revoke_between_task_hooks", &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                gents_store::graphql::escape_graphql_string(&doc_id)
-            )).await.unwrap();
-            std::fs::write(&gate, "revoked").unwrap();
-        };
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
-            tokio::join!(daemon.process_request(request, shutdown_rx), revoke)
-        })
-        .await
-        .unwrap();
-        result.unwrap();
+        env.install_task(json!(hooks)).await;
+        let request = env.create_request(Lineage::ManualFire, false).await;
+        let env_ref = &env;
+        env.run_at_fifo(
+            request,
+            &env.mark("ready"),
+            Duration::from_secs(15),
+            |doc_id| async move {
+                env_ref.replace_generation(&doc_id).await;
+                std::fs::write(&gate, "revoked").unwrap();
+            },
+        )
+        .await;
         let refused_before_launch = case
             .input
             .hooks
             .iter()
-            .filter(|hook| !harness.mark(&hook.hook_id).exists())
+            .filter(|hook| !env.mark(&hook.hook_id).exists())
             .map(|hook| hook.hook_id.clone())
             .collect();
         case.check(
             gents_lean_vocab::families::task_hooks_contracts_daemon_revocation::DaemonOutput {
                 refused_before_launch,
-                agent_ran: harness.calls() > 0,
+                agent_ran: env.calls() > 0,
             },
         );
     }
@@ -1430,8 +1379,8 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
 
 #[tokio::test]
 async fn natural_finish_excludes_task_and_workspace_success_effects() {
-    let harness = Harness::new().await;
-    let mut request = harness.create_request(Lineage::ManualFire, false).await;
+    let env = TaskHookEnv::new().await;
+    let mut request = env.create_request(Lineage::ManualFire, false).await;
     request.execution_origin = Some("interactive".into());
     request.input = Default::default();
     request.caused_by_trigger_id = None;

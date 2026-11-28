@@ -40,167 +40,226 @@ fn same(left: &WireAssignment, right: &WireAssignment) -> bool {
     serde_json::to_value(left).unwrap() == serde_json::to_value(right).unwrap()
 }
 
-async fn durable_rows(access: &gents_store::config_client::ConfigAccess) -> Value {
-    access.execute("{ Goal { _docID _version { cid } goal_id objective status token_budget continuation_sequence updated_at } GoalCreationClaim { _docID creation_key goal_id objective token_budget } }").await.unwrap()["data"].clone()
+async fn durable_rows(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Value {
+    let escaped = escape_graphql_string(session_id);
+    access
+        .execute(&format!(
+            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID _version {{ cid }} goal_id objective status token_budget continuation_sequence updated_at }} GoalCreationClaim {{ _docID creation_key goal_id objective token_budget }} }}"#
+        ))
+        .await
+        .unwrap()["data"]
+        .clone()
 }
 
-#[tokio::test]
+const EDIT_CASES_PER_NODE: usize = 15;
+const EDIT_NODES_AT_ONCE: usize = 6;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn generated_goal_edit_cases_drive_real_transactions() {
+    use futures::StreamExt;
     let cases = gents_lean_vocab::families::goal_edit_contracts_edit::cases::<Origin, GoalStatus>();
-    for case in &cases {
-        let row = &case.input;
-        let input = GoalSetInput {
-            objective: row.fields.objective.clone(),
-            token_budget: row.fields.budget.map(Some),
-            auto_resume: row.auto_resume,
-            ..Default::default()
-        };
-        let signed_home = gents_documents::test_support::SignedHome::start(
-            "goal-edit-contract",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (db, user, access) = signed_home.into_parts();
-        let node = db.node.clone();
-        let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-        let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
-        let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        access.transact_write("test.goal_edit_session", |txn| {
-            Box::pin(async {
-                let created = txn.execute_client_signed_create(
-                    "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
-                    &serde_json::json!({"input": {"node_did": signer.did(), "session_id": "session",
-                        "requester_did": user.did(), "agent_did": agent.did(),
-                        "created_at": "2026-11-04T00:00:00Z"}}),
-                    gents_protocol::schemas::AGENT_SESSION,
-                ).await?;
-                let doc = gents_store::graphql::created_doc_id(&created, "AgentSession")?;
-                txn.add_actor_relationship("AgentSession", &doc, "working_agent", &identity::Did::new(agent.did())?).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        }).await.unwrap();
-        let created = create_goal_for_session_from_access(
-            &access,
-            signer.did(),
-            "session",
-            "ship",
-            Some(100),
-        )
-        .await
-        .unwrap();
-        let mut observed = match created {
-            CreateGoalForSessionOutcome::Created(goal)
-            | CreateGoalForSessionOutcome::Idempotent(goal) => goal,
-        };
-        let doc = escape_graphql_string(&observed.doc_id);
-        access.transact_write("test.goal_edit_state", |txn| {
-            let doc = &doc;
-            Box::pin(async move {
-                txn.execute_client_signed_update(
-                    &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
-                    &serde_json::json!({"input": {"status": row.current.status,
-                        "continuation_sequence": row.current.sequence, "objective": row.current.objective.as_str(),
-                        "token_budget": row.current.budget,
-                        "auto_resume_at_reset": row.stored_auto_resume}}),
-                    gents_protocol::schemas::GOAL,
-                ).await
-            })
-        }).await.unwrap();
-        observed.status = serde_json::to_value(row.observed.status)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_owned();
-        observed.continuation_sequence = Some(i64::try_from(row.observed.sequence).unwrap());
-        observed.objective = row.observed.objective.clone();
-        observed.token_budget = row.observed.budget;
-        assert!(
-            same(&wire_assignment(&observed), &row.observed),
-            "{} observation",
-            row.name
-        );
-        let current = access
-            .transact_readonly("test.goal_edit.current", |txn| {
-                Box::pin(load_canonical_goal_in_txn(
-                    txn,
-                    &observed.node_did,
-                    &observed.session_id,
-                ))
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            same(&wire_assignment(&current), &row.current),
-            "{} durable input",
-            row.name
-        );
-        assert_eq!(
-            current.auto_resume_at_reset, row.stored_auto_resume,
-            "{}",
-            row.name
-        );
-        let before = durable_rows(&access).await;
-        let edit = match row.origin {
-            Origin::Agent => {
-                super::set_as_working_agent(&agent_access, &observed, &input, None).await
-            }
-            Origin::Client => {
-                let input = GoalSetInput {
-                    expected: Some(GoalExpected::Assignment {
-                        goal_doc_id: observed.doc_id.clone(),
-                        goal_id: observed.goal_id.clone(),
-                        assignment_root_request_doc_id: observed
-                            .assignment_root_request_doc_id
-                            .clone(),
-                        status: observed.parsed_status().unwrap(),
-                        continuation_sequence: observed.continuation_sequence(),
-                    }),
-                    ..input.clone()
-                };
-                super::set(&access, signer.did(), "session", &input).await
-            }
-        };
-        let result = match edit {
-            Ok(result) => Some(result),
-            Err(GoalOperationError::Passthrough(error)) => panic!("{}: {error:#}", row.name),
-            Err(_) => None,
-        };
-        let edited = result.as_ref().map(wire_edited);
-        case.check(edited.clone());
-        if let Some(updated) = &result {
-            let prompt =
-                crate::triggers::engine::goal_source::continuation_prompt(updated, None, false);
-            let objective = serde_json::to_string(&updated.objective).unwrap();
-            assert!(
-                prompt.contains(&format!(
-                    "<goal-objective-json>{objective}</goal-objective-json>"
-                )),
-                "{}",
-                row.name
-            );
+    let mut chunks = Vec::new();
+    let mut iter = cases.into_iter();
+    loop {
+        let chunk: Vec<_> = iter.by_ref().take(EDIT_CASES_PER_NODE).collect();
+        if chunk.is_empty() {
+            break;
         }
-        let after = durable_rows(&access).await;
-        assert_eq!(
-            before["GoalCreationClaim"], after["GoalCreationClaim"],
-            "{}",
-            row.name
-        );
-        if edited.as_ref().is_none_or(|edited| {
-            same(&edited.assignment, &wire_assignment(&current))
-                && edited.auto_resume == current.auto_resume_at_reset
-        }) {
-            assert_eq!(before, after, "{} must not write", row.name);
-        }
-        assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
-        node.shutdown().await.expect("node shutdown");
+        chunks.push(chunk);
     }
+    futures::stream::iter(chunks.into_iter().enumerate())
+        .map(|(chunk_index, chunk)| {
+            tokio::spawn(async move {
+                let signed_home = gents_documents::test_support::SignedHome::start(
+                    &format!("goal-edit-contract-{chunk_index}"),
+                    crate::lifecycle_hooks::composition(),
+                )
+                .await;
+                let binding = gents_inference::test_support::default_agent(&signed_home).await;
+                let (db, user, access) = signed_home.into_parts();
+                let node = db.node.clone();
+                let signer =
+                    gents_store::test_support::held_runtime_identity(db.node_identity.did());
+                let agent =
+                    gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
+                let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+                    node.clone(),
+                    identity::Did::new(agent.did()).unwrap(),
+                    agent.as_ref(),
+                )
+                .unwrap();
+                for (case_index, case) in chunk.iter().enumerate() {
+                    let row = &case.input;
+                    let session_id = format!("session-{chunk_index}-{case_index}");
+                    let input = GoalSetInput {
+                        objective: row.fields.objective.clone(),
+                        token_budget: row.fields.budget.map(Some),
+                        auto_resume: row.auto_resume,
+                        ..Default::default()
+                    };
+                    access
+                        .transact_write("test.goal_edit_session", |txn| {
+                            let session_id = &session_id;
+                            let signer = &signer;
+                            let user = &user;
+                            let agent = &agent;
+                            Box::pin(async move {
+                                let created = txn
+                                    .execute_client_signed_create(
+                                        "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
+                                        &serde_json::json!({"input": {"node_did": signer.did(), "session_id": session_id,
+                                            "requester_did": user.did(), "agent_did": agent.did(),
+                                            "created_at": "2026-11-04T00:00:00Z"}}),
+                                        gents_protocol::schemas::AGENT_SESSION,
+                                    )
+                                    .await?;
+                                let doc =
+                                    gents_store::graphql::created_doc_id(&created, "AgentSession")?;
+                                txn.add_actor_relationship(
+                                    "AgentSession",
+                                    &doc,
+                                    "working_agent",
+                                    &identity::Did::new(agent.did())?,
+                                )
+                                .await?;
+                                Ok::<_, anyhow::Error>(())
+                            })
+                        })
+                        .await
+                        .unwrap();
+                    let created = create_goal_for_session_from_access(
+                        &access,
+                        signer.did(),
+                        &session_id,
+                        "ship",
+                        Some(100),
+                    )
+                    .await
+                    .unwrap();
+                    let mut observed = match created {
+                        CreateGoalForSessionOutcome::Created(goal)
+                        | CreateGoalForSessionOutcome::Idempotent(goal) => goal,
+                    };
+                    let doc = escape_graphql_string(&observed.doc_id);
+                    access
+                        .transact_write("test.goal_edit_state", |txn| {
+                            let doc = &doc;
+                            Box::pin(async move {
+                                txn.execute_client_signed_update(
+                                    &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
+                                    &serde_json::json!({"input": {"status": row.current.status,
+                                        "continuation_sequence": row.current.sequence, "objective": row.current.objective.as_str(),
+                                        "token_budget": row.current.budget,
+                                        "auto_resume_at_reset": row.stored_auto_resume}}),
+                                    gents_protocol::schemas::GOAL,
+                                )
+                                .await
+                            })
+                        })
+                        .await
+                        .unwrap();
+                    observed.status = serde_json::to_value(row.observed.status)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                    observed.continuation_sequence =
+                        Some(i64::try_from(row.observed.sequence).unwrap());
+                    observed.objective = row.observed.objective.clone();
+                    observed.token_budget = row.observed.budget;
+                    assert!(
+                        same(&wire_assignment(&observed), &row.observed),
+                        "{} observation",
+                        row.name
+                    );
+                    let current = access
+                        .transact_readonly("test.goal_edit.current", |txn| {
+                            Box::pin(load_canonical_goal_in_txn(
+                                txn,
+                                &observed.node_did,
+                                &observed.session_id,
+                            ))
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(
+                        same(&wire_assignment(&current), &row.current),
+                        "{} durable input",
+                        row.name
+                    );
+                    assert_eq!(
+                        current.auto_resume_at_reset, row.stored_auto_resume,
+                        "{}",
+                        row.name
+                    );
+                    let before = durable_rows(&access, &session_id).await;
+                    let edit = match row.origin {
+                        Origin::Agent => {
+                            super::set_as_working_agent(&agent_access, &observed, &input, None)
+                                .await
+                        }
+                        Origin::Client => {
+                            let input = GoalSetInput {
+                                expected: Some(GoalExpected::Assignment {
+                                    goal_doc_id: observed.doc_id.clone(),
+                                    goal_id: observed.goal_id.clone(),
+                                    assignment_root_request_doc_id: observed
+                                        .assignment_root_request_doc_id
+                                        .clone(),
+                                    status: observed.parsed_status().unwrap(),
+                                    continuation_sequence: observed.continuation_sequence(),
+                                }),
+                                ..input.clone()
+                            };
+                            super::set(&access, signer.did(), &session_id, &input).await
+                        }
+                    };
+                    let result = match edit {
+                        Ok(result) => Some(result),
+                        Err(GoalOperationError::Passthrough(error)) => {
+                            panic!("{}: {error:#}", row.name)
+                        }
+                        Err(_) => None,
+                    };
+                    let edited = result.as_ref().map(wire_edited);
+                    case.check(edited.clone());
+                    if let Some(updated) = &result {
+                        let prompt = crate::triggers::engine::goal_source::continuation_prompt(
+                            updated, None, false,
+                        );
+                        let objective = serde_json::to_string(&updated.objective).unwrap();
+                        assert!(
+                            prompt.contains(&format!(
+                                "<goal-objective-json>{objective}</goal-objective-json>"
+                            )),
+                            "{}",
+                            row.name
+                        );
+                    }
+                    let after = durable_rows(&access, &session_id).await;
+                    assert_eq!(
+                        before["GoalCreationClaim"], after["GoalCreationClaim"],
+                        "{}",
+                        row.name
+                    );
+                    if edited.as_ref().is_none_or(|edited| {
+                        same(&edited.assignment, &wire_assignment(&current))
+                            && edited.auto_resume == current.auto_resume_at_reset
+                    }) {
+                        assert_eq!(before, after, "{} must not write", row.name);
+                    }
+                    assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
+                }
+                node.shutdown().await.expect("node shutdown");
+            })
+        })
+        .buffer_unordered(EDIT_NODES_AT_ONCE)
+        .for_each(|result| async { result.unwrap() })
+        .await;
 }
 
 #[test]

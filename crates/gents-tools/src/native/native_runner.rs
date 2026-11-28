@@ -149,7 +149,7 @@ impl NativeFsRunner {
             .map(|runtime| runtime.cancellation_token.clone())
             .unwrap_or_default();
         let root = self.effective_root(call);
-        let (argv, environment) = if runtime
+        let (argv, environment, linux_sandbox) = if runtime
             .as_ref()
             .is_some_and(|scope| scope.workspace_artifact.is_some())
         {
@@ -174,9 +174,9 @@ impl NativeFsRunner {
             .await?;
             let mut argv = vec![command.program.to_string_lossy().into_owned()];
             argv.extend(command.args);
-            (argv, Some(command.environment))
+            (argv, Some(command.environment), command.linux_sandbox)
         } else {
-            (runner.argv, None)
+            (runner.argv, None, None)
         };
         let stdin = serde_json::to_vec(&request)
             .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
@@ -201,6 +201,7 @@ impl NativeFsRunner {
             tool_name: Some(tool_name.to_string()),
             live_output: None,
             process_recorder: gents_session::exec::ownership::process_recorder(call),
+            linux_sandbox,
         })
         .await
         {

@@ -79,6 +79,7 @@ pub async fn run_command(
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
         process_recorder: gents_session::exec::ownership::process_recorder(call),
+        linux_sandbox: launch.linux_sandbox,
     })
     .await;
     let duration_ms = elapsed_ms(started);

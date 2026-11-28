@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.ArgumentFailure
+import Proofs.Conformance.ClientSettings
+import Proofs.Conformance.ContractCases.ReductionEngine
+import Proofs.Conformance.Contracts.Json.NativeExecution
+import Proofs.Conformance.EventGroups
+import Proofs.Conformance.GoalWakeAncestry
+import Proofs.Conformance.Identity.DelegatedFinality
+import Proofs.Conformance.Identity.HouseholdBInference
+import Proofs.Conformance.Identity.HouseholdBPack
+import Proofs.Conformance.Identity.HouseholdBTrace
+import Proofs.Conformance.InferenceObservationRegistry
+import Proofs.Conformance.NativeClaimLifetime
+import Proofs.Conformance.OpenOutputShape
+import Proofs.Conformance.PluginEffects
+import Proofs.Conformance.ReasoningAudit
+import Proofs.Conformance.RepeatedFailureIdentity
+import Proofs.Conformance.ScopeCollectionRules
+import Proofs.Conformance.ToolCallTimeoutAfterSweep
+import Proofs.Documents.ScopeTemplates.Derivation
+
+namespace Conformance.Contracts.Shards.S23
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S23

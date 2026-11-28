@@ -117,9 +117,6 @@ def liveOverlayCases : List LiveOverlayCase :=
     , hasContent := true, hasReasoning := false }
   ]
 
-def liveOverlayCaseNames : List String :=
-  liveOverlayCases.map LiveOverlayCase.name
-
 def liveOverlayTurn : String → Option ClientTurnState
   | "waitingForClaim" => some .waitingForClaim
   | "running" => some .running

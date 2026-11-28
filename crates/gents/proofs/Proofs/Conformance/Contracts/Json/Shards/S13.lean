@@ -1,0 +1,27 @@
+import Proofs.Conformance.Contracts.Json.Vocabularies
+import Proofs.Conformance.AccountRotation.Contracts
+import Proofs.Conformance.ArtifactAuthority
+import Proofs.Conformance.ClientSessionDeliveryCases
+import Proofs.Conformance.DesiredStatePlan
+import Proofs.Conformance.EnrollmentInvite
+import Proofs.Conformance.HomeResolution
+import Proofs.Conformance.Identity.HouseholdADocuments
+import Proofs.Conformance.Identity.HouseholdBBackend
+import Proofs.Conformance.Identity.Operations
+import Proofs.Conformance.Identity.SecretPublication
+import Proofs.Conformance.InferenceDroppedPermit
+import Proofs.Conformance.MCPHealthShutdown
+import Proofs.Conformance.PromptAssemblyRepair
+import Proofs.Conformance.RootCandidates.ReasoningCapabilities
+import Proofs.Conformance.StagedPermissionObjects
+import Proofs.Conformance.TitleText
+import Proofs.Conformance.Triggers.Contracts
+import Proofs.Conformance.WorkspaceFileConsent
+import Proofs.ToolCalls.Identity.ClientAgentJournal
+
+namespace Conformance.Contracts.Shards.S13
+
+set_option maxHeartbeats 1000000 in
+conformance_shard_entries entries
+
+end Conformance.Contracts.Shards.S13

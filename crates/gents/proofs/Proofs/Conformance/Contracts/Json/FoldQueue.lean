@@ -9,25 +9,6 @@ namespace Conformance.FoldQueueContracts
 
 open SessionQueue SessionQueue.FoldCases Conformance.Contracts
 
-def entryJson (entry : QueueEntry) : String :=
-  "{\"request_id\":" ++ toString entry.requestId ++
-  ",\"execution_origin\":" ++ jsonString entry.origin.toDefraDB ++
-  ",\"delivery\":" ++ jsonString entry.delivery.toDefraDB ++
-  ",\"order_key\":" ++ toString entry.orderKey ++
-  ",\"source\":" ++ jsonString entry.source.toDefraDB ++
-  ",\"policy\":" ++ jsonString entry.policy.toDefraDB ++
-  ",\"queued_after\":" ++ jsonOptionalNat entry.queuedAfter ++
-  ",\"requester_id\":" ++ jsonOptionalNat entry.requester ++
-  ",\"turn_context\":" ++ toString entry.turnContext ++
-  ",\"fresh\":" ++ jsonOptionalBool (some entry.fresh) ++ "}"
-
-def eventJson : Event → String
-  | .enqueue entry => "{\"kind\":\"enqueue\",\"entry\":" ++ entryJson entry ++ "}"
-  | .claim admitted =>
-      "{\"kind\":\"claim\",\"admitted\":" ++ jsonArray (admitted.map toString) ++ "}"
-  | .consume => "{\"kind\":\"consume\"}"
-  | .finish => "{\"kind\":\"finish\"}"
-
 inductive AuthoredKeyKind where
   | context
   | prompt

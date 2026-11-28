@@ -1,0 +1,3 @@
+---- MODULE MCAccountPoolRedClearDropsLimits ----
+EXTENDS AccountPool
+====

@@ -30,10 +30,12 @@ structure Input where
   resample : Nat := 2
   repair : Bool := true
   deadlineFits : Bool := true
-  /-- The bound counts accepted tool rounds after the first: a dispatch is refused once more
-  than `maxTurns + 1` turns have run, so zero is the tightest limit and never an absent one.
-  Retry attempts are not turns. -/
-  maxTurns : Nat := 0
+  /-- The bound counts provider turns: a dispatch is refused once `maxTurns` turns have run,
+  so zero admits none and is never an absent limit. Retry attempts are not turns. -/
+  maxTurns : Nat := 2
+  /-- The provider turns a resumed request ran before this run. The limit counts them:
+  the run starts its turn count here. -/
+  priorTurns : Nat := 0
   context : Bool := false
   initialDirty : Bool := false
   missingCapture : Bool := false
@@ -132,7 +134,7 @@ tool call is taken at the next turn boundary: every attempt of a later turn
 offers it, and no attempt of the turn that staged it does. -/
 def run (input : Input) : Observation := Id.run do
   let budget : Budget := ⟨input.transport, input.resample, 1, input.repair, 0, none⟩
-  let mut state := { baseState with phase := .issuing, now := 0, budget := budget, deadline := if input.deadlineFits then none else some 0 }
+  let mut state := { baseState with phase := .issuing, turn := input.priorTurns, now := 0, budget := budget, deadline := if input.deadlineFits then none else some 0 }
   let mut result : Observation := {}
   let mut dirty := input.initialDirty
   let mut repaired := input.nestedUsage.isSome
@@ -145,7 +147,7 @@ def run (input : Input) : Observation := Id.run do
   result := { result with ledgerUsed := ledger.map (·.used) }
   for call in input.calls do
     if result.failure.isSome || result.finalText.isSome then break
-    if state.turn > input.maxTurns + 1 then
+    if state.turn ≥ input.maxTurns then
       result := { result with failure := some .turnLimit }
       break
     if ledger.isSome && (ledger.map (·.remaining)).getD 0 == 0 then

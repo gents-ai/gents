@@ -108,7 +108,7 @@ fn sample_config(
 
 #[test]
 fn primary_routing_uses_file_type_then_priority_with_catalog_order_ties() {
-    let mut first = fixture_server(FIXTURE_PY.into());
+    let mut first = fixture_server(fixture_py());
     first.name = "first".into();
     first.file_types = vec![".ts".into()];
     first.priority = 20;
@@ -219,7 +219,7 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                         root.path().to_path_buf(),
                         FileToolMode::ReadOnly,
                         "s-entries",
-                        vec![fixture_server(FIXTURE_PY.into())],
+                        vec![fixture_server(fixture_py())],
                     ),
                     pool.clone(),
                 )
@@ -236,12 +236,8 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                             file,
                             line: positioned.then_some(1),
                             symbol: positioned.then(|| "x".to_string()),
-                            query: None,
-                            new_name: None,
-                            apply: None,
-                            payload: None,
                             timeout: Some(5),
-                            limit: None,
+                            ..LspArgs::default()
                         },
                         &gents_loop::tool::ToolCallEnvelope::default(),
                     )
@@ -275,7 +271,7 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                     root.path().to_path_buf(),
                     FileToolMode::ReadWrite,
                     "s-entries",
-                    vec![fixture_server(FIXTURE_PY.into())],
+                    vec![fixture_server(fixture_py())],
                 );
                 let _ = LspWritethrough::new(pool.clone(), config)
                     .after_mutation(&gents_loop::tool::ToolCallEnvelope::default(), &lib)
@@ -334,8 +330,20 @@ fn self_config_rejects_settings_and_command() {
     assert!(err.contains("command"), "{err}");
 }
 
-const FIXTURE_PY: &str = r#"
+fn lib_x_args(action: &str) -> LspArgs {
+    LspArgs {
+        action: action.into(),
+        file: Some("lib.rs".into()),
+        line: Some(1),
+        symbol: Some("x".into()),
+        ..LspArgs::default()
+    }
+}
+
+const LSP_PY_PREAMBLE: &str = r#"
 import json, sys
+import threading
+_write_lock = threading.Lock()
 def read():
     headers = {}
     while True:
@@ -350,9 +358,21 @@ def read():
     return json.loads(sys.stdin.buffer.read(n) or b'null')
 def write(obj):
     body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
+    with _write_lock:
+        sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
+        sys.stdout.buffer.write(body)
+        sys.stdout.buffer.flush()
+"#;
+
+fn lsp_py(body: &str) -> String {
+    format!("{LSP_PY_PREAMBLE}\n{body}")
+}
+
+fn fixture_py() -> String {
+    lsp_py(FIXTURE_PY_BODY)
+}
+
+const FIXTURE_PY_BODY: &str = r#"
 while True:
     msg = read()
     if msg is None:
@@ -399,7 +419,7 @@ async fn fixture_hover_definition_and_rename_preview() {
     let server = CatalogServer {
         name: "fixture".into(),
         command: "python3".into(),
-        args: vec!["-c".into(), FIXTURE_PY.into()],
+        args: vec!["-c".into(), fixture_py()],
         file_types: vec![".rs".into()],
         root_markers: vec!["Cargo.toml".into()],
         is_linter: false,
@@ -423,18 +443,7 @@ async fn fixture_hover_definition_and_rename_preview() {
     .unwrap();
     let hover = tool
         .call(
-            LspArgs {
-                action: "hover".into(),
-                file: Some("lib.rs".into()),
-                line: Some(1),
-                symbol: Some("x".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
-            },
+            lib_x_args("hover"),
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
@@ -442,18 +451,7 @@ async fn fixture_hover_definition_and_rename_preview() {
     assert!(hover.contains("hello hover"), "{hover}");
     let defn = tool
         .call(
-            LspArgs {
-                action: "definition".into(),
-                file: Some("lib.rs".into()),
-                line: Some(1),
-                symbol: Some("x".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
-            },
+            lib_x_args("definition"),
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
@@ -466,12 +464,9 @@ async fn fixture_hover_definition_and_rename_preview() {
                 file: Some("lib.rs".into()),
                 line: Some(1),
                 symbol: Some("x".into()),
-                query: None,
                 new_name: Some("Z".into()),
                 apply: Some(false),
-                payload: None,
-                timeout: None,
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -499,7 +494,7 @@ async fn rename_file_allows_a_new_destination() {
             root.path().to_path_buf(),
             FileToolMode::ReadWrite,
             "s-rename-file",
-            vec![fixture_server(FIXTURE_PY.into())],
+            vec![fixture_server(fixture_py())],
         ),
         LspPool::new(),
     )
@@ -509,14 +504,10 @@ async fn rename_file_allows_a_new_destination() {
             LspArgs {
                 action: "rename_file".into(),
                 file: Some("old.rs".into()),
-                line: None,
-                symbol: None,
-                query: None,
                 new_name: Some("new.rs".into()),
                 apply: Some(true),
-                payload: None,
                 timeout: Some(5),
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -574,7 +565,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         "[package]\nname='t'\nversion='0.1.0'\n",
     )
     .unwrap();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -667,25 +658,8 @@ async fn read_output_escape_redacts_and_completes() {
     {
         return;
     }
-    let fixture = r#"
-import json, sys
-def read():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
+    let fixture = lsp_py(
+        r#"
 while True:
     msg = read()
     if msg is None:
@@ -702,7 +676,8 @@ while True:
         break
     elif mid is not None:
         write({"jsonrpc":"2.0","id":mid,"result":None})
-"#;
+"#,
+    );
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
@@ -718,7 +693,7 @@ while True:
             vec![CatalogServer {
                 name: "fixture".into(),
                 command: "python3".into(),
-                args: vec!["-c".into(), fixture.into()],
+                args: vec!["-c".into(), fixture],
                 file_types: vec![".rs".into()],
                 root_markers: vec!["Cargo.toml".into()],
                 is_linter: false,
@@ -736,18 +711,7 @@ while True:
     .unwrap();
     let out = tool
         .call(
-            LspArgs {
-                action: "definition".into(),
-                file: Some("lib.rs".into()),
-                line: Some(1),
-                symbol: Some("x".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
-            },
+            lib_x_args("definition"),
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
@@ -772,26 +736,8 @@ async fn workspace_apply_edit_is_noop() {
     }
     let pwned = tempfile::tempdir().unwrap();
     let target = pwned.path().join("pwned.txt");
-    let fixture = format!(
+    let fixture = lsp_py(&format!(
         r#"
-import json, sys
-def read():
-    headers = {{}}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 sent = False
 while True:
     msg = read()
@@ -812,7 +758,7 @@ while True:
         write({{"jsonrpc":"2.0","id":mid,"result":None}})
 "#,
         target = target.display()
-    );
+    ));
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
@@ -846,18 +792,7 @@ while True:
     .unwrap();
     let _ = tool
         .call(
-            LspArgs {
-                action: "hover".into(),
-                file: Some("lib.rs".into()),
-                line: Some(1),
-                symbol: Some("x".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
-            },
+            lib_x_args("hover"),
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
@@ -933,15 +868,9 @@ async fn execute_command_is_argument_invalid() {
         .call(
             LspArgs {
                 action: "request".into(),
-                file: None,
-                line: None,
-                symbol: None,
                 query: Some("workspace/executeCommand".into()),
-                new_name: None,
-                apply: None,
                 payload: Some(r#"{"command":"evil"}"#.into()),
-                timeout: None,
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -996,7 +925,7 @@ async fn simultaneous_first_calls_share_one_process() {
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -1042,7 +971,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         )
         .unwrap();
     }
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.clone(),
         FileToolMode::ReadOnly,
@@ -1150,6 +1079,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
                 store_encryption: None,
                 document_acp: Default::default(),
                 client_identity: None,
+                registry: None,
             },
         )
         .unwrap();
@@ -1157,7 +1087,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
     write_config(&first_key);
 
     let starts = root.join("starts.txt");
-    let script = FIXTURE_PY.replace(
+    let script = fixture_py().replace(
         "while True:\n    msg = read()",
         &format!(
             "open({:?}, 'a').write('start\\n')\nwhile True:\n    msg = read()",
@@ -1234,7 +1164,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
     std::fs::write(&private, "private permission fixture").unwrap();
     let ordinary = root.join("ordinary.txt");
     std::fs::write(&ordinary, "ordinary file").unwrap();
-    let fixture = FIXTURE_PY.replace(
+    let fixture = fixture_py().replace(
         "    elif method == 'shutdown':",
         r#"    elif method == 'fixture/readable':
         try:
@@ -1399,7 +1329,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
     std::fs::create_dir(&home).unwrap();
     let ready = root.join("initialize-ready");
     let release = root.join("initialize-release");
-    let fixture = FIXTURE_PY.replace("import json, sys", "import json, os, sys, time").replace(
+    let fixture = fixture_py().replace("import json, sys", "import json, os, sys, time").replace(
         "    if method == 'initialize':",
         &format!("    if method == 'initialize':\n        open({ready:?}, 'w').close()\n        while not os.path.exists({release:?}):\n            time.sleep(0.01)"),
     );
@@ -1491,7 +1421,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
         "[package]\nname='t'\nversion='0.1.0'\n",
     )
     .unwrap();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let admitted = super::admit::admit_command(&server.command, root.path()).unwrap();
     let mut config = sample_config(
         root.path().to_path_buf(),
@@ -1530,27 +1460,10 @@ async fn semantic_retry_handles_empty_arrays_with_one_total_budget() {
     if !python3_available() {
         return;
     }
-    let fixture = r#"
-import json, sys
+    let fixture = lsp_py(
+        r#"
 calls = 0
 workspace_calls = 0
-def read():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 while True:
     msg = read()
     if msg is None:
@@ -1574,7 +1487,8 @@ while True:
         break
     elif mid is not None:
         write({"jsonrpc":"2.0","id":mid,"result":None})
-"#;
+"#,
+    );
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("lib.rs"), "fn retried() {}\n").unwrap();
     std::fs::write(
@@ -1583,7 +1497,7 @@ while True:
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(fixture.into());
+    let server = fixture_server(fixture);
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadOnly,
@@ -1694,29 +1608,9 @@ async fn semantic_retry_reports_a_server_that_exits_while_busy() {
     );
 }
 
-const BUSY_FIXTURE_PY: &str = r#"
-import json, sys, threading
+const BUSY_FIXTURE_PY_BODY: &str = r#"
 mode = sys.argv[1]
-lock = threading.Lock()
 settled = threading.Event()
-def read():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    with lock:
-        sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-        sys.stdout.buffer.write(body)
-        sys.stdout.buffer.flush()
 def status(quiescent):
     write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":quiescent}})
 def progress(kind):
@@ -1769,7 +1663,7 @@ async fn busy_fixture_symbols(
     )
     .unwrap();
     let pool = LspPool::new();
-    let mut server = fixture_server(BUSY_FIXTURE_PY.into());
+    let mut server = fixture_server(lsp_py(BUSY_FIXTURE_PY_BODY));
     server.args.push(mode.into());
     let session_id = format!("s-busy-{mode}");
     let config = sample_config(
@@ -1822,7 +1716,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
         "[package]\nname='t'\nversion='0.1.0'\n",
     )
     .unwrap();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadOnly,
@@ -1875,27 +1769,9 @@ async fn exited_server_is_evicted_and_restarted_on_the_next_action() {
     )
     .unwrap();
     let counter = root.path().join("starts.txt");
-    let fixture = format!(
+    let fixture = lsp_py(&format!(
         r#"
-import json, sys
 open({counter:?}, "a").write("x\n")
-def read():
-    headers = {{}}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 while True:
     msg = read()
     if msg is None:
@@ -1906,7 +1782,7 @@ while True:
     elif method == 'initialized':
         break
 "#
-    );
+    ));
     let server = fixture_server(fixture);
     let config = sample_config(
         root.path().to_path_buf(),
@@ -1960,7 +1836,7 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
     }
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
-    let fixture = FIXTURE_PY
+    let fixture = fixture_py()
         .replace("while True:\n    msg = read()", "status_polls = 0\nwhile True:\n    msg = read()")
         .replace("    elif method == 'shutdown':", r#"    elif method == 'rust-analyzer/analyzerStatus':
         status_polls += 1
@@ -2024,27 +1900,9 @@ async fn failed_initialize_wakes_waiters_and_backs_off() {
     )
     .unwrap();
     let counter = root.path().join("starts.txt");
-    let fixture = format!(
+    let fixture = lsp_py(&format!(
         r#"
-import json, sys
 open({counter:?}, "a").write("x\n")
-def read():
-    headers = {{}}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 while True:
     msg = read()
     if msg is None:
@@ -2056,7 +1914,7 @@ while True:
     elif mid is not None:
         write({{"jsonrpc":"2.0","id":mid,"result":None}})
 "#
-    );
+    ));
     let pool = LspPool::new();
     let server = fixture_server(fixture);
     let config = sample_config(
@@ -2122,7 +1980,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -2169,25 +2027,8 @@ async fn format_on_write_applies_without_starting_or_deadlocking() {
     if !python3_available() {
         return;
     }
-    let fixture = r#"
-import json, sys
-def read():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
+    let fixture = lsp_py(
+        r#"
 while True:
     msg = read()
     if msg is None:
@@ -2205,7 +2046,8 @@ while True:
         break
     elif mid is not None:
         write({"jsonrpc":"2.0","id":mid,"result":None})
-"#;
+"#,
+    );
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("lib.rs");
     std::fs::write(&path, "orig").unwrap();
@@ -2215,7 +2057,7 @@ while True:
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(fixture.into());
+    let server = fixture_server(fixture);
     let mut config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -2320,14 +2162,8 @@ async fn rust_analyzer_starts_and_reports_ready() {
             LspArgs {
                 action: "symbols".into(),
                 file: Some("src/lib.rs".into()),
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
                 timeout: Some(120),
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2344,12 +2180,8 @@ async fn rust_analyzer_starts_and_reports_ready() {
                 file: Some("src/lib.rs".into()),
                 line: Some(4),
                 symbol: Some("add".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
                 timeout: Some(40),
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2364,15 +2196,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
         .call(
             LspArgs {
                 action: "status".into(),
-                file: None,
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2429,14 +2253,8 @@ async fn rust_analyzer_hover_on_gents_crate() {
                 LspArgs {
                     action: "symbols".into(),
                     file: Some(file.into()),
-                    line: None,
-                    symbol: None,
-                    query: None,
-                    new_name: None,
-                    apply: None,
-                    payload: None,
                     timeout: Some(60),
-                    limit: None,
+                    ..LspArgs::default()
                 },
                 &gents_loop::tool::ToolCallEnvelope::default(),
             )
@@ -2455,12 +2273,8 @@ async fn rust_analyzer_hover_on_gents_crate() {
                 file: Some("crates/gents/src/tools/native/lsp/auth.rs".into()),
                 line: Some(advertised_line),
                 symbol: Some("lsp_advertised".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
                 timeout: Some(60),
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2478,12 +2292,8 @@ async fn rust_analyzer_hover_on_gents_crate() {
                 file: Some("crates/gents-loop/src/tool_policy.rs".into()),
                 line: Some(meet_line),
                 symbol: Some("meet".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
                 timeout: Some(60),
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2498,15 +2308,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
         .call(
             LspArgs {
                 action: "status".into(),
-                file: None,
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -2847,26 +2649,10 @@ async fn cancelled_start_does_not_leave_starting_entry() {
     if !python3_available() {
         return;
     }
-    let fixture = r#"
-import json, sys, time
+    let fixture = lsp_py(
+        r#"
+import time
 time.sleep(5)
-def read():
-    headers = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 while True:
     msg = read()
     if msg is None:
@@ -2875,7 +2661,8 @@ while True:
         write({"jsonrpc":"2.0","id":msg.get("id"),"result":{"capabilities":{}}})
     elif msg.get('id') is not None:
         write({"jsonrpc":"2.0","id":msg.get("id"),"result":None})
-"#;
+"#,
+    );
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
@@ -2884,7 +2671,7 @@ while True:
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(fixture.into());
+    let server = fixture_server(fixture);
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -2923,28 +2710,10 @@ async fn dropped_hanging_request_sends_cancel_without_killing_server() {
     let root = tempfile::tempdir().unwrap();
     let cancel_file = root.path().join("cancelled");
     let received_file = root.path().join("hover-received");
-    let fixture = format!(
+    let fixture = lsp_py(&format!(
         r#"
-import json, sys
 cancel_path = {cancel:?}
 received_path = {received:?}
-def read():
-    headers = {{}}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in (b'\r\n', b'\n'):
-            break
-        key, _, value = line.decode().partition(':')
-        headers[key.strip().lower()] = value.strip()
-    n = int(headers.get('content-length', '0'))
-    return json.loads(sys.stdin.buffer.read(n) or b'null')
-def write(obj):
-    body = json.dumps(obj).encode()
-    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\r\n\r\n'.encode())
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
 while True:
     msg = read()
     if msg is None:
@@ -2967,7 +2736,7 @@ while True:
 "#,
         cancel = cancel_file,
         received = received_file
-    );
+    ));
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(
         root.path().join("Cargo.toml"),
@@ -3128,7 +2897,7 @@ async fn reload_retires_current_snapshot_clients() {
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -3138,18 +2907,7 @@ async fn reload_retires_current_snapshot_clients() {
     let tool = LspTool::new(config, pool.clone()).unwrap();
     let _ = tool
         .call(
-            LspArgs {
-                action: "hover".into(),
-                file: Some("lib.rs".into()),
-                line: Some(1),
-                symbol: Some("x".into()),
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
-            },
+            lib_x_args("hover"),
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
@@ -3159,15 +2917,7 @@ async fn reload_retires_current_snapshot_clients() {
         .call(
             LspArgs {
                 action: "reload".into(),
-                file: None,
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: None,
-                limit: None,
+                ..LspArgs::default()
             },
             &gents_loop::tool::ToolCallEnvelope::default(),
         )
@@ -3235,7 +2985,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
     )
     .unwrap();
     let pool = LspPool::new();
-    let server = fixture_server(FIXTURE_PY.into());
+    let server = fixture_server(fixture_py());
     let config = sample_config(
         baked.path().to_path_buf(),
         FileToolMode::ReadWrite,
@@ -3327,14 +3077,7 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
                     LspArgs {
                         action: "capabilities".into(),
                         file: Some("README.md".into()),
-                        line: None,
-                        symbol: None,
-                        query: None,
-                        new_name: None,
-                        apply: None,
-                        payload: None,
-                        timeout: None,
-                        limit: None,
+                        ..LspArgs::default()
                     },
                     &scope_call,
                 )
@@ -3379,12 +3122,8 @@ fn hover_args() -> LspArgs {
         file: Some("lib.rs".into()),
         line: Some(1),
         symbol: Some("x".into()),
-        query: None,
-        new_name: None,
-        apply: None,
-        payload: None,
         timeout: Some(10),
-        limit: None,
+        ..LspArgs::default()
     }
 }
 

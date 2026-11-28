@@ -1012,7 +1012,7 @@ fn provision_failed_and_sealed_rejected_remain_until_cleanup() {
     );
 
     let cleaned = cleanup_ws(&fx, &mut docs, "foreign-left");
-    assert_eq!(cleaned.workspace.lifecycle_state, "provisionFailed");
+    assert_eq!(cleaned.workspace.lifecycle_state, "cleaned");
     assert!(
         !planned.exists(),
         "explicit cleanup removes ProvisionFailed leftovers"
@@ -2033,5 +2033,26 @@ fn binding_admission_follows_the_lean_workspace_binding_model() {
             false,
         )
         .is_ok()
+    });
+}
+
+#[test]
+fn lifecycle_transitions_follow_the_lean_workspace_model() {
+    use gents_lean_vocab::families::contracts_workspace_transition::WorkspaceTransitionOutput;
+    gents_lean_vocab::families::contracts_workspace_transition::replay(|input| {
+        match super::transition_workspace_lifecycle(
+            &input.from_state,
+            &input.to_state,
+            input.seal_hash.as_deref(),
+        ) {
+            Ok(state) => WorkspaceTransitionOutput {
+                legal: true,
+                state: state.as_str().to_owned(),
+            },
+            Err(_) => WorkspaceTransitionOutput {
+                legal: false,
+                state: input.from_state.clone(),
+            },
+        }
     });
 }

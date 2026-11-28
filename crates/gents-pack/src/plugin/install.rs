@@ -416,12 +416,22 @@ pub(crate) async fn stage_pack_graph(
     consent: bool,
     owner: &str,
 ) -> Result<StagedPluginInstall, GrantError> {
+    stage_pack_graph_with_wait(writer, inputs, consent, owner, store::LEASE_WAIT).await
+}
+
+pub(crate) async fn stage_pack_graph_with_wait(
+    writer: &store::StoreWriter,
+    inputs: Vec<PluginStageInput>,
+    consent: bool,
+    owner: &str,
+    lease_wait: std::time::Duration,
+) -> Result<StagedPluginInstall, GrantError> {
     if owner.is_empty() && inputs.iter().any(|input| !input.bindings.is_empty()) {
         return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
     }
     let cleanup = gents_store::drop_cleanup::DropCleanup::current();
     let lock = writer
-        .lock_until(tokio::time::Instant::now() + store::LEASE_WAIT)
+        .lock_until(tokio::time::Instant::now() + lease_wait)
         .await?;
     let home = writer.home().to_owned();
     let owner = owner.to_owned();

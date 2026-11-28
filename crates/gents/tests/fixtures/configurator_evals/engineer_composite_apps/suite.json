@@ -1,0 +1,15 @@
+{
+  "id": "engineer-composite-apps",
+  "title": "Engineer composite apps",
+  "coverage": [
+    "multi-stage in-place schema, trigger and themed UI page evolution",
+    "exact-boundary filtered trigger alerts paired with line chart, stats, badges and empty state",
+    "datastore-scoped read/write clerk agent with refusal check and tabbed switch checkout page",
+    "two-agent handoff chain with per-key session continuity and bar chart table page",
+    "workspace JSON import with fulltext BM25 search and donut chart textarea page",
+    "hybrid HNSW/FLAT vector similarity and BM25 fulltext search paired with live UI pages",
+    "packaged app pack verified via pack_config.json with node Page, table and live mutation",
+    "grouped quorum event source paired with grid, bar chart, search input and table page",
+    "two-branch triage trigger worker paired with tabs, badges, dialog intake form and toast feedback"
+  ]
+}

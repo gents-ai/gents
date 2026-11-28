@@ -20,6 +20,9 @@ pub struct ProvisionOptions {
     pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     /// Install the Engineer's default packs into a home this call creates.
     pub default_packs: bool,
+    /// Pack registry base URL to record on the home; unset preserves any
+    /// registry the home already records or falls back to the public registry.
+    pub registry: Option<String>,
 }
 
 /// Provisioning drives `init`, whose node opening is not `Send`, on a blocking
@@ -56,6 +59,11 @@ async fn ensure_standard_home_inner(
         stored.tool_root = options
             .tool_root
             .map(|path| path.to_string_lossy().into_owned());
+        if let Some(registry) =
+            gents_store::local::home::normalize_registry(options.registry.as_deref())
+        {
+            stored.registry = Some(registry);
+        }
         gents_service::home_state::write_init_config(&options.home, &stored)?;
         return Ok(());
     }
@@ -87,6 +95,11 @@ async fn ensure_standard_home_inner(
     }
     if options.store_key_custody == gents_store::local::store_key::StoreKeyCustodyChoice::File {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
+    }
+    if let Some(registry) =
+        gents_store::local::home::normalize_registry(options.registry.as_deref())
+    {
+        argv.extend(["--registry".to_string(), registry]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
     let Some(Command::Init(mut args)) = cli.command else {

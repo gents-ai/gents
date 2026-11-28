@@ -284,6 +284,11 @@ pub enum ConfigClientError {
         status: reqwest::StatusCode,
         body: String,
     },
+    #[error("the runtime refused the Agent's host grant ({status}): {body}")]
+    HostGrantStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
     #[error("document relationship request failed ({status}): {body}")]
     DocumentRelationshipStatus {
         status: reqwest::StatusCode,
@@ -629,6 +634,7 @@ impl ConfigClientError {
             Self::NodePermissionStatus { status, body }
             | Self::RelationshipStatus { status, body }
             | Self::OwnerStagedRouteStatus { status, body }
+            | Self::HostGrantStatus { status, body }
             | Self::DocumentRelationshipStatus { status, body }
             | Self::SchemaStatus { status, body, .. }
             | Self::SchemaOperationStatus { status, body }

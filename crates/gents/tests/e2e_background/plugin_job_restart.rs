@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::plugin_job_support::{
-    boot_job_harness, effects, guest_pin, job_call, job_child_states, job_row,
+    boot_job_harness_with_liveness, effects, guest_pin, job_call, job_child_states, job_row,
     reboot_job_harness_observing_children, result, spawn, wait_job, JobHarness, PlanEntry,
 };
 use crate::support::trial_store_at;
@@ -101,12 +101,13 @@ async fn run_job_crash_worker(ready_path: &Path) {
         })
         .collect();
     let plan = tokio::task::spawn_blocking(restart_job_plan).await.unwrap();
-    let h = boot_job_harness(
+    let h = boot_job_harness_with_liveness(
         db,
         handshake.join("plugin-home"),
         SESSION,
         vec![job_call(TOOL_CALL, &plan)],
         child_plans,
+        Some(4),
     )
     .await;
     wait_job(&h, TOOL_CALL, |v| {

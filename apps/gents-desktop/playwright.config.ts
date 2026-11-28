@@ -56,8 +56,11 @@ export default defineConfig({
     {
       name: "chromium-laptop",
       /* a test that sets its own window size is the same test here as on
-         chromium-desktop (tests/playwright/ownViewport.ts) */
+         chromium-desktop (tests/playwright/ownViewport.ts); pure form/logic
+         journeys already run at both desktop and narrow widths */
       grepInvert: new RegExp(OWN_VIEWPORT),
+      testIgnore:
+        /(?:^|[\\/])(?:desktop-first-run|chat-delivery|goal-delivery|mailbox-delivery|active-node|remote-config-readonly)\.spec\.ts$/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },

@@ -1,11 +1,14 @@
 //! The real compiler path of `config pack build`: `gents __plugin-build`
 //! started under the command sandbox, for a scaffolded Rust plugin.
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 use gents_pack::pack::authoring::{pack_built, scaffold, ScaffoldInput, Template};
 
 #[tokio::test]
 async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        return;
+    }
     // SAFETY: this is the only test in this binary, so nothing reads the
     // environment concurrently.
     unsafe { std::env::set_var("GENTS_PLUGIN_BUILDER", env!("CARGO_BIN_EXE_gents")) };
@@ -34,7 +37,12 @@ async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
     )
     .await
     .unwrap_or_else(|error| panic!("{error:#}"));
-    assert_eq!(build.sandbox, "macos_seatbelt");
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos_seatbelt"
+    } else {
+        "linux_landlock"
+    };
+    assert_eq!(build.sandbox, expected_sandbox);
     assert_eq!(build.output["cases"][0]["passed"], 1, "{}", build.output);
     assert_eq!(
         build.output["cases"][0]["failures"],

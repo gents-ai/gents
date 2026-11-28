@@ -1,12 +1,15 @@
 use super::*;
+#[cfg(target_os = "macos")]
 use crate::native::shared::command::command_launch::{
     kernel_network, macos_workspace_write_policy, render_seatbelt_profile, seatbelt_profile,
     select_sandbox, SeatbeltWrites,
 };
+#[cfg(target_os = "macos")]
 use crate::{
     native::shared::command::CommandExecutionMode, native::shared::command::CommandNetworkMode,
 };
-use gents_session::workspace::sandbox::SANDBOX_EXEC;
+#[cfg(target_os = "macos")]
+use gents_session::workspace::sandbox::{SandboxBackend, SANDBOX_EXEC};
 
 #[test]
 fn failed_credential_inspection_records_failure_and_stays_closed() {
@@ -23,6 +26,7 @@ fn failed_credential_inspection_records_failure_and_stays_closed() {
     assert!(after > before);
 }
 
+#[cfg(target_os = "macos")]
 async fn run(
     profile: String,
     parameters: Vec<String>,
@@ -42,6 +46,7 @@ async fn run(
         .unwrap()
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn command_isolation_seatbelt_matches_lean() {
     let folder = tempfile::tempdir().unwrap();
@@ -91,7 +96,7 @@ async fn command_isolation_seatbelt_matches_lean() {
         CommandNetworkMode,
         SeatbeltWrites,
     >() {
-        let sandbox = select_sandbox(case.input.mode, true).unwrap();
+        let sandbox = select_sandbox(case.input.mode, SandboxBackend::MacosSeatbelt).unwrap();
         let network = kernel_network(
             case.input.mode,
             case.input.network,
@@ -170,6 +175,7 @@ print('credentials_protected=%s network=%s writes=%s' % (protected, network, wri
     }
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn protected_hard_link_names_inside_one_namespace_are_allowed_and_unreadable() {
     let folder = tempfile::tempdir().unwrap();
@@ -206,6 +212,7 @@ print('protected hard-link aliases denied')
     assert!(String::from_utf8_lossy(&output.stdout).contains("protected hard-link aliases denied"));
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn dangling_links_protect_relative_and_absolute_targets() {
     let folder = tempfile::tempdir().unwrap();
@@ -291,6 +298,7 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
             store_encryption: None,
             document_acp: Default::default(),
             client_identity: None,
+            registry: None,
         },
     )
     .unwrap();

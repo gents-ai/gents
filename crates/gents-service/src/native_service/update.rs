@@ -150,7 +150,7 @@ where
                         .context("executable UTF-8")?
                         .to_owned(),
                 );
-                if args.len() == 4 {
+                if args.last().and_then(plist::Value::as_string) != Some(SYSTEM_LOG_FLAG) {
                     args.push(plist::Value::String(SYSTEM_LOG_FLAG.to_owned()));
                 }
                 if replacement.is_some() {

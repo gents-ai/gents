@@ -27,7 +27,7 @@ async fn other_provider_loop_has_no_codex_affinity() {
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
-        owned_config_for(0, &lifecycle),
+        owned_config_for(2, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,

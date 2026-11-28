@@ -212,7 +212,7 @@ fn config(
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
-        initial_turn_index: 0,
+        initial_turn_index: input.prior_turns as usize,
         resume_from_history: false,
         context_window: if input.nested_usage.is_some() {
             6500
@@ -364,7 +364,7 @@ async fn observe(
                 .unwrap();
                 let input: family::Input = serde_json::from_value(serde_json::json!({
                     "calls": [], "transport": 0, "resample": 0, "repair": false,
-                    "deadline_fits": true, "max_turns": 0, "context": false,
+                    "deadline_fits": true, "max_turns": 2, "prior_turns": 0, "context": false,
                     "initial_dirty": false, "missing_capture": false, "limit": null, "nested_usage": null, "structured": false, "recovered_pair": false, "compactor": false, "rebind_at": null,
                 })).unwrap();
                 let mut child_config = self::config(&input, Default::default(), Default::default());

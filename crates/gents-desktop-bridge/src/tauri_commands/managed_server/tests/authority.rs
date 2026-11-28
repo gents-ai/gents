@@ -218,6 +218,7 @@ async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone()
             tool_root: None,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             default_packs: false,
+            registry: None,
         },
     )
     .await

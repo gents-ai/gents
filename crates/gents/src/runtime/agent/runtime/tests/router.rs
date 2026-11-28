@@ -19,6 +19,7 @@ fn routed_snapshot(
 ) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
     Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
             generation,
             node: None,
             local_did: String::new(),

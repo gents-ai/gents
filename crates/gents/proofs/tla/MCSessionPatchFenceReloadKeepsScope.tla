@@ -1,0 +1,4 @@
+---- MODULE MCSessionPatchFenceReloadKeepsScope ----
+EXTENDS SessionPatchFence
+
+====

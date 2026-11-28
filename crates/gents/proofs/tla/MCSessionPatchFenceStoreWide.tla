@@ -1,0 +1,4 @@
+---- MODULE MCSessionPatchFenceStoreWide ----
+EXTENDS SessionPatchFence
+
+====

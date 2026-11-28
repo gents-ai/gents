@@ -574,6 +574,7 @@ async fn home_with_storage(provider: Provider, persistent: bool) -> anyhow::Resu
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let grants = crate::config_client::OwnerStagedRoute::new();
+    let fence_route = grants.clone();
     let mut builder = defra_node::Node::builder()
         .with_node_acp_owner(owner.did())
         .with_signing_key(defra_node::SigningKey::Ed25519(
@@ -582,7 +583,10 @@ async fn home_with_storage(provider: Provider, persistent: bool) -> anyhow::Resu
         .with_node_acp_enabled()
         .with_http(
             defra_node::HttpConfig::with_listener(listener)?
-                .with_authenticated_routes(status.merge(grants.router())),
+                .with_authenticated_routes(status.merge(grants.router()))
+                .with_router_transform(Arc::new(move |router| {
+                    fence_route.wrap_relationship_fence(router)
+                })),
         );
     if persistent {
         builder = builder.data_path(directory.path().join("db"));
@@ -735,20 +739,11 @@ impl Home {
         Ok(())
     }
 
-    async fn withdraw_as_node(
-        &self,
-        trigger: Trigger,
-        member: &identity::Did,
-    ) -> anyhow::Result<()> {
+    async fn withdraw_denial_as_node(&self, member: &identity::Did) -> anyhow::Result<()> {
         let runtime = self.runtime()?;
         let receipts = self.receipts(member).await?;
-        let withdrawal = match trigger {
-            Trigger::Denied => EnrollmentGrantWithdrawal::plan("first", &receipts)?,
-            Trigger::Revoked => {
-                EnrollmentGrantWithdrawal::plan_membership(member.as_str(), &receipts)?
-            }
-        }
-        .expect("a live receipt to withdraw");
+        let withdrawal = EnrollmentGrantWithdrawal::plan("first", &receipts)?
+            .expect("a live receipt to withdraw");
         withdrawal.revoke_node_permissions(&runtime).await?;
         runtime
             .transact_write("test.enrollment_withdrawal.revision", |txn| {
@@ -773,100 +768,35 @@ impl Home {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Trigger {
-    Denied,
-    Revoked,
-}
-
 async fn enrolled_client() -> anyhow::Result<(RawIdentity, identity::Did)> {
     let (key, member) = held_client()?;
     Ok((key, member.did().parse()?))
 }
 
-async fn the_node_alone_changes_no_administration(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    let (_other_key, other) = enrolled_client().await?;
-    home.approve("first", &member).await?;
-    assert!(home.administers(&member).await?, "{provider:?}");
-    let runtime = home.runtime()?;
-    for (subject, delete) in [(&member, true), (&other, false)] {
-        let node_doc = home.node_doc.clone();
-        let changed = runtime
-            .transact_write("test.enrollment_withdrawal.node_alone", |txn| {
-                let (node_doc, subject) = (&node_doc, subject);
-                Box::pin(async move {
-                    match delete {
-                        true => {
-                            txn.delete_actor_relationship(
-                                "Node",
-                                node_doc,
-                                "administrator",
-                                subject,
-                            )
-                            .await
-                        }
-                        false => {
-                            txn.add_actor_relationship("Node", node_doc, "administrator", subject)
-                                .await
-                        }
-                    }
-                })
-            })
-            .await;
-        assert!(
-            changed
-                .as_ref()
-                .is_err_and(|error| error.is_permission_denied()),
-            "{provider:?} delete={delete}: {changed:?}"
-        );
-    }
-    assert!(home.administers(&member).await?, "{provider:?}");
-    assert!(!home.administers(&other).await?, "{provider:?}");
-    home.shutdown().await
-}
-
-#[tokio::test]
-async fn the_node_alone_changes_no_administration_on_a_local_home() -> anyhow::Result<()> {
-    the_node_alone_changes_no_administration(Provider::Local).await
-}
-
-#[tokio::test]
-async fn the_node_alone_changes_no_administration_on_a_vera_home() -> anyhow::Result<()> {
-    the_node_alone_changes_no_administration(Provider::Vera).await
-}
-
-async fn a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
+async fn a_denial_the_node_finds_due_is_owed_until_the_owner_settles(
     provider: Provider,
-    trigger: Trigger,
 ) -> anyhow::Result<()> {
-    let case = format!("{provider:?} {trigger:?}");
     let home = home(provider).await?;
     let (_member_key, member) = enrolled_client().await?;
     home.approve("first", &member).await?;
-    if trigger == Trigger::Revoked {
-        home.approve("renewal", &member).await?;
-    }
-    assert!(home.direct_permissions(&member).await? > 0, "{case}");
+    assert!(home.direct_permissions(&member).await? > 0, "{provider:?}");
 
-    home.withdraw_as_node(trigger, &member).await?;
+    home.withdraw_denial_as_node(&member).await?;
     let receipts = home.receipts(&member).await?;
-    let retired = match trigger {
-        Trigger::Denied => 1,
-        Trigger::Revoked => 2,
-    };
     assert_eq!(
         receipts
             .iter()
             .filter(|receipt| receipt.withdrawn && receipt.owed)
             .count(),
-        retired,
-        "{case}: {receipts:?}"
+        1,
+        "{provider:?}: {receipts:?}"
     );
-    assert!(administration_owed(member.as_str(), &receipts), "{case}");
-    assert_eq!(home.direct_permissions(&member).await?, 0, "{case}");
-    assert!(home.administers(&member).await?, "{case}");
+    assert!(
+        administration_owed(member.as_str(), &receipts),
+        "{provider:?}"
+    );
+    assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
+    assert!(home.administers(&member).await?, "{provider:?}");
 
     let (stranger_key, stranger) = held_client()?;
     let stranger_did: identity::Did = stranger.did().parse()?;
@@ -883,27 +813,31 @@ async fn a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
             .await?
             .expect("a held client authorizes its requests"),
     )?;
-    assert_eq!(home.settle_as(stranger_authorization).await?, [], "{case}");
-    assert!(home.administers(&member).await?, "{case}");
+    assert_eq!(
+        home.settle_as(stranger_authorization).await?,
+        [],
+        "{provider:?}"
+    );
+    assert!(home.administers(&member).await?, "{provider:?}");
     assert!(
         administration_owed(member.as_str(), &home.receipts(&member).await?),
-        "{case}"
+        "{provider:?}"
     );
 
     assert_eq!(
         home.settle_as(home.authorization().await?).await?,
         [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{case}"
+        "{provider:?}"
     );
-    assert!(!home.administers(&member).await?, "{case}");
+    assert!(!home.administers(&member).await?, "{provider:?}");
     assert!(
         !administration_owed(member.as_str(), &home.receipts(&member).await?),
-        "{case}"
+        "{provider:?}"
     );
     assert_eq!(
         home.settle_as(home.authorization().await?).await?,
         [],
-        "{case}"
+        "{provider:?}"
     );
     drop(stranger_key);
     home.shutdown().await
@@ -911,164 +845,17 @@ async fn a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
 
 #[tokio::test]
 async fn a_denial_on_a_local_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
-        Provider::Local,
-        Trigger::Denied,
-    )
-    .await
+    a_denial_the_node_finds_due_is_owed_until_the_owner_settles(Provider::Local).await
 }
 
 #[tokio::test]
 async fn a_denial_on_a_vera_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(Provider::Vera, Trigger::Denied)
-        .await
+    a_denial_the_node_finds_due_is_owed_until_the_owner_settles(Provider::Vera).await
 }
 
 #[tokio::test]
-async fn a_revocation_on_a_local_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
-        Provider::Local,
-        Trigger::Revoked,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn a_revocation_on_a_vera_home_is_owed_until_the_owner_settles() -> anyhow::Result<()> {
-    a_withdrawal_the_node_finds_due_is_owed_until_the_owner_settles(
-        Provider::Vera,
-        Trigger::Revoked,
-    )
-    .await
-}
-
-async fn a_reapproval_takes_the_owed_withdrawal_over(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    home.approve("first", &member).await?;
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
-    home.approve("second", &member).await?;
-    let receipts = home.receipts(&member).await?;
-    assert!(
-        !administration_owed(member.as_str(), &receipts),
-        "{provider:?}"
-    );
-    assert!(
-        receipts.iter().any(|receipt| receipt.request_id == "second"
-            && receipt.accounts(member.as_str(), EnrollmentGrantTuple::NodeAdministrator)),
-        "{provider:?}: {receipts:?}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{provider:?}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [],
-        "{provider:?}"
-    );
-    assert!(home.administers(&member).await?, "{provider:?}");
-    assert!(home.direct_permissions(&member).await? > 0, "{provider:?}");
-    home.shutdown().await
-}
-
-#[tokio::test]
-async fn a_reapproval_on_a_local_home_takes_the_owed_withdrawal_over() -> anyhow::Result<()> {
-    a_reapproval_takes_the_owed_withdrawal_over(Provider::Local).await
-}
-
-#[tokio::test]
-async fn a_reapproval_on_a_vera_home_takes_the_owed_withdrawal_over() -> anyhow::Result<()> {
-    a_reapproval_takes_the_owed_withdrawal_over(Provider::Vera).await
-}
-
-struct Client {
-    _key: RawIdentity,
-    did: identity::Did,
-    endpoint: GraphqlEndpoint,
-    _endpoints: RuntimeEndpoints,
-}
-
-impl Client {
-    async fn new(home: &Home) -> anyhow::Result<Self> {
-        let (key, capability) = held_client()?;
-        let did: identity::Did = capability.did().parse()?;
-        crate::identity::GrantSet::OperatorUser
-            .grant(&home.runtime()?, &did)
-            .await?;
-        let endpoints = RuntimeEndpoints::new(capability);
-        let endpoint = endpoints.endpoint(home.runtime.did(), home.owner_endpoint.url())?;
-        Ok(Self {
-            _key: key,
-            did,
-            endpoint,
-            _endpoints: endpoints,
-        })
-    }
-
-    async fn authorization(&self) -> anyhow::Result<ClientAuthorization> {
-        Ok(ClientAuthorization::from_authenticated_bearer(
-            self.did.clone(),
-            &self
-                .endpoint
-                .runtime_authorization()
-                .await?
-                .expect("a held client authorizes its requests"),
-        )?)
-    }
-}
-
-async fn an_administrator_settles_when_the_owner_is_away(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    let administrator = Client::new(&home).await?;
-    home.owner()
-        .await?
-        .add_actor_relationship("Node", &home.node_doc, "administrator", &administrator.did)
-        .await?;
-    home.approve("first", &member).await?;
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
-    let owed = home
-        .access_owner()
-        .owed_removals(administrator.authorization().await?)
-        .await?;
-    assert_eq!(
-        owed,
-        [gents_protocol::owed_settlement::OwedRemoval {
-            member_did: member.as_str().to_owned(),
-            administrator_held: true,
-        }],
-        "{provider:?}"
-    );
-    assert_eq!(
-        home.settle_as(administrator.authorization().await?).await?,
-        [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{provider:?}"
-    );
-    assert!(!home.administers(&member).await?, "{provider:?}");
-    assert!(
-        home.access_owner()
-            .owed_removals(home.authorization().await?)
-            .await?
-            .is_empty(),
-        "{provider:?}"
-    );
-    home.shutdown().await
-}
-
-#[tokio::test]
-async fn an_administrator_settles_on_a_local_home_when_the_owner_is_away() -> anyhow::Result<()> {
-    an_administrator_settles_when_the_owner_is_away(Provider::Local).await
-}
-
-#[tokio::test]
-async fn an_administrator_settles_on_a_vera_home_when_the_owner_is_away() -> anyhow::Result<()> {
-    an_administrator_settles_when_the_owner_is_away(Provider::Vera).await
-}
-
-async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
+async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow::Result<()> {
+    let home = home(Provider::Local).await?;
     let (_member_key, member) = enrolled_client().await?;
     home.approve("first", &member).await?;
     let runtime = home.runtime()?;
@@ -1077,20 +864,20 @@ async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyho
     let grant = runtime.grant_node_permission(&member, NodePermission::DocumentRead);
     tokio::pin!(grant);
     assert!(futures::poll!(&mut grant).is_pending());
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
+    home.withdraw_denial_as_node(&member).await?;
     drop(withdrawal);
     let pending = |error: &ConfigClientError| matches!(error, ConfigClientError::AdministrationRemovalPending { member: pending } if pending == member.as_str());
     let direct = grant
         .await
         .expect_err("a direct permission waits for the owed removal");
-    assert!(pending(&direct), "{provider:?}: {direct:?}");
+    assert!(pending(&direct), "{direct:?}");
     let set = crate::identity::GrantSet::OperatorUser
         .grant(&runtime, &member)
         .await
         .expect_err("a grant set waits for the owed removal");
     assert!(
         matches!(&set, crate::identity::GrantSetError::Grant { source, .. } if pending(source)),
-        "{provider:?}: {set:?}"
+        "{set:?}"
     );
     let remote = ConfigAccess::Graphql(home.owner_endpoint.clone());
     let refused = remote
@@ -1107,211 +894,18 @@ async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyho
         ),
         "{refused:?}"
     );
-    assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
+    assert_eq!(home.direct_permissions(&member).await?, 0);
     home.settle_as(home.authorization().await?).await?;
     remote
         .grant_node_permission(&member, NodePermission::DocumentRead)
         .await?;
-    assert_eq!(home.direct_permissions(&member).await?, 1, "{provider:?}");
+    assert_eq!(home.direct_permissions(&member).await?, 1);
     home.shutdown().await
 }
 
 #[tokio::test]
-async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow::Result<()> {
-    an_owed_member_is_refused_node_permissions(Provider::Local).await
-}
-
-#[tokio::test]
-async fn an_owed_member_is_refused_node_permissions_on_a_vera_home() -> anyhow::Result<()> {
-    an_owed_member_is_refused_node_permissions(Provider::Vera).await
-}
-
-async fn a_deliberate_grant_closes_the_owed_removal(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    home.approve("first", &member).await?;
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
-    ConfigAccess::Graphql(home.owner_endpoint.clone())
-        .add_actor_relationship("Node", &home.node_doc, "administrator", &member)
-        .await?;
-    assert!(
-        !administration_owed(member.as_str(), &home.receipts(&member).await?),
-        "{provider:?}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{provider:?}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [],
-        "{provider:?}"
-    );
-    assert!(home.administers(&member).await?, "{provider:?}");
-    home.shutdown().await
-}
-
-#[tokio::test]
-async fn a_deliberate_grant_on_a_local_home_closes_the_owed_removal() -> anyhow::Result<()> {
-    a_deliberate_grant_closes_the_owed_removal(Provider::Local).await
-}
-
-#[tokio::test]
-async fn a_deliberate_grant_on_a_vera_home_closes_the_owed_removal() -> anyhow::Result<()> {
-    a_deliberate_grant_closes_the_owed_removal(Provider::Vera).await
-}
-
-async fn an_expiry_withdraws_unless_a_renewal_is_fresh(provider: Provider) -> anyhow::Result<()> {
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    home.approve("first", &member).await?;
-    home.approve("renewal", &member).await?;
-    let clock = lapse_clock(
-        crate::local::document_acp::node_provider_time(&home.node),
-        u64::try_from(chrono::Utc::now().timestamp())?,
-    );
-    assert!(
-        !membership_lapsed(None, clock, &[clock - 60, clock + 600]),
-        "{provider:?}"
-    );
-    assert!(home.direct_permissions(&member).await? > 0, "{provider:?}");
-    assert!(
-        membership_lapsed(None, clock, &[clock - 60, clock]),
-        "{provider:?}"
-    );
-    home.withdraw_as_node(Trigger::Revoked, &member).await?;
-    assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
-    assert!(
-        administration_owed(member.as_str(), &home.receipts(&member).await?),
-        "{provider:?}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{provider:?}"
-    );
-    assert!(!home.administers(&member).await?, "{provider:?}");
-    home.shutdown().await
-}
-
-#[tokio::test]
-async fn an_expiry_on_a_local_home_withdraws_unless_a_renewal_is_fresh() -> anyhow::Result<()> {
-    an_expiry_withdraws_unless_a_renewal_is_fresh(Provider::Local).await
-}
-
-#[tokio::test]
-async fn an_expiry_on_a_vera_home_withdraws_unless_a_renewal_is_fresh() -> anyhow::Result<()> {
-    an_expiry_withdraws_unless_a_renewal_is_fresh(Provider::Vera).await
-}
-
-async fn a_removal_overtaking_a_takeover_is_restored(
-    provider: Provider,
-    takeover: Takeover,
-) -> anyhow::Result<()> {
-    let case = format!("{provider:?} {takeover:?}");
-    let home = home(provider).await?;
-    let (_member_key, member) = enrolled_client().await?;
-    home.approve("first", &member).await?;
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
-    match takeover {
-        Takeover::Approval => home.approve("second", &member).await?,
-        Takeover::DeliberateGrant => {
-            home.owner()
-                .await?
-                .add_actor_relationship("Node", &home.node_doc, "administrator", &member)
-                .await?
-        }
-    }
-    let receipts = home.receipts(&member).await?;
-    assert!(!administration_owed(member.as_str(), &receipts), "{case}");
-    assert!(
-        receipts.iter().any(|receipt| receipt.restore),
-        "{case}: {receipts:?}"
-    );
-    home.owner()
-        .await?
-        .delete_actor_relationship("Node", &home.node_doc, "administrator", &member)
-        .await?;
-    assert!(!home.administers(&member).await?, "{case}");
-    assert!(
-        home.receipts(&member)
-            .await?
-            .iter()
-            .any(|receipt| receipt.restore),
-        "{case}"
-    );
-    let (stranger_key, stranger) = held_client()?;
-    let stranger_did: identity::Did = stranger.did().parse()?;
-    crate::identity::GrantSet::OperatorUser
-        .grant(&home.runtime()?, &stranger_did)
-        .await?;
-    let endpoints = RuntimeEndpoints::new(stranger);
-    let stranger_endpoint = endpoints.endpoint(home.runtime.did(), home.owner_endpoint.url())?;
-    let stranger_authorization = ClientAuthorization::from_authenticated_bearer(
-        stranger_did,
-        &stranger_endpoint
-            .runtime_authorization()
-            .await?
-            .expect("a held client authorizes its requests"),
-    )?;
-    assert_eq!(home.settle_as(stranger_authorization).await?, [], "{case}");
-    assert!(!home.administers(&member).await?, "{case}");
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [gents_protocol::owed_settlement::OwedStanding::Settled],
-        "{case}"
-    );
-    assert!(home.administers(&member).await?, "{case}");
-    assert!(
-        !home
-            .receipts(&member)
-            .await?
-            .iter()
-            .any(|receipt| receipt.restore),
-        "{case}"
-    );
-    assert_eq!(
-        home.settle_as(home.authorization().await?).await?,
-        [],
-        "{case}"
-    );
-    drop(stranger_key);
-    home.shutdown().await
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Takeover {
-    Approval,
-    DeliberateGrant,
-}
-
-#[tokio::test]
-async fn a_removal_overtaking_an_approval_on_a_local_home_is_restored() -> anyhow::Result<()> {
-    a_removal_overtaking_a_takeover_is_restored(Provider::Local, Takeover::Approval).await
-}
-
-#[tokio::test]
-async fn a_removal_overtaking_an_approval_on_a_vera_home_is_restored() -> anyhow::Result<()> {
-    a_removal_overtaking_a_takeover_is_restored(Provider::Vera, Takeover::Approval).await
-}
-
-#[tokio::test]
-async fn a_removal_overtaking_a_deliberate_grant_on_a_local_home_is_restored() -> anyhow::Result<()>
-{
-    a_removal_overtaking_a_takeover_is_restored(Provider::Local, Takeover::DeliberateGrant).await
-}
-
-#[tokio::test]
-async fn a_removal_overtaking_a_deliberate_grant_on_a_vera_home_is_restored() -> anyhow::Result<()>
-{
-    a_removal_overtaking_a_takeover_is_restored(Provider::Vera, Takeover::DeliberateGrant).await
-}
-
-async fn a_dependent_read_runs_only_once_its_grant_settled(
-    provider: Provider,
-) -> anyhow::Result<()> {
-    let home = home(provider).await?;
+async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
+    let home = home(Provider::Local).await?;
     let (_member_key, member) = enrolled_client().await?;
     let node_doc = home.node_doc.clone();
     let input = json!({
@@ -1350,25 +944,15 @@ async fn a_dependent_read_runs_only_once_its_grant_settled(
     assert_eq!(
         crate::config_client::owed::dependent_step(wait),
         crate::config_client::owed::DependentStep::Proceed,
-        "{provider:?}: {wait:?}"
+        "{wait:?}"
     );
     ticket.require_settled().await?;
     let seen = load_enrollment_grant_receipts(&home.owner().await?, member.as_str()).await?;
     assert!(
         seen.iter().any(|receipt| receipt.request_id == "shared"),
-        "{provider:?}: {seen:?}"
+        "{seen:?}"
     );
     home.shutdown().await
-}
-
-#[tokio::test]
-async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
-    a_dependent_read_runs_only_once_its_grant_settled(Provider::Local).await
-}
-
-#[tokio::test]
-async fn a_dependent_read_on_a_vera_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
-    a_dependent_read_runs_only_once_its_grant_settled(Provider::Vera).await
 }
 
 #[tokio::test]

@@ -415,7 +415,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out")
         .expect("next_fire returned None");
@@ -442,7 +442,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
-    let retry = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let retry = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("unacknowledged occurrence remains due")
         .expect("schedule source remains active");
@@ -513,7 +513,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
 
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out (fired)")
         .expect("next_fire returned None (fired)");
@@ -583,7 +583,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         resp.errors
     );
 
-    let intent2 = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent2 = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect("next_fire timed out (skipped)")
         .expect("next_fire returned None (skipped)");
@@ -635,9 +635,9 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
     cancel.cancel();
 
     let start = Instant::now();
-    let result = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let result = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
-        .expect("next_fire did not return within 2s after cancel");
+        .expect("next_fire did not return after cancel");
     let elapsed = start.elapsed();
 
     assert!(
@@ -965,10 +965,10 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
     let started = Instant::now();
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
         .expect(
-            "next_fire did not yield a FireIntent within 2s for a trigger with null \
+            "next_fire did not yield a FireIntent for a trigger with null \
              next_run_at; the engine must seed the Trigger cursor on first-seen (Finding 2)",
         )
         .expect("next_fire returned None for a trigger with null next_run_at");
@@ -1125,9 +1125,9 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
         cancel_clone.cancel();
     });
 
-    let result = tokio::time::timeout(Duration::from_secs(3), source.next_fire())
+    let result = tokio::time::timeout(STALL_CEILING, source.next_fire())
         .await
-        .expect("next_fire did not return within 3s after cancel");
+        .expect("next_fire did not return after cancel");
     let _ = canceller.await;
 
     assert!(

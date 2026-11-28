@@ -606,32 +606,39 @@ impl ConfigApplyTxn<'_> {
                 };
                 let node = Arc::clone(node);
                 let handle = handle.clone();
-                let (collection, doc_id, relation, target) = (
+                let (collection_owned, doc_id_owned, relation_owned, target_owned) = (
                     collection.to_owned(),
                     doc_id.to_owned(),
                     relation.to_owned(),
                     target.to_owned(),
                 );
+                let (c, d, r, t) = (
+                    collection_owned.clone(),
+                    doc_id_owned.clone(),
+                    relation_owned.clone(),
+                    target_owned.clone(),
+                );
+                let native_context = context.clone();
                 execute_owned_native(
                     async move {
                         if delete {
                             node.delete_dac_actor_relationship_for_in_txn(
                                 &handle,
-                                &context,
-                                &collection,
-                                &doc_id,
-                                &relation,
-                                &target,
+                                &native_context,
+                                &c,
+                                &d,
+                                &r,
+                                &t,
                             )
                             .await
                         } else {
                             node.add_dac_actor_relationship_for_in_txn(
                                 &handle,
-                                &context,
-                                &collection,
-                                &doc_id,
-                                &relation,
-                                &target,
+                                &native_context,
+                                &c,
+                                &d,
+                                &r,
+                                &t,
                             )
                             .await
                         }
@@ -641,6 +648,19 @@ impl ConfigApplyTxn<'_> {
                 )
                 .await?
                 .map_err(native_relationship_error)?;
+                if delete {
+                    self.record_staged_revocation(
+                        crate::config_client::relationship_fence::StagedRevocation {
+                            tuple: crate::config_client::relationship_fence::RelationshipTuple {
+                                collection: collection_owned,
+                                doc_id: doc_id_owned,
+                                relation: relation_owned,
+                                target: target_owned,
+                            },
+                            context,
+                        },
+                    );
+                }
             }
             TxnBackend::Http {
                 endpoint,

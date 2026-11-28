@@ -6,11 +6,6 @@ namespace Conformance.SessionControlContracts
 
 open Conformance.Contracts SessionQueue.Control
 
-def boolJson (value : Bool) : String := if value then "true" else "false"
-
-def statusJson (status : Goals.Status) : String :=
-  jsonString status.toDefraDB
-
 def settledStopped : State :=
   { queuedStopPost with request := none }
 def resumePost : State := (step? scope settledStopped .resume).getD settledStopped

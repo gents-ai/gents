@@ -240,6 +240,7 @@ fn trial_serving(p2p: Option<P2PConfigForPath>) -> HomeServing {
                 },
             )
         }),
+        ..HomeServing::default()
     }
 }
 

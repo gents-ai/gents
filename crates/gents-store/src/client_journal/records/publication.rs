@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use crate::config_client::host_grant::HostCredential;
 use crate::config_client::{
-    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, ConfigAccess,
-    ConfigClientError, ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage,
-    PublicationStatus, RecoveryDisposition,
+    AgentPublicationObserver, ClientAgentJournal, ConfigAccess, ConfigClientError,
+    ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage, PublicationStatus,
 };
 use crate::graphql::escape_graphql_string;
 use anyhow::{bail, ensure, Context, Result};
@@ -17,6 +17,8 @@ pub struct Record {
     journal: ClientAgentJournal,
     parent: ConfigRelationshipGrant,
     executor: ConfigRelationshipGrant,
+    host: ConfigRelationshipGrant,
+    host_credential: Option<HostCredential>,
 }
 
 impl Record {
@@ -29,10 +31,7 @@ impl Record {
     }
 
     fn terminal(&self) -> bool {
-        self.journal.commit == PublicationStatus::Failed
-            || (self.journal.commit == PublicationStatus::Succeeded
-                && self.journal.parent == PublicationStatus::Succeeded
-                && self.journal.executor == PublicationStatus::Succeeded)
+        self.journal.commit == PublicationStatus::Failed || self.journal.settled()
     }
 
     pub(super) fn validate(&self) -> Result<()> {
@@ -46,6 +45,11 @@ impl Record {
             matches!(&self.executor, ConfigRelationshipGrant::Actor { collection, doc_id, relation, target }
             if collection == "Agent" && doc_id == &self.journal.agent_doc && relation == "executor" && target == &self.journal.agent_did),
             "publication executor binding changed"
+        );
+        ensure!(
+            matches!(&self.host, ConfigRelationshipGrant::Actor { collection, doc_id, relation, target }
+            if collection == "Agent" && doc_id == &self.journal.agent_doc && relation == "host" && target == &self.journal.node_did),
+            "publication host binding changed"
         );
         Ok(())
     }
@@ -182,6 +186,26 @@ async fn replace(node: &Arc<defra_node::Node>, before: &[Record], after: &[Recor
     .await
 }
 
+fn grant_stage(grant: &ConfigRelationshipGrant) -> Option<PublicationStage> {
+    match grant {
+        ConfigRelationshipGrant::Resource {
+            collection,
+            relation,
+            ..
+        } if collection == "Agent" && relation == "parent" => Some(PublicationStage::Parent),
+        ConfigRelationshipGrant::Actor {
+            collection,
+            relation,
+            ..
+        } if collection == "Agent" => match relation.as_str() {
+            "executor" => Some(PublicationStage::Executor),
+            "host" => Some(PublicationStage::Host),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn journal_error(error: anyhow::Error) -> ConfigClientError {
     ConfigClientError::ClientAgentJournal(error.into_boxed_dyn_error())
 }
@@ -223,6 +247,7 @@ impl Observer {
             if selected.is_some_and(|grant| match stage {
                 PublicationStage::Parent => &record.parent != grant,
                 PublicationStage::Executor => &record.executor != grant,
+                PublicationStage::Host => &record.host != grant,
                 PublicationStage::Commit => true,
             }) {
                 continue;
@@ -264,6 +289,7 @@ impl AgentPublicationObserver for Observer {
         &self,
         creator: &str,
         grants: &[ConfigRelationshipGrant],
+        host_credentials: &[(ConfigRelationshipGrant, HostCredential)],
     ) -> Result<(), ConfigClientError> {
         super::require_client_signer(&self.node, &self.client).map_err(journal_error)?;
         let build = || -> Result<Vec<Record>> {
@@ -296,6 +322,10 @@ impl AgentPublicationObserver for Observer {
                 let ConfigRelationshipGrant::Resource { target_doc_id, .. } = parent else {
                     unreachable!()
                 };
+                let host = grants
+                    .iter()
+                    .find(|grant| matches!(grant, ConfigRelationshipGrant::Actor { collection, doc_id: host_doc, relation, .. } if collection == "Agent" && host_doc == doc_id && relation == "host"))
+                    .context("Agent publication has no host grant")?;
                 let mut journal = ClientAgentJournal::new(
                     creator.to_owned(),
                     target.clone(),
@@ -313,6 +343,11 @@ impl AgentPublicationObserver for Observer {
                     journal,
                     parent: parent.clone(),
                     executor: executor.clone(),
+                    host: host.clone(),
+                    host_credential: host_credentials
+                        .iter()
+                        .find(|(grant, _)| grant == host)
+                        .map(|(_, credential)| credential.clone()),
                 };
                 record.validate()?;
                 records.push(record);
@@ -326,6 +361,15 @@ impl AgentPublicationObserver for Observer {
         }
         *self.active.lock().await = records;
         Ok(())
+    }
+
+    async fn host_credential(&self, grant: &ConfigRelationshipGrant) -> Option<HostCredential> {
+        self.active
+            .lock()
+            .await
+            .iter()
+            .find(|record| &record.host == grant)
+            .and_then(|record| record.host_credential.clone())
     }
 
     async fn committed(&self) -> Result<(), ConfigClientError> {
@@ -347,18 +391,8 @@ impl AgentPublicationObserver for Observer {
     }
 
     async fn before_grant(&self, grant: &ConfigRelationshipGrant) -> Result<(), ConfigClientError> {
-        let stage = match grant {
-            ConfigRelationshipGrant::Resource {
-                collection,
-                relation,
-                ..
-            } if collection == "Agent" && relation == "parent" => PublicationStage::Parent,
-            ConfigRelationshipGrant::Actor {
-                collection,
-                relation,
-                ..
-            } if collection == "Agent" && relation == "executor" => PublicationStage::Executor,
-            _ => return Ok(()),
+        let Some(stage) = grant_stage(grant) else {
+            return Ok(());
         };
         self.transition(stage, Some(grant), true, false, false)
             .await
@@ -366,18 +400,8 @@ impl AgentPublicationObserver for Observer {
     }
 
     async fn granted(&self, grant: &ConfigRelationshipGrant) -> Result<(), ConfigClientError> {
-        let stage = match grant {
-            ConfigRelationshipGrant::Resource {
-                collection,
-                relation,
-                ..
-            } if collection == "Agent" && relation == "parent" => PublicationStage::Parent,
-            ConfigRelationshipGrant::Actor {
-                collection,
-                relation,
-                ..
-            } if collection == "Agent" && relation == "executor" => PublicationStage::Executor,
-            _ => return Ok(()),
+        let Some(stage) = grant_stage(grant) else {
+            return Ok(());
         };
         self.transition(stage, Some(grant), false, true, false)
             .await
@@ -385,90 +409,8 @@ impl AgentPublicationObserver for Observer {
     }
 }
 
-pub async fn ensure_recovered(
-    node: &Arc<defra_node::Node>,
-    access: &ConfigAccess,
-    client: &str,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    super::require_client_signer(node, client)?;
-    let actor_matches = access.actor_did().as_deref() == Some(client);
-    ensure!(actor_matches, "Agent publication actor changed");
-    let record = lookup(node, client, node_did, agent_did).await?;
-    let binding_matches = record.as_ref().is_some_and(|record| {
-        record.journal.client == client
-            && record.journal.node_did == node_did
-            && record.journal.agent_did == agent_did
-    });
-    let disposition = recovery_disposition(
-        actor_matches,
-        record.as_ref().map(|record| &record.journal),
-        binding_matches,
-    );
-    let Some(record) = record else {
-        return Ok(());
-    };
-    match disposition {
-        RecoveryDisposition::Proceed => Ok(()),
-        RecoveryDisposition::BindingMismatch => bail!("retained Agent publication identity changed"),
-        RecoveryDisposition::CommitUnknown => bail!("Agent {agent_did} creation for document {} has an unknown outcome; inspect its retained publication before repair", record.journal.agent_doc),
-        RecoveryDisposition::ExplicitRepair => bail!("Agent {agent_did} document {} has unfinished relationships (parent: {:?}, executor: {:?}); current parent and ownership bindings cannot be verified atomically, so inspect and repair them explicitly", record.journal.agent_doc, record.journal.parent, record.journal.executor),
-    }
-}
+mod recovery;
+pub use recovery::{ensure_recovered, HostRecoveryError};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn matching_attempt_id_cannot_replace_physical_grant_bindings() -> Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        crate::schema::ensure_runtime_schemas(&node).await?;
-        let client = node.node_identity_did().context("client identity")?;
-        let mut journal = ClientAgentJournal::new(
-            client.into(),
-            "agent".into(),
-            "node".into(),
-            "agent-doc".into(),
-            "node-doc".into(),
-        );
-        journal.record_attempt(PublicationStage::Commit, true);
-        let record = Record {
-            attempt: "same-attempt".into(),
-            journal,
-            parent: ConfigRelationshipGrant::Resource {
-                collection: "Agent".into(),
-                doc_id: "agent-doc".into(),
-                relation: "parent".into(),
-                target_resource: "nodes".into(),
-                target_doc_id: "node-doc".into(),
-            },
-            executor: ConfigRelationshipGrant::Actor {
-                collection: "Agent".into(),
-                doc_id: "agent-doc".into(),
-                relation: "executor".into(),
-                target: "agent".into(),
-            },
-        };
-        record.validate()?;
-        reserve(&node, std::slice::from_ref(&record)).await?;
-        reserve(&node, std::slice::from_ref(&record)).await?;
-        let mut different = record.clone();
-        different.journal.node_doc = "different-node-doc".into();
-        if let ConfigRelationshipGrant::Resource { target_doc_id, .. } = &mut different.parent {
-            *target_doc_id = different.journal.node_doc.clone();
-        }
-        different.validate()?;
-        assert!(reserve(&node, &[different]).await.is_err());
-        let retained = lookup(&node, client, "node", "agent")
-            .await?
-            .context("retained record")?;
-        assert_eq!(
-            serde_json::to_value(retained)?,
-            serde_json::to_value(record)?
-        );
-        node.shutdown().await?;
-        Ok(())
-    }
-}
+mod tests;

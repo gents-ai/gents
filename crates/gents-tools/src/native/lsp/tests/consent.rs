@@ -19,10 +19,11 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new() -> Option<Self> {
-        if !python3_available() {
-            return None;
-        }
+    async fn new() -> Self {
+        assert!(
+            python3_available(),
+            "python3 is required to run the LSP fixture server"
+        );
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let home = root.join("home");
@@ -44,7 +45,7 @@ impl Fixture {
             )),
         )
         .unwrap();
-        let server = fixture_server(FIXTURE_PY.into());
+        let server = fixture_server(fixture_py());
         let config = sample_config(
             root.clone(),
             FileToolMode::ReadWrite,
@@ -70,7 +71,7 @@ impl Fixture {
             .await
             .unwrap();
         let context = ToolContext::new(root.clone(), false).unwrap();
-        Some(Self {
+        Self {
             _directory: directory,
             root,
             home,
@@ -78,7 +79,7 @@ impl Fixture {
             _pool: pool,
             lease,
             context,
-        })
+        }
     }
 
     fn edit(&self, path: &Path) -> super::super::edits::PreparedEdit {
@@ -135,9 +136,7 @@ fn verdict(invocation: workspace::ReviewInvocation, allowed: bool) -> Option<Str
 
 #[tokio::test]
 async fn lsp_edit_consent_is_complete_before_the_first_write() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     let first = fixture.root.join("first.rs");
     let second = fixture.root.join("second.rs");
     let edits = [fixture.edit(&first), fixture.edit(&second)];
@@ -160,9 +159,7 @@ async fn lsp_edit_consent_is_complete_before_the_first_write() {
 #[tokio::test]
 async fn lsp_edit_consent_follows_the_lean_consent_model() {
     for case in gents_lean_vocab::families::lsp_consent_edit::cases() {
-        let Some(fixture) = Fixture::new().await else {
-            return;
-        };
+        let fixture = Fixture::new().await;
         let paths = case
             .input
             .inside
@@ -215,9 +212,7 @@ async fn lsp_edit_consent_follows_the_lean_consent_model() {
 
 #[tokio::test]
 async fn lsp_edit_rechecks_approval_after_waiting_for_mutation_locks() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     let path = fixture.root.join("outside.rs");
     let edits = [fixture.edit(&path)];
     let calls = Arc::new(AtomicUsize::new(0));
@@ -241,9 +236,7 @@ async fn lsp_edit_rechecks_approval_after_waiting_for_mutation_locks() {
 
 #[tokio::test]
 async fn lsp_edit_rechecks_operator_aliases_before_any_write() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     let first = fixture.root.join("first.rs");
     let second = fixture.root.join("second.rs");
     let edits = [fixture.edit(&first), fixture.edit(&second)];
@@ -271,9 +264,7 @@ async fn lsp_edit_rechecks_operator_aliases_before_any_write() {
 #[cfg(unix)]
 #[tokio::test]
 async fn lsp_edit_rechecks_parent_paths_before_any_write() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     let outside = tempfile::tempdir().unwrap();
     let first = fixture.root.join("first.rs");
     let folder = fixture.root.join("folder");
@@ -304,9 +295,7 @@ async fn lsp_edit_rechecks_parent_paths_before_any_write() {
 
 #[tokio::test]
 async fn lsp_rename_rechecks_the_source_content_before_moving_it() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     let source = fixture.root.join("before.rs");
     let destination = fixture.root.join("after.rs");
     std::fs::write(&source, "original\n").unwrap();
@@ -333,9 +322,7 @@ async fn lsp_rename_rechecks_the_source_content_before_moving_it() {
 
 #[tokio::test]
 async fn lsp_rename_does_not_overwrite_a_changed_destination() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
+    let fixture = Fixture::new().await;
     for existed in [false, true] {
         let source = fixture.root.join("source.rs");
         let destination = fixture.root.join("destination.rs");

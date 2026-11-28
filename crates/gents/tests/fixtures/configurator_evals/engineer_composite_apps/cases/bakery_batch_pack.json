@@ -1,0 +1,332 @@
+{
+  "case_id": "bakery-batch-pack",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "batches.csv",
+        "contents": "batch,item,loaves\nB-01,Sourdough,24\nB-02,Rye,18\nB-03,Brioche,30\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "package",
+      "prompt": "Package and install kitchen/bakery 1.0.0 in workspace dir bakery with OvenBatch(batch, item, loaves: Int), WasteLog(batch, count: Int), and surface bakery-batch, then import batches.csv. Save and lint a node Page titled \"Bakery Batches\" with a donut chart, search input, and waste form.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "kitchen/bakery"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "OvenBatch",
+            "WasteLog"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "batches",
+          "collection": "OvenBatch",
+          "filter": {},
+          "fields": [
+            "batch",
+            "item",
+            "loaves"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "pack_files",
+          "glob": "bakery/pack_config.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "batches",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "kitchen/bakery",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "bakery-batch",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"OvenBatch\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"WasteLog\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"kind\"\\s*:\\s*\"query\""
+                  }
+                ]
+              },
+              {
+                "capture": "batches",
+                "key": "batch",
+                "id": "B-01",
+                "expect": [
+                  {
+                    "field": "item",
+                    "equals": "Sourdough"
+                  },
+                  {
+                    "field": "loaves",
+                    "equals": 24
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)bakery[- ]?batches"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\buseWrite\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bDonutChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bInput\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bloaves\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bcount\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"bakery-batch\""
+              },
+              {
+                "field": "data",
+                "matches": "(?s)(?:\"tools\"\\s*:\\s*\\[[^\\]]*\"[^\"]+\"\\s*,\\s*\"[^\"]+\"|\"surface\"\\s*:\\s*\"[^\"]+\".*\"surface\"\\s*:\\s*\"[^\"]+\")"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "pack_files",
+            "expect": [
+              {
+                "path": "bakery/pack_config.json",
+                "contains": "bakery-batch"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type OvenBatch { batch: String item: String loaves: Int } type WasteLog { batch: String count: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Log 4 wasted loaves for batch B-09 in the bakery desk.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Was the waste entry for B-09 saved?",
+        "max": 1,
+        "until": "waste"
+      },
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "waste",
+          "collection": "WasteLog",
+          "filter": {
+            "batch": {
+              "_eq": "B-09"
+            }
+          },
+          "fields": [
+            "batch",
+            "count"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "waste",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "count",
+                "equals": 4
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

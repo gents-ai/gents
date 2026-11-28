@@ -180,7 +180,7 @@ pub async fn drive_generated_turn_input(
         RawStreamingChoice::Message("answered".to_string()),
         RawStreamingChoice::FinalResponse(()),
     ]]);
-    let mut config = owned_config_for(0, &lifecycle);
+    let mut config = owned_config_for(2, &lifecycle);
     config.context_message = case.context.clone().map(Message::user);
     config.folded_prompts = case
         .folded

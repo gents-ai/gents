@@ -1973,7 +1973,18 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     if let Some((captured, _)) =
                         loading.then(|| in_flight.remove(&node_did)).flatten()
                     {
-                        let patch_accepted = store.accepts_chat_patch_read(&captured);
+                        // A patch naming no session scope is decided for the whole
+                        // store, as `ClientDataPublication.accepts` decides it.
+                        let unscoped = ClientStore::from_rows(
+                            crate::client_projection::store::ClientStoreRows {
+                                requests: vec![gents_protocol::row::AgentRequestRow {
+                                    request_id: "unscoped".into(),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            },
+                        );
+                        let patch_accepted = store.accepts_chat_patch_read(&captured, &unscoped);
                         let settlement = match result {
                             "transport_failed" => Settlement::TransportFailed,
                             "refused" => {

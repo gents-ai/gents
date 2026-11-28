@@ -352,7 +352,7 @@ export function useQuery<T = unknown>(
 }
 
 export interface WriteState {
-  /** run one create tool; resolves with the receipt, rejects with the refusal */
+  /** run one create or upsert tool; resolves with the receipt, rejects with the refusal */
   write: (args: Record<string, unknown>) => Promise<UxDataCallResult>;
   pending: boolean;
   error: string | null;

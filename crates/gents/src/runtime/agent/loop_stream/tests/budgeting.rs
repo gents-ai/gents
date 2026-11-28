@@ -114,7 +114,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
         ]]);
-        let mut loop_config = config(0);
+        let mut loop_config = config(2);
         loop_config.max_tokens = Some(max_tokens);
         loop_config.context_window = 6_500;
         loop_config.compaction_threshold = 0.25;

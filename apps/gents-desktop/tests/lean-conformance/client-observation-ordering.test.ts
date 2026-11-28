@@ -1,7 +1,3 @@
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { acceptsLiveCursor } from "@source-inc/gents-desktop-client";
@@ -16,6 +12,7 @@ import {
 import { projectFirstRunPhase, type FirstRunPhase } from "../../src/ui/lib/firstRun";
 import { projectStartupGate, type StartupGate } from "../../src/lib/startupGate";
 import type { ManagedServerStatus } from "@source-inc/gents-desktop-client";
+import { loadLeanFamilyCases, runLeanGeneratorJson } from "./leanGenerator";
 
 type ObservationFenceCase = {
   current: number;
@@ -23,27 +20,14 @@ type ObservationFenceCase = {
   accepted: boolean;
 };
 
-const run = promisify(execFile);
-
 describe("generated client observation ordering", () => {
   it("drives the production async-result fence with every Lean row", async () => {
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
-    const proofsDir = join(repoRoot, "crates/gents/proofs");
-    await run("lake", ["build", "Proofs.Conformance.ClientObservationOrdering"], {
-      cwd: proofsDir,
-      timeout: 240_000,
-    });
-    const { stdout } = await run(
-      "lake",
-      ["env", "lean", "--run", "Proofs/Conformance/ClientObservationOrdering.lean"],
-      { cwd: proofsDir, encoding: "utf8", timeout: 240_000 },
-    );
     const {
       fences: cases,
       startup,
       firstRun,
       liveDeltas,
-    } = JSON.parse(stdout.trim()) as {
+    } = await runLeanGeneratorJson<{
       liveDeltas: {
         base: number | null;
         current: number | null;
@@ -68,7 +52,10 @@ describe("generated client observation ordering", () => {
         authoritative: boolean;
         expected: FirstRunPhase;
       }[];
-    };
+    }>(
+      "Proofs.Conformance.ClientObservationOrdering:olean",
+      "Proofs/Conformance/ClientObservationOrdering.lean",
+    );
 
     expect(cases).toHaveLength(25);
     expect(liveDeltas).toHaveLength(18);
@@ -103,9 +90,6 @@ describe("generated client observation ordering", () => {
     }
   }, 300_000);
 });
-
-const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
-const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
 
 type StartupGateCase = {
   input: {
@@ -146,30 +130,7 @@ const startupPhase = (phase: LeanStartupPhase) =>
 
 describe("generated startup gate and settings read", () => {
   it("drives the startup gate and the settings read's answers with every case of their Lean families", async () => {
-    const proofsDir = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../../crates/gents/proofs",
-    );
-    await run("lake", ["build", "Proofs.Conformance.Contracts"], {
-      cwd: proofsDir,
-      timeout: 240_000,
-    });
-    const { stdout } = await run(
-      "lake",
-      ["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
-      { cwd: proofsDir, encoding: "utf8", timeout: 240_000, maxBuffer: 1 << 30 },
-    );
-    const begin = stdout.indexOf(CONTRACT_JSON_BEGIN) + CONTRACT_JSON_BEGIN.length;
-    const end = stdout.indexOf(CONTRACT_JSON_END);
-    const { families } = JSON.parse(stdout.slice(begin, end)) as {
-      families: Record<string, { cases: unknown[] }>;
-    };
-    const cases = <T>(family: string) => {
-      const key = /^families::(\w+)::cases\(\)$/.exec(family)![1]!;
-      return families[key]!.cases as T[];
-    };
-
-    const gate = cases<StartupGateCase>(
+    const gate = await loadLeanFamilyCases<StartupGateCase>(
       "families::client_snapshot_observation_startup_gate::cases()",
     );
     expect(gate).toHaveLength(16);
@@ -194,7 +155,7 @@ describe("generated startup gate and settings read", () => {
       ).toBe(expected);
     }
 
-    const answered = cases<SettingsAnsweredCase>(
+    const answered = await loadLeanFamilyCases<SettingsAnsweredCase>(
       "families::client_snapshot_observation_settings_answered::cases()",
     );
     expect(answered).toHaveLength(112);
@@ -211,7 +172,7 @@ describe("generated startup gate and settings read", () => {
       ).toBe(startupPhase(expected));
     }
 
-    const timedOut = cases<SettingsReadTimedOutCase>(
+    const timedOut = await loadLeanFamilyCases<SettingsReadTimedOutCase>(
       "families::client_snapshot_observation_settings_read_timed_out::cases()",
     );
     expect(timedOut).toHaveLength(14);

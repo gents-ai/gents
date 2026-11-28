@@ -21,9 +21,6 @@ def toContract : LifecycleTransitionClassification → String
 
 end LifecycleTransitionClassification
 
-def lifecycleTransitionCaseName (domain source target : String) : String :=
-  domain ++ ":" ++ source ++ "->" ++ target
-
 def actionForPairFromSamples {σ α : Type}
     (samples : List σ)
     (actions : List (String × α))

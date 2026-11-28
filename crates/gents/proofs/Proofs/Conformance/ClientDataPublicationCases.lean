@@ -2,6 +2,7 @@ import Proofs.Clients.ClientShell.ObservationOrdering
 import Proofs.Conformance.Family
 
 attribute [conformance_function] ClientDataPublication.reloadAcceptedSince
+  ClientDataPublication.reach
 
 namespace Conformance.ClientDataPublication
 
@@ -108,6 +109,63 @@ def nodePublication : Family NodePublicationInput NodePublicationOutput where
     { accepted
       expected := [1, 2].map fun node =>
         { node, value := if node = 1 ∧ accepted = true then "incoming" else rows node } }
+
+deriving instance ToJson for PatchStep, Reach
+
+structure PatchFenceStep where
+  step : PatchStep
+  named : List Nat
+  deriving ToJson
+
+structure PatchFenceInput where
+  name : String
+  /-- The session scopes the patch's rows name; none when a row names no scope. -/
+  carried : Option (List Nat)
+  steps : List PatchFenceStep
+  deriving ToJson
+
+structure PatchFenceOutput where
+  accepted : Bool
+  deriving ToJson
+
+/-- A store that has already seen a step of every reach. -/
+def patchFenceStart : PatchFence :=
+  ((PatchFence.initial.move .whole []).move .named [1, 2]).move .nothing []
+
+/-- A patch of scope 1 (or of scopes 1 and 3, or naming no scope) is read,
+`steps` happen, and it publishes through the fence. -/
+@[conformance_family]
+def patchFence : Family PatchFenceInput PatchFenceOutput where
+  inputs :=
+    [ ("no_step_accepts", some [1], []),
+      ("other_scope_event_preserves_patch", some [1], [(PatchStep.scopeEvent, [2])]),
+      ("sustained_other_scope_events_preserve_patch", some [1],
+        List.replicate 64 (PatchStep.scopeEvent, [2])),
+      ("other_scope_reload_preserves_patch", some [1], [(.scopeReload, [2])]),
+      ("other_scope_patch_preserves_patch", some [1], [(.patch, [2])]),
+      ("collection_event_preserves_patch", some [1], [(.collectionEvent, [])]),
+      ("collection_reload_preserves_patch", some [1], [(.collectionReload, [])]),
+      ("own_scope_event_rejects_patch", some [1], [(.scopeEvent, [1])]),
+      ("own_scope_reload_rejects_patch", some [1], [(.scopeReload, [2, 1])]),
+      ("own_scope_patch_rejects_patch", some [1], [(.patch, [1])]),
+      ("own_scope_event_among_others_rejects_patch", some [1],
+        [(.scopeEvent, [2]), (.scopeEvent, [1]), (.scopeEvent, [2])]),
+      ("closure_scope_event_rejects_patch", some [1, 3], [(.scopeEvent, [3])]),
+      ("unscoped_event_rejects_patch", some [1], [(.unscopedEvent, [])]),
+      ("provenance_event_rejects_patch", some [1], [(.provenanceEvent, [])]),
+      ("carried_collection_event_rejects_patch", some [1], [(.carriedCollectionEvent, [])]),
+      ("carried_collection_reload_rejects_patch", some [1], [(.carriedCollectionReload, [])]),
+      ("node_reload_rejects_patch", some [1], [(.nodeReload, [])]),
+      ("unscoped_patch_publication_rejects_patch", some [1], [(.unscopedPatch, [])]),
+      ("unscoped_patch_rejected_by_other_scope_event", none, [(.scopeEvent, [2])]),
+      ("unscoped_patch_rejected_by_collection_event", none, [(.collectionEvent, [])]),
+      ("unscoped_patch_accepted_without_a_step", none, []) ].map
+      fun (name, carried, steps) =>
+        { name, carried, steps := steps.map fun (step, named) => { step, named } }
+  model := fun i =>
+    let captured := patchFenceStart.capture
+    let fence := i.steps.foldl (fun fence s => fence.move (reach s.step) s.named) patchFenceStart
+    { accepted := fence.accepts captured i.carried }
 
 inductive RecoveryOp where
   | requestScope

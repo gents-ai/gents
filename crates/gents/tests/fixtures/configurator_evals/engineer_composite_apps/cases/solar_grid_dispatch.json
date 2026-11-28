@@ -1,0 +1,357 @@
+{
+  "case_id": "solar-grid-dispatch",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type ArrayMeter { site: String kw: Float hour: String }",
+      "type GridDispatch { site: String action: String }"
+    ],
+    "documents": [
+      {
+        "collection": "ArrayMeter",
+        "document": {
+          "site": "mesa",
+          "kw": 28,
+          "hour": "09:00"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "Set up a Grid Operator agent woken in session site- plus site only when a new ArrayMeter drops strictly below 15 kw, logging a GridDispatch. Build and lint a \"Solar Grid\" page with themed CSS, a line chart, KPI stats, dispatch badges, and an empty state.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "node_did",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "worker",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%grid operator%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1
+              },
+              {
+                "capture": "worker",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "pages",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "enabled",
+                "equals": true
+              },
+              {
+                "field": "display_name",
+                "fallback_field": "page_id",
+                "matches": "(?i)solar[- ]?grid"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(?:jsx|jsxs|createElement)\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bPLUGIN_PAGE_AREA\\b|['\"]plugin\\.pages['\"]"
+              },
+              {
+                "field": "module",
+                "matches": "\\buseQuery\\("
+              },
+              {
+                "field": "module",
+                "matches": "\\bLineChart\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(Stat|Card)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bBadge\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\b(EmptyState|LoadingState)\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\bkw\\b"
+              },
+              {
+                "field": "module",
+                "matches": "\\baction\\b"
+              },
+              {
+                "field": "data",
+                "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
+              },
+              {
+                "field": "css",
+                "matches": "var\\(--"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              },
+              {
+                "field": "findings",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "boundary_site",
+      "seed": {
+        "collection": "ArrayMeter",
+        "document": {
+          "site": "ridge",
+          "kw": 15,
+          "hour": "10:00"
+        }
+      },
+      "expect_fire": false,
+      "deadline_secs": 180,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "runs",
+          "of_seed": true
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "low_site",
+      "seed": {
+        "collection": "ArrayMeter",
+        "document": {
+          "site": "valley",
+          "kw": 9.2,
+          "hour": "10:05"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "capture": [
+        {
+          "kind": "runs",
+          "name": "seed_runs",
+          "of_seed": true
+        },
+        {
+          "kind": "documents",
+          "name": "valley_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "session_id": {
+              "_eq": "site-valley"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "lifecycle_state",
+            "caused_by_trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "valley_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "site-valley"
+            }
+          },
+          "fields": [
+            "session_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "ridge_dispatches",
+          "collection": "GridDispatch",
+          "filter": {
+            "site": {
+              "_eq": "ridge"
+            }
+          },
+          "fields": [
+            "site",
+            "action"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "valley_dispatches",
+          "collection": "GridDispatch",
+          "filter": {
+            "site": {
+              "_eq": "valley"
+            }
+          },
+          "fields": [
+            "site",
+            "action"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "seed_runs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "valley_runs",
+                "min": 1
+              },
+              {
+                "capture": "valley_sessions",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "ridge_dispatches",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "valley_dispatches",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

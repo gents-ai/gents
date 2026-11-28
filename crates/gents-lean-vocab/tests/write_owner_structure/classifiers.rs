@@ -35,7 +35,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-inference/src/backends/registry.rs", &["ActorBackendDiscoveryError::unavailable_in"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
     ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
-    ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", &["EnrollmentDecisionRefusal::in_chain"]),
+    ("crates/gents-p2p/src/p2p_reconcile/enrollment_store/projection.rs", &["EnrollmentDecisionRefusal::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/trait_def.rs", &["RemoteP2pAdminError::in_error"]),
     ("crates/gents-pack/src/pack/interpolate.rs", &["UnsetVariables::in_chain"]),
     ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),

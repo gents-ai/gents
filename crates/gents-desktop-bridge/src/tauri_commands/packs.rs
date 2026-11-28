@@ -173,20 +173,20 @@ pub async fn desktop_pack_search(
     query: String,
     page: Option<u32>,
     registry: Option<String>,
+    state: State<'_, DesktopAppState>,
 ) -> Result<PackSearchView, BridgeError> {
-    {
-        run(move || packs::search(registry, query, page.unwrap_or(1).max(1))).await
-    }
+    let home = state.policy.node_home.clone();
+    run(move || packs::search(home, registry, query, page.unwrap_or(1).max(1))).await
 }
 
 #[tauri::command]
 pub async fn desktop_pack_info(
     package: String,
     registry: Option<String>,
+    state: State<'_, DesktopAppState>,
 ) -> Result<PackInfoView, BridgeError> {
-    {
-        run(move || packs::info(registry, package)).await
-    }
+    let home = state.policy.node_home.clone();
+    run(move || packs::info(home, registry, package)).await
 }
 
 /// The Engineer's core packs as the local node's home has them. A read: it
@@ -575,11 +575,111 @@ mod tests {
             .await;
         let url = registry.uri();
         let view: PackSearchView = run_on(&runtime_handle(), move || {
-            packs::search(Some(url), "demo".into(), 2)
+            packs::search(None, Some(url), "demo".into(), 2)
         })
         .await
         .unwrap();
         assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    #[tokio::test]
+    async fn desktop_provisioning_and_pack_routes_use_the_homes_recorded_registry() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let registry = MockServer::start().await;
+        let search_report = serde_json::json!({
+            "packs": [{"namespace": "acme", "name": "demo", "published": {"version": "1.0.0"}}],
+            "has_more": false,
+            "page": 1,
+            "per_page": 20,
+            "count": 1,
+        });
+        let info_report = serde_json::json!({
+            "namespace": "acme",
+            "name": "demo",
+            "latest": "1.0.0",
+            "owner": "acme",
+            "versions": [{"version": "1.0.0"}],
+        });
+        Mock::given(wiremock::matchers::path("/api/v1/packs"))
+            .and(wiremock::matchers::query_param("q", "demo"))
+            .and(wiremock::matchers::query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(search_report.clone()))
+            .expect(1)
+            .mount(&registry)
+            .await;
+        Mock::given(wiremock::matchers::path("/api/v1/packs/acme/demo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(info_report.clone()))
+            .expect(1)
+            .mount(&registry)
+            .await;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("node");
+        let desktop = root.path().join("desktop");
+        let expected_url = registry.uri();
+        gents_server::server_host::ensure_standard_home(
+            &runtime_handle(),
+            gents_server::server_host::ProvisionOptions {
+                home: home.clone(),
+                desktop_root: desktop.clone(),
+                node_name: "local".into(),
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
+                tool_root: None,
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                default_packs: false,
+                registry: Some(format!("{expected_url}/")),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gents_store::local::home::recorded_registry(&home).as_deref(),
+            Some(expected_url.as_str())
+        );
+
+        // Re-provisioning without an explicit registry keeps the home's recorded one.
+        gents_server::server_host::ensure_standard_home(
+            &runtime_handle(),
+            gents_server::server_host::ProvisionOptions {
+                home: home.clone(),
+                desktop_root: desktop,
+                node_name: "local".into(),
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
+                tool_root: None,
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                default_packs: false,
+                registry: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gents_store::local::home::recorded_registry(&home).as_deref(),
+            Some(expected_url.as_str())
+        );
+
+        let search_home = home.clone();
+        let search_view: PackSearchView = run_on(&runtime_handle(), move || {
+            packs::search(Some(search_home), None, "demo".into(), 1)
+        })
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(search_view).unwrap(), search_report);
+
+        let info_home = home.clone();
+        let info_view: PackInfoView = run_on(&runtime_handle(), move || {
+            packs::info(Some(info_home), None, "acme/demo".into())
+        })
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(info_view).unwrap(), info_report);
+
+        let logout_home = home.clone();
+        let logout_view: PackLogoutView =
+            run_on(&runtime_handle(), move || packs::logout(logout_home, None))
+                .await
+                .unwrap();
+        assert_eq!(logout_view.registry, expected_url);
     }
 
     #[test]

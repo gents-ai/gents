@@ -1,8 +1,8 @@
 ---- MODULE ClientIdentityMetadata ----
 \* lean: none
 \* crates: gents-desktop-core, gents-store
-\* traces: violates
 \* models: ClientIdentityMetadata.decide
+\* traces: violates
 (***************************************************************************)
 (* First-run writers of one home's client identity metadata                *)
 (* (`principal.json`, `PrincipalIdentity::load_or_create`): two `gents`    *)

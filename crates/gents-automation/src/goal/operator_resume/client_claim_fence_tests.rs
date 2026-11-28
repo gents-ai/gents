@@ -1,5 +1,5 @@
 use super::contract_tests::paused_goal_state;
-use super::support::{request_rows, Fixture, PARENT, SESSION};
+use super::support::FixtureNode;
 use super::*;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
@@ -7,7 +7,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::config_client::ConfigAccess;
 
 async fn update_goal_root(access: &ConfigAccess, doc_id: &str, root: Option<&str>) {
     let mutation = format!(
@@ -33,6 +33,7 @@ async fn update_goal_root(access: &ConfigAccess, doc_id: &str, root: Option<&str
 #[tokio::test]
 async fn user_goal_continuation_claim_fences_current_physical_binding() {
     let before = paused_goal_state();
+    let shared = FixtureNode::start_with_shared_agent().await;
 
     for scenario in [
         "valid",
@@ -45,28 +46,23 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
         "changed-edge",
         "changed-session",
     ] {
-        let f = Fixture::new_with_goal_author(&before, true, None, true).await;
+        let f = shared
+            .fixture_with_goal_author(&before, true, None, true)
+            .await;
         let user = f.user_access();
         let agent = f.agent_access();
-        let admin = ConfigAccess::local_as(
-            f.node.clone(),
-            ::identity::Did::new(f.identity.did()).unwrap(),
-        );
         let user_did = ::identity::Did::new(f.user.did()).unwrap();
-        for permission in [
-            NodePermission::DocumentDelete,
-            NodePermission::DacRelationDelete,
-        ] {
-            admin
-                .grant_node_permission(&user_did, permission)
-                .await
-                .unwrap();
-        }
-        let receipt =
-            resume_goal_request(&user, f.user.as_ref(), f.identity.did(), SESSION, PARENT)
-                .await
-                .unwrap();
-        let row = request_rows(&agent)
+        let receipt = resume_goal_request(
+            &user,
+            f.user.as_ref(),
+            f.identity.did(),
+            &f.session,
+            &f.parent.request_id,
+        )
+        .await
+        .unwrap();
+        let row = f
+            .session_rows(&agent)
             .await
             .into_iter()
             .find(|row| row.request_id == receipt.request_id)
@@ -98,7 +94,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 changed.is_err(),
                 "{scenario}: signed field change was accepted"
             );
-            let current = request_rows(&agent)
+            let current = f
+                .session_rows(&agent)
                 .await
                 .into_iter()
                 .find(|row| row.request_id == request.request_id)
@@ -227,8 +224,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             };
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
-                "new-goal-opening",
-                RequestScope::new(f.identity.did(), f.user.did(), opening_agent, SESSION),
+                format!("new-goal-opening-{scenario}"),
+                RequestScope::new(f.identity.did(), f.user.did(), opening_agent, &f.session),
                 "new assignment",
                 "interactive",
                 "2030-01-01T00:00:00Z",
@@ -270,7 +267,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                     .await
                     .unwrap();
             }
-            let new_root = request_rows(&user)
+            let new_root = f
+                .session_rows(&user)
                 .await
                 .into_iter()
                 .find(|row| row.request_id == opening.request_id)
@@ -306,7 +304,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             "stale" => assert_ne!(result.unwrap(), ClaimOutcome::Claimed),
             _ => assert!(result.is_err(), "{scenario}: {result:?}"),
         }
-        let current = request_rows(&user)
+        let current = f
+            .session_rows(&user)
             .await
             .into_iter()
             .find(|row| row.request_id == request.request_id)
@@ -319,7 +318,6 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
         } else if !matches!(scenario, "valid" | "changed-edge" | "changed-session") {
             assert_eq!(current.lifecycle_state, Some(RequestLifecycleState::Failed));
         }
-        drop(lifecycle);
-        f.node.shutdown().await.unwrap();
     }
+    shared.shutdown().await;
 }

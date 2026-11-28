@@ -2,6 +2,7 @@
 """Structurally lint generated Lean JSON against a supported Rust type subset."""
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -302,23 +303,30 @@ def validate(items, payload, groups=None):
     return checker.errors
 
 
+def load_contract_text(proofs_dir, contract_path=None):
+    source = contract_path
+    if source is None:
+        env_path = os.environ.get("GENTS_LEAN_CONTRACT_FILE", "").strip()
+        if env_path:
+            source = Path(env_path)
+    if source is not None:
+        return Path(source).read_text()
+    return subprocess.run(
+        ["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
+        cwd=proofs_dir, check=True, capture_output=True, text=True).stdout
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--contract", type=Path,
-                        help="saved generator stdout; omitted, the contract is generated after lake build")
+                        help="saved generator stdout; defaults to GENTS_LEAN_CONTRACT_FILE or lake env lean --run")
     args = parser.parse_args()
     items = {}
     for source in sorted((args.root / "crates/gents-lean-vocab/src").glob("*.rs")):
         items.update(parse_items(source.read_text()))
     try:
-        if args.contract:
-            raw = args.contract.read_text()
-        else:
-            raw = subprocess.run(
-                ["lake", "env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
-                cwd=args.root / "crates/gents/proofs", check=True, capture_output=True,
-                text=True).stdout
+        raw = load_contract_text(args.root / "crates/gents/proofs", args.contract)
         payload = extract_contract(raw)
     except subprocess.CalledProcessError as error:
         print(error.stdout + error.stderr, file=sys.stderr)

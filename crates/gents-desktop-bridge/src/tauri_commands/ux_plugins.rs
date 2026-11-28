@@ -183,6 +183,7 @@ pub struct UxDataCallRequest {
 pub enum UxDataCallKind {
     Query,
     Create,
+    Upsert,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, TS)]
@@ -225,7 +226,7 @@ impl From<WatchDelivery<UxDataCallResult>> for UxDataWatchEvent {
 }
 
 /// One declared datastore tool, run as the operator on the agent's node;
-/// answers `{"kind": "query" | "create", "output": <the tool's result>}`.
+/// answers `{"kind": "query" | "create" | "upsert", "output": <the tool's result>}`.
 #[tauri::command]
 pub async fn desktop_ux_data_call(
     request: UxDataCallRequest,

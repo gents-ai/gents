@@ -186,6 +186,7 @@ impl Service {
             environment: None,
             tool_name: Some(name.to_owned()),
             kind: ManagedExecKind::PersistentService,
+            linux_sandbox: None,
         })
         .await
         .map_err(anyhow::Error::msg)?;

@@ -98,13 +98,32 @@ def Limit.live (now : Time) (family : Family) (limit : Limit) : Bool :=
 def liveLimits (now : Time) (family : Family) (account : Account) : List Limit :=
   account.limits.filter (Limit.live now family)
 
+inductive LiveLimitStatus where
+  | clear
+  | warned
+  | rejected
+  deriving DecidableEq, Repr
+
+def liveLimitStatus (now : Time) (family : Family) (account : Account) : LiveLimitStatus :=
+  let live := liveLimits now family account
+  if live.any (·.severity == .rejected) then .rejected
+  else if live.any (·.severity == .warning) then .warned
+  else .clear
+
+/-- Eligibility tier from an account's enabled flag, block flag, summarised
+live-limit severity, overage state and policy flag. -/
+def tierOfStatus (enabled blocked : Bool) (limitStatus : LiveLimitStatus)
+    (overage : Overage) (allowOverage : Bool) : Option Tier :=
+  if !enabled || blocked then none
+  else match limitStatus with
+    | .rejected => if allowOverage && overage.serves then some .overage else none
+    | .warned => some .warned
+    | .clear => some .clear
+
 def tier? (policy : Policy) (now : Time) (family : Family) (account : Account) :
     Option Tier :=
-  if !account.enabled || decide (now < account.blockedUntil) then none
-  else if (liveLimits now family account).any (·.severity == .rejected) then
-    if policy.allowOverage && account.overage.serves then some .overage else none
-  else if (liveLimits now family account).any (·.severity == .warning) then some .warned
-  else some .clear
+  tierOfStatus account.enabled (decide (now < account.blockedUntil))
+    (liveLimitStatus now family account) account.overage policy.allowOverage
 
 def ranks (policy : Policy) (now : Time) (family : Family) (pool : List Account) :
     List (Option Nat) :=

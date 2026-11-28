@@ -1,5 +1,4 @@
 import Proofs.Conformance.ContractCases.Enrollment
-import Proofs.Conformance.Contracts.Json.Core
 import Proofs.P2P.Enrollment.AutoRenewal
 import Proofs.Conformance.Family
 

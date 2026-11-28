@@ -121,7 +121,7 @@ where
     };
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     let choice = HomeChoice {
-        home: node_home,
+        home: node_home.clone(),
         explicit: false,
     };
     let report = prepare(choice)
@@ -145,6 +145,16 @@ where
                 ..
             },
         ) => (ManagedServerRepairOutcome::Ready, None),
+        RepairOutcome::Blocked(Blocker::StoreRefused { kind, message }) => {
+            let message = capitalize(message);
+            let mut managed = state.managed_server.lock().await;
+            managed.incompatible_store = Some(super::readiness::refused_runtime_store(
+                &node_home,
+                Some(kind),
+            ));
+            managed.last_error = Some(message.clone());
+            (ManagedServerRepairOutcome::Blocked, Some(message))
+        }
         RepairOutcome::Blocked(blocker) => (
             ManagedServerRepairOutcome::Blocked,
             Some(capitalize(blocker.to_string())),

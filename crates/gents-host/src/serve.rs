@@ -792,10 +792,14 @@ async fn serve_foreground(
             .unwrap_or_default(),
         identity.did(),
     );
+    let fence_route = owner_staged.clone();
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
         .with_authenticated_routes(extra_routes)
         .with_router_transform(Arc::new(move |router| {
-            crate::http::gzip_requests::wrap(authority.wrap(streams.wrap(edge.wrap(router))))
+            crate::http::gzip_requests::wrap(
+                authority
+                    .wrap(streams.wrap(edge.wrap(fence_route.wrap_relationship_fence(router)))),
+            )
         }));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
@@ -919,7 +923,10 @@ async fn serve_foreground(
                 p2p_intervals: p2p_intervals(&args),
                 p2p_network_id: args.p2p_network_id.clone(),
                 system_log: args.system_log,
-                registry_url: args.registry.clone(),
+                registry_url: Some(gents_pack::pack::registry::resolve_registry_url_for_home(
+                    args.registry.as_deref(),
+                    Some(&home_dir),
+                )),
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
