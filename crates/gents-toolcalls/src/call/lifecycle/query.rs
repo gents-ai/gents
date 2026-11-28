@@ -440,6 +440,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
+            plugin_writes_refusal: None,
             file_capture: None,
             spawned_by_tool_call_doc_id,
             plugin_effect,

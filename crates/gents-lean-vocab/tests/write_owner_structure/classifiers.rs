@@ -113,7 +113,7 @@ const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
     ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
     ("crates/gents-session/src/workspace/adapter.rs", &["git_blob_missing"]),
-    ("crates/gents-store/src/config_client/retry.rs", &["ConfigClientError::is_missing_or_denied_write", "is_transaction_conflict_text"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["ConfigClientError::is_missing_or_denied_write", "ConfigClientError::is_permanent_write_rejection", "is_transaction_conflict_text"]),
     ("crates/gents-store/src/graphql.rs", &["is_storage_full"]),
     ("crates/gents-tools/src/builtin/schema_help/mod.rs", &["sdl_help_call"]),
     ("crates/gents-tools/src/builtin/self_config/command/patch.rs", &["serde_found_string"]),

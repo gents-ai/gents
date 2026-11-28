@@ -1618,15 +1618,21 @@ where
                                 ))
                             })?;
                             outcome = settled_outcome;
-                            if let HookAction::Terminate { reason } = result_action {
-                                Err(StreamingError::Prompt(Box::new(
-                                    PromptError::PromptCancelled {
-                                        chat_history: rig_compat::to_rig_messages(
-                                            &error_chat_history(&history, &new_messages),
-                                        ),
-                                        reason,
-                                    },
-                                )))?;
+                            match result_action {
+                                crate::ToolResultHookAction::Continue => {}
+                                crate::ToolResultHookAction::ReplaceOutcome(replaced) => {
+                                    outcome = *replaced;
+                                }
+                                crate::ToolResultHookAction::Terminate { reason } => {
+                                    Err(StreamingError::Prompt(Box::new(
+                                        PromptError::PromptCancelled {
+                                            chat_history: rig_compat::to_rig_messages(
+                                                &error_chat_history(&history, &new_messages),
+                                            ),
+                                            reason,
+                                        },
+                                    )))?;
+                                }
                             }
                         }
                         invalid_tool_progress.record(&outcome);

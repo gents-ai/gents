@@ -449,7 +449,7 @@ impl ToolCallLifecycle {
                         cancel: None,
                         completion_reason: None,
                     };
-                    return Box::pin(self.terminalize_with_options_at(
+                    let published = Box::pin(self.terminalize_with_options_at(
                         expected,
                         fields,
                         TerminalizeOptions {
@@ -462,7 +462,11 @@ impl ToolCallLifecycle {
                             fixture_now,
                         },
                     ))
-                    .await;
+                    .await?;
+                    if published {
+                        self.plugin_writes_refusal = Some(text);
+                    }
+                    return Ok(published);
                 }
                 error => return Err(error.into_anyhow()),
             },

@@ -303,7 +303,7 @@ impl SessionHook for RecordingHook {
         _internal_call_id: &str,
         _args: &str,
         outcome: &ToolOutcome,
-    ) -> HookAction {
+    ) -> crate::ToolResultHookAction {
         if let Some(gate) = &self.settlement_gate {
             struct Dropped(Arc<SettlementGate>);
             impl Drop for Dropped {
@@ -320,7 +320,7 @@ impl SessionHook for RecordingHook {
             tool_name: tool_name.to_string(),
             outcome: outcome.model_facing_text().to_string(),
         });
-        HookAction::Continue
+        crate::ToolResultHookAction::Continue
     }
 
     async fn foreground_live_output_writer(
@@ -699,22 +699,22 @@ impl SessionHook for ParallelHook {
         id: &str,
         _: &str,
         outcome: &ToolOutcome,
-    ) -> HookAction {
+    ) -> crate::ToolResultHookAction {
         let id = id.parse::<usize>().unwrap();
         self.settled
             .lock()
             .await
             .push((id, matches!(outcome, ToolOutcome::Cancelled)));
         if self.cancelled_terminates && matches!(outcome, ToolOutcome::Cancelled) {
-            HookAction::Terminate {
+            crate::ToolResultHookAction::Terminate {
                 reason: "cancelled".into(),
             }
         } else if self.terminate_id == Some(id) {
-            HookAction::Terminate {
+            crate::ToolResultHookAction::Terminate {
                 reason: "stopped".into(),
             }
         } else {
-            HookAction::Continue
+            crate::ToolResultHookAction::Continue
         }
     }
 
@@ -1059,6 +1059,7 @@ pub(crate) struct EffectBatchHook {
     pub(crate) block: bool,
     pub(crate) terminate: Option<u32>,
     pub(crate) terminate_result: Option<u32>,
+    pub(crate) replace_result: Option<(u32, ToolOutcome)>,
     pub(crate) skip: Option<u32>,
     pub(crate) fail_reservation: Option<u32>,
     pub(crate) fail_finish: Option<u32>,
@@ -1072,6 +1073,7 @@ impl Default for EffectBatchHook {
             block: false,
             terminate: None,
             terminate_result: None,
+            replace_result: None,
             skip: None,
             fail_reservation: None,
             fail_finish: None,
@@ -1155,14 +1157,20 @@ impl SessionHook for EffectBatchHook {
         id: &str,
         _: &str,
         _: &ToolOutcome,
-    ) -> HookAction {
+    ) -> crate::ToolResultHookAction {
         self.events.lock().unwrap().push(format!("result:{id}"));
         if self.terminate_result == id.parse().ok() {
-            HookAction::Terminate {
+            crate::ToolResultHookAction::Terminate {
                 reason: "settlement failed".into(),
             }
+        } else if let Some((target, replacement)) = &self.replace_result {
+            if id.parse().ok() == Some(*target) {
+                crate::ToolResultHookAction::replace_outcome(replacement.clone())
+            } else {
+                crate::ToolResultHookAction::Continue
+            }
         } else {
-            HookAction::Continue
+            crate::ToolResultHookAction::Continue
         }
     }
 
@@ -1327,11 +1335,11 @@ impl SessionHook for EffectHook {
         internal_id: &str,
         _: &str,
         _: &ToolOutcome,
-    ) -> HookAction {
+    ) -> crate::ToolResultHookAction {
         if internal_id == "parent" {
             self.parent_settled.store(true, Ordering::SeqCst);
         }
-        HookAction::Continue
+        crate::ToolResultHookAction::Continue
     }
 
     async fn foreground_live_output_writer(

@@ -1,6 +1,8 @@
 use super::*;
 use crate::call::hook::background_executions::RetainedStopReceipt;
-use crate::call::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
+use crate::call::hook::{
+    decide_persistence_outcome, FailurePolicy, PolicyDecision, ToolResultHookAction,
+};
 use gents_protocol::tool_names::{
     AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
@@ -420,7 +422,7 @@ impl DefraSessionHook {
         internal_call_id: &str,
         _args: &str,
         outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
-    ) -> HookAction {
+    ) -> ToolResultHookAction {
         use gents_loop::tool_call_lifecycle::ToolOutcome;
 
         let is_plugin_effect = self
@@ -428,7 +430,7 @@ impl DefraSessionHook {
             .lock()
             .await
             .contains_key(internal_call_id);
-        let persist_result: anyhow::Result<HookAction> = async {
+        let persist_result: anyhow::Result<ToolResultHookAction> = async {
             if matches!(
                 outcome,
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
@@ -445,7 +447,7 @@ impl DefraSessionHook {
                         _ => RetainedStopReceipt::Cancel(CancelCause::Interrupted, "request interrupted".to_owned()),
                     }).await {
                         self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
-                        return Ok(HookAction::Terminate {
+                        return Ok(ToolResultHookAction::Terminate {
                             reason: "tool process exit could not be confirmed".to_owned(),
                         });
                     }
@@ -476,13 +478,13 @@ impl DefraSessionHook {
                 }
 
                 if is_plugin_effect {
-                    return Ok(HookAction::Continue);
+                    return Ok(ToolResultHookAction::Continue);
                 }
                 let reason = match outcome {
                     ToolOutcome::TimedOut { .. } => "tool call deadline exceeded",
                     _ => "tool call cancelled",
                 };
-                return Ok(HookAction::Terminate {
+                return Ok(ToolResultHookAction::Terminate {
                     reason: reason.to_string(),
                 });
             }
@@ -529,7 +531,7 @@ impl DefraSessionHook {
             if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && !self.foreground_stop_confirmed(&lc, RetainedStopReceipt::Failure(outcome.clone())).await {
                 self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
-                return Ok(HookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
+                return Ok(ToolResultHookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
             }
             self.forget_foreground_evidence(&lc).await;
             lc.stage_plugin_receipt(
@@ -542,7 +544,7 @@ impl DefraSessionHook {
             if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && self.background_executions.settle_retained_stop(&mut lc).await? {
                 self.release_live_output(&tool_call_doc_id).await;
-                return Ok(HookAction::Continue);
+                return Ok(ToolResultHookAction::Continue);
             }
 
             let presentation = self.background_live_outputs.registry
@@ -575,7 +577,15 @@ impl DefraSessionHook {
             if lc.is_terminal() { self.background_executions.retire_confirmed_stop(lc.tool_call_id(), &tool_call_doc_id, true); }
             self.release_live_output(&tool_call_doc_id).await;
 
-            Ok(HookAction::Continue)
+            if let Some(refusal) = lc.take_plugin_writes_refusal() {
+                return Ok(ToolResultHookAction::replace_outcome(ToolOutcome::Failed {
+                    class: FailureClass::ToolReturnedError,
+                    denial: None,
+                    text: refusal,
+                }));
+            }
+
+            Ok(ToolResultHookAction::Continue)
         }
         .instrument(tracing::info_span!(
             "tool.result",
@@ -597,13 +607,20 @@ impl DefraSessionHook {
                         "persist plugin effect",
                         &e,
                     ) {
-                        PolicyDecision::Terminate(reason) => HookAction::Terminate { reason },
+                        PolicyDecision::Terminate(reason) => {
+                            ToolResultHookAction::Terminate { reason }
+                        }
                         PolicyDecision::Continue => {
                             unreachable!("plugin effects require durable results")
                         }
                     }
                 } else {
-                    self.on_persistence_error("persist tool result", &e)
+                    match self.decide_persistence_outcome("persist tool result", &e) {
+                        PolicyDecision::Continue => ToolResultHookAction::Continue,
+                        PolicyDecision::Terminate(reason) => {
+                            ToolResultHookAction::Terminate { reason }
+                        }
+                    }
                 }
             }
         }

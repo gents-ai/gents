@@ -6,7 +6,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_inference::llm::message::Message;
-pub use gents_inference::llm::{HookAction, ToolCallHookAction};
+pub use gents_inference::llm::{HookAction, ToolCallHookAction, ToolResultHookAction};
 use gents_loop::tool::ToolDyn;
 use tokio::sync::Mutex;
 
@@ -1347,7 +1347,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         internal_call_id: &str,
         args: &str,
         outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
-    ) -> HookAction {
+    ) -> ToolResultHookAction {
         DefraSessionHook::on_tool_result(
             self,
             tool_name,
