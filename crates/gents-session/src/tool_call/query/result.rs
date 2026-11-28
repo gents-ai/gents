@@ -717,11 +717,12 @@ async fn finish_tool_call_read(
         // A background call's ToolResult reply is its acceptance receipt, an
         // authored payload; its output lives on the call's tool_call segment.
         let response = source
-            .execute(
-                &gents_protocol::output::rows::request_output_segments_query(
-                    &expected_request_doc_id,
-                ),
-            )
+            .execute(&gents_protocol::output::rows::source_output_segments_query(
+                &expected_request_doc_id,
+                &OutputSource::ToolCall {
+                    tool_call_doc_id: tool_call_doc_id.to_owned(),
+                },
+            )?)
             .await?;
         let values = response
             .pointer("/data/AgentOutputSegment")
@@ -1061,7 +1062,12 @@ async fn accept_derived(
             .as_deref()
             .context("plugin effect lacks request")?;
         let response = source
-            .execute(&gents_protocol::output::rows::request_output_segments_query(request))
+            .execute(&gents_protocol::output::rows::source_output_segments_query(
+                request,
+                &OutputSource::ToolEffectArguments {
+                    tool_call_doc_id: call.doc_id.clone(),
+                },
+            )?)
             .await?;
         let rows = response["data"]["AgentOutputSegment"]
             .as_array()

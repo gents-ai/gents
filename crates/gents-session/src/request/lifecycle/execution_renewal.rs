@@ -12,6 +12,10 @@ use gents_store::graphql::response_has_documents;
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
     lost: tokio_util::sync::CancellationToken,
+    /// Leaf gate shared with `RequestLifecycle` terminalization so a
+    /// background renewal never opens or commits on `AgentRequest` while
+    /// `terminalize_execution` is in flight (`tla/TerminalizeRenewalContention`).
+    gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Drop for RenewalTask {
@@ -31,6 +35,8 @@ impl RenewalTask {
     ) -> Self {
         let lost = tokio_util::sync::CancellationToken::new();
         let observed_lost = lost.clone();
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let task_gate = Arc::clone(&gate);
         let task = tokio::spawn(async move {
             let poll_interval = renewal_poll_interval(duration_ms);
             let mut ticker = tokio::time::interval(poll_interval);
@@ -54,6 +60,7 @@ impl RenewalTask {
                     signer.clone(),
                     &request_doc_id,
                     &generation,
+                    Some(&task_gate),
                 )
                 .await;
                 let elapsed = started.elapsed();
@@ -77,11 +84,15 @@ impl RenewalTask {
                 }
             }
         });
-        Self { task, lost }
+        Self { task, lost, gate }
     }
 
     pub(super) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.lost.clone()
+    }
+
+    pub(super) fn gate(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.gate)
     }
 }
 
@@ -96,12 +107,19 @@ pub enum RenewalAttemptOutcome {
     Lost,
 }
 
+#[derive(Clone, Copy, Default)]
+struct RenewalTimeOverride {
+    expected_deadline: Option<DateTime<Utc>>,
+    now: Option<DateTime<Utc>>,
+}
+
 async fn renew_once(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     generation: &str,
+    gate: Option<&tokio::sync::Mutex<()>>,
 ) -> Result<bool> {
     Ok(!matches!(
         renew_once_with_time(
@@ -110,8 +128,8 @@ async fn renew_once(
             signer,
             request_doc_id,
             generation,
-            None,
-            None
+            RenewalTimeOverride::default(),
+            gate,
         )
         .await?,
         RenewalAttemptOutcome::Lost
@@ -136,8 +154,11 @@ pub async fn renew_once_at_with_access(
         access.managed_agent_signer(),
         request_doc_id,
         generation,
-        Some(expected_deadline),
-        Some(now),
+        RenewalTimeOverride {
+            expected_deadline: Some(expected_deadline),
+            now: Some(now),
+        },
+        None,
     )
     .await
 }
@@ -193,26 +214,32 @@ async fn renew_once_with_time(
     signer: Option<gents_store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     generation: &str,
-    expected_deadline: Option<DateTime<Utc>>,
-    fixture_now: Option<DateTime<Utc>>,
+    time_override: RenewalTimeOverride,
+    gate: Option<&tokio::sync::Mutex<()>>,
 ) -> Result<RenewalAttemptOutcome> {
     loop {
-        match gents_store::config_client::ConfigAccess::renew_execution_lease_with_signer(
-            node,
-            actor.clone(),
-            signer.clone(),
-            move |txn| {
-                Box::pin(renew_in_transaction(
-                    txn,
-                    request_doc_id,
-                    generation,
-                    expected_deadline,
-                    fixture_now,
-                ))
-            },
-        )
-        .await
-        {
+        let attempt = {
+            let _guard = match gate {
+                Some(gate) => Some(gate.lock().await),
+                None => None,
+            };
+            gents_store::config_client::ConfigAccess::renew_execution_lease_with_signer(
+                node,
+                actor.clone(),
+                signer.clone(),
+                move |txn| {
+                    Box::pin(renew_in_transaction(
+                        txn,
+                        request_doc_id,
+                        generation,
+                        time_override.expected_deadline,
+                        time_override.now,
+                    ))
+                },
+            )
+            .await
+        };
+        match attempt {
             Err(RenewalError::Expired) => return Ok(RenewalAttemptOutcome::Lost),
             Err(error)
                 if gents_store::config_client::is_classified_transaction_conflict(&error) =>

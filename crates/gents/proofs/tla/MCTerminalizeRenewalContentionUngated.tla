@@ -1,0 +1,3 @@
+---- MODULE MCTerminalizeRenewalContentionUngated ----
+EXTENDS TerminalizeRenewalContention
+====

@@ -16,8 +16,30 @@ use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 use gents_protocol::output::rows::{
     decode_output_segment_row, decode_scoped_request_output_segment_shapes,
     decode_scoped_request_output_segments, OutputSegmentShapeRow, AGENT_OUTPUT_SEGMENT_FIELDS,
-    AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS,
 };
+
+pub(super) async fn cached_request_rows(
+    access: ReadAccess<'_, '_>,
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    cache: &mut ReadCache,
+) -> Result<Arc<RequestOutputRows>> {
+    if let Some(rows) = cache.requests.get(request_doc_id) {
+        return Ok(Arc::clone(rows));
+    }
+    #[cfg(any(test, feature = "test-fixtures"))]
+    record_request_output_scan();
+    let values = access
+        .request_segment_values(request_doc_id, "load_output_source")
+        .await?;
+    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?;
+    let rows = Arc::new(RequestOutputRows::from(rows));
+    cache
+        .requests
+        .insert(request_doc_id.to_owned(), Arc::clone(&rows));
+    Ok(rows)
+}
 
 async fn request_rows(
     access: ReadAccess<'_, '_>,
@@ -55,20 +77,10 @@ pub(super) async fn source_rows(
     #[cfg(any(test, feature = "test-fixtures"))]
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let values = if let ReadAccess::Txn(txn) = access {
-        txn.cursor_rows(
-            "AgentOutputSegment",
-            AGENT_OUTPUT_SEGMENT_FIELDS,
-            &gents_protocol::output::rows::source_output_segments_filter(request_doc_id, source)?,
-        )
-        .await?
-    } else {
-        let query =
-            gents_protocol::output::rows::source_output_segments_query(request_doc_id, source)?;
-        let response = access.query(&query, "load_output_source").await?;
-        rows_value(&response, "AgentOutputSegment")?.to_vec()
-    };
-    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?
+    let query = gents_protocol::output::rows::source_output_segments_query(request_doc_id, source)?;
+    let response = access.query(&query, "load_output_source").await?;
+    let values = rows_value(&response, "AgentOutputSegment")?;
+    let rows = decode_scoped_request_output_segments(values, node_did, None, requester_did)?
         .into_iter()
         .filter(|row| row.segment.source == *source)
         .collect::<Vec<_>>();
@@ -90,22 +102,11 @@ pub(super) async fn source_shapes(
     #[cfg(any(test, feature = "test-fixtures"))]
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let values = if let ReadAccess::Txn(txn) = access {
-        txn.cursor_rows(
-            "AgentOutputSegment",
-            AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS,
-            &gents_protocol::output::rows::source_output_segments_filter(request_doc_id, source)?,
-        )
-        .await?
-    } else {
-        let query = gents_protocol::output::rows::source_output_segment_shapes_query(
-            request_doc_id,
-            source,
-        )?;
-        let response = access.query(&query, "load_output_source_shapes").await?;
-        rows_value(&response, "AgentOutputSegment")?.to_vec()
-    };
-    let rows = decode_scoped_request_output_segment_shapes(&values, node_did, None, requester_did)?
+    let query =
+        gents_protocol::output::rows::source_output_segment_shapes_query(request_doc_id, source)?;
+    let response = access.query(&query, "load_output_source_shapes").await?;
+    let values = rows_value(&response, "AgentOutputSegment")?;
+    let rows = decode_scoped_request_output_segment_shapes(values, node_did, None, requester_did)?
         .into_iter()
         .filter(|row| row.shape.source == *source)
         .collect::<Vec<_>>();

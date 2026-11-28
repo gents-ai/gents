@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::access::{rows_value, ReadAccess, ReadCache};
 use super::reconstruct::{
-    reconstruct_scoped_message, reconstruct_scoped_message_with_facts, segment_document,
-    source_rows, source_shapes,
+    cached_request_rows, reconstruct_scoped_message, reconstruct_scoped_message_with_facts,
+    segment_document, source_rows, source_shapes,
 };
 use gents_protocol::output::rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
@@ -99,6 +99,27 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
     pub fn clear_output_cache(&mut self) {
         self.cache.requests.clear();
         self.cache.sources.clear();
+    }
+
+    pub(crate) async fn load_cached_request_source_rows(
+        &mut self,
+        request_doc_id: &str,
+        session_id: &str,
+        source: &OutputSource,
+    ) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
+        let rows = cached_request_rows(
+            ReadAccess::Txn(self.txn),
+            request_doc_id,
+            self.node_did,
+            self.requester_did,
+            &mut self.cache,
+        )
+        .await?;
+        Ok(rows
+            .for_source(source)
+            .filter(|row| row.segment.session_id == session_id)
+            .cloned()
+            .collect())
     }
 
     pub(crate) async fn load_source(
@@ -351,10 +372,21 @@ async fn load_canonical_payload(
         !request_doc_id.trim().is_empty(),
         "canonical payload request id is blank"
     );
-    let values = access
-        .request_segment_values(request_doc_id, "load_canonical_payload")
-        .await?;
-    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?;
+    let rows = if let Some(expected_source) = expected_source {
+        source_rows(
+            access,
+            request_doc_id,
+            expected_source,
+            node_did,
+            requester_did,
+        )
+        .await?
+    } else {
+        let values = access
+            .request_segment_values(request_doc_id, "load_canonical_payload")
+            .await?;
+        decode_scoped_request_output_segments(&values, node_did, None, requester_did)?
+    };
     if let Some(expected_source) = expected_source {
         anyhow::ensure!(
             rows.iter().any(|row| {

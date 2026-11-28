@@ -59,14 +59,22 @@ pub fn arguments_from_rows(
     request_doc_id: &str,
     call: PluginEffectCall<'_>,
 ) -> Result<(PayloadRef, String)> {
+    let records =
+        decode_scoped_request_output_segments(rows, node_did, Some(session_id), requester_did)?;
+    arguments_from_decoded_rows(&records, request_doc_id, call)
+}
+
+pub fn arguments_from_decoded_rows(
+    records: &[gents_protocol::output::rows::OutputSegmentRow],
+    request_doc_id: &str,
+    call: PluginEffectCall<'_>,
+) -> Result<(PayloadRef, String)> {
     let PluginEffectCall {
         tool_call_doc_id: child,
         tool_call_id: internal_id,
         tool_name: name,
         execution_generation: generation,
     } = call;
-    let records =
-        decode_scoped_request_output_segments(rows, node_did, Some(session_id), requester_did)?;
     let source = OutputSource::ToolEffectArguments {
         tool_call_doc_id: child.to_owned(),
     };
@@ -138,6 +146,15 @@ pub fn receipt_from_rows(
     tool: &str,
 ) -> Result<Option<String>> {
     let records = decode_scoped_request_output_segments(rows, node, Some(session), requester)?;
+    receipt_from_decoded_rows(&records, session, request, tool)
+}
+
+pub fn receipt_from_decoded_rows(
+    records: &[gents_protocol::output::rows::OutputSegmentRow],
+    session: &str,
+    request: &str,
+    tool: &str,
+) -> Result<Option<String>> {
     let source = receipt_source(session, tool);
     let matching = records
         .iter()
