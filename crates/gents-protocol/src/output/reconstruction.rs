@@ -298,7 +298,10 @@ fn extent_streams_from_closing(
         if u64::from(ordinal) + 1 != u64::from(*count) {
             return Err(malformed());
         }
-    } else if !closing.segment.runs.is_empty() || !closing.segment.payload.is_empty() {
+    } else if !closing.segment.runs.is_empty()
+        || !closing.segment.payload.is_empty()
+        || closing.segment.stream_bytes_after.is_some()
+    {
         // Native shape check: Lean's Option Flush cannot represent this record.
         return Err(malformed());
     }
@@ -359,6 +362,16 @@ fn extent_streams_from_closing(
         }
         if offset != record.segment.payload.len() {
             return Err(malformed());
+        }
+        if let Some(declared) = record.segment.stream_bytes_after.as_deref() {
+            if declared.len() != streams.len()
+                || declared
+                    .iter()
+                    .zip(&streams)
+                    .any(|(expected, stream)| *expected != stream.text.len() as u64)
+            {
+                return Err(malformed());
+            }
         }
     }
     if streams.len() != stream_bytes.len()

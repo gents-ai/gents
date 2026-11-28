@@ -444,6 +444,7 @@ async fn seed_admission(
                 },
             }),
         }],
+        stream_bytes_after: None,
         payload: arguments.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

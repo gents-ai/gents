@@ -32,6 +32,7 @@ fn fixture() -> (AgentToolCallRow, Vec<OutputSegmentRow>) {
                 payload: StreamPayload::ToolOutput,
             }),
         }],
+        stream_bytes_after: None,
         payload: "final output".into(),
         close: None,
         created_at: "2026-10-03T00:00:00Z".into(),

@@ -77,6 +77,7 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: "雪".into(),
         close: None,
         created_at: "2026-09-21T00:00:00Z".into(),

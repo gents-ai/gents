@@ -338,6 +338,7 @@ async fn seeded_node() -> gents_store::test_support::TestStore {
                     payload: gents_protocol::output::StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: payload.to_string(),
             close: Some(gents_protocol::output::SourceClose::Closed {
                 outcome: gents_protocol::output::OutputOutcome::Complete,

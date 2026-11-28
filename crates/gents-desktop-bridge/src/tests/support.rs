@@ -879,6 +879,7 @@ pub async fn seed_served_job_row(
                                 payload: StreamPayload::ToolOutput,
                             }),
                         }],
+                        stream_bytes_after: None,
                         payload: payload.clone(),
                         close: Some(SourceClose::Closed {
                             outcome: OutputOutcome::Complete,

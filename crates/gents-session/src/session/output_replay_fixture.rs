@@ -306,6 +306,7 @@ impl ReplayFixture {
                     }),
                 },
             ],
+            stream_bytes_after: None,
             payload: parts.concat(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
@@ -416,6 +417,7 @@ impl ReplayFixture {
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: "note".into(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
@@ -731,6 +733,7 @@ pub async fn fixture_with_provider_payload_options(
         },
         ordinal: Some(0),
         runs,
+        stream_bytes_after: None,
         payload,
         close: Some(SourceClose::Closed {
             outcome: if recovered {

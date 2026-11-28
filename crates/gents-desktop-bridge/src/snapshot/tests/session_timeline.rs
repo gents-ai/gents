@@ -676,6 +676,7 @@ fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: "working".into(),
             close: None,
             created_at: "2026-04-21T12:00:00Z".into(),

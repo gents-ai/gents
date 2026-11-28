@@ -720,6 +720,7 @@ mod tests {
                                     payload,
                                 }),
                             }],
+                            stream_bytes_after: None,
                             payload: String::from_utf8(bytes.clone()).unwrap(),
                             close: Some(SourceClose::Closed {
                                 outcome: OutputOutcome::Complete,

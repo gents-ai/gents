@@ -13,6 +13,7 @@ pub mod origin;
 pub mod reconstruction;
 pub mod recovery;
 pub mod rows;
+pub mod tail_append;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -41,6 +42,22 @@ pub enum OutputSource {
 }
 
 impl OutputSource {
+    /// Deterministic injective scalar key for composite store indexes.
+    pub fn canonical_key(&self) -> String {
+        match self {
+            Self::ProviderTurn {
+                scope,
+                turn_index,
+                attempt,
+            } => format!("provider_turn:{scope}:{turn_index}:{attempt}"),
+            Self::ToolCall { tool_call_doc_id } => format!("tool_call:{tool_call_doc_id}"),
+            Self::ToolEffectArguments { tool_call_doc_id } => {
+                format!("tool_effect_arguments:{tool_call_doc_id}")
+            }
+            Self::Authored { key } => format!("authored:{key}"),
+        }
+    }
+
     pub fn is_auxiliary_audit(&self) -> bool {
         matches!(
             self,
@@ -152,6 +169,10 @@ pub struct OutputSegment {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub runs: Vec<SegmentRun>,
+    /// Cumulative byte count per stream after this flush commits. Absent on
+    /// terminal-only records that carry no flush.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_bytes_after: Option<Vec<u64>>,
     #[serde(
         default,
         deserialize_with = "crate::row::deserialize_null_default",
@@ -184,6 +205,8 @@ pub struct OutputSegmentShape {
     )]
     pub runs: Vec<SegmentRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_bytes_after: Option<Vec<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<SourceClose>,
     pub created_at: String,
 }
@@ -199,6 +222,7 @@ impl OutputSegment {
             writer: self.writer.clone(),
             ordinal: self.ordinal,
             runs: self.runs.clone(),
+            stream_bytes_after: self.stream_bytes_after.clone(),
             close: self.close.clone(),
             created_at: self.created_at.clone(),
         }

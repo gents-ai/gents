@@ -108,6 +108,7 @@ fn history_observation_segment(
                 },
             }),
         }],
+        stream_bytes_after: None,
         payload: text.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

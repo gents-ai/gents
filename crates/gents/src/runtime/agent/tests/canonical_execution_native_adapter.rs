@@ -2966,6 +2966,7 @@ impl NativeCanonicalExecution {
                 .map(|flush| u32::try_from(flush.ordinal))
                 .transpose()?,
             runs,
+            stream_bytes_after: None,
             payload: record
                 .flush
                 .as_ref()
@@ -3059,6 +3060,7 @@ impl NativeCanonicalExecution {
                 .map(|flush| u32::try_from(flush.ordinal))
                 .transpose()?,
             runs,
+            stream_bytes_after: None,
             payload: record
                 .flush
                 .as_ref()

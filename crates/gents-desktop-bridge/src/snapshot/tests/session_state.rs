@@ -624,6 +624,7 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
                     },
                     ordinal: Some(0),
                     runs,
+                    stream_bytes_after: None,
                     payload,
                     close: None,
                     created_at: "2026-04-21T12:00:00Z".into(),

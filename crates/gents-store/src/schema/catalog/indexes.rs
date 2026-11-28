@@ -102,6 +102,51 @@ static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static AGENT_OUTPUT_SOURCE_KEY_ORDINAL_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_doc_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "source_key",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "ordinal",
+        descending: true,
+    },
+];
+
+static AGENT_OUTPUT_CLOSE_SOURCE_KEY_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_doc_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "is_close",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "source_key",
+        descending: false,
+    },
+];
+
+static AGENT_OUTPUT_CREATED_SOURCE_KEY_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_doc_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "created_at",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "source_key",
+        descending: false,
+    },
+];
+
 static MESSAGE_SESSION_SEQUENCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     OrdinaryIndexField {
         name: "session_id",
@@ -264,6 +309,21 @@ pub static ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         name: "AgentOutputSegment_request_doc_id_source",
         fields: AGENT_OUTPUT_SOURCE_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        name: "AgentOutputSegment_request_source_key_ordinal",
+        fields: AGENT_OUTPUT_SOURCE_KEY_ORDINAL_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        name: "AgentOutputSegment_request_close_source_key",
+        fields: AGENT_OUTPUT_CLOSE_SOURCE_KEY_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        name: "AgentOutputSegment_request_created_source_key",
+        fields: AGENT_OUTPUT_CREATED_SOURCE_KEY_FIELDS,
     },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_REQUEST_NAME,

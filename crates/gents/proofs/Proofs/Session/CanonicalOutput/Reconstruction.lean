@@ -141,10 +141,26 @@ def flushAt (records : List Segment) (writer : Writer) (ordinal : Nat) :
       | some flush => .ok flush
       | none => .error .malformedRuns
 
+def flushWithBytesAt (records : List Segment) (writer : Writer) (ordinal : Nat) :
+    Except ExtentError (Flush × Option (List Nat)) :=
+  match uniqueRecord (.missingOrdinal ordinal) (.conflictingOrdinal ordinal)
+      (records.filter (fun r => r.flush.any (fun f => f.ordinal == ordinal))) with
+  | .error error => .error error
+  | .ok record =>
+      if record.writer ≠ writer then .error .invalidWriter
+      else match record.flush with
+      | some flush => .ok (flush, record.streamBytesAfter)
+      | none => .error .malformedRuns
+
 theorem flushAt_order_independent (left right : List Segment) (writer : Writer)
     (ordinal : Nat) (h : left.Perm right) :
     flushAt left writer ordinal = flushAt right writer ordinal := by
   simp only [flushAt, uniqueRecord_order_independent _ _ _ _ (h.filter _)]
+
+theorem flushWithBytesAt_order_independent (left right : List Segment) (writer : Writer)
+    (ordinal : Nat) (h : left.Perm right) :
+    flushWithBytesAt left writer ordinal = flushWithBytesAt right writer ordinal := by
+  simp only [flushWithBytesAt, uniqueRecord_order_independent _ _ _ _ (h.filter _)]
 
 abbrev Streams := List (Declaration × List UInt8)
 
@@ -274,6 +290,31 @@ def consumeFlushes : List Flush → Streams → Except ExtentError Streams
         let next ← consumeRuns flush.runs flush.payload streams
         consumeFlushes rest next
 
+/-- Validates each flush's runs and, when present, verifies its immutable
+cumulative `streamBytesAfter` coordinate against the running stream byte sums. -/
+def consumeFlushesWithBytes :
+    List (Flush × Option (List Nat)) → Streams → Except ExtentError Streams
+  | [], streams => .ok streams
+  | (flush, streamBytesAfter) :: rest, streams => do
+      if flush.runs.isEmpty then .error .malformedRuns
+      else
+        let next ← consumeRuns flush.runs flush.payload streams
+        match streamBytesAfter with
+        | some declared =>
+            if next.map (fun s => s.2.length) != declared then .error .malformedRuns
+            else consumeFlushesWithBytes rest next
+        | none => consumeFlushesWithBytes rest next
+
+theorem wrong_stream_bytes_after_is_rejected (flush : Flush) (declared : List Nat)
+    (streams next : Streams)
+    (hnonempty : flush.runs.isEmpty = false)
+    (hruns : consumeRuns flush.runs flush.payload streams = .ok next)
+    (hne : next.map (fun s => s.2.length) ≠ declared) :
+    consumeFlushesWithBytes [(flush, some declared)] streams = .error .malformedRuns := by
+  have hneq : (next.map (fun s => s.2.length) != declared) = true := by
+    simp [hne]
+  simp [consumeFlushesWithBytes, hnonempty, hruns, hneq, Bind.bind, Except.bind]
+
 /-- The coordinate's request is the already-authorized physical request boundary
 supplied by the owner. This check never derives or broadens that scope; it only
 checks the source/writer shape within it. Provider output is request-owned, tool
@@ -299,12 +340,13 @@ def reconstructExtent (records : List Segment) (closing : Segment) :
   else
     match closing.close with
     | some (.closed _ count expectedBytes) =>
-        if closing.flush.any (fun f => f.ordinal + 1 != count) then
+        if closing.flush.any (fun f => f.ordinal + 1 != count) ||
+            (closing.flush.isNone && closing.streamBytesAfter.isSome) then
           .error .invalidClosure
         else
           let selected := extent records closing.coordinate count
-          let flushes ← (List.range count).mapM (flushAt selected closing.writer)
-          let streams ← consumeFlushes flushes []
+          let flushes ← (List.range count).mapM (flushWithBytesAt selected closing.writer)
+          let streams ← consumeFlushesWithBytes flushes []
           if streams.map (fun s => s.2.length) = expectedBytes then .ok streams
           else .error .extentMismatch
     | _ => .error .invalidClosure
@@ -313,12 +355,12 @@ theorem extent_order_independent (left right : List Segment) (closing : Segment)
     (h : left.Perm right) :
     reconstructExtent left closing = reconstructExtent right closing := by
   have slots (count ordinal : Nat) :
-      flushAt (extent left closing.coordinate count) closing.writer ordinal =
-        flushAt (extent right closing.coordinate count) closing.writer ordinal :=
-    flushAt_order_independent _ _ _ _ ((h.filter _).filter _)
+      flushWithBytesAt (extent left closing.coordinate count) closing.writer ordinal =
+        flushWithBytesAt (extent right closing.coordinate count) closing.writer ordinal :=
+    flushWithBytesAt_order_independent _ _ _ _ ((h.filter _).filter _)
   have functions (count : Nat) :
-      flushAt (extent left closing.coordinate count) closing.writer =
-        flushAt (extent right closing.coordinate count) closing.writer :=
+      flushWithBytesAt (extent left closing.coordinate count) closing.writer =
+        flushWithBytesAt (extent right closing.coordinate count) closing.writer :=
     funext (slots count)
   simp only [reconstructExtent, functions]
 
@@ -478,11 +520,11 @@ theorem reconstructPayload_shared_extent (records : List Segment) (denied : List
               split at he
               · contradiction
               cases hm : (List.range count).mapM
-                  (flushAt (extent records closing.coordinate count) closing.writer) with
+                  (flushWithBytesAt (extent records closing.coordinate count) closing.writer) with
               | error error => simp [hm, Bind.bind, Except.bind] at he
               | ok flushes =>
                 simp only [hm, Bind.bind, Except.bind] at he
-                cases hf : consumeFlushes flushes [] with
+                cases hf : consumeFlushesWithBytes flushes [] with
                 | error error => simp [hf] at he
                 | ok result =>
                   simp only [hf] at he

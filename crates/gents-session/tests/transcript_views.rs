@@ -131,6 +131,7 @@ async fn transcript_views_match_model_on_served_node() -> anyhow::Result<()> {
             },
             ordinal: None,
             runs: Vec::new(),
+            stream_bytes_after: None,
             payload: String::new(),
             close: Some(SourceClose::Retracted),
             created_at: "2026-11-12T00:00:00Z".into(),

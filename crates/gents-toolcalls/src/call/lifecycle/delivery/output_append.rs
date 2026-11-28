@@ -1,8 +1,19 @@
 use crate::call::lifecycle::ToolCallLifecycle;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents_protocol::document_query::{
+    fields::agent_output_segment as seg_fields, fields::agent_tool_call as tool_fields, Direction,
+    Filter, Query, QuerySet, Selection,
+};
 use gents_protocol::output::extent::ObservedShape;
-use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
+use gents_protocol::output::rows::{
+    decode_scoped_request_output_segment_shapes, decode_scoped_request_output_segments,
+    AGENT_OUTPUT_SEGMENT_FIELDS, AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
+use gents_protocol::output::tail_append::{
+    plan_tool_append_from_tail, TailAppendKind, TailAppendObservation,
+};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
@@ -162,27 +173,67 @@ async fn append_tool_output_with_time(
                 let binding = binding.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    use gents_protocol::document_query::{
-                        fields::agent_tool_call as fields, Filter, Query, Selection,
+                    let source = OutputSource::ToolCall {
+                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
+                    };
+                    let source_key = source.canonical_key();
+                    let writer = OutputWriter::ToolExecution {
+                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
                     };
                     let requester_filter = match binding.requester_did.as_deref() {
-                        Some(value) => Filter::eq(fields::REQUESTER_DID, value),
-                        None => Filter::is_null(fields::REQUESTER_DID),
+                        Some(value) => Filter::eq(tool_fields::REQUESTER_DID, value),
+                        None => Filter::is_null(tool_fields::REQUESTER_DID),
                     };
-                    let query = Query::select(
+                    let tool_query = Query::select(
                         Selection::doc_id()
-                            .field(fields::LIFECYCLE_STATE)
-                            .field(fields::DEADLINE_AT),
+                            .field(tool_fields::LIFECYCLE_STATE)
+                            .field(tool_fields::DEADLINE_AT),
                     )
-                    .filter(Filter::eq(fields::DOC_ID, &binding.tool_call_doc_id))
-                    .filter(Filter::eq(fields::REQUEST_DOC_ID, &binding.request_doc_id))
-                    .filter(Filter::eq(fields::NODE_DID, &binding.node_did))
-                    .filter(Filter::eq(fields::SESSION_ID, &binding.session_id))
+                    .filter(Filter::eq(tool_fields::DOC_ID, &binding.tool_call_doc_id))
+                    .filter(Filter::eq(
+                        tool_fields::REQUEST_DOC_ID,
+                        &binding.request_doc_id,
+                    ))
+                    .filter(Filter::eq(tool_fields::NODE_DID, &binding.node_did))
+                    .filter(Filter::eq(tool_fields::SESSION_ID, &binding.session_id))
                     .filter(requester_filter)
-                    .limit(2)
-                    .render();
-                    let row = txn.run(&query).await?;
-                    let tools = row["data"]["AgentToolCall"]
+                    .limit(2);
+                    let tail_query =
+                        Query::select(Selection::owned(AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS))
+                            .filter(Filter::eq(
+                                seg_fields::REQUEST_DOC_ID,
+                                &binding.request_doc_id,
+                            ))
+                            .filter(Filter::eq(seg_fields::SOURCE_KEY, &source_key))
+                            .order_by(seg_fields::ORDINAL, Direction::Desc)
+                            .limit(3);
+                    let closures_query =
+                        Query::select(Selection::owned(AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS))
+                            .filter(Filter::eq(
+                                seg_fields::REQUEST_DOC_ID,
+                                &binding.request_doc_id,
+                            ))
+                            .filter(Filter::eq(seg_fields::IS_CLOSE, true))
+                            .filter(Filter::eq(seg_fields::SOURCE_KEY, &source_key))
+                            .limit(2);
+                    let same_attempt_query =
+                        Query::select(Selection::owned(AGENT_OUTPUT_SEGMENT_FIELDS))
+                            .filter(Filter::eq(
+                                seg_fields::REQUEST_DOC_ID,
+                                &binding.request_doc_id,
+                            ))
+                            .filter(Filter::eq(seg_fields::CREATED_AT, &created_at))
+                            .filter(Filter::eq(seg_fields::SOURCE_KEY, &source_key))
+                            .limit(2);
+                    let query = QuerySet::new()
+                        .root("tool", &tool_query)
+                        .root("tail", &tail_query)
+                        .root("closures", &closures_query)
+                        .root("same_attempt", &same_attempt_query)
+                        .render();
+                    let response = txn.run(&query).await?;
+                    let data = &response["data"];
+                    let tools = data["tool"]
                         .as_array()
                         .context("tool output append query omitted physical rows")?;
                     anyhow::ensure!(
@@ -196,51 +247,83 @@ async fn append_tool_output_with_time(
                     if state != ToolCallState::Running {
                         return Err(ToolOutputAppendRejection::NotRunning.into());
                     }
-                    let source = OutputSource::ToolCall {
-                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
-                    };
-                    let writer = OutputWriter::ToolExecution {
-                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
-                    };
-                    let rows = gents_session::session::load_source_shapes_in_txn(
-                        txn,
-                        &binding.request_doc_id,
-                        &source,
+                    let tail_raw = data["tail"]
+                        .as_array()
+                        .context("tool output append query omitted tail rows")?;
+                    let closures_raw = data["closures"]
+                        .as_array()
+                        .context("tool output append query omitted closure rows")?;
+                    let same_raw = data["same_attempt"]
+                        .as_array()
+                        .context("tool output append query omitted retry rows")?;
+                    let tail_rows = decode_scoped_request_output_segment_shapes(
+                        tail_raw,
                         &binding.node_did,
-                        &binding.session_id,
+                        Some(&binding.session_id),
                         binding.requester_did.as_deref(),
-                    )
-                    .await?;
-                    let same_attempt = rows
-                        .iter()
-                        .filter(|row| row.shape.created_at == created_at)
-                        .collect::<Vec<_>>();
+                    )?;
                     anyhow::ensure!(
-                        same_attempt.len() <= 1,
-                        "canonical tool output append has ambiguous retry identity"
+                        tail_rows.len() == tail_raw.len(),
+                        "tool output tail crossed exact scope"
                     );
+                    let closure_rows = decode_scoped_request_output_segment_shapes(
+                        closures_raw,
+                        &binding.node_did,
+                        Some(&binding.session_id),
+                        binding.requester_did.as_deref(),
+                    )?;
                     anyhow::ensure!(
-                        rows.iter().all(|row| row.shape.close.is_none()),
-                        "cannot append raw output after tool source closure"
+                        closure_rows.len() == closures_raw.len(),
+                        "tool output closure witness crossed exact scope"
                     );
-                    let prior = rows
+                    let same_attempt_rows = decode_scoped_request_output_segments(
+                        same_raw,
+                        &binding.node_did,
+                        Some(&binding.session_id),
+                        binding.requester_did.as_deref(),
+                    )?;
+                    anyhow::ensure!(
+                        same_attempt_rows.len() == same_raw.len(),
+                        "tool output retry witness crossed exact scope"
+                    );
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    {
+                        let decoded_rows =
+                            tail_rows.len() + closure_rows.len() + same_attempt_rows.len();
+                        let decoded_payload_bytes = same_attempt_rows
+                            .iter()
+                            .map(|row| row.segment.payload.len())
+                            .sum();
+                        gents_session::session::record_source_read(
+                            decoded_rows,
+                            decoded_payload_bytes,
+                        );
+                    }
+                    let tail_shapes = tail_rows
                         .iter()
-                        .filter(|row| row.shape.created_at != created_at)
                         .map(|row| ObservedShape::from_shape(&row.doc_id, &row.shape))
                         .collect::<Vec<_>>();
-                    let extent = gents_protocol::output::extent::inspect_open_source_shape(
-                        &prior,
+                    let closure_shapes = closure_rows
+                        .iter()
+                        .map(|row| ObservedShape::from_shape(&row.doc_id, &row.shape))
+                        .collect::<Vec<_>>();
+                    let same_shapes = same_attempt_rows
+                        .iter()
+                        .map(|row| ObservedShape::from_segment(&row.doc_id, &row.segment))
+                        .collect::<Vec<_>>();
+                    let plan = plan_tool_append_from_tail(
+                        TailAppendObservation {
+                            tail: &tail_shapes,
+                            closure_witness: &closure_shapes,
+                            same_attempt: &same_shapes,
+                        },
                         &binding.request_doc_id,
                         &source,
                         &writer,
+                        &created_at,
+                        payload.len() as u64,
                     )
                     .map_err(anyhow::Error::from)?;
-                    anyhow::ensure!(
-                        extent.stream_bytes.len() <= 1,
-                        "tool raw output source has unexpected multiple streams"
-                    );
-                    let ordinal = extent.segments;
-                    let start = extent.stream_bytes.first().copied().unwrap_or(0);
                     let segment = OutputSegment {
                         node_did: binding.node_did.clone(),
                         requester_did: binding.requester_did.clone(),
@@ -248,37 +331,49 @@ async fn append_tool_output_with_time(
                         request_doc_id: binding.request_doc_id.clone(),
                         source,
                         writer,
-                        ordinal: Some(ordinal),
+                        ordinal: Some(plan.ordinal),
                         runs: vec![SegmentRun {
                             stream: 0,
                             bytes: u32::try_from(payload.len())
                                 .context("tool output chunk too large")?,
-                            declaration: (ordinal == 0).then_some(StreamDeclaration {
+                            declaration: (plan.ordinal == 0).then_some(StreamDeclaration {
                                 block_index: 0,
                                 part_index: 0,
                                 payload: StreamPayload::ToolOutput,
                             }),
                         }],
+                        stream_bytes_after: Some(vec![plan.end_byte]),
                         payload,
                         close: None,
                         created_at,
                     };
-                    if let Some(existing) = same_attempt.first() {
-                        let recorded = gents_session::session::load_output_segment_in_txn(
-                            txn,
-                            &existing.doc_id,
-                            &binding.node_did,
-                            &binding.session_id,
-                            binding.requester_did.as_deref(),
-                        )
-                        .await?;
+                    if plan.kind == TailAppendKind::Replay {
+                        let doc_id = plan
+                            .doc_id
+                            .context("tool output replay omitted physical doc_id")?;
+                        let recorded = match same_attempt_rows
+                            .into_iter()
+                            .find(|row| row.doc_id == doc_id)
+                        {
+                            Some(row) => row,
+                            None => {
+                                gents_session::session::load_output_segment_in_txn(
+                                    txn,
+                                    &doc_id,
+                                    &binding.node_did,
+                                    &binding.session_id,
+                                    binding.requester_did.as_deref(),
+                                )
+                                .await?
+                            }
+                        };
                         anyhow::ensure!(
                             recorded.segment == segment,
                             "canonical tool output retry conflicts with the recorded segment"
                         );
                         return Ok(ToolOutputAppendReceipt {
-                            range: start..start + segment.payload.len() as u64,
-                            segment_doc_id: existing.doc_id.clone(),
+                            range: plan.start_byte..plan.end_byte,
+                            segment_doc_id: doc_id,
                         });
                     }
                     let deadline = tools[0]["deadline_at"]
@@ -297,7 +392,7 @@ async fn append_tool_output_with_time(
                         )
                         .await?;
                     Ok(ToolOutputAppendReceipt {
-                        range: start..start + segment.payload.len() as u64,
+                        range: plan.start_byte..plan.end_byte,
                         segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
                     })
                 })

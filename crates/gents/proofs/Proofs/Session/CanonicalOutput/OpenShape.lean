@@ -23,21 +23,22 @@ def inspectOpenShape (records : List Segment) (coordinate : Coordinate) (writer 
     if !(selected.all fun record => record.writer == writer) then .error .invalidWriter
     else if !(selected.all fun record => exactIdentityAt selected record) then
       .error .malformedRuns
-    else if !(selected.all fun record => record.flush.isSome || record.close.isSome) then
+    else if !(selected.all fun record =>
+        record.flush.isSome || (record.close.isSome && record.streamBytesAfter.isNone)) then
       .error .malformedRuns
     else if !timestampsNondecreasing selected then .error .malformedRuns
     else
       let data := (selected.filter fun record => record.flush.isSome).dedup
       let count := data.length
-      let flushes ← (List.range count).mapM (flushAt data writer)
-      let streams ← consumeFlushes flushes []
+      let flushes ← (List.range count).mapM (flushWithBytesAt data writer)
+      let streams ← consumeFlushesWithBytes flushes []
       let last := if data.isEmpty then none else some ((data.map Segment.createdAt).foldl max 0)
       pure ⟨count, streams.map (fun stream => stream.2.length), last⟩
 
 theorem erasePayload_idempotent (record : Segment) :
     erasePayload (erasePayload record) = erasePayload record := by
   cases record with
-  | mk id coordinate writer flush close createdAt =>
+  | mk id coordinate writer flush close createdAt streamBytesAfter =>
     cases flush <;> simp [erasePayload]
 
 /-- A prefix summary is independent of payload text. The full-record replay

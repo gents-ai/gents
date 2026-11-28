@@ -146,6 +146,7 @@ fn authored_segments(
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: (*part).into(),
             close: (ordinal + 1 == parts.len()).then(|| SourceClose::Closed {
                 outcome: OutputOutcome::Complete,

@@ -100,6 +100,7 @@ pub(super) fn plan_source_close(
         writer,
         ordinal: final_flush.then_some(extent.segments),
         runs,
+        stream_bytes_after: final_flush.then(|| stream_bytes.clone()),
         payload: suffix,
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

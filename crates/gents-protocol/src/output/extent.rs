@@ -35,6 +35,7 @@ pub struct ObservedShape<'a> {
     pub writer: &'a OutputWriter,
     pub ordinal: Option<u32>,
     pub runs: &'a [SegmentRun],
+    pub stream_bytes_after: Option<&'a [u64]>,
     pub close: Option<&'a SourceClose>,
     pub created_at: &'a str,
     pub payload: Option<&'a str>,
@@ -52,6 +53,7 @@ impl<'a> ObservedShape<'a> {
             writer: &segment.writer,
             ordinal: segment.ordinal,
             runs: &segment.runs,
+            stream_bytes_after: segment.stream_bytes_after.as_deref(),
             close: segment.close.as_ref(),
             created_at: &segment.created_at,
             payload: Some(&segment.payload),
@@ -69,6 +71,7 @@ impl<'a> ObservedShape<'a> {
             writer: &shape.writer,
             ordinal: shape.ordinal,
             runs: &shape.runs,
+            stream_bytes_after: shape.stream_bytes_after.as_deref(),
             close: shape.close.as_ref(),
             created_at: &shape.created_at,
             payload: None,
@@ -76,7 +79,7 @@ impl<'a> ObservedShape<'a> {
     }
 }
 
-fn facts_agree(left: &ObservedShape<'_>, right: &ObservedShape<'_>) -> bool {
+pub(super) fn facts_agree(left: &ObservedShape<'_>, right: &ObservedShape<'_>) -> bool {
     ObservedShape {
         doc_id: "",
         ..*left
@@ -86,7 +89,7 @@ fn facts_agree(left: &ObservedShape<'_>, right: &ObservedShape<'_>) -> bool {
     }
 }
 
-fn writer_matches(source: &OutputSource, writer: &OutputWriter) -> bool {
+pub(super) fn writer_matches(source: &OutputSource, writer: &OutputWriter) -> bool {
     match (source, writer) {
         (
             OutputSource::ProviderTurn { .. } | OutputSource::ToolEffectArguments { .. },
@@ -191,6 +194,7 @@ fn inspect(
             if r.close.is_some()
                 && r.runs.is_empty()
                 && r.payload.is_none_or(|payload| payload.is_empty())
+                && r.stream_bytes_after.is_none()
             {
                 continue;
             }
@@ -271,6 +275,18 @@ fn inspect(
                 return Err(bad("runs do not partition payload"));
             }
         }
+        if let Some(declared) = r.stream_bytes_after {
+            if declared.len() != streams.len()
+                || declared
+                    .iter()
+                    .zip(&streams)
+                    .any(|(expected, stream)| *expected != stream.bytes)
+            {
+                return Err(bad(
+                    "stream_bytes_after disagrees with running stream bytes",
+                ));
+            }
+        }
     }
     let stream_bytes = streams.iter().map(|s| s.bytes).collect();
     let reconstructed = reconstructs_text.then(|| {
@@ -335,6 +351,7 @@ mod tests {
                 })
                 .collect(),
             payload: input.payload.clone(),
+            stream_bytes_after: input.stream_bytes_after.clone(),
             close: input.close.then_some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
                 segments: 0,
@@ -417,7 +434,7 @@ mod tests {
                     "stream": 0, "bytes": 3,
                     "declaration": { "block": 0, "part": 0, "kind": "tool_output" },
                 }],
-                "payload": "one", "close": false, "created_at": 0,
+                "payload": "one", "close": false, "created_at": 0, "stream_bytes_after": null,
             }))
             .unwrap();
         let mut record = segment(&input);

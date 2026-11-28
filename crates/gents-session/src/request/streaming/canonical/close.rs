@@ -273,6 +273,7 @@ async fn close_provider_attempt_with_time(
                             let mut closure = prepared.clone();
                             closure.ordinal = None;
                             closure.runs.clear();
+                            closure.stream_bytes_after = None;
                             closure.payload.clear();
                             closure.close = Some(derived_close.clone());
                             closure

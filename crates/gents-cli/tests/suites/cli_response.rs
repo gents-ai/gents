@@ -203,6 +203,7 @@ async fn insert_materialized_response(
         },
         ordinal: has_data.then_some(0),
         runs,
+        stream_bytes_after: None,
         payload,
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

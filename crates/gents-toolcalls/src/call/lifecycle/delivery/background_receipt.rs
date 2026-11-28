@@ -354,6 +354,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
                 payload: StreamPayload::ToolOutput,
             }),
         }],
+        stream_bytes_after: Some(vec![receipt.len() as u64]),
         payload: receipt.clone(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

@@ -4,10 +4,10 @@ use super::{OutputSegment, OutputSegmentShape, OutputSource, TranscriptMessage};
 use crate::graphql::{escape_graphql_string, graphql_input_literal, GraphqlError};
 
 pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id \
-request_doc_id source ordinal writer runs payload close created_at _docID";
+request_doc_id source ordinal writer runs stream_bytes_after payload close created_at _docID";
 
 pub const AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS: &str = "node_did requester_did session_id \
-request_doc_id source ordinal writer runs close created_at _docID";
+request_doc_id source ordinal writer runs stream_bytes_after close created_at _docID";
 
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
@@ -260,10 +260,17 @@ pub fn is_runtime_context_key(message_key: &str) -> bool {
 pub fn output_segment_create_variables(
     segment: &OutputSegment,
 ) -> Result<Value, CanonicalRowError> {
-    let input = serde_json::to_value(segment).map_err(|source| CanonicalRowError::Encode {
+    let mut input = serde_json::to_value(segment).map_err(|source| CanonicalRowError::Encode {
         collection: "AgentOutputSegment",
         source,
     })?;
+    if let Some(object) = input.as_object_mut() {
+        object.insert(
+            "source_key".to_owned(),
+            Value::String(segment.source.canonical_key()),
+        );
+        object.insert("is_close".to_owned(), Value::Bool(segment.close.is_some()));
+    }
     Ok(Value::Object(serde_json::Map::from_iter([(
         "input".to_owned(),
         input,
@@ -479,6 +486,7 @@ mod tests {
             },
             ordinal: None,
             runs: Vec::new(),
+            stream_bytes_after: None,
             payload: String::new(),
             close: Some(crate::output::SourceClose::Closed {
                 outcome: crate::output::OutputOutcome::Complete,
@@ -496,6 +504,8 @@ mod tests {
         assert_eq!(input["close"]["stream_bytes"], serde_json::json!([]));
         assert!(input["close"]["stream_bytes"].is_array());
         assert!(input["runs"].is_null(), "empty runs skip-serialize");
+        assert_eq!(input["source_key"], serde_json::json!("authored:prompt"));
+        assert_eq!(input["is_close"], serde_json::json!(true));
     }
 
     #[test]

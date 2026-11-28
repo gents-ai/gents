@@ -215,6 +215,7 @@ fn provider_segment_for_message(
             },
             ordinal: (!runs.is_empty()).then_some(0),
             runs,
+            stream_bytes_after: None,
             payload,
             close: None,
             created_at,
@@ -1137,6 +1138,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         },
         ordinal: Some(0),
         runs: delta.runs,
+        stream_bytes_after: None,
         payload: delta.payload,
         close: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -1502,6 +1504,7 @@ async fn partial_close_replay_with_stopped_reasoning_rejects_missing_header() {
         },
         ordinal: None,
         runs: Vec::new(),
+        stream_bytes_after: None,
         payload: String::new(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Partial,
@@ -1979,6 +1982,7 @@ async fn provider_flush_preserves_output_and_replay_identity() {
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: CHUNK.to_owned(),
             close: None,
             created_at: (started + chrono::Duration::milliseconds(i64::from(ordinal)))

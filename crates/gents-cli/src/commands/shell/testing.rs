@@ -117,6 +117,7 @@ pub(super) fn closed(
                 payload,
             }),
         }],
+        stream_bytes_after: None,
         payload: text.to_string(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

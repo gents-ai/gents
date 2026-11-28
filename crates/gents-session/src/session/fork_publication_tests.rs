@@ -80,6 +80,7 @@ fn closing_record(scope: &Scope<'_>, closure: u64, generation: &str) -> OutputSe
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: text.clone(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

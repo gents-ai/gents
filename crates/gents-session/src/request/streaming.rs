@@ -186,6 +186,13 @@ impl DefraStreamWriter {
                 declaration: Some(stream.declaration.clone()),
             });
         }
+        let stream_bytes_after = (!runs.is_empty()).then(|| {
+            encoded
+                .streams
+                .iter()
+                .map(|stream| stream.payload.len() as u64)
+                .collect()
+        });
         let source = OutputSource::Authored {
             key: key.to_owned(),
         };
@@ -200,6 +207,7 @@ impl DefraStreamWriter {
             },
             ordinal: (!runs.is_empty()).then_some(0),
             runs,
+            stream_bytes_after,
             payload,
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -333,6 +341,13 @@ impl DefraStreamWriter {
             },
             ordinal: Some(ordinal),
             runs: delta.runs,
+            stream_bytes_after: Some(
+                encoded
+                    .streams
+                    .iter()
+                    .map(|stream| stream.payload.len() as u64)
+                    .collect(),
+            ),
             payload: delta.payload,
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -424,6 +439,7 @@ impl DefraStreamWriter {
             },
             ordinal: None,
             runs: Vec::new(),
+            stream_bytes_after: None,
             payload: String::new(),
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -493,6 +509,13 @@ impl DefraStreamWriter {
                 },
                 ordinal: Some(tail.next_ordinal),
                 runs: delta.runs,
+                stream_bytes_after: Some(
+                    encoded
+                        .streams
+                        .iter()
+                        .map(|stream| stream.payload.len() as u64)
+                        .collect(),
+                ),
                 payload: delta.payload,
                 close: None,
                 created_at,
@@ -509,6 +532,7 @@ impl DefraStreamWriter {
                 },
                 ordinal: None,
                 runs: Vec::new(),
+                stream_bytes_after: None,
                 payload: String::new(),
                 close: None,
                 created_at,

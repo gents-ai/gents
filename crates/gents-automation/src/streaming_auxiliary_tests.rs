@@ -240,6 +240,7 @@ fn native_raw(
         },
         ordinal: Some(u32::try_from(flush.ordinal).unwrap()),
         runs,
+        stream_bytes_after: None,
         payload,
         close: None,
         created_at: chrono::Utc::now().to_rfc3339(),

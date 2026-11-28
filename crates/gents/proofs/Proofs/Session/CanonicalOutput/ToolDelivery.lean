@@ -31,10 +31,11 @@ def validOpenData (records : List Segment) (source : Coordinate) (writer : Write
   let sourceRecords := sourceRecords records source
   let data := sourceRecords.filter (fun record => record.flush.isSome) |>.dedup
   sourceRecords.all (exactIdentityAt records) &&
+    sourceRecords.all (fun record => record.flush.isSome || record.streamBytesAfter.isNone) &&
     timestampsNondecreasing data &&
-    match (List.range data.length).mapM (flushAt data writer) with
+    match (List.range data.length).mapM (flushWithBytesAt data writer) with
     | .error _ => false
-    | .ok flushes => match consumeFlushes flushes [] with
+    | .ok flushes => match consumeFlushesWithBytes flushes [] with
       | .error _ => false
       | .ok streams => streams.all fun stream =>
           stream.1.kind == .toolOutput || stream.1.kind == .media
