@@ -817,3 +817,40 @@ async fn build_registers_gated_family() {
     }
     assert_eq!(definition.parameters["required"], json!(["argv"]));
 }
+
+#[test]
+fn own_tools_timing_notes_tell_the_model_not_to_end_its_reply() {
+    assert!(
+        EFFECT_TIMING_NOTE.contains("next tool call in this same response")
+            && EFFECT_TIMING_NOTE.contains("do not end your reply")
+            && !EFFECT_TIMING_NOTE.contains("from your next turn"),
+        "{EFFECT_TIMING_NOTE}"
+    );
+    let rebound = crate::tools_rebinding::ToolsRebinding::Rebound {
+        added: vec!["write".into()],
+        removed: Vec::new(),
+        waiting: Vec::new(),
+    };
+    let in_effect = super::rebinding::effect(&rebound).expect("rebound effect");
+    assert!(
+        in_effect.contains("next tool call in this same response")
+            && in_effect.contains("do not end your reply")
+            && !in_effect.contains("your next turn"),
+        "{in_effect}"
+    );
+    let waiting = crate::tools_rebinding::ToolsRebinding::Rebound {
+        added: Vec::new(),
+        removed: Vec::new(),
+        waiting: vec![crate::tools_rebinding::WaitingItem {
+            name: "agent_new".into(),
+            reason: "agent disabled".into(),
+        }],
+    };
+    let waiting_effect = super::rebinding::effect(&waiting).expect("waiting effect");
+    assert!(
+        waiting_effect.contains("next tool call in this same response")
+            && waiting_effect.contains("do not end your reply")
+            && !waiting_effect.contains("your next turn"),
+        "{waiting_effect}"
+    );
+}

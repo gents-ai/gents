@@ -116,7 +116,7 @@ impl PackInstaller {
         };
         ordered! {
             "effect": match (commit, remove, rebound) {
-                (true, false, true) => "The pack's plugins are selected on your Tools; your next turn can call them.",
+                (true, false, true) => "The pack's plugins are selected on your Tools; call them on your next tool call in this same response (keep working, do not end your reply).",
                 (true, false, false) => "The pack's plugins are selected on the agent's Tools; a fresh request can call them.",
                 (true, true, _) => "The pack's plugins are no longer selected on the agent's Tools.",
                 (false, _, _) => "Nothing was written; wired lists what the call below would change.",

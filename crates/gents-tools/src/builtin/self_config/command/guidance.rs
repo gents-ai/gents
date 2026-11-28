@@ -28,6 +28,27 @@ impl CatalogRefusal {
     }
 }
 
+/// The model tool's wording for an agent operation refusal.
+pub(crate) fn agent_error_message(
+    error: &AgentOperationError,
+    params: &ConfigureAgentParams,
+) -> String {
+    match error {
+        AgentOperationError::ProfileNotPublished => {
+            if gents_protocol::operations::agent::AgentCreateOperation::for_verb(
+                agent_management::requested_operation(params),
+            )
+            .is_some()
+            {
+                "select a published inference profile in options.profile; list published profiles with [\"profile\",\"list\"]".to_owned()
+            } else {
+                "select a published inference profile in set.inference_profile_id; list published profiles with [\"profile\",\"list\"]".to_owned()
+            }
+        }
+        other => gents_protocol::error_chain::ErrorChain(other).to_string(),
+    }
+}
+
 /// A refused agent operation answers with what happened and the recovery its
 /// error declares for the requested operation. Another owner's failure passes
 /// on unchanged to that owner's classifiers in `failure_guidance`.
@@ -40,7 +61,7 @@ pub(super) fn agent_failure(
             CatalogRefusal(gents_protocol::error_chain::ErrorChain(&error).to_string()).into()
         }
         AgentApplyError::Operation(error) => CommandGuidance {
-            message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            message: agent_error_message(&error, params),
             next_call: next_call(agent_management::recovery_for(params, &error)),
         }
         .into(),

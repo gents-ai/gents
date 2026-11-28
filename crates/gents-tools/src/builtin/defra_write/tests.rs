@@ -830,6 +830,11 @@ fn write_grant_guidance_names_the_call_that_keeps_the_callers_datastore_group() 
         set["enable_defra_query"], true,
         "the group is sent back whole"
     );
+    let how = held["how"].as_str().unwrap();
+    assert!(
+        how.contains("next tool call in this same response") && !how.contains("in your next turn"),
+        "{how}"
+    );
 
     let unheld = super::write_grant_guidance(false, Some(&group), &names);
     assert!(unheld.get("next_call").is_none(), "{unheld}");
