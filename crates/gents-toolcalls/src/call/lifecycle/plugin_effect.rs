@@ -174,6 +174,7 @@ impl ToolCallLifecycle {
                         runs: vec![SegmentRun { stream: 0, bytes: u32::try_from(arguments.len())?,
                             declaration: Some(StreamDeclaration { block_index: 0, part_index: 0,
                                 payload: StreamPayload::ToolArguments { id: internal_id, call_id: None, name } }) }],
+                        stream_bytes_after: Some(vec![arguments.len() as u64]),
                         close: Some(SourceClose::Closed { outcome: OutputOutcome::Complete, segments: 1,
                             stream_bytes: vec![arguments.len() as u64] }), payload: arguments,
                         created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
@@ -578,6 +579,7 @@ pub(super) async fn publish_receipt_in_txn(
                 payload: StreamPayload::ToolOutput,
             }),
         }],
+        stream_bytes_after: Some(vec![text.len() as u64]),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,
             segments: 1,

@@ -1099,6 +1099,7 @@ pub fn segment(record: &Segment, session: u64) -> (String, OutputSegment) {
         writer: writer(&record.writer),
         ordinal,
         runs,
+        stream_bytes_after: None,
         payload: payload_text,
         close: record.close.as_ref().map(closure),
         created_at: rfc3339(record.created_at),

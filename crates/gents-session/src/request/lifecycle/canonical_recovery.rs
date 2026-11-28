@@ -513,6 +513,7 @@ async fn recover_expired_generation_with_access_and_facts(
                                     writer: writer.clone(),
                                     ordinal: None,
                                     runs: Vec::new(),
+                                    stream_bytes_after: None,
                                     payload: String::new(),
                                     close: Some(plan.close.clone()),
                                     created_at: timestamp.clone(),

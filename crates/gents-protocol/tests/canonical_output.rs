@@ -153,6 +153,7 @@ fn reasoning_audit_recovery_follows_the_lean_model() {
                         writer: writer.clone(),
                         ordinal: None,
                         runs: Vec::new(),
+                        stream_bytes_after: None,
                         payload: String::new(),
                         close: Some(plan.close.clone()),
                         created_at: extent

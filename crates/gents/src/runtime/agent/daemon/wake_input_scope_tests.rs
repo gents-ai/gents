@@ -342,6 +342,7 @@ async fn append_through(
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: text.clone(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,

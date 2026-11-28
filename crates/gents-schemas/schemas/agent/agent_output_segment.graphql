@@ -8,10 +8,13 @@ type AgentOutputSegment @policy(id: "$household", resource: "children") {
     parent_linked: Boolean @index
     request_doc_id: String @index @immutable
     source: JSON @immutable
+    source_key: String @immutable
     ordinal: Int @immutable
     writer: JSON @immutable
     runs: JSON @immutable
+    stream_bytes_after: JSON @immutable
     payload: String @immutable
     close: JSON @immutable
+    is_close: Boolean @immutable
     created_at: String @immutable
 }

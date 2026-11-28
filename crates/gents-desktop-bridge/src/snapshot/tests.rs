@@ -121,6 +121,7 @@ fn canonical_text_message(
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: text.to_string(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,

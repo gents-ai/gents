@@ -873,3 +873,181 @@ async fn ordinary_indexes_backfill_and_bound_scans_on_existing_collections() {
 
     node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn output_segment_tail_close_and_retry_queries_use_bounded_composite_indexes() {
+    use gents_protocol::schemas::{AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME};
+
+    let node = fresh_node().await;
+    let ids = gents_protocol::schemas::HomePolicyIds::node_store();
+    node.add_collection(&ids.render(AGENT_OUTPUT_SEGMENT))
+        .await
+        .unwrap();
+
+    let source_key = "tool_call:tool-a";
+    let mut inputs = (0..64)
+        .map(|ordinal| {
+            serde_json::json!({
+                "request_doc_id": "request-a",
+                "source": {"kind": "tool_call", "tool_call_doc_id": "tool-a"},
+                "source_key": source_key,
+                "ordinal": ordinal,
+                "is_close": false,
+                "stream_bytes_after": [(ordinal + 1) * 16],
+                "payload": format!("chunk-{ordinal:03}"),
+                "created_at": format!("2026-10-01T00:00:{ordinal:02}Z"),
+            })
+        })
+        .collect::<Vec<_>>();
+    // Add another source in the same request to ensure source_key isolation.
+    for ordinal in 0..16 {
+        inputs.push(serde_json::json!({
+            "request_doc_id": "request-a",
+            "source": {"kind": "tool_call", "tool_call_doc_id": "tool-b"},
+            "source_key": "tool_call:tool-b",
+            "ordinal": ordinal,
+            "is_close": false,
+            "stream_bytes_after": [(ordinal + 1) * 16],
+            "payload": format!("other-{ordinal:03}"),
+            "created_at": format!("2026-10-01T01:00:{ordinal:02}Z"),
+        }));
+    }
+    let batch = gents_protocol::graphql::graphql_input_literal(&Value::Array(inputs)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentOutputSegment(input: {batch}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+
+    let entry = baseline(ids)
+        .iter()
+        .find(|entry| entry.name == AGENT_OUTPUT_SEGMENT_NAME)
+        .expect("AgentOutputSegment baseline");
+    let indexes = ORDINARY_INDEXES
+        .iter()
+        .copied()
+        .filter(|index| index.collection == AGENT_OUTPUT_SEGMENT_NAME)
+        .collect::<Vec<_>>();
+    let catalog = Catalog {
+        baseline: std::slice::from_ref(entry),
+        ordinary_indexes: &indexes,
+    };
+    ensure(node.as_ref(), &catalog).await.unwrap();
+
+    // 1. Bounded descending tail read uses (request_doc_id ASC, source_key ASC, ordinal DESC)
+    let tail_query = r#"query {
+        AgentOutputSegment(
+            filter: { request_doc_id: { _eq: "request-a" }, source_key: { _eq: "tool_call:tool-a" } },
+            order: { ordinal: DESC },
+            limit: 3
+        ) { ordinal }
+    }"#;
+    let tail_rows = node.execute(tail_query).await;
+    assert!(!tail_rows.has_errors(), "{:?}", tail_rows.errors);
+    let ordinals = tail_rows.data.unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["ordinal"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ordinals, vec![63, 62, 61]);
+    assert_indexed_query(
+        node.as_ref(),
+        tail_query,
+        "AgentOutputSegment_request_source_key_ordinal",
+        3,
+    )
+    .await;
+
+    // 2. Closure check uses (request_doc_id ASC, is_close ASC, source_key ASC) with 0 fetches when open
+    let close_query = r#"query {
+        AgentOutputSegment(
+            filter: { request_doc_id: { _eq: "request-a" }, is_close: { _eq: true }, source_key: { _eq: "tool_call:tool-a" } },
+            limit: 2
+        ) { _docID }
+    }"#;
+    let open_close = node.execute(close_query).await;
+    assert!(!open_close.has_errors(), "{:?}", open_close.errors);
+    assert!(open_close.data.unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_indexed_query(
+        node.as_ref(),
+        close_query,
+        "AgentOutputSegment_request_close_source_key",
+        1,
+    )
+    .await;
+
+    // 3. Retry-identity check uses (request_doc_id ASC, created_at ASC, source_key ASC)
+    let retry_query = r#"query {
+        AgentOutputSegment(
+            filter: { request_doc_id: { _eq: "request-a" }, created_at: { _eq: "2026-10-01T00:00:42Z" }, source_key: { _eq: "tool_call:tool-a" } },
+            limit: 2
+        ) { ordinal }
+    }"#;
+    let retry_rows = node.execute(retry_query).await;
+    assert!(!retry_rows.has_errors(), "{:?}", retry_rows.errors);
+    let retry_ordinals = retry_rows.data.unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["ordinal"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(retry_ordinals, vec![42]);
+    assert_indexed_query(
+        node.as_ref(),
+        retry_query,
+        "AgentOutputSegment_request_created_source_key",
+        1,
+    )
+    .await;
+
+    // 4. After writing a terminal-only closure (ordinal: null, is_close: true),
+    // closure lookup finds it in <= 1 fetch and tail DESC still returns highest integer ordinals first.
+    let close_created = node
+        .execute(
+            r#"mutation { create_AgentOutputSegment(input: {
+                request_doc_id: "request-a",
+                source: {kind: "tool_call", tool_call_doc_id: "tool-a"},
+                source_key: "tool_call:tool-a",
+                is_close: true,
+                created_at: "2026-10-01T00:01:00Z"
+            }) { _docID } }"#,
+        )
+        .await;
+    assert!(!close_created.has_errors(), "{:?}", close_created.errors);
+    let closed_rows = node.execute(close_query).await;
+    assert!(!closed_rows.has_errors(), "{:?}", closed_rows.errors);
+    assert_eq!(
+        closed_rows.data.unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_indexed_query(
+        node.as_ref(),
+        close_query,
+        "AgentOutputSegment_request_close_source_key",
+        1,
+    )
+    .await;
+    let tail_after_close = node.execute(tail_query).await;
+    assert!(
+        !tail_after_close.has_errors(),
+        "{:?}",
+        tail_after_close.errors
+    );
+    let ordinals_after_close = tail_after_close.data.unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["ordinal"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ordinals_after_close, vec![63, 62, 61]);
+
+    node.shutdown().await.expect("shut down test node");
+}

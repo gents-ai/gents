@@ -116,6 +116,7 @@ pub async fn import(
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: text.into(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,

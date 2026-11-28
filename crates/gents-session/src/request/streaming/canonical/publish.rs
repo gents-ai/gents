@@ -213,8 +213,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             if prepared.close.as_ref().is_some_and(|candidate| candidate != &derived_close) {
                 return Err(ProviderCloseRejection::InvalidExtent.into());
             }
-            let mut variables = output_segment_bound_variables(txn, prepared).await?;
-            variables["input"]["close"] = serde_json::to_value(&derived_close)?;
+            let mut closing = prepared.clone();
+            closing.close = Some(derived_close);
+            let variables = output_segment_bound_variables(txn, &closing).await?;
             let created = txn.execute_with_variables(
                 CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables,
             ).await?;

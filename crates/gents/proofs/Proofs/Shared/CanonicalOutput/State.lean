@@ -111,6 +111,7 @@ structure Segment where
   flush : Option Flush
   close : Option Closure
   createdAt : Time
+  streamBytesAfter : Option (List Nat) := none
   deriving DecidableEq, Repr
 
 structure PayloadRef where

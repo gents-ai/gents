@@ -1259,6 +1259,7 @@ mod dependency_identity_tests {
                 },
                 ordinal: None,
                 runs: Vec::new(),
+                stream_bytes_after: None,
                 payload: String::new(),
                 close: Some(SourceClose::Retracted),
                 created_at: "2026-09-01T00:00:00Z".to_string(),

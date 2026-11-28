@@ -41,6 +41,7 @@ fn segment(payload: &str) -> OutputSegment {
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: Some(vec![payload.len() as u64]),
         payload: payload.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

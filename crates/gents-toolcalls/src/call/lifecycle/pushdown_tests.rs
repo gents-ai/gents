@@ -199,6 +199,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
                 payload: StreamPayload::ToolOutput,
             }),
         }],
+        stream_bytes_after: None,
         payload: payload.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

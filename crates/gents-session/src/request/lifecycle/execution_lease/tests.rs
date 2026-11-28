@@ -1245,6 +1245,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: payload.to_owned(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
@@ -2485,6 +2486,7 @@ async fn large_request_with_derived_effects_terminalizes_in_bounded_statements()
                                         },
                                     }]
                                 },
+                                stream_bytes_after: None,
                                 payload: if ord == 0 {
                                     args_text.clone()
                                 } else {
@@ -2592,6 +2594,7 @@ async fn large_request_with_derived_effects_terminalizes_in_bounded_statements()
                                     payload: StreamPayload::ToolOutput,
                                 }),
                             }],
+                            stream_bytes_after: None,
                             payload: tool_payload.clone(),
                             close: Some(SourceClose::Closed {
                                 outcome: OutputOutcome::Complete,
@@ -2707,6 +2710,7 @@ async fn large_request_with_derived_effects_terminalizes_in_bounded_statements()
                                         },
                                     }),
                                 }],
+                                stream_bytes_after: None,
                                 payload: eff_args.into(),
                                 close: Some(SourceClose::Closed {
                                     outcome: OutputOutcome::Complete,
@@ -2742,6 +2746,7 @@ async fn large_request_with_derived_effects_terminalizes_in_bounded_statements()
                                         payload: StreamPayload::ToolOutput,
                                     }),
                                 }],
+                                stream_bytes_after: None,
                                 payload: "ok".into(),
                                 close: Some(SourceClose::Closed {
                                     outcome: OutputOutcome::Complete,
@@ -2819,6 +2824,7 @@ async fn large_request_with_derived_effects_terminalizes_in_bounded_statements()
                             payload: StreamPayload::Text,
                         }),
                     }],
+                    stream_bytes_after: None,
                     payload: "done".into(),
                     close: Some(SourceClose::Closed {
                         outcome: OutputOutcome::Complete,

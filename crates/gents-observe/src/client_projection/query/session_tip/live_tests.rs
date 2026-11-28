@@ -291,6 +291,7 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: "hello".into(),
             close: None,
             created_at: "2026-10-07T12:00:00Z".into(),

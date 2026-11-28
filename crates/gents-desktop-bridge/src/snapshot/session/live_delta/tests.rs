@@ -56,6 +56,7 @@ fn segment(ordinal: u32, text: &str) -> OutputSegmentRow {
                     payload: StreamPayload::Text,
                 }),
             }],
+            stream_bytes_after: None,
             payload: text.into(),
             close: None,
             created_at: "2026-10-07T12:00:00Z".into(),

@@ -18,9 +18,9 @@ def call (id sequence : Nat) (selectedTool : Tool := tool) : MessageEnvelope :=
 def terminalRecords (selectedTool : Tool) : List Segment :=
   [ ⟨3000 + selectedTool.id, ⟨selectedTool.request, .tool selectedTool.id⟩,
       .tool selectedTool.id,
-      some ⟨0, [⟨0, 0, some ⟨0, 0, .toolOutput, none, none⟩⟩], []⟩, none, 0⟩
+      some ⟨0, [⟨0, 0, some ⟨0, 0, .toolOutput, none, none⟩⟩], []⟩, none, 0, none⟩
   , ⟨4000 + selectedTool.id, ⟨selectedTool.request, .tool selectedTool.id⟩,
-      .tool selectedTool.id, none, some (.closed .complete 1 [0]), 0⟩ ]
+      .tool selectedTool.id, none, some (.closed .complete 1 [0]), 0, none⟩ ]
 
 def delivered (id sequence : Nat) (selectedTool : Tool := tool) : MessageEnvelope :=
   let blocks := [MessageBlock.toolResult selectedTool.id "call" none
@@ -82,7 +82,7 @@ def copiedRecords (selectedTool : Tool) : List Segment :=
     { segment with id := segment.id + 10000, coordinate := logical }
 
 /-- The copied argument closure every modeled invocation names. -/
-def argumentsCopy : Segment := ⟨21000, ⟨1000, .tool 0⟩, .tool 0, none, none, 0⟩
+def argumentsCopy : Segment := ⟨21000, ⟨1000, .tool 0⟩, .tool 0, none, none, 0, none⟩
 
 def copiedHeaders (headers : List MessageEnvelope) (offset : Nat) : List MessageEnvelope :=
   headers.map fun message =>

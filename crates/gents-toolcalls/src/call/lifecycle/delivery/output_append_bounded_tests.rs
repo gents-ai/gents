@@ -211,6 +211,7 @@ async fn conflicting_ordinal_twin_rejects_the_next_append() {
             bytes: CHUNK.len() as u32,
             declaration: None,
         }],
+        stream_bytes_after: Some(vec![(CHUNK.len() * 2) as u64]),
         payload: CHUNK.chars().rev().collect(),
         close: None,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
@@ -242,6 +243,168 @@ async fn conflicting_ordinal_twin_rejects_the_next_append() {
         format!("{error:#}").contains("conflicting flush twin"),
         "{error:#}"
     );
+
+    drop(owner);
+    node.shutdown().await.expect("shut down test node");
+    let _ = tokio::fs::remove_dir_all(path).await;
+}
+
+#[tokio::test]
+async fn per_append_source_reads_stay_bounded_as_segment_count_grows() {
+    let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "append-bounded-reads".to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let PublishedAdmission {
+        node, path, tool, ..
+    } = fixture;
+    let binding = tool.tool_output_binding().unwrap();
+
+    for index in 0..80usize {
+        let ((result, payload_bytes), rows) = gents_session::session::count_source_rows_decoded(
+            gents_session::session::count_source_payload_bytes(super::append_tool_output(
+                &binding, CHUNK,
+            )),
+        )
+        .await;
+        let range = result.unwrap();
+        assert_eq!(range.start, (index * CHUNK.len()) as u64);
+        assert_eq!(range.end, ((index + 1) * CHUNK.len()) as u64);
+        assert!(
+            rows <= 3,
+            "append #{index} decoded {rows} source rows; expected <= 3"
+        );
+        assert_eq!(
+            payload_bytes, 0,
+            "fresh append #{index} should not read payload bytes"
+        );
+    }
+
+    drop(owner);
+    node.shutdown().await.expect("shut down test node");
+    let _ = tokio::fs::remove_dir_all(path).await;
+}
+
+#[tokio::test]
+async fn corrupted_stream_bytes_after_is_rejected_on_append_and_close() {
+    let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "append-corrupt-bytes-after".to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let PublishedAdmission {
+        node,
+        path,
+        mut tool,
+        ..
+    } = fixture;
+    let binding = tool.tool_output_binding().unwrap();
+    let access = binding_access(&binding);
+
+    super::append_tool_output(&binding, CHUNK).await.unwrap();
+
+    let corrupt = OutputSegment {
+        node_did: binding.node_did.clone(),
+        requester_did: binding.requester_did.clone(),
+        session_id: binding.session_id.clone(),
+        request_doc_id: binding.request_doc_id.clone(),
+        source: OutputSource::ToolCall {
+            tool_call_doc_id: binding.tool_call_doc_id.clone(),
+        },
+        writer: OutputWriter::ToolExecution {
+            tool_call_doc_id: binding.tool_call_doc_id.clone(),
+        },
+        ordinal: Some(1),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: CHUNK.len() as u32,
+            declaration: None,
+        }],
+        stream_bytes_after: Some(vec![999_999]),
+        payload: CHUNK.to_owned(),
+        close: None,
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+    };
+    access
+        .transact_idempotent(
+            gents_store::config_client::IdempotentTransactionRetry::Standard,
+            "test.inject_corrupt_stream_bytes_after",
+            move |txn| {
+                let corrupt = corrupt.clone();
+                Box::pin(async move {
+                    let variables =
+                        gents_store::config_client::session_children::output_segment_bound_variables(
+                            txn, &corrupt,
+                        )
+                        .await?;
+                    txn.execute_with_variables(
+                        gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &variables,
+                    )
+                    .await?;
+                    anyhow::Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        super::append_tool_output(&binding, CHUNK).await.is_err(),
+        "append must reject corrupted stream_bytes_after on the tail"
+    );
+    assert!(
+        tool.complete(&CHUNK.repeat(2)).await.is_err(),
+        "close must reject corrupted stream_bytes_after during full extent validation"
+    );
+
+    drop(owner);
+    node.shutdown().await.expect("shut down test node");
+    let _ = tokio::fs::remove_dir_all(path).await;
+}
+
+#[tokio::test]
+async fn regressed_timestamp_and_retry_of_earlier_attempt_follow_tail_contract() {
+    let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "append-time-and-earlier-retry".to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let PublishedAdmission {
+        node, path, tool, ..
+    } = fixture;
+    let binding = tool.tool_output_binding().unwrap();
+
+    let t0 = chrono::Utc::now();
+    let t1 = t0 + chrono::Duration::milliseconds(10);
+    let t2 = t0 + chrono::Duration::milliseconds(20);
+    let r0 = super::append_tool_output_at(&binding, "first", t0, t0)
+        .await
+        .unwrap();
+    super::append_tool_output_at(&binding, "second", t1, t1)
+        .await
+        .unwrap();
+    super::append_tool_output_at(&binding, "third", t2, t2)
+        .await
+        .unwrap();
+
+    let regressed = t0 + chrono::Duration::milliseconds(5);
+    assert!(
+        super::append_tool_output_at(&binding, "late", regressed, t2)
+            .await
+            .is_err(),
+        "fresh append with timestamp earlier than tail must be rejected"
+    );
+
+    let replayed = super::append_tool_output_at(&binding, "first", t0, t2)
+        .await
+        .unwrap();
+    assert_eq!(replayed.segment_doc_id, r0.segment_doc_id);
+    assert_eq!(replayed.range, r0.range);
 
     drop(owner);
     node.shutdown().await.expect("shut down test node");

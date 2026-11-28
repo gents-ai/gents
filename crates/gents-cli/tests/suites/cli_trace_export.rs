@@ -1619,6 +1619,7 @@ async fn seed_canonical_trace_tool(
                 },
             }),
         }],
+        stream_bytes_after: None,
         payload: arguments,
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,
@@ -1691,6 +1692,7 @@ async fn seed_canonical_trace_tool(
                     payload: StreamPayload::ToolOutput,
                 }),
             }],
+            stream_bytes_after: None,
             payload: result.into(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
@@ -1786,6 +1788,7 @@ async fn seed_canonical_terminal_text(
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: text.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

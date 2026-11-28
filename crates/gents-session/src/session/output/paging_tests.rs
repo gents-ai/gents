@@ -40,6 +40,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: "x".into(),
         close: None,
         created_at: "2026-10-24T00:00:00Z".into(),

@@ -336,6 +336,7 @@ mod tests {
             },
             ordinal: Some(0),
             runs,
+            stream_bytes_after: None,
             payload: payload.into(),
             close: None,
             created_at: "2026-01-01T00:00:00Z".into(),

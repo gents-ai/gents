@@ -798,6 +798,7 @@ mod canonical_projection_tests {
                         payload: StreamPayload::ToolOutput,
                     }),
                 }],
+                stream_bytes_after: None,
                 payload: "live text".to_string(),
                 close: None,
                 created_at: "2026-09-01T00:00:00Z".to_string(),
@@ -903,6 +904,7 @@ mod canonical_projection_tests {
                         },
                     }),
                 }],
+                stream_bytes_after: None,
                 payload: "{}".to_string(),
                 close: Some(SourceClose::Closed {
                     outcome: OutputOutcome::Complete,
@@ -983,6 +985,7 @@ mod canonical_projection_tests {
                         payload: StreamPayload::ToolOutput,
                     }),
                 }],
+                stream_bytes_after: None,
                 payload: "first".to_string(),
                 close: Some(SourceClose::Closed {
                     outcome: OutputOutcome::Complete,
@@ -1128,6 +1131,7 @@ mod canonical_projection_tests {
                         payload: StreamPayload::Text,
                     }),
                 }],
+                stream_bytes_after: None,
                 payload: text.to_string(),
                 close: Some(SourceClose::Closed {
                     outcome: OutputOutcome::Complete,

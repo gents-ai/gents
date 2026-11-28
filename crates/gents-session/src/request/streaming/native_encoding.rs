@@ -627,6 +627,7 @@ mod tests {
             },
             ordinal: Some(0),
             runs,
+            stream_bytes_after: None,
             payload,
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,

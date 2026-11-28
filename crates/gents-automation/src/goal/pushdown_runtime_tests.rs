@@ -774,6 +774,7 @@ async fn publish_owned_terminal_activity(
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: content.into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

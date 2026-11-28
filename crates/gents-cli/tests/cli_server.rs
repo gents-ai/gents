@@ -976,6 +976,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: "hello".into(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,
@@ -2406,6 +2407,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
                 payload: StreamPayload::Text,
             }),
         }],
+        stream_bytes_after: None,
         payload: "hello".to_string(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,

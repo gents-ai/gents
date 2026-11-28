@@ -312,6 +312,7 @@ pub async fn persist_background_completion_with_message_waking_with_access(
                                 payload: StreamPayload::ToolOutput,
                             }),
                         }],
+                        stream_bytes_after: Some(vec![notification_content.len() as u64]),
                         payload: notification_content.to_owned(),
                         close: Some(SourceClose::Closed {
                             outcome: OutputOutcome::Complete,

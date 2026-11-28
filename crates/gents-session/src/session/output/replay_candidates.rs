@@ -635,6 +635,7 @@ mod recovered_provenance_tests {
                 declaration(1, 1, StreamPayload::ReasoningSignature),
                 declaration(2, 0, StreamPayload::ReasoningStop),
             ],
+            stream_bytes_after: None,
             payload: "AS".into(),
             close: Some(SourceClose::Closed {
                 outcome: OutputOutcome::Partial,
