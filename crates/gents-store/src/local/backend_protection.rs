@@ -248,10 +248,18 @@ pub async fn build_configured(
         Ok(())
     };
     if let Err(error) = configure() {
-        let _ = node.shutdown().await;
+        let _ = close_temporary_node(node, data).await;
         return Err(error);
     }
     Ok(node)
+}
+
+async fn close_temporary_node(node: Arc<defra_node::Node>, data: &Path) -> Result<()> {
+    let shutdown = node.shutdown().await;
+    drop(node);
+    super::home::wait_for_engine_release(data).await;
+    shutdown?;
+    Ok(())
 }
 
 async fn start(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
@@ -471,10 +479,9 @@ impl<'a> FreshBackendStore<'a> {
             Ok((deployment, ids))
         }
         .await;
-        let shutdown = node.shutdown().await;
+        let closed = close_temporary_node(node, &self.data).await;
         let (deployment, ids) = result?;
-        shutdown?;
-        drop(node);
+        closed?;
         if let Some(deployment) = deployment {
             let data = self.data.clone();
             tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
@@ -641,7 +648,7 @@ impl<'a> ProtectedBackendStore<'a> {
             }
         }
         .await;
-        let shutdown = node.shutdown().await;
+        let closed = close_temporary_node(node, &self.data).await;
         let transport_replica = checked.map_err(|error| match error {
             BackendProtectionError::InvalidBinding => BackendProtectionError::Incompatible(
                 gents_protocol::operations::install_repair::IncompatibleStore {
@@ -651,7 +658,7 @@ impl<'a> ProtectedBackendStore<'a> {
             ),
             error => error,
         })?;
-        shutdown?;
+        closed?;
         if !stamped {
             super::store_compat::record_compatible(&self.data, ids)?;
         }
@@ -704,11 +711,12 @@ impl PreflightProtectedBackendStore<'_> {
         if let Some(group) = &self.transport_replica {
             extensions.attach(Arc::new(group.clone()))?;
         }
+        let data = self.store.data.clone();
         let started = self
             .start_node_with_plugins(key, runtime, configure, policy, plugins)
             .await?;
         if let Err(error) = crate::node_extension::attach_all(&started.0, &extensions) {
-            let _ = started.0.shutdown().await;
+            let _ = close_temporary_node(started.0, &data).await;
             return Err(error.into());
         }
         Ok(started)
@@ -748,7 +756,7 @@ impl PreflightProtectedBackendStore<'_> {
         };
         let node = build_configured(builder, &self.store.data, self.document_acp).await?;
         if let Err(error) = validate_binding(&node).await {
-            let _ = node.shutdown().await;
+            let _ = close_temporary_node(node, &self.store.data).await;
             return Err(error);
         }
         let admission = BackendAdmission {

@@ -143,7 +143,10 @@ pub async fn refuse_other_version_schema(
     })?;
     let node = builder.build().await.map_err(opened)?;
     let validated = crate::schema::catalog::validate_existing_schema(&node, ids).await;
-    node.shutdown().await.map_err(opened)?;
+    let shutdown = node.shutdown().await;
+    drop(node);
+    super::home::wait_for_engine_release(data_path).await;
+    shutdown.map_err(opened)?;
     validated.map_err(|source| match incompatible_store(&source, data_path) {
         Some(store) => StorageBackendError::Incompatible(store),
         None => StorageBackendError::InspectionSchema {
