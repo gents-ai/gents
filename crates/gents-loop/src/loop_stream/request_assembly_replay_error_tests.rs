@@ -839,15 +839,16 @@ async fn unpaired_tool_call_with_reasoning_leaves_no_ghost_assistant_on_openai_w
         "reasoning-plus-text assistant turn keeps its text block"
     );
 
-    let rig_assistants: Vec<_> = request
+    let assistant_messages: Vec<_> = request
         .chat_history
         .iter()
-        .filter(|msg| matches!(msg, rig::completion::Message::Assistant { .. }))
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
         .collect();
     assert_eq!(
-        rig_assistants.len(),
+        assistant_messages.len(),
         1,
-        "no empty ghost assistant message in rig chat_history: {rig_assistants:?}"
+        "no empty ghost assistant message in chat_history: {assistant_messages:?}"
     );
 
     #[cfg(feature = "native")]
@@ -1012,12 +1013,13 @@ async fn repair_and_rebuild_drops_reasoning_only_assistants_and_keeps_prompt() {
         new_messages,
         vec![TaggedMessage::unassociated(Message::user("retry"))]
     );
-    let rig_assistants: Vec<_> = request
+    let assistant_messages: Vec<_> = request
         .chat_history
         .iter()
-        .filter(|msg| matches!(msg, rig::completion::Message::Assistant { .. }))
+        .map(crate::rig_compat::from_rig_message)
+        .filter(|msg| matches!(msg, Message::Assistant { .. }))
         .collect();
-    assert_eq!(rig_assistants.len(), 1);
+    assert_eq!(assistant_messages.len(), 1);
 
     let mut fallback_history = vec![TaggedMessage::unassociated(Message::user("fallback"))];
     let mut reasoning_only_prompt = vec![TaggedMessage::unassociated(Message::Assistant {
@@ -1042,7 +1044,8 @@ async fn repair_and_rebuild_drops_reasoning_only_assistants_and_keeps_prompt() {
     assert!(rebuilt
         .chat_history
         .iter()
-        .all(|msg| !matches!(msg, rig::completion::Message::Assistant { .. })));
+        .map(crate::rig_compat::from_rig_message)
+        .all(|msg| !matches!(msg, Message::Assistant { .. })));
 }
 
 #[test]
