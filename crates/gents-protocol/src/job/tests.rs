@@ -18,46 +18,30 @@ fn assert_lists_empty(e: &JobEffects) {
 }
 
 #[test]
-fn effects_lists_default_to_empty_when_absent() {
-    let e = effects_of(decode(json!({ "effects": {} })).expect("decode"));
-    assert_lists_empty(&e);
-    assert_eq!((e.pin, e.resume, e.progress), (None, None, None));
-}
-
-#[test]
-fn effects_lists_default_to_empty_when_null() {
-    let e = effects_of(
-        decode(json!({ "effects": {
+fn job_effects_serde_defaults_and_strictness() {
+    for raw in [
+        json!({ "effects": {} }),
+        json!({ "effects": {
             "spawn": null, "message": null, "interrupt": null,
             "writes": null, "scratch": null
-        } }))
-        .expect("decode"),
+        } }),
+    ] {
+        let e = effects_of(decode(raw).expect("decode"));
+        assert_lists_empty(&e);
+        assert_eq!((e.pin, e.resume, e.progress), (None, None, None));
+    }
+    let e = effects_of(decode(json!({ "effects": { "interrupt": [{ "slot": "0:a" }] } })).unwrap());
+    assert_eq!(e.interrupt, vec![JobInterrupt { slot: "0:a".into() }]);
+    assert!(
+        e.spawn.is_empty() && e.message.is_empty() && e.writes.is_empty() && e.scratch.is_empty()
     );
-    assert_lists_empty(&e);
-}
 
-#[test]
-fn effects_decode_one_list_alone() {
-    let e = effects_of(
-        decode(json!({ "effects": { "interrupt": [{ "slot": "0:a" }] } })).expect("decode"),
-    );
+    let output = decode(json!({ "effects": { "message": [], "writes": [] } })).unwrap();
     assert_eq!(
-        e.interrupt,
-        vec![JobInterrupt {
-            slot: "0:a".to_string()
-        }]
-    );
-    assert!(e.spawn.is_empty() && e.message.is_empty());
-    assert!(e.writes.is_empty() && e.scratch.is_empty());
-}
-
-#[test]
-fn empty_effects_lists_are_omitted_on_encode() {
-    let output = decode(json!({ "effects": { "message": [], "writes": [] } })).expect("decode");
-    assert_eq!(
-        serde_json::to_value(&output).expect("encode"),
+        serde_json::to_value(&output).unwrap(),
         json!({ "effects": {} })
     );
+    assert!(decode(json!({ "effects": { "spawns": [] } })).is_err());
 }
 
 #[test]
@@ -77,11 +61,6 @@ fn guest_state_rides_on_effects_and_suspend_only() {
         decode(json!({"result": {}, "state": 1})).is_err(),
         "a terminal result carries no state for a next step"
     );
-}
-
-#[test]
-fn unknown_effects_key_is_still_refused() {
-    assert!(decode(json!({ "effects": { "spawns": [] } })).is_err());
 }
 
 fn progress_json() -> serde_json::Value {

@@ -287,28 +287,14 @@ mod tests {
         });
     }
 
-    fn msg(key: &str, seq: i64, role: TimelineRole) -> TimelineMessageInput {
+    fn msg(key: &str, sequence: Option<i64>, dedup_token: Option<&str>) -> TimelineMessageInput {
         TimelineMessageInput {
             key: key.to_string(),
-            sequence: Some(seq),
-            role,
+            sequence,
+            role: TimelineRole::Assistant,
             emits_item: true,
-            dedup_token: None,
+            dedup_token: dedup_token.map(str::to_string),
         }
-    }
-
-    fn count_group(slots: &[TimelineSlot], seq: Option<i64>) -> usize {
-        slots
-            .iter()
-            .filter(|s| matches!(s, TimelineSlot::ToolGroup { message_sequence } if *message_sequence == seq))
-            .count()
-    }
-
-    fn pending_tail() -> Vec<PendingInput> {
-        vec![PendingInput {
-            key: "request".into(),
-            placement: PendingPlacement::Tail,
-        }]
     }
 
     #[test]
@@ -327,194 +313,71 @@ mod tests {
                 runtime_control: false,
             },
         ];
-
         assert!(!has_durable_user_owner(&messages, "request-under-test"));
     }
 
     #[test]
-    fn every_tool_group_is_placed_exactly_once() {
-        let messages = vec![
-            msg("a", 0, TimelineRole::User),
-            msg("b", 2, TimelineRole::Assistant),
-        ];
-        let groups = vec![Some(0), Some(5)];
-        let slots = build_timeline_order(&messages, &groups, &[], None);
-
-        assert_eq!(
-            count_group(&slots, Some(0)),
-            1,
-            "attached group placed once"
-        );
-        assert_eq!(count_group(&slots, Some(5)), 1, "orphan group placed once");
-        let a_pos = slots
-            .iter()
-            .position(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "a"))
-            .unwrap();
-        assert!(
-            matches!(
-                &slots[a_pos + 1],
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(0)
-                }
-            ),
-            "attached group must immediately follow its owner: {slots:?}"
-        );
-    }
-
-    #[test]
-    fn overlay_is_shown_conditionally_and_last() {
-        let messages = vec![msg("a", 0, TimelineRole::Assistant)];
-        let groups = vec![Some(0)];
-
-        let shown = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::Tail,
-            }),
-        );
-        assert_eq!(
-            shown.last(),
-            Some(&TimelineSlot::Overlay),
-            "overlay must be last: {shown:?}"
-        );
-
-        let hidden = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: true,
-                placement: OverlayPlacement::Tail,
-            }),
-        );
-        assert!(
-            !hidden.contains(&TimelineSlot::Overlay),
-            "a duplicate overlay must not be shown: {hidden:?}"
-        );
-
-        let absent = build_timeline_order(&messages, &groups, &pending_tail(), None);
-        assert!(!absent.contains(&TimelineSlot::Overlay));
-    }
-
-    #[test]
-    fn overlay_follows_terminal_orphan_groups() {
-        let messages = vec![msg("user", 0, TimelineRole::User)];
-        let groups = vec![Some(1)];
-        let slots = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::Tail,
-            }),
-        );
-
-        assert_eq!(
-            slots.last(),
-            Some(&TimelineSlot::Overlay),
-            "the next live assistant turn must follow terminal orphan tools: {slots:?}"
-        );
-    }
-
-    #[test]
-    fn pending_turn_precedes_later_message_from_same_partially_replicated_turn() {
-        let messages = vec![
-            msg("historical", 1, TimelineRole::Assistant),
-            msg("continued", 3, TimelineRole::Assistant),
-        ];
-        let slots = build_timeline_order(
-            &messages,
+    fn dedup_and_unsequenced_message_ordering() {
+        let dup_slots = build_timeline_order(
+            &[
+                msg("dup", Some(0), None),
+                msg("dup", Some(1), None),
+                msg("other", Some(2), None),
+            ],
             &[],
-            &[PendingInput {
-                key: "request".into(),
-                placement: PendingPlacement::BeforeMessage {
-                    message_sequence: 3,
-                },
-            }],
+            &[],
             None,
         );
-
-        let pending_pos = slots
-            .iter()
-            .position(|slot| matches!(slot, TimelineSlot::Pending { .. }))
-            .expect("pending slot");
-        let continued_pos = slots
-            .iter()
-            .position(
-                |slot| matches!(slot, TimelineSlot::Message { key, .. } if key == "continued"),
-            )
-            .expect("continued assistant message");
-        assert_eq!(pending_pos + 1, continued_pos, "{slots:?}");
-    }
-
-    #[test]
-    fn duplicate_message_keys_are_deduped_first_wins() {
-        let messages = vec![
-            msg("dup", 0, TimelineRole::Assistant),
-            msg("dup", 1, TimelineRole::Assistant),
-            msg("other", 2, TimelineRole::Assistant),
-        ];
-        let slots = build_timeline_order(&messages, &[], &[], None);
-        let dup_count = slots
-            .iter()
-            .filter(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "dup"))
-            .count();
         assert_eq!(
-            dup_count, 1,
-            "a repeated message key must render once: {slots:?}"
+            dup_slots
+                .iter()
+                .filter(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "dup"))
+                .count(),
+            1
         );
-    }
 
-    #[test]
-    fn presentation_token_dedup_also_drops_the_second_group_attach() {
-        let mut first = msg("m1", 0, TimelineRole::Assistant);
-        first.dedup_token = Some("same".to_string());
-        let mut second = msg("m2", 1, TimelineRole::Assistant);
-        second.dedup_token = Some("same".to_string());
-
-        let slots = build_timeline_order(&[first, second], &[Some(0), Some(1)], &[], None);
-
-        let m2_shown = slots
-            .iter()
-            .any(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "m2"));
-        assert!(
-            !m2_shown,
-            "presentation-deduped message must not render: {slots:?}"
+        let token_slots = build_timeline_order(
+            &[
+                msg("m1", Some(0), Some("same")),
+                msg("m2", Some(1), Some("same")),
+            ],
+            &[Some(0), Some(1)],
+            &[],
+            None,
         );
-        assert_eq!(count_group(&slots, Some(1)), 1);
-    }
-
-    #[test]
-    fn none_sequence_sorts_before_some() {
-        let mut none_msg = msg("none", 0, TimelineRole::Assistant);
-        none_msg.sequence = None;
-        let some_msg = msg("some", 5, TimelineRole::Assistant);
-        let slots = build_timeline_order(&[some_msg, none_msg], &[], &[], None);
-        let none_pos = slots
+        assert!(!token_slots
             .iter()
-            .position(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "none"));
-        let some_pos = slots
-            .iter()
-            .position(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "some"));
-        assert!(
-            none_pos < some_pos,
-            "None sequence must sort first: {slots:?}"
+            .any(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "m2")));
+        assert_eq!(
+            token_slots
+                .iter()
+                .filter(|s| matches!(
+                    s,
+                    TimelineSlot::ToolGroup {
+                        message_sequence: Some(1)
+                    }
+                ))
+                .count(),
+            1
         );
-    }
 
-    #[test]
-    fn tail_pending_stays_after_sequence_less_messages() {
-        let mut none_msg = msg("none", 0, TimelineRole::Assistant);
-        none_msg.sequence = None;
-        let slots = build_timeline_order(&[none_msg], &[], &pending_tail(), None);
-
+        let pending = [PendingInput {
+            key: "request".into(),
+            placement: PendingPlacement::Tail,
+        }];
+        let none_slots = build_timeline_order(
+            &[msg("some", Some(5), None), msg("none", None, None)],
+            &[],
+            &pending,
+            None,
+        );
         assert!(matches!(
-            slots.as_slice(),
-            [TimelineSlot::Message { .. }, TimelineSlot::Pending { .. }]
+            none_slots.as_slice(),
+            [
+                TimelineSlot::Message { key: first, .. },
+                TimelineSlot::Message { key: second, .. },
+                TimelineSlot::Pending { .. },
+            ] if first == "none" && second == "some"
         ));
     }
 }

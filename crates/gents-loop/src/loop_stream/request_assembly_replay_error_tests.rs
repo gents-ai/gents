@@ -83,100 +83,62 @@ fn armed_seed(rows: Vec<ReplayEvidenceRow>) -> ReplayEstimateSeed {
     seed
 }
 
-#[tokio::test]
-async fn a_seeded_lookup_resolves_only_the_tags_the_seed_does_not_cover() {
-    let seeded = provider_tag(0);
-    let missing = provider_tag(1);
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
-        resolve: Some(counting_resolver(
-            vec![evidence_row(&missing, "header-1", Vec::new())],
-            vec![missing.clone()],
-            calls.clone(),
-        )),
-        estimate_seed: Some(armed_seed(vec![evidence_row(
-            &seeded,
-            "header-0",
-            Vec::new(),
-        )])),
-        ..LoopReplayInput::default()
-    };
-    let served = resolve_replay_evidence(&replay, &[seeded.clone(), missing.clone()])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0", "header-1"],
-        "seeded rows and freshly resolved rows compose one answer"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "only the uncovered tag crosses the canonical resolver"
-    );
+fn headers_of(rows: &[ReplayEvidenceRow]) -> Vec<&str> {
+    rows.iter()
+        .map(|row| row.evidence.physical_header.as_str())
+        .collect()
 }
 
 #[tokio::test]
-async fn a_seed_is_taken_once_so_the_next_lookup_re_resolves() {
-    let tag = provider_tag(0);
+async fn seeded_lookup_resolves_only_uncovered_tags_once_and_filters_subsets() {
+    let tag0 = provider_tag(0);
+    let tag1 = provider_tag(1);
+    let row0 = evidence_row(&tag0, "header-0", Vec::new());
+    let row1 = evidence_row(&tag1, "header-1", Vec::new());
+
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
+    let partial = LoopReplayInput {
         resolve: Some(counting_resolver(
-            vec![evidence_row(&tag, "header-0", Vec::new())],
-            vec![tag.clone()],
+            vec![row1.clone()],
+            vec![tag1.clone()],
             calls.clone(),
         )),
-        estimate_seed: Some(armed_seed(vec![evidence_row(&tag, "header-0", Vec::new())])),
+        estimate_seed: Some(armed_seed(vec![row0.clone()])),
         ..LoopReplayInput::default()
     };
-    resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
+    let served = resolve_replay_evidence(&partial, &[tag0.clone(), tag1.clone()])
         .await
         .unwrap();
-    let re_resolved = resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
-        .await
-        .unwrap();
-    assert_eq!(
-        re_resolved
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0"],
-        "the second lookup still answers the same evidence"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "every lookup after the seeded dispatch revalidates the store"
-    );
-}
+    assert_eq!(headers_of(&served), ["header-0", "header-1"]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-#[tokio::test]
-async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
-    let requested = provider_tag(0);
-    let superset = provider_tag(1);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
+    let once = LoopReplayInput {
+        resolve: Some(counting_resolver(
+            vec![row0.clone()],
+            vec![tag0.clone()],
+            calls.clone(),
+        )),
+        estimate_seed: Some(armed_seed(vec![row0.clone()])),
+        ..LoopReplayInput::default()
+    };
+    resolve_replay_evidence(&once, std::slice::from_ref(&tag0))
+        .await
+        .unwrap();
+    let re_resolved = resolve_replay_evidence(&once, std::slice::from_ref(&tag0))
+        .await
+        .unwrap();
+    assert_eq!(headers_of(&re_resolved), ["header-0"]);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let subset = LoopReplayInput {
         resolve: Some(counting_resolver(Vec::new(), vec![], calls.clone())),
-        estimate_seed: Some(armed_seed(vec![
-            evidence_row(&requested, "header-0", Vec::new()),
-            evidence_row(&superset, "header-1", Vec::new()),
-        ])),
+        estimate_seed: Some(armed_seed(vec![row0, row1])),
         ..LoopReplayInput::default()
     };
-    let served = resolve_replay_evidence(&replay, &[requested])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0"],
-        "a subset dispatch never sees the estimate's other tags"
-    );
+    let served = resolve_replay_evidence(&subset, &[tag0]).await.unwrap();
+    assert_eq!(headers_of(&served), ["header-0"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
@@ -186,44 +148,15 @@ fn assembly_only() -> crate::test_support::scripted_provider::ScriptedProvider {
 }
 
 fn replay_assembly_config() -> LoopConfig {
-    LoopConfig {
-        provider_call: Default::default(),
-        replay: LoopReplayInput::default(),
-        provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
-            crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
-            crate::openai_wire::OpenAiWireApi::ChatCompletions,
-            "test-model",
-        )),
-        preamble: None,
-        context_message: None,
-        temperature: None,
-        max_tokens: None,
-        aggregate_token_budget: None,
-        additional_params: None,
-        structured_output: None,
-        tool_choice: None,
-        configuration_guard: None,
-        tool_rebinding: None,
-        on_rendered_request: None,
-        turn_compactor: None,
-        active_reduction_keys: Vec::new(),
-        reduction_chain_keys: Vec::new(),
-        initial_turn_index: 0,
-        resume_from_history: false,
-        context_window: 128_000,
-        compaction_threshold: 0.75,
-        context_calibration: Default::default(),
-        retry_policy: CompletionRetryPolicy::interactive_default(),
-        provider_idle_timeout: None,
-        deadline: None,
-        max_turns: 4,
-        max_invalid_tool_calls: crate::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
-        repeated_tool_failure_limit: crate::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
-        output_obligation_gate: None,
-        folded_prompts: Vec::new(),
-        authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::default(),
-    }
+    let mut config = crate::end_to_end_test::test_loop_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
+        crate::openai_wire::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+    config.preamble = None;
+    config.max_turns = 4;
+    config
 }
 
 fn assistant_with(request_id: Option<&str>, call: Option<(&str, &str)>) -> Message {

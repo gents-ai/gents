@@ -339,7 +339,7 @@ fn plan_at(name: &str, observed_at: DateTime<Utc>) -> Option<UsagePlan> {
 }
 
 #[test]
-fn view_merge_newer_window_per_label_wins() {
+fn view_merge_prefers_newer_window_per_label() {
     let earlier = now() - Duration::minutes(5);
     let stored = report(vec![
         window("primary", 10.0, earlier),
@@ -350,15 +350,12 @@ fn view_merge_newer_window_per_label_wins() {
     assert_eq!(find(&merged, "primary").used_pct, 20.0);
     assert_eq!(find(&merged, "primary").observed_at, now());
     assert_eq!(find(&merged, "secondary").used_pct, 30.0);
-}
 
-#[test]
-fn view_merge_older_report_never_replaces_newer() {
-    let stored = report(vec![window("5h", 50.0, now())]);
+    let newer = report(vec![window("5h", 50.0, now())]);
     let late = report(vec![window("5h", 10.0, now() - Duration::minutes(1))]);
-    let merged = stored.merge(late);
-    assert_eq!(find(&merged, "5h").used_pct, 50.0);
-    assert_eq!(merged.windows.len(), 1);
+    let kept = newer.merge(late);
+    assert_eq!(kept.windows.len(), 1);
+    assert_eq!(find(&kept, "5h").used_pct, 50.0);
 }
 
 #[test]
@@ -426,48 +423,34 @@ fn view_header_and_endpoint_same_window_merge_into_one() {
 }
 
 #[test]
-fn view_fresh_until_fifteen_minutes() {
-    let usage = report(vec![
-        window("a", 1.0, now() - Duration::minutes(15)),
-        window("b", 2.0, now()),
-    ]);
-    let visible = visible_windows(&usage, now());
-    assert_eq!(visible.len(), 2);
-    assert!(visible
-        .iter()
-        .all(|(_, freshness)| *freshness == Freshness::Fresh));
-}
-
-#[test]
-fn view_stale_until_sixty_minutes() {
-    let usage = report(vec![window("a", 1.0, now() - Duration::minutes(16))]);
-    let visible = visible_windows(&usage, now());
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].1, Freshness::Stale);
-}
-
-#[test]
-fn view_dropped_after_sixty_minutes() {
-    let usage = report(vec![
-        window("kept", 1.0, now() - Duration::minutes(59)),
-        window("dropped", 2.0, now() - Duration::minutes(61)),
-    ]);
-    let visible = visible_windows(&usage, now());
-    assert_eq!(visible.len(), 1, "{visible:?}");
-    assert_eq!(visible[0].0.label, "kept");
-    assert_eq!(visible[0].1, Freshness::Stale);
-}
-
-#[test]
-fn view_never_past_resets_at() {
+fn view_visibility_enforces_freshness_and_reset_bounds() {
     let mut future = window("future", 1.0, now());
     future.resets_at = Some(now() + Duration::minutes(1));
     let mut past = window("past", 2.0, now());
     past.resets_at = Some(now() - Duration::seconds(1));
-    let usage = report(vec![future, past]);
-    let visible = visible_windows(&usage, now());
-    assert_eq!(visible.len(), 1, "{visible:?}");
-    assert_eq!(visible[0].0.label, "future");
+    let usage = report(vec![
+        window("fresh_edge", 1.0, now() - Duration::minutes(15)),
+        window("fresh_now", 2.0, now()),
+        window("stale_start", 3.0, now() - Duration::minutes(16)),
+        window("stale_end", 4.0, now() - Duration::minutes(59)),
+        window("expired", 5.0, now() - Duration::minutes(61)),
+        future,
+        past,
+    ]);
+    let visible: Vec<(&str, Freshness)> = visible_windows(&usage, now())
+        .into_iter()
+        .map(|(w, f)| (w.label.as_str(), f))
+        .collect();
+    assert_eq!(
+        visible,
+        [
+            ("fresh_edge", Freshness::Fresh),
+            ("fresh_now", Freshness::Fresh),
+            ("stale_start", Freshness::Stale),
+            ("stale_end", Freshness::Stale),
+            ("future", Freshness::Fresh),
+        ]
+    );
 }
 
 #[test]
@@ -499,22 +482,18 @@ fn view_same_values_ignores_observed_at() {
 }
 
 #[test]
-fn capped_openrouter_response_without_remaining_is_malformed() {
-    let response = serde_json::json!({ "data": { "limit": 10.0 } });
-    assert_eq!(openrouter_key(&response, Utc::now()), None);
-}
-
-#[test]
-fn numeric_zero_or_malformed_openrouter_limit_is_not_uncapped() {
+fn malformed_openrouter_limit_shapes_are_rejected() {
     for data in [
-        serde_json::json!({ "limit": 0, "limit_remaining": 0 }),
-        serde_json::json!({ "limit": "10", "limit_remaining": 5 }),
-        serde_json::json!({ "limit": 10, "limit_remaining": "5" }),
-        serde_json::json!({}),
+        json!({ "limit": 10.0 }),
+        json!({ "limit": 0, "limit_remaining": 0 }),
+        json!({ "limit": "10", "limit_remaining": 5 }),
+        json!({ "limit": 10, "limit_remaining": "5" }),
+        json!({}),
     ] {
         assert_eq!(
-            openrouter_key(&serde_json::json!({ "data": data }), Utc::now()),
-            None
+            openrouter_key(&json!({ "data": data }), now()),
+            None,
+            "{data}"
         );
     }
 }

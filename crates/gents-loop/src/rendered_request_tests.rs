@@ -4,20 +4,7 @@ use gents_protocol::message::{
 use serde_json::json;
 
 use super::*;
-
-fn context() -> RenderedRequestContext {
-    RenderedRequestContext {
-        request_doc_id: "doc-1".to_string(),
-        request_commit_cid: "bafy-request-commit".to_string(),
-        request_id: "req-1".to_string(),
-        node_did: "did:key:test".to_string(),
-        requester_did: "did:key:requester".to_string(),
-        agent_did: "behavior".to_string(),
-        session_id: "session".to_string(),
-        model_name: "test-model".to_string(),
-        provider_family: None,
-    }
-}
+use crate::test_support::doubles::{empty_trace, test_capture_context};
 
 fn chat_body() -> Value {
     json!({
@@ -43,7 +30,7 @@ fn build(
     components: RenderedRequestComponents,
 ) -> RenderedCompletionRequest {
     build_rendered_completion_request(
-        &context(),
+        &test_capture_context(),
         RenderedRequestSource::OpenAiChatCompletions,
         ProviderRoute {
             endpoint: Some("https://api.example.test".to_string()),
@@ -59,10 +46,6 @@ fn build(
         components,
     )
     .expect("rendered request")
-}
-
-fn empty_trace() -> AssemblyTrace {
-    AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new())
 }
 
 fn tool_result_message(id: &str, call_id: Option<&str>, text: &str) -> Message {
@@ -93,59 +76,54 @@ fn assistant_with_tool_call(id: Option<&str>, tool_call_id: &str) -> Message {
 }
 
 #[test]
-fn canonical_hash_sorts_object_keys() {
+fn canonical_hash_sorts_object_keys_and_digests_exact_bytes() {
     let left = json!({ "b": 1, "a": { "d": 2, "c": 3 } });
     let right = json!({ "a": { "c": 3, "d": 2 }, "b": 1 });
-
     assert_eq!(
         sha256_canonical_json(&left).unwrap(),
         sha256_canonical_json(&right).unwrap()
     );
-}
 
-#[test]
-fn component_hashes_digest_exactly_the_canonical_bytes() {
     let value = json!({ "b": [3, {"z": 1, "a": 2}], "a": "x" });
-
     let bytes = canonical_json_string(&value).unwrap();
     assert_eq!(bytes, r#"{"a":"x","b":[3,{"a":2,"z":1}]}"#);
-
-    let digest = Sha256::digest(bytes.as_bytes());
     assert_eq!(
         sha256_canonical_json(&value).unwrap(),
-        format!("{digest:x}")
+        format!("{:x}", Sha256::digest(bytes.as_bytes()))
     );
 }
 
 #[test]
-fn capture_key_is_stable_and_prefixed() {
+fn capture_key_is_stable_prefixed_and_boundary_separated() {
     let key = capture_key("did:key:a", "session-1", "doc-1", "inference.1", 3, 2).unwrap();
-    assert!(key.starts_with("rendered:v1:"), "unexpected key {key}");
-    assert_eq!(key.len(), "rendered:v1:".len() + 64);
+    assert!(key.starts_with("rendered:v1:") && key.len() == "rendered:v1:".len() + 64);
     assert_eq!(
         key,
         capture_key("did:key:a", "session-1", "doc-1", "inference.1", 3, 2).unwrap()
     );
-}
-
-#[test]
-fn capture_key_does_not_collide_across_component_boundaries() {
-    assert_ne!(
-        capture_key("did:key:a", "s:1", "doc-1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a:s", "1", "doc-1", "inference.1", 0, 0).unwrap(),
-    );
-    assert_ne!(
-        capture_key("did:key:a", "session", "r:1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session:r", "1", "inference.1", 0, 0).unwrap(),
-    );
-    assert_ne!(
-        capture_key("did:key:a", "session-1", "shared", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-2", "shared", "inference.1", 0, 0).unwrap(),
-    );
-    assert_ne!(
-        capture_key("did:key:a", "s", "req#compaction.1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "s", "req", "compaction.1", 0, 0).unwrap(),
-    );
+    for (a, b) in [
+        (
+            ("did:key:a", "s:1", "doc-1", "inference.1"),
+            ("did:key:a:s", "1", "doc-1", "inference.1"),
+        ),
+        (
+            ("did:key:a", "session", "r:1", "inference.1"),
+            ("did:key:a", "session:r", "1", "inference.1"),
+        ),
+        (
+            ("did:key:a", "session-1", "shared", "inference.1"),
+            ("did:key:a", "session-2", "shared", "inference.1"),
+        ),
+        (
+            ("did:key:a", "s", "req#compaction.1", "inference.1"),
+            ("did:key:a", "s", "req", "compaction.1"),
+        ),
+    ] {
+        assert_ne!(
+            capture_key(a.0, a.1, a.2, a.3, 0, 0).unwrap(),
+            capture_key(b.0, b.1, b.2, b.3, 0, 0).unwrap(),
+        );
+    }
 }
 
 #[test]

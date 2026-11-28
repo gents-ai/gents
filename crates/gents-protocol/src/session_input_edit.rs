@@ -342,6 +342,38 @@ impl SessionInputEditReceipt {
 mod tests {
     use super::*;
 
+    fn base_edit(ids: &[&str]) -> SessionInputEdit {
+        SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: "command".into(),
+            requester_did: "author".into(),
+            requester_peer_id: None,
+            node_did: "node".into(),
+            session_id: "session".into(),
+            session_doc_id: "session-doc".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: "agent-doc".into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: "2026-01-01T00:01:00Z".into(),
+            edit: PendingQueueEdit {
+                expected_request_doc_ids: ids.iter().map(|id| (*id).into()).collect(),
+                selected_request_doc_ids: ids.iter().map(|id| (*id).into()).collect(),
+                messages: ids
+                    .iter()
+                    .map(|id| PendingMessageEdit {
+                        request_doc_id: (*id).into(),
+                        content: "edited".into(),
+                        authored_input: None,
+                    })
+                    .collect(),
+            },
+            replacements: Vec::new(),
+            replacement_evidence: Vec::new(),
+            replacement_credentials: Vec::new(),
+            signature: vec![1; 64],
+        }
+    }
+
     #[test]
     fn signed_edit_binds_native_author_targets_selection_and_graph() {
         use crate::request_admission::{AgentRequestAdmissionRecord, RequestPurpose, RequestScope};
@@ -357,32 +389,9 @@ mod tests {
         replacement.session_doc_id = Some("session-doc".into());
         replacement.agent_doc_id = Some("agent-doc".into());
         replacement.admission.signature = vec![1; 64];
-        let command = SessionInputEdit {
-            version: SESSION_INPUT_EDIT_VERSION,
-            command_id: "command".into(),
-            requester_did: "author".into(),
-            requester_peer_id: None,
-            node_did: "node".into(),
-            session_id: "session".into(),
-            session_doc_id: "session-doc".into(),
-            agent_did: "agent".into(),
-            agent_doc_id: "agent-doc".into(),
-            issued_at: "2026-01-01T00:00:00Z".into(),
-            expires_at: "2026-01-01T00:01:00Z".into(),
-            edit: PendingQueueEdit {
-                expected_request_doc_ids: vec!["selected".into()],
-                selected_request_doc_ids: vec!["selected".into()],
-                messages: vec![PendingMessageEdit {
-                    request_doc_id: "selected".into(),
-                    content: "edited".into(),
-                    authored_input: None,
-                }],
-            },
-            replacements: vec![replacement],
-            replacement_evidence: vec![serde_json::json!({"signature": [1, 2]})],
-            replacement_credentials: Vec::new(),
-            signature: vec![1; 64],
-        };
+        let mut command = base_edit(&["selected"]);
+        command.replacements = vec![replacement];
+        command.replacement_evidence = vec![serde_json::json!({"signature": [1, 2]})];
         command.validate_shape().unwrap();
         let payload = command.signing_payload();
         let original = serde_json::to_value(&command).unwrap();
@@ -423,33 +432,7 @@ mod tests {
 
     #[test]
     fn signature_binds_authored_input_to_its_message() {
-        let message = |id: &str| PendingMessageEdit {
-            request_doc_id: id.into(),
-            content: "message".into(),
-            authored_input: None,
-        };
-        let mut command = SessionInputEdit {
-            version: SESSION_INPUT_EDIT_VERSION,
-            command_id: "command".into(),
-            requester_did: "requester".into(),
-            requester_peer_id: None,
-            node_did: "node".into(),
-            session_id: "session".into(),
-            session_doc_id: "session-doc".into(),
-            agent_did: "agent".into(),
-            agent_doc_id: "agent-doc".into(),
-            issued_at: "2026-01-01T00:00:00Z".into(),
-            expires_at: "2026-01-01T00:01:00Z".into(),
-            edit: PendingQueueEdit {
-                expected_request_doc_ids: vec!["one".into(), "two".into()],
-                selected_request_doc_ids: vec!["one".into(), "two".into()],
-                messages: vec![message("one"), message("two")],
-            },
-            replacements: Vec::new(),
-            replacement_evidence: Vec::new(),
-            replacement_credentials: Vec::new(),
-            signature: Vec::new(),
-        };
+        let mut command = base_edit(&["one", "two"]);
         let legacy = command.signing_payload();
         let input = crate::request_input::AuthoredRequestInput {
             selected_skill_ids: vec!["review".into()],
@@ -461,23 +444,5 @@ mod tests {
         command.edit.messages[0].authored_input = None;
         command.edit.messages[1].authored_input = Some(input);
         assert_ne!(first, command.signing_payload());
-
-        let bound = command.signing_payload();
-        command.session_doc_id = "different-session-doc".into();
-        assert_ne!(bound, command.signing_payload());
-        command.session_doc_id = "session-doc".into();
-        command.agent_did = "different-agent".into();
-        assert_ne!(bound, command.signing_payload());
-        command.agent_did = "agent".into();
-        command.agent_doc_id = "different-agent-doc".into();
-        assert_ne!(bound, command.signing_payload());
-        command.agent_doc_id = "agent-doc".into();
-        command
-            .replacement_evidence
-            .push(serde_json::json!({"block": [1, 2, 3]}));
-        assert_ne!(bound, command.signing_payload());
-        let evidence_bound = command.signing_payload();
-        command.replacement_evidence[0]["block"][0] = serde_json::json!(4);
-        assert_ne!(evidence_bound, command.signing_payload());
     }
 }

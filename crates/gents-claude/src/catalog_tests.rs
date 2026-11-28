@@ -214,6 +214,8 @@ fn provider_ids_and_capabilities() {
     );
     assert!(legacy.context.is_none() && legacy.image_limits.is_none());
     assert!(!legacy.eager_input_streaming.bedrock && legacy.eager_input_streaming.vertex);
+    let mythos = find("claude-mythos-5").expect("mythos 5");
+    assert!(!mythos.eager_input_streaming.bedrock && !mythos.eager_input_streaming.vertex);
 
     let sonnet = find("claude-sonnet-4-5").expect("sonnet 4.5");
     assert_eq!(
@@ -314,37 +316,4 @@ fn eager_input_streaming_matches_the_lean_model() {
         }
         .enabled(i.provider, i.default_endpoint)
     });
-}
-
-#[test]
-fn eager_input_streaming_is_read_on_vertex_and_bedrock_default_endpoints() {
-    let providers = [
-        CatalogProvider::FirstParty,
-        CatalogProvider::Bedrock,
-        CatalogProvider::Vertex,
-        CatalogProvider::Foundry,
-        CatalogProvider::AnthropicAws,
-        CatalogProvider::AnthropicGoogleCloud,
-        CatalogProvider::Mantle,
-        CatalogProvider::Gateway,
-    ];
-    for (id, bedrock, vertex) in [
-        ("claude-opus-5-5", true, true),
-        ("claude-3-5-haiku", false, true),
-        ("claude-mythos-5", false, false),
-    ] {
-        let flag = find(id).unwrap().eager_input_streaming;
-        for provider in providers {
-            let expected = match provider {
-                CatalogProvider::Bedrock => bedrock,
-                CatalogProvider::Vertex => vertex,
-                _ => false,
-            };
-            assert_eq!(flag.enabled(provider, true), expected, "{id} {provider:?}");
-            assert!(
-                !flag.enabled(provider, false),
-                "{id} {provider:?} custom url"
-            );
-        }
-    }
 }

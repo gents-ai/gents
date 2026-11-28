@@ -623,32 +623,37 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn definitions_are_exactly_the_admitted_tool_surface() {
-        use crate::tool_effects::ToolEffectDispatcher;
-        let hook = Arc::new(EffectHook {
-            invoked: AtomicBool::new(false),
-            rejected: AtomicBool::new(false),
-            block_before: false,
-            cleanup_fails: false,
-            cleaned: AtomicBool::new(false),
-            parent_settled: AtomicBool::new(false),
-            terminate_before: false,
-        });
-        let dispatcher = EffectDispatcher {
-            tools: Arc::new(vec![
-                Box::new(ParseOnlyTool),
-                Box::new(ReadyAfterWallDeadline {
-                    deadline_at: Utc::now(),
-                    called: Arc::new(AtomicBool::new(false)),
-                    fails: false,
-                }),
-            ]),
-            hook: hook.clone(),
+    fn effect_dispatcher(
+        tools: Vec<Box<dyn ToolDyn>>,
+        hook: Arc<EffectHook>,
+    ) -> EffectDispatcher<EffectHook> {
+        EffectDispatcher {
+            tools: Arc::new(tools),
+            hook,
             parent_internal_id: "parent".into(),
             fatal: Default::default(),
             composed: Default::default(),
-        };
+        }
+    }
+
+    fn wall_tool() -> Box<dyn ToolDyn> {
+        Box::new(ReadyAfterWallDeadline {
+            deadline_at: Utc::now(),
+            called: Arc::new(AtomicBool::new(false)),
+            fails: false,
+        })
+    }
+
+    fn scope_call(deadline: Option<chrono::DateTime<Utc>>) -> ToolCallEnvelope {
+        ToolScopeEntry::new(deadline, tokio_util::sync::CancellationToken::new()).call()
+    }
+
+    #[tokio::test]
+    async fn definitions_are_exactly_the_admitted_tool_surface() {
+        use crate::tool_effects::ToolEffectDispatcher;
+        let hook = Arc::new(EffectHook::default());
+        let dispatcher =
+            effect_dispatcher(vec![Box::new(ParseOnlyTool), wall_tool()], hook.clone());
         let definitions = dispatcher.definitions().await;
         let names: Vec<_> = definitions.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, ["parse", "ready_after_wall_deadline"]);
@@ -672,13 +677,8 @@ mod tests {
             &ToolCallEnvelope::default()
         )
         .is_some());
-        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .call();
         let outcome = dispatcher
-            .call(&scope_call, 1, "unlisted", "{}")
+            .call(&scope_call(None), 1, "unlisted", "{}")
             .await
             .unwrap();
         assert!(matches!(outcome, ToolOutcome::Failed { .. }));
@@ -689,15 +689,7 @@ mod tests {
     #[tokio::test]
     async fn a_hidden_tool_is_refused_to_the_model_and_called_for_a_plugin() {
         use crate::tool_effects::ToolEffectDispatcher;
-        let hook = Arc::new(EffectHook {
-            invoked: AtomicBool::new(false),
-            rejected: AtomicBool::new(false),
-            block_before: false,
-            cleanup_fails: false,
-            cleaned: AtomicBool::new(false),
-            parent_settled: AtomicBool::new(false),
-            terminate_before: false,
-        });
+        let hook = Arc::new(EffectHook::default());
         let tools: Vec<Box<dyn ToolDyn>> = vec![
             Box::new(AdmissionGate {
                 name: "script",
@@ -705,10 +697,7 @@ mod tests {
             }),
             Box::new(ParseOnlyTool),
         ];
-        let tools = Arc::new(crate::tool_policy::presentation::present_tools(
-            tools,
-            &["parse".into()],
-        ));
+        let tools = crate::tool_policy::presentation::present_tools(tools, &["parse".into()]);
         let args = r#"{"text":"valid"}"#;
         let refused = admit_tool(&tools, "parse", args, &ToolCallEnvelope::default()).unwrap();
         let ToolOutcome::Failed { class, text, .. } = refused else {
@@ -720,13 +709,7 @@ mod tests {
         );
         assert!(text.contains("`script`"), "{text}");
         assert!(admit_tool(&tools, "unlisted", "{}", &ToolCallEnvelope::default()).is_none());
-        let dispatcher = EffectDispatcher {
-            tools,
-            hook: hook.clone(),
-            parent_internal_id: "parent".into(),
-            fatal: tokio::sync::Mutex::new(None),
-            composed: Default::default(),
-        };
+        let dispatcher = effect_dispatcher(tools, hook.clone());
         let names: Vec<_> = dispatcher
             .definitions()
             .await
@@ -734,13 +717,8 @@ mod tests {
             .map(|definition| definition.name)
             .collect();
         assert_eq!(names, ["script", "parse"]);
-        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .call();
         let outcome = dispatcher
-            .call(&scope_call, 1, "parse", args)
+            .call(&scope_call(None), 1, "parse", args)
             .await
             .unwrap();
         assert_eq!(outcome.model_facing_text(), "specialized side effect");
@@ -751,29 +729,10 @@ mod tests {
     #[tokio::test]
     async fn unselected_specialized_tool_never_reaches_before_hook() {
         use crate::tool_effects::ToolEffectDispatcher;
-        let hook = Arc::new(EffectHook {
-            invoked: AtomicBool::new(false),
-            rejected: AtomicBool::new(false),
-            block_before: false,
-            cleanup_fails: false,
-            cleaned: AtomicBool::new(false),
-            parent_settled: AtomicBool::new(false),
-            terminate_before: false,
-        });
-        let dispatcher = EffectDispatcher {
-            tools: Arc::new(vec![]),
-            hook: hook.clone(),
-            parent_internal_id: "parent".into(),
-            fatal: tokio::sync::Mutex::new(None),
-            composed: Default::default(),
-        };
-        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .call();
+        let hook = Arc::new(EffectHook::default());
+        let dispatcher = effect_dispatcher(vec![], hook.clone());
         let outcome = dispatcher
-            .call(&scope_call, 1, "agent_interrupt", "{}")
+            .call(&scope_call(None), 1, "agent_interrupt", "{}")
             .await
             .unwrap();
         assert!(matches!(outcome, ToolOutcome::Failed { .. }));
@@ -785,32 +744,13 @@ mod tests {
     async fn before_hook_effect_outlasting_the_deadline_is_not_interrupted() {
         use crate::tool_effects::ToolEffectDispatcher;
         let hook = Arc::new(EffectHook {
-            invoked: AtomicBool::new(false),
-            rejected: AtomicBool::new(false),
-            block_before: true,
-            cleanup_fails: false,
-            cleaned: AtomicBool::new(false),
-            parent_settled: AtomicBool::new(false),
-            terminate_before: false,
+            yield_before: true,
+            ..Default::default()
         });
-        let dispatcher = EffectDispatcher {
-            tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
-                deadline_at: Utc::now(),
-                called: Arc::new(AtomicBool::new(false)),
-                fails: false,
-            })]),
-            hook: hook.clone(),
-            parent_internal_id: "parent".into(),
-            fatal: tokio::sync::Mutex::new(None),
-            composed: Default::default(),
-        };
-        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-            Some(Utc::now() + chrono::Duration::milliseconds(10)),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .call();
+        let dispatcher = effect_dispatcher(vec![wall_tool()], hook.clone());
+        let expired = Some(Utc::now() - chrono::Duration::seconds(1));
         let outcome = dispatcher
-            .call(&scope_call, 1, "ready_after_wall_deadline", "{}")
+            .call(&scope_call(expired), 1, "ready_after_wall_deadline", "{}")
             .await
             .unwrap();
         assert_eq!(
@@ -825,41 +765,19 @@ mod tests {
         use crate::tool_effects::ToolEffectDispatcher;
         for cleanup_fails in [false, true] {
             let hook = Arc::new(EffectHook {
-                invoked: AtomicBool::new(false),
-                rejected: AtomicBool::new(false),
-                block_before: false,
                 cleanup_fails,
-                cleaned: AtomicBool::new(false),
-                parent_settled: AtomicBool::new(false),
                 terminate_before: true,
+                ..Default::default()
             });
-            let dispatcher = Arc::new(EffectDispatcher {
-                tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
-                    deadline_at: Utc::now(),
-                    called: Arc::new(AtomicBool::new(false)),
-                    fails: false,
-                })]),
-                hook: hook.clone(),
-                parent_internal_id: "parent".into(),
-                fatal: tokio::sync::Mutex::new(None),
-                composed: Default::default(),
-            });
-            let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .call();
-            let outcome = async {
-                let result = dispatcher
-                    .call(&scope_call, 1, "ready_after_wall_deadline", "{}")
-                    .await;
-                assert!(matches!(
-                    result,
-                    Err(crate::tool_effects::ToolEffectError::Fatal(_))
-                ));
-                ToolOutcome::Completed("guest swallowed the error".into())
-            }
-            .await;
+            let dispatcher = effect_dispatcher(vec![wall_tool()], hook.clone());
+            let result = dispatcher
+                .call(&scope_call(None), 1, "ready_after_wall_deadline", "{}")
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::tool_effects::ToolEffectError::Fatal(_))
+            ));
+            let outcome = ToolOutcome::Completed("guest swallowed the error".into());
             let action = dispatcher
                 .settle_parent_result("plugin", None, "{}", &outcome)
                 .await;

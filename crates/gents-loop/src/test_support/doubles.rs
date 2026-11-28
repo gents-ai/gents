@@ -24,7 +24,11 @@ use tokio_util::sync::CancellationToken;
 use crate::live_output::{CanonicalOutputAppender, DeferredToolWrites, LiveOutputError};
 use crate::loop_stream::{ReboundTools, ToolRebinding};
 use crate::provider_call::{ForCall, ProviderCall};
+use crate::rendered_request::scope::{test_scope, RequestCaptureScope};
 use crate::rendered_request::transport::RenderedRequestCapturingHttpClient;
+use crate::rendered_request::{
+    AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+};
 use crate::session_hook::{ForegroundCall, ForegroundResult, SessionHook};
 use crate::test_support::fixed_tool::FixedTool;
 use crate::tool::{
@@ -34,6 +38,54 @@ use crate::tool::{
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
 use crate::{HookAction, ToolCallHookAction};
 
+pub(crate) struct DropFlag(pub(crate) Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn test_capture_context() -> RenderedRequestContext {
+    RenderedRequestContext {
+        request_doc_id: "doc-1".to_string(),
+        request_commit_cid: "bafy-request-commit".to_string(),
+        request_id: "req-1".to_string(),
+        node_did: "did:key:agent".to_string(),
+        requester_did: "did:key:requester".to_string(),
+        agent_did: "behavior".to_string(),
+        session_id: "session".to_string(),
+        model_name: "test-model".to_string(),
+        provider_family: None,
+    }
+}
+
+pub(crate) fn noop_capture_sink() -> RenderedRequestCaptureSink {
+    Arc::new(|_| Box::pin(async { Ok(()) }))
+}
+
+pub(crate) fn test_capture_scope() -> Arc<RequestCaptureScope> {
+    test_scope(test_capture_context(), noop_capture_sink())
+}
+
+pub(crate) fn empty_trace() -> AssemblyTrace {
+    AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new())
+}
+
+fn simple_tool_def(
+    name: &'static str,
+    description: &'static str,
+) -> BoxFuture<'static, ToolDefinition> {
+    Box::pin(async move {
+        ToolDefinition {
+            name: name.to_string(),
+            description: description.to_string(),
+            parameters: json!({"type": "object"}),
+        }
+    })
+}
+
+#[cfg(feature = "native")]
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResponsesArgs {
@@ -42,13 +94,16 @@ pub(crate) struct ResponsesArgs {
     pub(crate) mode: Option<ResponsesMode>,
 }
 
+#[cfg(feature = "native")]
 #[derive(serde::Deserialize, serde::Serialize)]
 pub(crate) enum ResponsesMode {
     Normal,
 }
 
+#[cfg(feature = "native")]
 pub(crate) struct ResponsesTool(pub(crate) Arc<Mutex<Vec<String>>>);
 
+#[cfg(feature = "native")]
 impl Tool for ResponsesTool {
     const NAME: &'static str = "echo";
     type Error = ToolError;
@@ -384,15 +439,7 @@ impl ToolDyn for PendingTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        let name = self.name;
-        let description = self.description;
-        Box::pin(async move {
-            ToolDefinition {
-                name: name.to_string(),
-                description: description.to_string(),
-                parameters: json!({"type": "object"}),
-            }
-        })
+        simple_tool_def(self.name, self.description)
     }
 
     fn call<'a>(
@@ -400,13 +447,7 @@ impl ToolDyn for PendingTool {
         _: String,
         context: &'a ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
-        struct Dropped(Arc<AtomicBool>);
-        impl Drop for Dropped {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-        let marker = self.dropped.clone().map(Dropped);
+        let marker = self.dropped.clone().map(DropFlag);
         let observed = self.observed.clone();
         Box::pin(async move {
             let _marker = marker;
@@ -430,13 +471,7 @@ impl ToolDyn for ReadEchoTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "echo".into(),
-                description: String::new(),
-                parameters: json!({"type":"object"}),
-            }
-        })
+        simple_tool_def("echo", "")
     }
 
     fn call<'a>(
@@ -507,13 +542,7 @@ impl ToolDyn for RebindingEchoTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "echo".into(),
-                description: "echo".into(),
-                parameters: json!({"type":"object"}),
-            }
-        })
+        simple_tool_def("echo", "echo")
     }
 
     fn call<'a>(
@@ -555,13 +584,7 @@ impl ToolDyn for ParallelProbeTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "probe".into(),
-                description: String::new(),
-                parameters: json!({"type":"object"}),
-            }
-        })
+        simple_tool_def("probe", "")
     }
 
     fn call<'a>(
@@ -725,13 +748,7 @@ impl ToolDyn for HeldFirstTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "probe".into(),
-                description: String::new(),
-                parameters: json!({"type": "object"}),
-            }
-        })
+        simple_tool_def("probe", "")
     }
 
     fn call<'a>(
@@ -1009,13 +1026,7 @@ impl ToolDyn for EffectBatchProbe {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "probe".into(),
-                description: String::new(),
-                parameters: json!({"type":"object"}),
-            }
-        })
+        simple_tool_def("probe", "")
     }
 
     fn footprint(&self, args: &str, _: &ToolCallEnvelope) -> ToolFootprint {
@@ -1226,10 +1237,11 @@ impl Tool for ParseOnlyTool {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct EffectHook {
     pub(crate) invoked: AtomicBool,
     pub(crate) rejected: AtomicBool,
-    pub(crate) block_before: bool,
+    pub(crate) yield_before: bool,
     pub(crate) cleanup_fails: bool,
     pub(crate) cleaned: AtomicBool,
     pub(crate) parent_settled: AtomicBool,
@@ -1288,8 +1300,8 @@ impl SessionHook for EffectHook {
                 reason: "child hook terminated".into(),
             };
         }
-        if self.block_before {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        if self.yield_before {
+            tokio::task::yield_now().await;
         }
         ToolCallHookAction::Skip {
             reason: "specialized side effect".into(),
@@ -1354,13 +1366,10 @@ impl ToolDyn for ReadyAfterWallDeadline {
     }
 
     fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "ready_after_wall_deadline".into(),
-                description: "wall-clock deadline regression".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
+        simple_tool_def(
+            "ready_after_wall_deadline",
+            "wall-clock deadline regression",
+        )
     }
 
     #[expect(
@@ -1403,13 +1412,7 @@ impl ToolDyn for AdmissionGateTool {
     }
 
     fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: self.name.into(),
-                description: String::new(),
-                parameters: json!({"type": "object"}),
-            }
-        })
+        simple_tool_def(self.name, "")
     }
 
     fn call<'a>(
@@ -1564,13 +1567,7 @@ impl ToolDyn for LifecycleReceiptTool {
     }
 
     fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "receipt".into(),
-                description: "fixture".into(),
-                parameters: json!({"type": "object"}),
-            }
-        })
+        simple_tool_def("receipt", "fixture")
     }
 
     fn call<'a>(

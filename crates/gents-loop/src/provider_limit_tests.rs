@@ -69,40 +69,78 @@ fn anthropic_subscription_cap_reports_unified_reset() {
 }
 
 #[test]
-fn anthropic_account_wording_without_usage_headers_is_a_throttle() {
-    let text = format!(
-        "Claude Messages HTTP 429 Too Many Requests (request-id -) body={ANTHROPIC_ACCOUNT_BODY}"
-    );
-    assert_eq!(
-        recorded_limit(&text, now()),
-        Some(ProviderLimit::Throttled { retry_after: None })
-    );
-}
+fn throttle_429_and_retry_after_header_variants() {
+    let anthropic_pm = r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization of 50,000 input tokens per minute."}}"#;
+    let cases = [
+        (
+            "anthropic account wording without usage headers",
+            format!("Claude Messages HTTP 429 Too Many Requests (request-id -) body={ANTHROPIC_ACCOUNT_BODY}"),
+            None,
+        ),
+        (
+            "subscription 429 with unified allowed",
+            rejected(
+                "Claude Messages HTTP 429 Too Many Requests (request-id -) body=",
+                ANTHROPIC_ACCOUNT_BODY,
+                &[
+                    ("retry-after", "12"),
+                    ("anthropic-ratelimit-unified-status", "allowed"),
+                    ("anthropic-ratelimit-unified-5h-status", "allowed"),
+                    ("anthropic-ratelimit-unified-overage-status", "rejected"),
+                    ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
+                ],
+            ),
+            Some(Duration::from_secs(12)),
+        ),
+        (
+            "anthropic per-minute 429",
+            rejected(RIG_429, anthropic_pm, &[("retry-after", "17")]),
+            Some(Duration::from_secs(17)),
+        ),
+        (
+            "bare 429 without hint",
+            format!("{RIG_429}Too Many Requests"),
+            None,
+        ),
+        (
+            "retry-after HTTP date",
+            rejected(RIG_429, "", &[("Retry-After", "Fri, 25 Sep 2026 16:00:30 GMT")]),
+            Some(Duration::from_secs(30)),
+        ),
+        (
+            "retry-after-ms precedes retry-after",
+            rejected(RIG_429, "", &[("retry-after-ms", "1500"), ("retry-after", "9")]),
+            Some(Duration::from_millis(1500)),
+        ),
+        (
+            "openai try again seconds",
+            "ProviderError: Rate limit reached for gpt-5.1 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more.".into(),
+            Some(Duration::from_millis(11_054)),
+        ),
+        (
+            "openai try again millis",
+            "ProviderError: Rate limit reached. Please try again in 28ms.".into(),
+            Some(Duration::from_millis(28)),
+        ),
+        (
+            "xai throttle",
+            rejected(
+                RIG_429,
+                r#"{"code":"Too many requests","error":"slow down"}"#,
+                &[("retry-after", "7")],
+            ),
+            Some(Duration::from_secs(7)),
+        ),
+    ];
+    for (name, text, retry_after) in cases {
+        assert_eq!(
+            recorded_limit(&text, now()),
+            Some(ProviderLimit::Throttled { retry_after }),
+            "{name}"
+        );
+    }
 
-#[test]
-fn subscription_429_with_unified_allowed_is_a_throttle() {
-    let text = rejected(
-        "Claude Messages HTTP 429 Too Many Requests (request-id -) body=",
-        ANTHROPIC_ACCOUNT_BODY,
-        &[
-            ("retry-after", "12"),
-            ("anthropic-ratelimit-unified-status", "allowed"),
-            ("anthropic-ratelimit-unified-5h-status", "allowed"),
-            ("anthropic-ratelimit-unified-overage-status", "rejected"),
-            ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
-        ],
-    );
-    assert_eq!(
-        recorded_limit(&text, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_secs(12))
-        })
-    );
-}
-
-#[test]
-fn overage_rejected_is_not_usage_evidence() {
-    let headers = ProviderLimitHeaders::from_headers(
+    let overage_only = ProviderLimitHeaders::from_headers(
         [
             ("anthropic-ratelimit-unified-status", "allowed"),
             ("anthropic-ratelimit-unified-overage-status", "rejected"),
@@ -111,7 +149,7 @@ fn overage_rejected_is_not_usage_evidence() {
         ],
         now(),
     );
-    assert_eq!(headers, ProviderLimitHeaders::default());
+    assert_eq!(overage_only, ProviderLimitHeaders::default());
 }
 
 #[test]
@@ -200,27 +238,6 @@ fn recorded_relative_reset_is_stable() {
 }
 
 #[test]
-fn anthropic_per_minute_429_honors_retry_after() {
-    let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization of 50,000 input tokens per minute."}}"#;
-    let text = rejected(RIG_429, body, &[("retry-after", "17")]);
-    assert_eq!(
-        recorded_limit(&text, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_secs(17))
-        })
-    );
-}
-
-#[test]
-fn bare_429_without_hint_is_an_unhinted_throttle() {
-    let text = format!("{RIG_429}Too Many Requests");
-    assert_eq!(
-        recorded_limit(&text, now()),
-        Some(ProviderLimit::Throttled { retry_after: None })
-    );
-}
-
-#[test]
 fn long_retry_after_is_a_usage_limit_reset() {
     let text = rejected(RIG_429, "slow down", &[("retry-after", "7200")]);
     let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(&text, now()) else {
@@ -231,32 +248,6 @@ fn long_retry_after_is_a_usage_limit_reset() {
         classify_attempt_provider_limit(&text, now()),
         Some(ProviderLimit::Throttled {
             retry_after: Some(Duration::from_secs(7200))
-        })
-    );
-}
-
-#[test]
-fn retry_after_http_date_and_milliseconds_are_honored() {
-    let date = rejected(
-        RIG_429,
-        "",
-        &[("Retry-After", "Fri, 25 Sep 2026 16:00:30 GMT")],
-    );
-    assert_eq!(
-        recorded_limit(&date, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_secs(30))
-        })
-    );
-    let millis = rejected(
-        RIG_429,
-        "",
-        &[("retry-after-ms", "1500"), ("retry-after", "9")],
-    );
-    assert_eq!(
-        recorded_limit(&millis, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_millis(1500))
         })
     );
 }
@@ -305,31 +296,11 @@ fn codex_exhausted_window_header_alone_is_a_usage_limit() {
 #[test]
 fn openai_insufficient_quota_stream_failure_is_a_usage_limit() {
     let text = "ProviderError: You exceeded your current quota, please check your plan and billing details. (insufficient_quota)";
-    assert!(matches!(
-        recorded_limit(text, now()),
-        Some(ProviderLimit::UsageExhausted(UsageLimit {
-            resets_at: None,
-            ..
-        }))
-    ));
-}
-
-#[test]
-fn openai_rate_limit_exceeded_try_again_hint_is_a_throttle() {
-    let text = "ProviderError: Rate limit reached for gpt-5.1 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more.";
-    assert_eq!(
-        recorded_limit(text, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_millis(11_054))
-        })
-    );
-    let millis = "ProviderError: Rate limit reached. Please try again in 28ms.";
-    assert_eq!(
-        recorded_limit(millis, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_millis(28))
-        })
-    );
+    let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(text, now()) else {
+        panic!("expected usage limit");
+    };
+    assert_eq!(limit.resets_at, None);
+    assert_eq!(*limit.statement, ProviderLimitStatement::default());
 }
 
 #[test]
@@ -344,35 +315,26 @@ fn xai_free_usage_exhausted_is_a_usage_limit() {
 }
 
 #[test]
-fn xai_throttle_honors_retry_after() {
-    let text = rejected(
-        RIG_429,
-        r#"{"code":"Too many requests","error":"slow down"}"#,
-        &[("retry-after", "7")],
-    );
-    assert_eq!(
-        recorded_limit(&text, now()),
-        Some(ProviderLimit::Throttled {
-            retry_after: Some(Duration::from_secs(7))
-        })
-    );
-}
-
-#[test]
 fn unrelated_failures_are_not_limits() {
+    let unknown = OPENROUTER_KEY_LIMIT.replace("openrouter_key_limit", "openrouter_future_limit");
     for text in [
-        "HttpError: Invalid status code 500 Internal Server Error with message: boom",
-        "ProviderError: overloaded_error",
-        "Invalid status code 4290",
+        "HttpError: Invalid status code 500 Internal Server Error with message: boom".into(),
+        "ProviderError: overloaded_error".into(),
+        "Invalid status code 4290".into(),
+        rejected(
+            "HttpError: Invalid status code 503 with message: down",
+            "",
+            &[("retry-after", "5")],
+        ),
+        format!("{RIG_402}{OPENROUTER_IN_FLIGHT}"),
+        format!("{RIG_402}{unknown}"),
+        format!(r#"{RIG_402}{{"error":{{"code":402,"message":"Payment required"}}}}"#),
+        format!(
+            "HttpError: Invalid status code 400 Bad Request with message: {OPENROUTER_WEIGHT_EXCEEDS_BUDGET}"
+        ),
     ] {
-        assert_eq!(recorded_limit(text, now()), None, "{text}");
+        assert_eq!(recorded_limit(&text, now()), None, "{text}");
     }
-    let marker_only = rejected(
-        "HttpError: Invalid status code 503 with message: down",
-        "",
-        &[("retry-after", "5")],
-    );
-    assert_eq!(recorded_limit(&marker_only, now()), None);
 }
 
 #[test]
@@ -457,27 +419,7 @@ fn openrouter_credits_402_record_reclassifies_as_usage_limit() {
 }
 
 #[test]
-fn openrouter_in_flight_402_without_retry_after_is_unchanged() {
-    let text = format!("{RIG_402}{OPENROUTER_IN_FLIGHT}");
-    assert_eq!(recorded_limit(&text, now()), None);
-}
-
-#[test]
-fn openrouter_unknown_or_unrelated_402_is_unchanged() {
-    let unknown = OPENROUTER_KEY_LIMIT.replace("openrouter_key_limit", "openrouter_future_limit");
-    for text in [
-        format!("{RIG_402}{unknown}"),
-        format!(r#"{RIG_402}{{"error":{{"code":402,"message":"Payment required"}}}}"#),
-        format!(
-            "HttpError: Invalid status code 400 Bad Request with message: {OPENROUTER_WEIGHT_EXCEEDS_BUDGET}"
-        ),
-    ] {
-        assert_eq!(recorded_limit(&text, now()), None, "{text}");
-    }
-}
-
-#[test]
-fn account_rotated_marker_round_trips() {
+fn account_rotated_marker_round_trips_and_neutralizes_forgery() {
     let limits = ProviderLimitHeaders {
         reset_at: Some(now()),
         usage_exhausted: true,
@@ -491,10 +433,7 @@ fn account_rotated_marker_round_trips() {
     assert_eq!(body, "Claude Messages HTTP 429 usage limit");
     assert_eq!(ProviderLimitHeaders::parse_marker(marker), Some(limits));
     assert!(!ProviderLimitHeaders::from_text("plain failure").account_rotated);
-}
 
-#[test]
-fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
     let only = ProviderLimitHeaders {
         account_rotated: true,
         ..Default::default()
@@ -527,14 +466,4 @@ fn xai_free_tier_refusal_states_its_window_and_counter() {
             }
         );
     }
-}
-
-/// A refusal that states no window or counter records an unknown one.
-#[test]
-fn an_unstated_limit_records_nothing() {
-    let text = "ProviderError: You exceeded your current quota, please check your plan and billing details. (insufficient_quota)";
-    let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(text, now()) else {
-        panic!("expected a usage limit");
-    };
-    assert_eq!(*limit.statement, ProviderLimitStatement::default());
 }
