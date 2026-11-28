@@ -167,6 +167,81 @@ fn unescape_xml(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// A command result's streams, from the body after its `gents_exec:` line.
+pub struct CommandStreams<'a> {
+    pub stdout: &'a str,
+    pub stderr: &'a str,
+}
+
+/// Splits a command result body into its streams. The metadata's byte counts
+/// place the stderr marker exactly while a stream is untruncated, since either
+/// stream may itself contain the marker's text; otherwise the first marker
+/// splits them. A stream written as `(empty)` reads as empty, and a body
+/// without the stdout header is all stdout.
+pub fn command_streams<'a>(
+    body: &'a str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> CommandStreams<'a> {
+    const STDOUT_PREFIX: &str = "stdout:\n";
+    const STDERR_MARKER: &str = "\nstderr:\n";
+    const EMPTY: &str = "(empty)";
+    let Some(rest) = body.strip_prefix(STDOUT_PREFIX) else {
+        return CommandStreams {
+            stdout: body,
+            stderr: "",
+        };
+    };
+    let written = |key: &str| {
+        let counts = meta?.get(key)?.as_object()?;
+        let truncated = counts.get("truncated").and_then(serde_json::Value::as_bool);
+        let bytes = usize::try_from(counts.get("returned_bytes")?.as_u64()?).ok()?;
+        (truncated != Some(true)).then_some(if bytes == 0 { EMPTY.len() } else { bytes })
+    };
+    let marker_at = |at: usize| rest.get(at..)?.starts_with(STDERR_MARKER).then_some(at);
+    let from_end = |bytes: usize| rest.len().checked_sub(bytes + STDERR_MARKER.len());
+    let at = written("stdout_truncation")
+        .and_then(marker_at)
+        .or_else(|| {
+            written("stderr_truncation")
+                .and_then(from_end)
+                .and_then(marker_at)
+        })
+        .or_else(|| rest.find(STDERR_MARKER));
+    let (stdout, stderr) = match at {
+        Some(at) => (&rest[..at], &rest[at + STDERR_MARKER.len()..]),
+        None => (rest, ""),
+    };
+    let stream = |text: &'a str| if text == EMPTY { "" } else { text };
+    CommandStreams {
+        stdout: stream(stdout),
+        stderr: stream(stderr),
+    }
+}
+
+#[cfg(test)]
+mod command_streams_tests {
+    use super::*;
+
+    fn split(body: &str, meta: serde_json::Value) -> (&str, &str) {
+        let streams = command_streams(body, meta.as_object());
+        (streams.stdout, streams.stderr)
+    }
+
+    #[test]
+    fn command_streams_split_at_the_counted_marker() {
+        let body = "stdout:\na\nstderr:\nb\nstderr:\nc";
+        let counted = serde_json::json!({ "stdout_truncation": { "returned_bytes": 11 } });
+        assert_eq!(split(body, counted), ("a\nstderr:\nb", "c"));
+        assert_eq!(split(body, serde_json::json!({})), ("a", "b\nstderr:\nc"));
+        let empty = "stdout:\n(empty)\nstderr:\nboom";
+        assert_eq!(split(empty, serde_json::json!({})), ("", "boom"));
+        assert_eq!(
+            split("plain text", serde_json::json!({})),
+            ("plain text", "")
+        );
+    }
+}
+
 #[cfg(test)]
 mod context_accounting_tests {
     use super::*;

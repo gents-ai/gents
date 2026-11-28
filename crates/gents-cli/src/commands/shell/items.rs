@@ -6,17 +6,23 @@ use gents_observe::client_projection::canonical_output::{
 };
 use gents_observe::client_projection::query::SessionTranscriptQueryPage;
 use gents_observe::client_projection::store::{session_summary_entries, ClientStore};
+use gents_protocol::background_completion::is_background_completion_notification_message_key;
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::file_changes::{FileImage, ToolFileChanges};
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
-use gents_protocol::output::{MessageBlock, MessageRole};
-use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, PayloadPresentation, TranscriptMessage,
+};
+use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
-use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents_protocol::tool_names::{
+    AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+};
 use gents_protocol::transcript::present_message;
-use gents_shell::app::transcript::ChatLine;
+use gents_shell::app::transcript::{elapsed, ChatLine};
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
+use gents_tools::rendering::{command_streams, completion_metadata, CompletionMetadata};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::Value;
 
@@ -254,8 +260,24 @@ pub(super) fn transcript(
     let mut compacted = compacted.into_iter().peekable();
     let mut lines = Vec::new();
     let mut names = RapidHashMap::new();
+    let mut subjects: RapidHashMap<String, String> = RapidHashMap::new();
     let mut delivered = Vec::new();
+    let requests: RapidHashMap<&str, &AgentRequestRow> = page
+        .requests
+        .iter()
+        .filter_map(|request| Some((request.doc_id.as_deref()?, request)))
+        .collect();
+    let worked_line = |turn: Option<&str>| {
+        let request = turn.and_then(|done| requests.get(done)).copied();
+        request.and_then(worked)
+    };
+    let mut turn = None;
     for row in &messages {
+        let request = row.message.request_doc_id.as_deref();
+        if request != turn {
+            lines.extend(worked_line(turn));
+            turn = request;
+        }
         let sequence = i64::from(row.message.sequence);
         while let Some(entry) = compacted.next_if(|entry| through(entry) < sequence) {
             lines.push(compaction(entry));
@@ -292,6 +314,25 @@ pub(super) fn transcript(
                     }
                 }
             }
+            MessageRole::User
+                if is_background_completion_notification_message_key(&row.message.message_key) =>
+            {
+                let Some((call, metadata)) = completion(&row.message) else {
+                    continue;
+                };
+                let tool = tools.get(call.as_str()).copied();
+                let parent = tool.and_then(|tool| tool.spawned_by_tool_call_doc_id.as_deref());
+                let subject = subjects.get(&call).or_else(|| subjects.get(parent?));
+                let subject = subject.unwrap_or(&metadata.tool_name);
+                lines.push(notice(&metadata, subject, id.clone()));
+                if let Some(tool) = tool {
+                    if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials)
+                    {
+                        lines.extend(output(&id, &result));
+                    }
+                }
+                delivered.push(call);
+            }
             MessageRole::User if shown.has_visible_body() => {
                 lines.push(shown_line(body, Tone::You, id));
             }
@@ -319,6 +360,9 @@ pub(super) fn transcript(
                     names.insert(tool_call_doc_id.clone(), name.clone());
                     let tool = tools.get(tool_call_doc_id.as_str()).copied();
                     let arguments = tool_arguments(&message, call);
+                    if let Some(subject) = subject(name, tool, &arguments) {
+                        subjects.insert(tool_call_doc_id.clone(), subject);
+                    }
                     let changed = edits.get(tool_call_doc_id).and_then(Option::as_deref);
                     let made = tool_lines(tool_call_doc_id, name, tool, &arguments, changed);
                     lines.extend(made);
@@ -327,8 +371,8 @@ pub(super) fn transcript(
             _ => {}
         }
     }
-    lines.extend(compacted.map(compaction));
-    // A spawned or background run has no result message: its own output is its result.
+    // A spawned or background run has no result message: its own output is its result, under
+    // its call's line.
     for tool in view.tool_calls.iter().copied() {
         let Some(id) = tool.doc_id.as_deref() else {
             continue;
@@ -340,14 +384,36 @@ pub(super) fn transcript(
             continue;
         }
         if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials) {
-            lines.extend(output(id, &result));
+            let call = |line: &ChatLine| {
+                line.item.as_deref() == Some(id) || line.under.as_deref() == Some(id)
+            };
+            let at = lines
+                .iter()
+                .rposition(call)
+                .map_or(lines.len(), |at| at + 1);
+            lines.splice(at..at, output(id, &result));
         }
     }
+    lines.extend(worked_line(turn));
+    lines.extend(compacted.map(compaction));
     let next = messages.iter().map(|row| row.message.sequence + 1).max();
     Transcript {
         lines,
         next: next.unwrap_or_default(),
     }
+}
+
+/// How long a finished request worked: from its claim to its end.
+fn worked(request: &AgentRequestRow) -> Option<ChatLine> {
+    let claimed = DateTime::parse_from_rfc3339(request.claimed_at.as_deref()?).ok()?;
+    let ended = DateTime::parse_from_rfc3339(request.terminalized_at.as_deref()?).ok()?;
+    let spent = (ended - claimed).to_std().ok()?;
+    let id = format!("{}/worked", request.doc_id.as_deref()?);
+    Some(shown_line(
+        format!("  worked for {}", elapsed(spent)),
+        Tone::Label,
+        id,
+    ))
 }
 
 fn compaction(entry: &CompactionEntryRow) -> ChatLine {
@@ -406,14 +472,13 @@ fn tool_lines(
     };
     let line = |text: String, tone| shown_line(text, tone, id.to_string());
     if name == AGENT_NEW_TOOL_NAME || name == AGENT_MESSAGE_TOOL_NAME {
-        let field = if name == AGENT_NEW_TOOL_NAME {
-            "prompt"
-        } else {
-            "message"
-        };
-        let prompt = arguments[field].as_str().unwrap_or_default();
-        let first = clean(prompt.lines().next().unwrap_or_default());
+        let first = first_prompt_line(name, arguments);
         return vec![line(format!("  ◆ {first}"), Tone::Label)];
+    }
+    if name == SPAWN_PROCESS_TOOL_NAME {
+        if let Some(spawned) = subject(name, tool, arguments) {
+            return vec![line(format!("  {mark} spawn {spawned}"), tone)];
+        }
     }
     if is_command(name, tool) {
         return vec![line(
@@ -427,6 +492,7 @@ fn tool_lines(
             tone,
             item: Some(format!("{id}/{n}")),
             change: None,
+            under: None,
         };
         return match changed {
             Some(changes) => changes
@@ -458,6 +524,30 @@ fn tool_lines(
     vec![line(format!("  {mark} {service} {called}"), tone)]
 }
 
+/// What a background call's completion names it by: an agent call's first prompt line, a
+/// spawned process's command, or a command's own. A spawned process's completion is its
+/// child's, which names it through this call.
+fn subject(name: &str, tool: Option<&AgentToolCallRow>, arguments: &Value) -> Option<String> {
+    if name == AGENT_NEW_TOOL_NAME || name == AGENT_MESSAGE_TOOL_NAME {
+        return Some(first_prompt_line(name, arguments));
+    }
+    if name == SPAWN_PROCESS_TOOL_NAME {
+        let spawned = arguments["tool_name"].as_str()?;
+        return Some(command(spawned, &arguments["args"]));
+    }
+    is_command(name, tool).then(|| command(name, arguments))
+}
+
+fn first_prompt_line(name: &str, arguments: &Value) -> String {
+    let field = if name == AGENT_NEW_TOOL_NAME {
+        "prompt"
+    } else {
+        "message"
+    };
+    let prompt = arguments[field].as_str().unwrap_or_default();
+    clean(prompt.lines().next().unwrap_or_default())
+}
+
 /// A command as it was run: its argv joined as a shell would read it.
 fn command(name: &str, arguments: &Value) -> String {
     let program = arguments["command"]
@@ -477,16 +567,54 @@ fn command(name: &str, arguments: &Value) -> String {
     }
 }
 
-/// A command's output line, none for no output. Its first line is the runner's metadata
-/// when it starts `gents_exec:`.
+/// A command's output line, opening under its command's line `id`; none for no output. Its
+/// first line is the runner's metadata when it starts `gents_exec:`, and of the streams after
+/// it the line shows stdout, or stderr when stdout is empty.
 fn output(id: &str, result: &str) -> Option<ChatLine> {
     let shown = match result.strip_prefix("gents_exec:") {
-        Some(rest) => rest.split_once('\n').map_or("", |(_, output)| output),
+        Some(rest) => {
+            let (header, body) = rest.split_once('\n').unwrap_or((rest, ""));
+            let meta = serde_json::from_str::<Value>(header).ok();
+            let streams = command_streams(body, meta.as_ref().and_then(Value::as_object));
+            match streams.stdout.trim().is_empty() {
+                true => streams.stderr,
+                false => streams.stdout,
+            }
+        }
         None => result,
     };
     let shown = clean(shown);
     let shown = shown.trim_end();
-    (!shown.is_empty()).then(|| shown_line(capped(shown), Tone::Label, format!("{id}/output")))
+    (!shown.is_empty()).then(|| ChatLine {
+        under: Some(id.to_string()),
+        ..shown_line(capped(shown), Tone::Label, format!("{id}/output"))
+    })
+}
+
+/// The call a completion notification delivers to, and what its envelope says.
+fn completion(message: &TranscriptMessage) -> Option<(String, CompletionMetadata)> {
+    let MessagePublication::ToolDelivery { tool_call_doc_id } = &message.publication else {
+        return None;
+    };
+    let metadata = message.blocks.iter().find_map(|block| match block {
+        MessageBlock::Text { text } => match &text.presentation {
+            PayloadPresentation::Composed { parts } => completion_metadata(parts),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    Some((tool_call_doc_id.clone(), metadata))
+}
+
+/// A background call's end, in its run line's columns.
+fn notice(metadata: &CompletionMetadata, subject: &str, id: String) -> ChatLine {
+    let ((mark, tone), verb) = match (metadata.status.as_str(), metadata.reason.as_deref()) {
+        ("completed", _) => (DONE, "done"),
+        ("cancelled", _) => (FAILED, "cancelled"),
+        ("failed", Some("deadline_exceeded")) => (FAILED, "timed out"),
+        _ => (FAILED, "failed"),
+    };
+    shown_line(format!("  {mark} {verb:<5} {}", clean(subject)), tone, id)
 }
 
 /// The running turn's reasoning and reply, under the sequence its message will take.
@@ -513,6 +641,7 @@ fn shown_line(text: String, tone: Tone, item: String) -> ChatLine {
         tone,
         item: Some(item),
         change: None,
+        under: None,
     }
 }
 
@@ -564,8 +693,8 @@ mod tests {
     };
     use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
     use gents_protocol::output::{
-        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter, StreamPayload,
-        ToolResultPart,
+        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
+        PayloadPresentation, PayloadRef, PresentedPayload, StreamPayload, ToolResultPart,
     };
     use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
     use gents_protocol::session::AgentSession;
@@ -757,6 +886,7 @@ mod tests {
     struct Page {
         rows: ClientStoreRows,
         closes: usize,
+        requests: Vec<AgentRequestRow>,
     }
 
     impl Page {
@@ -837,6 +967,52 @@ mod tests {
             let source = OutputSource::ToolCall {
                 tool_call_doc_id: id.to_string(),
             };
+            self.delivery(sequence, id, source, output);
+        }
+
+        /// The receipt a background call's caller gets at once, written apart from its output.
+        fn receipt(&mut self, sequence: u32, id: &str, text: &str) {
+            let key = format!("receipt:{id}");
+            self.delivery(sequence, id, OutputSource::Authored { key }, text);
+        }
+
+        /// Marks call `id` as run in the background.
+        fn background(&mut self, id: &str) {
+            let mut tools = self.rows.tool_calls.iter_mut();
+            let tool = tools.find(|tool| tool.doc_id.as_deref() == Some(id));
+            tool.expect("a call on the page").await_mode = Some("background".to_string());
+        }
+
+        /// The output call `id` wrote itself, which no message delivers.
+        fn ran(&mut self, id: &str, output: &str) {
+            let source = OutputSource::ToolCall {
+                tool_call_doc_id: id.to_string(),
+            };
+            let writer = OutputWriter::ToolExecution {
+                tool_call_doc_id: id.to_string(),
+            };
+            self.segment(closed(
+                &at(),
+                source,
+                writer,
+                StreamPayload::ToolOutput,
+                output,
+            ));
+        }
+
+        /// The process `parent`'s spawn_process call started, as call `id` in `state`.
+        fn spawned(&mut self, id: &str, parent: &str, state: &str) {
+            let row = json!({
+                "_docID": id, "node_did": "n", "request_doc_id": "bae-r1", "tool_call_key": id,
+                "session_id": "s1", "request_id": "r1", "requester_did": "u", "tool_name": "bash",
+                "lifecycle_state": state, "await_mode": "background",
+                "spawned_by_tool_call_doc_id": parent,
+            });
+            let row = serde_json::from_value::<AgentToolCallRow>(row).unwrap();
+            self.rows.tool_calls.push(row);
+        }
+
+        fn delivery(&mut self, sequence: u32, id: &str, source: OutputSource, output: &str) {
             let writer = OutputWriter::ToolExecution {
                 tool_call_doc_id: id.to_string(),
             };
@@ -865,6 +1041,68 @@ mod tests {
             self.message(delivered);
         }
 
+        /// The completion notification the runtime delivers for background call `id`: a
+        /// user message whose text composes the envelope around the call's output.
+        fn notice(
+            &mut self,
+            sequence: u32,
+            id: &str,
+            status: &str,
+            reason: Option<&str>,
+            output: &str,
+        ) {
+            use gents_tools::rendering::{
+                tool_completion_presentation, NOTIFICATION_SUMMARY_BYTES,
+            };
+            let source = OutputSource::ToolCall {
+                tool_call_doc_id: id.to_string(),
+            };
+            let writer = OutputWriter::ToolExecution {
+                tool_call_doc_id: id.to_string(),
+            };
+            let segment = closed(&at(), source, writer, StreamPayload::ToolOutput, output);
+            let close_doc_id = self.segment(segment);
+            let (_, parts) = tool_completion_presentation(
+                id,
+                "bash",
+                status,
+                output,
+                reason,
+                NOTIFICATION_SUMMARY_BYTES,
+            );
+            let block = MessageBlock::Text {
+                text: PresentedPayload {
+                    output: PayloadRef {
+                        close_doc_id,
+                        stream: 0,
+                    },
+                    presentation: PayloadPresentation::Composed { parts },
+                },
+            };
+            let key =
+                gents_protocol::background_completion::background_completion_notification_message_key(id, "tool");
+            let publication = MessagePublication::ToolDelivery {
+                tool_call_doc_id: id.to_string(),
+            };
+            let notice = header(
+                &at(),
+                &key,
+                sequence,
+                MessageRole::User,
+                publication,
+                vec![block],
+            );
+            self.message(notice);
+        }
+
+        /// The page's request, claimed at `claimed` and ended at `ended` when it has.
+        fn claimed(&mut self, claimed: &str, ended: Option<&str>) {
+            let mut row = request("r1", "s1", "completed", "hello", claimed);
+            row.claimed_at = Some(claimed.to_string());
+            row.terminalized_at = ended.map(str::to_string);
+            self.requests.push(row);
+        }
+
         fn read(self, compactions: &[CompactionEntryRow], edits: &Edits) -> Transcript {
             let page = SessionTranscriptQueryPage {
                 store: ClientStore::from_rows(self.rows),
@@ -876,7 +1114,7 @@ mod tests {
                 source_exhausted: true,
                 has_newer: false,
                 covered: Default::default(),
-                requests: Vec::new(),
+                requests: self.requests,
                 result_messages: Vec::new(),
             };
             transcript(&page, compactions, "s1", edits)
@@ -884,6 +1122,72 @@ mod tests {
     }
 
     type Edits = RapidHashMap<String, Option<Vec<Change>>>;
+
+    /// `line`, opening under item `parent`.
+    fn under(parent: &str, line: ChatLine) -> ChatLine {
+        ChatLine {
+            under: Some(parent.to_string()),
+            ..line
+        }
+    }
+
+    #[test]
+    fn a_finished_request_ends_with_how_long_it_worked() {
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "hello");
+        page.text(1, MessageRole::Assistant, "hi");
+        let cargo = json!({ "command": "cargo", "args": ["test"] });
+        page.tool(2, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        page.ran("t1", "ok");
+        page.claimed("2026-11-26T12:00:00Z", Some("2026-11-26T12:01:23Z"));
+        let read = page.read(&[], &Edits::new());
+        let worked = line("  worked for 1m 23s", Tone::Label, "bae-r1/worked");
+        let output = under("t1", line("ok", Tone::Label, "t1/output"));
+        assert_eq!(read.lines[read.lines.len() - 2..], [output, worked]);
+
+        let mut running = Page::default();
+        running.text(0, MessageRole::User, "hello");
+        running.claimed("2026-11-26T12:00:00Z", None);
+        let read = running.read(&[], &Edits::new());
+        assert!(read
+            .lines
+            .iter()
+            .all(|shown| !shown.text.contains("worked for")));
+    }
+
+    #[test]
+    fn a_background_call_s_own_output_follows_its_command() {
+        use Tone::{Label, Reply, You};
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "hello");
+        let cargo = json!({ "command": "cargo", "args": ["test"] });
+        page.tool(1, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        page.text(2, MessageRole::Assistant, "started it");
+        page.ran("t1", "ok");
+        let read = page.read(&[], &Edits::new());
+        let expected = vec![
+            line("hello", You, "m0"),
+            line("  ✓ run   cargo test", Label, "t1"),
+            under("t1", line("ok", Label, "t1/output")),
+            line("started it", Reply, "m2"),
+        ];
+        assert_eq!(read.lines, expected);
+    }
+
+    #[test]
+    fn a_spawned_process_shows_its_command() {
+        let mut page = Page::default();
+        let spawn = json!({
+            "tool_name": "bash",
+            "args": { "command": "cargo", "args": ["test", "-p", "gents"] },
+        });
+        page.tool(0, "p1", "spawn_process", spawn, "completed");
+        let read = page.read(&[], &Edits::new());
+        let spawned = line("  ✓ spawn cargo test -p gents", Tone::Label, "p1");
+        assert_eq!(read.lines, [spawned]);
+    }
 
     fn compacted(key: &str, through: i64) -> CompactionEntryRow {
         let entry = json!({ "compaction_key": key, "compacted_through_sequence": through });
@@ -921,7 +1225,7 @@ mod tests {
             line("hello", You, "m0"),
             line("hi\nthere", Reply, "m1"),
             line("  ✓ run   cargo test '--all targets'", Label, "t1"),
-            line("ok", Label, "t1/output"),
+            under("t1", line("ok", Label, "t1/output")),
             line("  … gents search", Warn, "t2"),
             line("  ✓ compacted the conversation", Label, "k1"),
             line("  ✗ run   false", Warn, "t3"),
@@ -930,6 +1234,143 @@ mod tests {
         ];
         assert_eq!(read.lines, expected);
         assert_eq!(read.next, 8, "the next message's sequence");
+    }
+
+    #[test]
+    fn a_background_completion_shows_its_command_and_output() {
+        use Tone::{Label, Reply, You};
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "run the tests in the background");
+        let cargo = json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        page.tool(1, "t1", "bash", cargo, "completed");
+        page.notice(2, "t1", "completed", None, "test result: ok. 412 passed");
+        page.text(3, MessageRole::Assistant, "All 412 tests passed.");
+
+        let read = page.read(&[], &Edits::new());
+
+        let expected = vec![
+            line("run the tests in the background", You, "m0"),
+            line("  ✓ run   cargo test -p gents", Label, "t1"),
+            line("  ✓ done  cargo test -p gents", Label, "m2"),
+            under(
+                "m2",
+                line("test result: ok. 412 passed", Label, "m2/output"),
+            ),
+            line("All 412 tests passed.", Reply, "m3"),
+        ];
+        assert_eq!(read.lines, expected);
+        let raw = read
+            .lines
+            .iter()
+            .any(|shown| shown.text.contains("<tool-completion"));
+        assert!(!raw, "the envelope never shows");
+    }
+
+    #[test]
+    fn a_background_completion_names_how_it_ended() {
+        use Tone::{Label, Warn, You};
+        let cargo = || json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        for (status, reason, state, expected) in [
+            (
+                "cancelled",
+                None,
+                "cancelled",
+                "  ✗ cancelled cargo test -p gents",
+            ),
+            (
+                "failed",
+                Some("deadline_exceeded"),
+                "failed",
+                "  ✗ timed out cargo test -p gents",
+            ),
+            (
+                "failed",
+                Some("tool_failed"),
+                "failed",
+                "  ✗ failed cargo test -p gents",
+            ),
+        ] {
+            let mut page = Page::default();
+            page.tool(0, "t1", "bash", cargo(), state);
+            page.notice(1, "t1", status, reason, "boom");
+            let read = page.read(&[], &Edits::new());
+            assert_eq!(
+                read.lines[1],
+                line(expected, Warn, "m1"),
+                "{status} {reason:?}"
+            );
+        }
+
+        // A call not on the loaded page is named by its tool and has no output line.
+        let mut page = Page::default();
+        page.notice(0, "older", "completed", None, "ok");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(read.lines, vec![line("  ✓ done  bash", Label, "m0")]);
+
+        // Only the message key makes a notice: typed envelope text stays the person's.
+        let typed = "<tool-completion tool_call_id=\"x\" tool_name=\"bash\" status=\"completed\">\n  <result>ok</result>\n</tool-completion>";
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, typed);
+        assert_eq!(page.read(&[], &Edits::new()).lines[0].tone, You);
+    }
+
+    #[test]
+    fn a_receipt_and_the_completion_keep_their_own_lines() {
+        use Tone::Label;
+        let mut page = Page::default();
+        let cargo = json!({ "command": "cargo", "args": ["test", "-p", "gents"] });
+        page.tool(0, "t1", "bash", cargo, "completed");
+        page.background("t1");
+        page.receipt(1, "t1", "continues in the background");
+        page.notice(2, "t1", "completed", None, "test result: ok");
+
+        let read = page.read(&[], &Edits::new());
+
+        let expected = vec![
+            line("  ✓ run   cargo test -p gents", Label, "t1"),
+            under(
+                "t1",
+                line("continues in the background", Label, "t1/output"),
+            ),
+            line("  ✓ done  cargo test -p gents", Label, "m2"),
+            under("m2", line("test result: ok", Label, "m2/output")),
+        ];
+        assert_eq!(read.lines, expected);
+    }
+
+    #[test]
+    fn an_agent_call_completion_names_its_prompt() {
+        let mut page = Page::default();
+        let prompt = json!({ "prompt": "review it\nthen report" });
+        page.tool(0, "t1", AGENT_NEW_TOOL_NAME, prompt, "completed");
+        page.background("t1");
+        page.notice(1, "t1", "completed", None, "reviewed");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(
+            read.lines[1],
+            line("  ✓ done  review it", Tone::Label, "m1")
+        );
+    }
+
+    #[test]
+    fn a_spawned_process_completion_names_its_command() {
+        use Tone::Label;
+        let mut page = Page::default();
+        let spawn = json!({
+            "tool_name": "bash",
+            "args": { "command": "cargo", "args": ["test", "-p", "gents"] },
+        });
+        page.tool(0, "p1", "spawn_process", spawn, "completed");
+        page.spawned("c1", "p1", "completed");
+        page.notice(1, "c1", "completed", None, "test result: ok");
+        let read = page.read(&[], &Edits::new());
+        assert_eq!(
+            read.lines[1..],
+            [
+                line("  ✓ done  cargo test -p gents", Label, "m1"),
+                under("m1", line("test result: ok", Label, "m1/output")),
+            ]
+        );
     }
 
     fn file(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeImages {
@@ -1020,6 +1461,19 @@ mod tests {
                 edited("  ✓ edit  b.rs", Tone::Label, "t1/1", Some(&changed[1])),
                 edited("  … edit  new.rs", Tone::Warn, "t2/0", None),
             ]
+        );
+    }
+
+    #[test]
+    fn command_output_shows_its_stdout_or_else_its_stderr() {
+        let shown = |result: &str| output("t1", result).map(|line| line.text);
+        let both = "gents_exec: {}\nstdout:\nran tests\nstderr:\nwarning: unused";
+        assert_eq!(shown(both).as_deref(), Some("ran tests"));
+        let failed = "gents_exec: {}\nstdout:\n(empty)\nstderr:\nerror: no such file";
+        assert_eq!(shown(failed).as_deref(), Some("error: no such file"));
+        assert_eq!(
+            shown("gents_exec: {}\nstdout:\n(empty)\nstderr:\n(empty)"),
+            None
         );
     }
 

@@ -164,6 +164,7 @@ pub fn numbered(count: usize) -> Vec<ChatLine> {
             tone: Tone::Plain,
             item: None,
             change: None,
+            under: None,
         })
         .collect()
 }

@@ -1,12 +1,14 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Margin, Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::input::TAB;
+use crate::app::markdown::Marks;
+use crate::app::selection::Selection;
 use crate::app::transcript::Tab;
 use crate::app::{App, Mode, Pane};
 use crate::keys::KeySet;
@@ -39,7 +41,11 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
         startup(area, message.y, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
-        chat(&app.conversation_rows(rows.width), tab.scroll, rows, buf);
+        let shown = app.conversation_rows(rows.width);
+        chat(&shown, &tab.row_marks(rows.width), tab.scroll, rows, buf);
+        if let Some(selection) = app.selection {
+            selected(selection, shown.len(), tab.scroll, rows, buf);
+        }
     }
     running_rows(app, tab, area, buf);
     message_box(app, message, focused, buf);
@@ -154,13 +160,25 @@ pub fn first_line(total: usize, height: u16, scroll: usize) -> usize {
     total.saturating_sub(usize::from(height) + scroll)
 }
 
-/// A conversation's rows, `scroll` rows up from its end, as the tab and the sidebar draw them.
-pub fn chat(rows: &[(String, Tone)], scroll: usize, area: Rect, buf: &mut Buffer) {
+/// A conversation's rows, `scroll` rows up from its end, as the tab and the sidebar draw them,
+/// each row styled by its `marks`; rows past them draw plain.
+pub(crate) fn chat(
+    rows: &[(String, Tone)],
+    marks: &[Marks],
+    scroll: usize,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let edges = bubble_edges(rows);
     let first = first_line(rows.len(), area.height, scroll);
     let shown = rows[first..].iter().zip(&edges[first..]);
-    for (((text, tone), edge), y) in shown.zip(area.top()..area.bottom()) {
+    for (at, (((text, tone), edge), y)) in (first..).zip(shown.zip(area.top()..area.bottom())) {
         draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
+        for (cells, look) in marks.get(at).into_iter().flatten() {
+            let width = cells.end.saturating_sub(cells.start);
+            let cells = Rect::new(area.x + cells.start as u16, y, width as u16, 1);
+            buf.set_style(cells.intersection(area), theme::look(*look));
+        }
         if *tone == Tone::You {
             let left = edge.saturating_sub(1) as u16;
             let block = Rect::new(area.x + left, y, area.width - left, 1);
@@ -173,9 +191,26 @@ pub fn chat(rows: &[(String, Tone)], scroll: usize, area: Rect, buf: &mut Buffer
     }
 }
 
+/// Reverses the cells `selection` covers of the `total` rows `chat` drew in `area`, so it shows
+/// on every tone, the reply's highlight included.
+fn selected(selection: Selection, total: usize, scroll: usize, area: Rect, buf: &mut Buffer) {
+    let ((top, from), (bottom, to)) = selection.ordered();
+    let first = first_line(total, area.height, scroll);
+    for (row, y) in (first..total).zip(area.top()..area.bottom()) {
+        if !(top..=bottom).contains(&row) {
+            continue;
+        }
+        let left = if row == top { from } else { 0 };
+        let right = if row == bottom { to + 1 } else { area.width };
+        let width = right.min(area.width).saturating_sub(left);
+        let cells = Rect::new(area.x + left, y, width, 1);
+        buf.set_style(cells, Style::new().add_modifier(Modifier::REVERSED));
+    }
+}
+
 /// The column each of your messages' rows starts at: the least indented row of its bubble, so
 /// its blank and indented rows keep the bubble's edge. Other rows get 0.
-fn bubble_edges(rows: &[(String, Tone)]) -> Vec<usize> {
+pub(crate) fn bubble_edges(rows: &[(String, Tone)]) -> Vec<usize> {
     let indent = |row: &str| row.len() - row.trim_start().len();
     let mut edges = vec![0; rows.len()];
     let mut at = 0;
@@ -348,11 +383,13 @@ fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::markdown::Look;
     use crate::app::transcript::{sample_chat, ChatLine, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::Tone;
     use crate::source::{Agent, Update};
     use crate::testing::{buffer, find, press, screen, with_right_pane};
+    use ratatui::style::Modifier;
 
     fn no_logo(app: &App) -> bool {
         buffer(app).content().iter().all(|c| c.bg != theme::LOGO)
@@ -367,6 +404,7 @@ mod tests {
                 tone: Tone::Plain,
                 item: None,
                 change: None,
+                under: None,
             })
             .collect();
         tab
@@ -387,6 +425,7 @@ mod tests {
             tone: Tone::You,
             item: None,
             change: None,
+            under: None,
         }];
         let s = screen(&app);
         let (y, x) = find(&s, "first line").expect("the bubble");
@@ -480,6 +519,34 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_is_drawn_reversed() {
+        use ratatui::crossterm::event::{
+            Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = chat_app();
+        let s = screen(&app);
+        let (row, start) = find(&s, "Moving them").expect("the reply");
+        let (last_row, column) = find(&s, "beside them.").expect("its second row");
+        let end = column + "beside them.".len() as u16 - 1;
+        for (kind, (column, row)) in [
+            (MouseEventKind::Down(MouseButton::Left), (start, row)),
+            (MouseEventKind::Drag(MouseButton::Left), (end, last_row)),
+        ] {
+            let modifiers = KeyModifiers::NONE;
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers,
+            }));
+        }
+        let buf = buffer(&app);
+        let reversed = |x, y| buf[(x, y)].modifier.contains(Modifier::REVERSED);
+        assert!(reversed(start, row) && reversed(end, last_row));
+        assert!(!reversed(start - 1, row) && !reversed(end + 1, last_row));
+    }
+
+    #[test]
     fn a_reply_is_highlighted_across_the_row() {
         let mut app = chat_app();
         app.tabs[0].prompts = vec![crate::sample::approval("Engineer")];
@@ -514,6 +581,7 @@ mod tests {
             tone: Tone::You,
             item: None,
             change: None,
+            under: None,
         }];
         let rows = rows_at(&tab, 56);
         assert!(rows.len() > 1);
@@ -651,6 +719,166 @@ mod tests {
         assert_eq!(drawn.count(), 60);
     }
 
+    fn tab_with(lines: &[(&str, Tone)]) -> Tab {
+        let mut tab = Tab::new_session();
+        tab.lines = lines
+            .iter()
+            .map(|(text, tone)| ChatLine {
+                text: text.to_string(),
+                tone: *tone,
+                item: None,
+                change: None,
+                under: None,
+            })
+            .collect();
+        tab
+    }
+
+    fn bold() -> Look {
+        Look {
+            modifier: Modifier::BOLD,
+            code: false,
+        }
+    }
+
+    fn code() -> Look {
+        Look {
+            modifier: Modifier::empty(),
+            code: true,
+        }
+    }
+
+    #[test]
+    fn a_reply_row_marks_its_styled_columns() {
+        let tab = tab_with(&[("**bold** and `code`", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["bold and code"]);
+        assert_eq!(tab.row_marks(80), [vec![(0..4, bold()), (9..13, code())]]);
+    }
+
+    #[test]
+    fn a_wrapped_row_knows_what_joins_it_to_the_row_before() {
+        let tab = tab_with(&[("aa bb\nabcdefgh", Tone::Plain), ("x yz", Tone::You)]);
+        assert_eq!(rows_at(&tab, 4)[..4], ["aa", "bb", "abcd", "efgh"]);
+        assert_eq!(tab.row_joins(4)[..4], ["\n", " ", "\n", ""]);
+        assert_eq!(tab.row_joins(4).len(), rows_at(&tab, 4).len());
+        let reply = tab_with(&[("**aa** bb", Tone::Reply)]);
+        assert_eq!(reply.row_joins(4), ["\n", " "]);
+    }
+
+    #[test]
+    fn a_styled_span_keeps_its_style_across_a_wrap() {
+        let tab = tab_with(&[("aaaa **bb cc**", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 7), ["aaaa bb", "cc"]);
+        assert_eq!(
+            tab.row_marks(7),
+            [vec![(5..7, bold())], vec![(0..2, bold())]]
+        );
+    }
+
+    #[test]
+    fn styles_land_on_columns_not_bytes() {
+        let tab = tab_with(&[("é😀 **x**", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["é😀 x"]);
+        assert_eq!(tab.row_marks(80), [vec![(4..5, bold())]]);
+    }
+
+    #[test]
+    fn a_tab_in_a_reply_neither_breaks_its_rows_nor_moves_its_styles() {
+        let tab = tab_with(&[("field\t`état` ok", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["fieldétat ok"]);
+        assert_eq!(tab.row_marks(80), [vec![(5..9, code())]]);
+        let long = format!("key:\t{}→ next", "x".repeat(74));
+        let tab = tab_with(&[(long.as_str(), Tone::Reply)]);
+        let first = format!("key:{}→", "x".repeat(74));
+        assert_eq!(rows_at(&tab, 80), [first.as_str(), "next"]);
+        assert_eq!(tab.row_marks(80), [Vec::new(), Vec::new()]);
+    }
+
+    #[test]
+    fn a_reply_table_draws_as_columns() {
+        let tab = tab_with(&[("| a | bb |\n|---|---|\n| c😀 | `d` |", Tone::Reply)]);
+        assert_eq!(rows_at(&tab, 80), ["a   │ bb", "────┼───", "c😀 │ d"]);
+        let marks = tab.row_marks(80);
+        assert_eq!(
+            (&marks[0], &marks[2]),
+            (&vec![(0..1, bold()), (6..8, bold())], &vec![(6..7, code())])
+        );
+        let around = tab_with(&[("intro\n\n| a |\n|---|\n| 1 |\n\nafter", Tone::Reply)]);
+        assert_eq!(
+            rows_at(&around, 80),
+            ["intro", "", "a", "─", "1", "", "after"]
+        );
+    }
+
+    #[test]
+    fn a_wide_table_wraps_its_cells_inside_their_columns() {
+        let tab = tab_with(&[("| k | words |\n|---|---|\n| 1 | aaa bbb ccc |", Tone::Reply)]);
+        assert_eq!(
+            rows_at(&tab, 11),
+            ["k │ words", "──┼────────", "1 │ aaa bbb", "  │ ccc"]
+        );
+        assert!(
+            tab.row_joins(11).iter().all(|join| *join == "\n"),
+            "a table copies as drawn"
+        );
+        assert!(
+            !rows_at(&tab, 2).is_empty(),
+            "a pane narrower than the rules still lays out"
+        );
+    }
+
+    #[test]
+    fn only_replies_read_markdown() {
+        let tab = tab_with(&[("**hi**", Tone::You), ("**x**", Tone::Plain)]);
+        let rows = rows_at(&tab, 80);
+        assert_eq!(
+            (rows[0].trim_start(), rows[1].as_str()),
+            ("**hi**", "**x**")
+        );
+        assert!(tab.row_marks(80).iter().all(Vec::is_empty));
+    }
+
+    fn reply_app(text: &str) -> App {
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        app.tabs[0].lines = tab_with(&[(text, Tone::Reply)]).lines;
+        app
+    }
+
+    #[test]
+    fn a_reply_draws_its_markdown_styled() {
+        let app = reply_app("**Fixed** the `wrap()`");
+        let s = screen(&app);
+        let (row, column) = find(&s, "Fixed the wrap()").expect("the reply");
+        assert_eq!(find(&s, "**"), None);
+        let buf = buffer(&app);
+        let bold = |x: u16| buf[(x, row)].modifier.contains(Modifier::BOLD);
+        assert!(bold(column) && bold(column + 4) && !bold(column + 6));
+        assert_eq!(buf[(column + 10, row)].fg, theme::ACCENT);
+        assert_ne!(buf[(column + 6, row)].fg, theme::ACCENT);
+    }
+
+    #[test]
+    fn a_selection_shows_over_styled_text() {
+        use ratatui::crossterm::event::{
+            Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = reply_app("**Fixed** the `wrap()`");
+        let (row, column) = find(&screen(&app), "Fixed").expect("the reply");
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), column),
+            (MouseEventKind::Drag(MouseButton::Left), column + 4),
+        ] {
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        }
+        let cell = buffer(&app)[(column, row)].modifier;
+        assert!(cell.contains(Modifier::REVERSED | Modifier::BOLD));
+    }
+
     #[test]
     fn a_multi_line_reply_wraps_each_line_and_keeps_its_tone() {
         let mut tab = Tab::new_session();
@@ -659,6 +887,7 @@ mod tests {
             tone,
             item: None,
             change: None,
+            under: None,
         };
         tab.lines = vec![
             line("one\ntwo three", Tone::Reply),

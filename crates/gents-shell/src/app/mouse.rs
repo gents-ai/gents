@@ -2,6 +2,7 @@ use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::layers::LayerKind;
+use super::selection::Selection;
 use super::{App, Pane};
 use crate::draw::agent::{chip_at, first_line, message_box_area, slash_area, slash_rows, ChipHit};
 use crate::draw::layers::{list_area, list_start};
@@ -14,7 +15,12 @@ impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => self.click(at),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.selection = None;
+                self.click(at);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => self.drag(at),
+            MouseEventKind::Up(MouseButton::Left) => self.release(),
             MouseEventKind::ScrollUp => self.wheel(at, false),
             MouseEventKind::ScrollDown => self.wheel(at, true),
             _ => {}
@@ -185,9 +191,64 @@ impl App {
             return;
         }
         self.focus_pane(Pane::Agent);
+        if let Some(item) = self.opener_at(pane, at) {
+            self.tabs[self.active].toggle(item);
+            return;
+        }
         if message_box_area(pane, message_rows).contains(at) {
             self.act(Action::EnterInput);
+        } else if self.conversation_area(pane).contains(at) {
+            let point = self.conversation_point(pane, at);
+            self.selection = Some(Selection {
+                anchor: point,
+                end: point,
+            });
         }
+    }
+
+    fn drag(&mut self, at: Position) {
+        let (Some(panes), Some(selection)) = (self.panes(), self.selection) else {
+            return;
+        };
+        let end = self.conversation_point(panes.agent, at);
+        self.selection = Some(Selection { end, ..selection });
+    }
+
+    fn release(&mut self) {
+        let (Some(panes), Some(selection)) = (self.panes(), self.selection) else {
+            return;
+        };
+        if selection.anchor == selection.end {
+            self.selection = None;
+            return;
+        }
+        let width = self.conversation_area(panes.agent).width;
+        let mut rows = self.conversation_rows(width);
+        for at in self.tabs[self.active].mark_rows(width) {
+            let row = &mut rows[at].0;
+            row.truncate(row.trim_end_matches(['▸', '▾']).trim_end().len());
+        }
+        let text = selection.text(&rows, &self.conversation_joins(width));
+        if text.trim().is_empty() {
+            self.selection = None;
+            return;
+        }
+        self.clipboard = Some(text);
+        self.notice = Some("copied the selection".to_string());
+    }
+
+    fn conversation_area(&self, pane: Rect) -> Rect {
+        self.visible_rows(Pane::Agent, self.conversation_rect(pane))
+    }
+
+    /// `at` as a (row index, column) of the conversation's rows, held inside its area.
+    fn conversation_point(&self, pane: Rect, at: Position) -> (usize, u16) {
+        let area = self.conversation_area(pane);
+        let total = self.conversation_rows(area.width).len();
+        let first = first_line(total, area.height, self.tabs[self.active].scroll);
+        let y = at.y.min(area.bottom().saturating_sub(1)).max(area.top());
+        let x = at.x.min(area.right().saturating_sub(1)).max(area.left());
+        (first + usize::from(y - area.y), x - area.x)
     }
 
     fn click_slash(&mut self, list: Rect, at: Position) {
@@ -222,6 +283,18 @@ impl App {
             Tone::File(file) => Some(file),
             _ => None,
         }
+    }
+
+    /// The item a click at `at` opens or closes: a line that others open under.
+    fn opener_at(&self, pane: Rect, at: Position) -> Option<String> {
+        let area = self.conversation_area(pane);
+        if !area.contains(at) {
+            return None;
+        }
+        let tab = &self.tabs[self.active];
+        let total = self.conversation_rows(area.width).len();
+        let row = first_line(total, area.height, tab.scroll) + usize::from(at.y - area.y);
+        tab.opener_at(area.width, row)
     }
 
     fn wheel(&mut self, at: Position, down: bool) {
@@ -539,6 +612,200 @@ mod tests {
             mouse(&mut app, kind, column, row);
             assert_eq!(app.subagent, None);
         }
+    }
+
+    /// Presses the left button at `from`, drags to `to` and releases there, as (row, column).
+    fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) {
+        mouse(app, MouseEventKind::Down(MouseButton::Left), from.1, from.0);
+        mouse(app, MouseEventKind::Drag(MouseButton::Left), to.1, to.0);
+        mouse(app, MouseEventKind::Up(MouseButton::Left), to.1, to.0);
+    }
+
+    /// The sample reply's first character and its last.
+    fn reply_ends(app: &App) -> ((u16, u16), (u16, u16)) {
+        let shown = screen(app);
+        let start = find(&shown, "Moving them under").expect("the reply");
+        let (row, column) = find(&shown, "beside them.").expect("its second row");
+        (start, (row, column + "beside them.".len() as u16 - 1))
+    }
+
+    const REPLY: &str = "Moving them under gents auth, one subcommand per provider,\n and folding the probes in beside them.";
+
+    #[test]
+    fn a_drag_across_rows_copies_their_text() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, start, end);
+        assert_eq!(app.take_clipboard().as_deref(), Some(REPLY));
+        assert_eq!(app.notice.as_deref(), Some("copied the selection"));
+    }
+
+    #[test]
+    fn a_drag_over_a_wrapped_reply_copies_its_lines_whole() {
+        use crate::app::transcript::ChatLine;
+        use crate::sample::Tone;
+        let mut app = session_app(132, 36);
+        let words: Vec<String> = (0..60).map(|at| format!("word{at}")).collect();
+        let text = format!("{}\nnext line", words.join(" "));
+        app.tabs[0].lines = vec![ChatLine {
+            text: text.clone(),
+            tone: Tone::Reply,
+            item: None,
+            change: None,
+            under: None,
+        }];
+        let shown = screen(&app);
+        let start = find(&shown, "word0").expect("the reply");
+        let (row, column) = find(&shown, "next line").expect("its last line");
+        assert!(row > start.0 + 1, "the first line wraps");
+        drag(&mut app, start, (row, column + 8));
+        assert_eq!(app.take_clipboard().as_deref(), Some(text.as_str()));
+    }
+
+    #[test]
+    fn a_drag_upward_copies_the_same_text() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, end, start);
+        assert_eq!(app.take_clipboard().as_deref(), Some(REPLY));
+    }
+
+    #[test]
+    fn a_drag_past_the_conversation_clamps() {
+        let mut app = session_app(132, 36);
+        app.tabs[0].lines = numbered(100);
+        app.tabs[0].scroll = 10;
+        let shown = screen(&app);
+        let shows = |n: &usize| find(&shown, &format!("message {n}")).is_some();
+        let first = (10..100).find(shows).expect("the top shown row");
+        let last = (10..99).rev().find(shows).expect("rows hidden below");
+        let messages = |from: usize, to: usize| {
+            let rows = (from..=to).map(|n| format!("message {n}"));
+            rows.collect::<Vec<_>>().join("\n")
+        };
+        let (row, column) = find(&shown, "message 80").expect("a shown row");
+        drag(&mut app, (row, column), (35, 200));
+        assert_eq!(app.take_clipboard(), Some(messages(80, last)));
+        drag(&mut app, (row, column + 9), (0, 0));
+        assert_eq!(app.take_clipboard(), Some(messages(first, 80)));
+    }
+
+    #[test]
+    fn copying_a_command_leaves_out_its_open_mark() {
+        let mut app = session_app(132, 36);
+        command_tab(&mut app);
+        let shown = screen(&app);
+        let command = find(&shown, "✓ run").expect("the command");
+        let (row, column) = find(&shown, "All good.").expect("the reply");
+        drag(&mut app, (row, column + 8), command);
+        assert_eq!(
+            app.take_clipboard().as_deref(),
+            Some("✓ run   cargo check\n\nAll good.")
+        );
+    }
+
+    #[test]
+    fn a_click_copies_nothing_and_a_key_ends_the_selection() {
+        let mut app = session_app(132, 36);
+        let (start, end) = reply_ends(&app);
+        drag(&mut app, start, start);
+        assert_eq!((app.take_clipboard(), app.selection), (None, None));
+        drag(&mut app, start, end);
+        assert!(app.selection.is_some());
+        press(&mut app, "j");
+        assert_eq!(app.selection, None);
+    }
+
+    #[test]
+    fn a_drag_over_blank_space_copies_nothing() {
+        let mut app = session_app(132, 36);
+        let (start, _) = reply_ends(&app);
+        let blank = (start.0 + 1, start.1 + 80);
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            blank.1,
+            blank.0,
+        );
+        let further = (blank.1 + 4, blank.0);
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            further.0,
+            further.1,
+        );
+        assert!(app.selection.is_some(), "the press started a selection");
+        mouse(
+            &mut app,
+            MouseEventKind::Up(MouseButton::Left),
+            further.0,
+            further.1,
+        );
+        let notice = app.notice.clone();
+        assert_eq!(
+            (app.take_clipboard(), notice, app.selection),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_drag_from_a_file_row_opens_the_file() {
+        let mut app = session_app(132, 36);
+        let start = find(&screen(&app), "M cli/mod.rs").expect("a file row");
+        drag(&mut app, start, (start.0 + 1, start.1 + 4));
+        assert_eq!((app.diff, app.selection), (Some(1), None));
+    }
+
+    /// A command's line `c1`, a reply, and the command's output under it arriving after the
+    /// reply, each followed by a blank.
+    fn command_tab(app: &mut App) {
+        use crate::app::transcript::ChatLine;
+        use crate::sample::Tone;
+        let line = |text: &str, item: &str, under: Option<&str>| ChatLine {
+            text: text.to_string(),
+            tone: Tone::Label,
+            item: Some(item.to_string()),
+            change: None,
+            under: under.map(str::to_string),
+        };
+        let tab = &mut app.tabs[0];
+        tab.lines.clear();
+        tab.put(line("  ✓ run   cargo check", "c1", None));
+        tab.put(line("All good.", "m2", None));
+        tab.put(line("Finished in 41s", "c1/output", Some("c1")));
+    }
+
+    #[test]
+    fn a_command_opens_its_output_on_click() {
+        let mut app = session_app(132, 36);
+        command_tab(&mut app);
+        let rows = |app: &App| {
+            let shown = app.tabs[0].wrapped_rows(80);
+            shown.into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(&app),
+            ["  ✓ run   cargo check  ▸", "", "All good.", ""]
+        );
+        click_text(&mut app, "cargo check");
+        let open = [
+            "  ✓ run   cargo check  ▾",
+            "",
+            "Finished in 41s",
+            "",
+            "All good.",
+            "",
+        ];
+        assert_eq!(rows(&app), open);
+        assert_eq!(
+            app.selection, None,
+            "the click opened the line, no selection"
+        );
+        click_text(&mut app, "cargo check");
+        assert_eq!(
+            rows(&app),
+            ["  ✓ run   cargo check  ▸", "", "All good.", ""]
+        );
     }
 
     #[test]

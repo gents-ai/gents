@@ -273,6 +273,7 @@ pub fn changes() -> Vec<ChatLine> {
             kind,
             diff.to_string(),
         )),
+        under: None,
     };
     vec![
         edit(
@@ -471,6 +472,7 @@ fn chat_lines(chat: Chat) -> Vec<ChatLine> {
             tone,
             item: None,
             change: None,
+            under: None,
         })
         .collect()
 }
@@ -531,6 +533,7 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
                     tone,
                     item: None,
                     change: None,
+                    under: None,
                 };
                 updates.push(Update::Item {
                     session: session.clone(),
@@ -555,6 +558,7 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
                     tone: Tone::You,
                     item: None,
                     change: None,
+                    under: None,
                 },
             },
         ],

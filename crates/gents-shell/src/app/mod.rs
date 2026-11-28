@@ -3,14 +3,18 @@ pub mod fields;
 pub mod form;
 pub mod input;
 pub mod layers;
+pub(crate) mod markdown;
 mod mouse;
 mod prompt;
 pub mod search;
+pub(crate) mod selection;
 pub mod setup;
+mod table;
 pub mod transcript;
 pub mod work;
 
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -175,6 +179,10 @@ pub struct App {
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
     pub branch: Option<String>,
+    /// The conversation text a left drag covers; kept after the release until the next press.
+    pub(crate) selection: Option<selection::Selection>,
+    /// The time the shell last drew at, for the working row's count. Set by the input loop only.
+    now: Option<Instant>,
     /// Text the terminal copies after this input.
     clipboard: Option<String>,
     next_tab: u64,
@@ -280,6 +288,8 @@ impl App {
             intents: None,
             connection: Connection::Sample,
             branch: None,
+            selection: None,
+            now: None,
             clipboard: None,
             next_tab: 0,
             quit: false,
@@ -442,6 +452,7 @@ impl App {
                 tone,
                 item: Some(item),
                 change: None,
+                under: None,
             }),
         }
     }
@@ -508,6 +519,7 @@ impl App {
             let first = &mut self.tabs[0];
             first.starting = true;
             first.following = true;
+            first.since = Some(Instant::now());
             let intent = Intent::Send {
                 tab: first.id,
                 session: None,
@@ -630,7 +642,10 @@ impl App {
 
     pub fn handle(&mut self, event: Event) {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.selection = None;
+                self.handle_key(key);
+            }
             Event::Paste(text) => self.paste(&text),
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Resize(width, height) => {
@@ -1224,6 +1239,7 @@ impl App {
         let (id, session, agent) = (tab.id, tab.session.clone(), tab.agent_id.clone());
         // A goal's first request is the runtime's, not a turn this connection started.
         tab.following = !matches!(sending, Sending::Goal);
+        tab.since = tab.following.then(Instant::now);
         let intent = match sending {
             Sending::Text => Intent::Send {
                 tab: id,

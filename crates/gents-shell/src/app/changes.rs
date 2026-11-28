@@ -445,6 +445,7 @@ mod tests {
             tone,
             item: None,
             change: None,
+            under: None,
         }
     }
 

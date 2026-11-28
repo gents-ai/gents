@@ -1,6 +1,7 @@
 use std::io::{self, stdout, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event, KeyboardEnhancementFlags};
 use ratatui::crossterm::{cursor, event, execute, terminal};
@@ -136,8 +137,9 @@ where
 }
 
 /// Takes every queued input, then renders once if any could change the screen: a render costs
-/// a pass over the transcript, and the terminal reports each mouse move. Ends on quit with the
-/// session the center pane shows, or with a failed terminal read.
+/// a pass over the transcript, and the terminal reports each mouse move. While the screen
+/// changes with time alone, a tick with no input renders too. Ends on quit with the session the
+/// center pane shows, or with a failed terminal read.
 fn run_loop<F>(
     mut app: App,
     receiver: &Receiver<Input>,
@@ -146,13 +148,15 @@ fn run_loop<F>(
 where
     F: FnMut(&App) -> io::Result<()>,
 {
+    app.tick(Instant::now());
     render(&app)?;
     loop {
-        let Ok(first) = receiver.recv() else {
+        let tick = app.ticking().then_some(TICK);
+        let Ok(first) = next_input(receiver, tick) else {
             return Err(io::Error::other("the terminal stopped sending input"));
         };
-        let mut changed = false;
-        for input in std::iter::once(first).chain(receiver.try_iter()) {
+        let mut changed = first.is_none();
+        for input in first.into_iter().chain(receiver.try_iter()) {
             changed |= !inert(&input);
             match input {
                 Input::Terminal(event) => {
@@ -169,19 +173,41 @@ where
             }
         }
         if changed {
+            app.tick(Instant::now());
             render(&app)?;
         }
     }
 }
 
-/// Inputs `App::handle` ignores: pointer motion, releases, and key releases.
+/// How often a screen that changes with time alone is drawn: the working row counts seconds.
+const TICK: Duration = Duration::from_secs(1);
+
+/// The next input, waiting at most `tick` when one is set; none once it passes.
+fn next_input(
+    receiver: &Receiver<Input>,
+    tick: Option<Duration>,
+) -> Result<Option<Input>, mpsc::RecvError> {
+    let Some(tick) = tick else {
+        return receiver.recv().map(Some);
+    };
+    match receiver.recv_timeout(tick) {
+        Ok(input) => Ok(Some(input)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(mpsc::RecvError),
+    }
+}
+
+/// Inputs `App::handle` ignores: pointer motion, drags and releases of other buttons than the
+/// left, and key releases.
 fn inert(input: &Input) -> bool {
-    use event::{KeyEventKind, MouseEventKind};
+    use event::{KeyEventKind, MouseButton, MouseEventKind};
     match input {
-        Input::Terminal(Event::Mouse(mouse)) => matches!(
-            mouse.kind,
-            MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
-        ),
+        Input::Terminal(Event::Mouse(mouse)) => match mouse.kind {
+            MouseEventKind::Drag(button) | MouseEventKind::Up(button) => {
+                button != MouseButton::Left
+            }
+            kind => kind == MouseEventKind::Moved,
+        },
         Input::Terminal(Event::Key(key)) => key.kind != KeyEventKind::Press,
         _ => false,
     }
@@ -297,6 +323,36 @@ mod tests {
         assert_eq!(error.to_string(), "the tty went away");
         assert_eq!(renders, 1, "one render before the queued inputs");
         drop(sender);
+    }
+
+    #[test]
+    fn the_next_input_waits_at_most_a_tick() {
+        let (sender, receiver) = mpsc::channel();
+        let tick = Some(std::time::Duration::from_millis(1));
+        assert!(
+            matches!(next_input(&receiver, tick), Ok(None)),
+            "the tick passed"
+        );
+        sender.send(Input::Terminal(Event::FocusGained)).unwrap();
+        assert!(matches!(next_input(&receiver, tick), Ok(Some(_))));
+        drop(sender);
+        assert!(next_input(&receiver, tick).is_err(), "the sender is gone");
+    }
+
+    #[test]
+    fn a_left_drag_redraws_and_other_motion_does_not() {
+        use event::MouseButton::{Left, Right};
+        use event::MouseEventKind::{Drag, Moved, Up};
+        let at = |kind| {
+            Input::Terminal(Event::Mouse(event::MouseEvent {
+                kind,
+                column: 3,
+                row: 3,
+                modifiers: event::KeyModifiers::NONE,
+            }))
+        };
+        assert!(!inert(&at(Drag(Left))) && !inert(&at(Up(Left))));
+        assert!(inert(&at(Moved)) && inert(&at(Drag(Right))) && inert(&at(Up(Right))));
     }
 
     #[test]
