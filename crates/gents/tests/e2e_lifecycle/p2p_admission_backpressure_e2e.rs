@@ -307,16 +307,21 @@ async fn replay_missing_pushes(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stalled_push_yields_the_only_worker_to_healthy_peers() {
     use gents_lean_vocab::tla::replay::Trace;
-    let admission = TestP2pAdmission::single_push_worker();
-    let trace = Trace::load(
+    for json in [
         include_str!("../../proofs/tla/generated/traces/MCP2PBackpressureTimeoutStall.json"),
-        "P2PBackpressure",
-        &[(
-            "PushWorkers",
-            admission.max_concurrent_push_tasks.try_into().unwrap(),
-        )],
-    );
-    replay_pushes(&trace, admission).await;
+        include_str!("../../proofs/tla/generated/traces/MCP2PBackpressureGreen.sample-1.json"),
+    ] {
+        let admission = TestP2pAdmission::single_push_worker();
+        let trace = Trace::load(
+            json,
+            "P2PBackpressure",
+            &[(
+                "PushWorkers",
+                admission.max_concurrent_push_tasks.try_into().unwrap(),
+            )],
+        );
+        replay_pushes(&trace, admission).await;
+    }
 }
 
 async fn replay_pushes(trace: &gents_lean_vocab::tla::replay::Trace, admission: TestP2pAdmission) {
@@ -390,7 +395,22 @@ async fn replay_pushes(trace: &gents_lean_vocab::tla::replay::Trace, admission: 
                     .expect("slow peer did not receive the push"),
                 );
             }
-            "Stutter" => {
+            "StartPush" => {
+                assert!(healthy.contains_key(actor()));
+                publish_peer_record(&owner.node, &format!("outbound-{}", actor()), actor()).await;
+            }
+            "PushSucceeds" => {
+                let peer = actor();
+                let row = wait_for_peer_record(
+                    &healthy[peer].node,
+                    &format!("outbound-{peer}"),
+                    STALL_CEILING,
+                    "single worker delivery",
+                )
+                .await;
+                delivered += usize::from(row["endpoint_address"] == peer);
+            }
+            "PushTimesOut" | "Stutter" => {
                 assert!(held.is_some());
                 publish_peer_record(&owner.node, "after-held-push", "healthy").await;
                 for peer in healthy.values() {
@@ -402,7 +422,9 @@ async fn replay_pushes(trace: &gents_lean_vocab::tla::replay::Trace, admission: 
                     )
                     .await;
                     assert_eq!(row["endpoint_address"], "healthy");
-                    delivered += 1;
+                    if step.action == "Stutter" {
+                        delivered += 1;
+                    }
                 }
             }
             action => panic!("unmapped outbound push {action}"),

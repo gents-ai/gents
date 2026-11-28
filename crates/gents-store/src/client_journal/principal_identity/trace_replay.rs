@@ -43,6 +43,13 @@ async fn replay(trace: &Trace) {
             "Rename" => Some(MetadataStep::Rename),
             "Decide" => Some(MetadataStep::Decide),
             "Clear" => None,
+            "Crash" => {
+                assert!(
+                    !steps.contains_key(who),
+                    "sampled process exited before opening metadata"
+                );
+                None
+            }
             action => panic!("unmapped metadata action {action}"),
         };
         if let Some(phase) = phase {
@@ -83,6 +90,7 @@ async fn replay(trace: &Trace) {
 #[tokio::test]
 async fn client_identity_metadata_traces() {
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCClientIdentityMetadata.sample-1.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCClientIdentityMetadataBefore.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCClientIdentityMetadataDivergentKey.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCClientIdentityMetadataNoReread.json"),

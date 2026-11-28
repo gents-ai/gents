@@ -113,7 +113,7 @@ async fn replay(trace: Trace) {
         ProviderInputProfile::OpenAiChatCompletions,
     );
     let mut observation = None;
-    let mut write_landed = false;
+    let mut write_landed = None;
     let mut dispatch_live = None;
     for step in &trace.steps {
         match step.action.as_str() {
@@ -181,9 +181,9 @@ async fn replay(trace: Trace) {
                     .write_rendered("test.retry_trace.expire", &mutation)
                     .await
                     .unwrap();
-                write_landed = gents_store::graphql::response_has_documents(
+                write_landed = Some(gents_store::graphql::response_has_documents(
                     &data["data"]["update_AgentRequest"],
-                );
+                ));
             }
             "Wake" => {
                 let wake = stream.next().await.unwrap().unwrap();
@@ -200,20 +200,29 @@ async fn replay(trace: Trace) {
                     dispatch_live = Some(live);
                 }
             }
+            "Complete" => {
+                while let Some(item) = stream.next().await {
+                    processor.process_item(item).await.unwrap();
+                }
+                assert_eq!(backend.observed_requests(marker), 2);
+            }
             action => panic!("unmapped retry step {action}"),
         }
     }
     let dispatched = backend.observed_requests(marker) == 2;
     let wall = trace.config == "MCRetryBackoffLeaseWallClock";
     let mut props = vec![
-        ("FixtureExpires", write_landed),
+        ("FixtureExpires", write_landed != Some(false)),
         (
             "DispatchOnlyLive",
             !dispatched || dispatch_live == Some(true),
         ),
     ];
     if wall {
-        props.push(("NoRetryAfterExpiry", !(write_landed && dispatched)));
+        props.push((
+            "NoRetryAfterExpiry",
+            !(write_landed == Some(true) && dispatched),
+        ));
     }
     trace.check(if wall { Red::Premise } else { Red::Defect }, &props);
     drop(stream);
@@ -224,6 +233,9 @@ async fn replay(trace: Trace) {
 #[tokio::test]
 async fn retry_backoff_lease_traces() {
     for json in [
+        include_str!(
+            "../../../../../proofs/tla/generated/traces/MCRetryBackoffLeaseFenced.sample-1.json"
+        ),
         include_str!("../../../../../proofs/tla/generated/traces/MCRetryBackoffLeaseUnfenced.json"),
         include_str!(
             "../../../../../proofs/tla/generated/traces/MCRetryBackoffLeaseDeadlineCas.json"

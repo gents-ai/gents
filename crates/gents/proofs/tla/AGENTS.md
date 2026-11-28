@@ -122,3 +122,8 @@ from either indexed field.
 TLC model values use `{"$model":"w1"}` and functions use `{"$function":[[key,value],…]}`
 to retain composite keys. A temporal trace ends with its closing transition,
 whose `backToState` names the one-based TLC state it revisits.
+
+For deterministic green replays, put `\* trace sample: seed=23 depth=20 count=2`
+in a holds configuration. Each sample records its seed, depth and simulation
+index. TLC emits states from simulation and labels transitions in the graph
+constrained to those sampled edges. An ambiguous edge fails generation.

@@ -254,8 +254,12 @@ async fn native_round(store: &TestStore, trace: &Trace, observed: &mut Observati
                     response.errors
                 );
             }
-            "MutualAbort" => {
-                for writer in actor.as_array().unwrap() {
+            "MutualAbort" | "Commit" => {
+                let writers = actor
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_else(|| std::slice::from_ref(actor));
+                for writer in writers {
                     let id = call(step, writer);
                     let outcome = match open.remove(&id).unwrap().commit().await {
                         Ok(()) => Outcome::Acknowledged,
@@ -396,6 +400,7 @@ async fn replay(trace: &Trace, receipt: CommitReceipt) -> Result<()> {
 #[tokio::test]
 async fn shared_owner_hot_counter_traces() -> Result<()> {
     for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounter.sample-1.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterStaleRetry.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterReadOutsideTxn.json"),
         include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterConflictAsSuccess.json"),
@@ -405,13 +410,20 @@ async fn shared_owner_hot_counter_traces() -> Result<()> {
         include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterWaveDeadline.json"),
     ] {
         let trace = Trace::load(json, "SharedOwnerHotCounter", &[("Attempts", TRANSACT_CONFLICT_MAX_RETRIES + 1)]);
-        if trace.constants["CanTimeout"] == true {
+        if trace.steps.iter().any(|step| step.action == "CommitTimeout") {
             replay(&trace, CommitReceipt::LostAfterCommit).await.with_context(|| format!("{} landed", trace.config))?;
             replay(&trace, CommitReceipt::TimeoutBeforeCommit).await.with_context(|| format!("{} unlanded", trace.config))?;
         } else {
             replay(&trace, CommitReceipt::Delivered).await.with_context(|| trace.config.clone())?;
         }
     }
-    let native = Trace::load(include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterNativeAbortOnOpenWriter.json"), "SharedOwnerHotCounter", &[("Attempts", 1)]);
-    replay(&native, CommitReceipt::Delivered).await
+    for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterNativeAbortOnOpenWriter.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterNative.sample-1.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCSharedOwnerHotCounterNative.sample-2.json"),
+    ] {
+        let native = Trace::load(json, "SharedOwnerHotCounter", &[("Attempts", 1)]);
+        replay(&native, CommitReceipt::Delivered).await?;
+    }
+    Ok(())
 }

@@ -702,13 +702,11 @@ async fn desktop_start_ownership_trace_preserves_pending_owner() {
     use super::super::start_wait::{lock_start, StartDisposition};
     use gents_lean_vocab::tla::replay::{Red, Trace};
 
-    let trace = Trace::load(
-        include_str!(
-            "../../../../../gents/proofs/tla/generated/traces/MCDesktopStartOwnershipReplaced.json"
-        ),
-        "DesktopStartOwnership",
-        &[],
-    );
+    for json in [
+        include_str!("../../../../../gents/proofs/tla/generated/traces/MCDesktopStartOwnershipReplaced.json"),
+        include_str!("../../../../../gents/proofs/tla/generated/traces/MCDesktopStartOwnership.sample-1.json"),
+    ] {
+        let trace = Trace::load(json, "DesktopStartOwnership", &[]);
     let (_home, state) = orchestration_state();
     let mut owner = None;
     for step in &trace.steps {
@@ -722,6 +720,10 @@ async fn desktop_start_ownership_trace_preserves_pending_owner() {
                 let (_lifecycle, disposition) = lock_start(&state).await;
                 assert!(matches!(disposition, StartDisposition::Observe));
             }
+            "Ready" => {
+                finish_start_wait(&state, owner.as_ref().unwrap()).await;
+                assert!(!state.managed_server.lock().await.starting);
+            }
             action => panic!("unmapped start action {action}"),
         }
     }
@@ -730,5 +732,8 @@ async fn desktop_start_ownership_trace_preserves_pending_owner() {
         Red::Defect,
         &[("PendingOwnerIsNotCancelled", !owner.is_cancelled())],
     );
-    finish_start_wait(&state, &owner).await;
+    if state.managed_server.lock().await.starting {
+        finish_start_wait(&state, &owner).await;
+    }
+    }
 }

@@ -238,6 +238,7 @@ async fn background_wake_identity_notifier_traces() {
     use gents_store::test_support::paused_transaction::PausedTransaction;
     use rapidhash::RapidHashMap;
     for json in [
+        include_str!("../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityProduction.sample-1.json"),
         include_str!("../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityNoGate.json"),
         include_str!(
             "../../gents/proofs/tla/generated/traces/MCBackgroundWakeIdentityNoGateNoConflict.json"

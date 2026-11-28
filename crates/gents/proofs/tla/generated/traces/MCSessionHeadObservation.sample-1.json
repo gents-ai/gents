@@ -1,0 +1,529 @@
+{
+  "config": "MCSessionHeadObservation",
+  "constants": {
+    "HeadSeed": true,
+    "Order": "lean",
+    "Refusals": true
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 22,
+    "sample": 0,
+    "seed": 23
+  },
+  "spec": "SessionHeadObservation",
+  "steps": [
+    {
+      "action": "ClaimA",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 0,
+        "dirty": false,
+        "head": "A",
+        "online": false,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": false,
+        "second": {
+          "A": 0,
+          "B": 0
+        },
+        "state": {
+          "A": "claimed",
+          "B": "none"
+        },
+        "term": {
+          "A": 0,
+          "B": 0
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 0,
+        "dirty": false,
+        "head": "none",
+        "online": false,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": false,
+        "second": {
+          "A": 0,
+          "B": 0
+        },
+        "state": {
+          "A": "pending",
+          "B": "none"
+        },
+        "term": {
+          "A": 0,
+          "B": 0
+        }
+      }
+    },
+    {
+      "action": "Reopen",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 0,
+        "dirty": true,
+        "head": "A",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": false,
+        "second": {
+          "A": 0,
+          "B": 0
+        },
+        "state": {
+          "A": "claimed",
+          "B": "none"
+        },
+        "term": {
+          "A": 0,
+          "B": 0
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 0,
+        "dirty": false,
+        "head": "A",
+        "online": false,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": false,
+        "second": {
+          "A": 0,
+          "B": 0
+        },
+        "state": {
+          "A": "claimed",
+          "B": "none"
+        },
+        "term": {
+          "A": 0,
+          "B": 0
+        }
+      }
+    },
+    {
+      "action": "AdmitB",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 1,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "claimed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 0,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 0,
+        "dirty": true,
+        "head": "A",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": false,
+        "second": {
+          "A": 0,
+          "B": 0
+        },
+        "state": {
+          "A": "claimed",
+          "B": "none"
+        },
+        "term": {
+          "A": 0,
+          "B": 0
+        }
+      }
+    },
+    {
+      "action": "LoadBegin",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 1,
+        "dirty": false,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "claimed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 0,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 1,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "none",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "claimed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 0,
+          "B": 1
+        }
+      }
+    },
+    {
+      "action": "Complete",
+      "actor": "A",
+      "after": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 1,
+        "dirty": false,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "claimed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 0,
+          "B": 1
+        }
+      }
+    },
+    {
+      "action": "LoadEnd",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      }
+    },
+    {
+      "action": "LoadBegin",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": false,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": true,
+        "head": "B",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "claimed",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      }
+    },
+    {
+      "action": "LoadEnd",
+      "actor": null,
+      "after": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": false,
+        "head": "B",
+        "online": true,
+        "phase": "idle",
+        "proj": {
+          "A": "absent",
+          "B": "refused"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      },
+      "before": {
+        "aHigher": true,
+        "clock": 2,
+        "dirty": false,
+        "head": "B",
+        "online": true,
+        "phase": "mid",
+        "proj": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "q1Head": "B",
+        "q1State": {
+          "A": "absent",
+          "B": "absent"
+        },
+        "refusedWhileLive": true,
+        "second": {
+          "A": 0,
+          "B": 1
+        },
+        "state": {
+          "A": "completed",
+          "B": "refused"
+        },
+        "term": {
+          "A": 2,
+          "B": 1
+        }
+      }
+    }
+  ]
+}
