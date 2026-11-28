@@ -42,6 +42,8 @@ pub(super) use change_fault::before_relationship_change_for_test;
 pub use change_fault::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 pub use cursor::ConfigCursor;
 #[cfg(any(test, feature = "test-fixtures"))]
+pub(super) use fault_injection::record_statement;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::{count_statements, StatementCounts};

@@ -641,3 +641,158 @@ async fn client_goal_read_is_unknown_until_the_agent_publishes() {
     }
     f.node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn event_for_one_agent_does_not_sweep_other_agents_or_open_write_txns_when_settled() {
+    let f = fixture().await;
+    let identity: Arc<dyn NodeIdentity> = f.identity.clone();
+    let other_binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let other_agent: Arc<dyn NodeIdentity> =
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &other_binding).unwrap();
+    let other_did = identity::Did::new(other_agent.did()).unwrap();
+    let admin = ConfigAccess::local_as(f.node.clone(), identity::Did::new(identity.did()).unwrap());
+    for permission in [
+        gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::DocumentUpdate,
+        gents_store::config_client::NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&other_did, permission)
+            .await
+            .unwrap();
+    }
+    let user_access = f.user_access();
+    let other_session_doc = user_access
+        .transact_write("test.goal_obs.other_agent", |txn| {
+            let other_did = &other_did;
+            let other_binding = &other_binding;
+            let identity = &identity;
+            let user = &f.user;
+            Box::pin(async move {
+                let node_resp = txn
+                    .execute(&format!(
+                        r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+                        escape_graphql_string(identity.did())
+                    ))
+                    .await?;
+                let node_doc = node_resp["data"]["Node"][0]["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let created_agent = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                        &json!({
+                            "input": {
+                                "node_did": identity.did(),
+                                "agent_did": other_binding.agent_did,
+                                "creation_nonce": other_binding.creation_nonce,
+                                "enabled": true
+                            }
+                        }),
+                        gents_protocol::schemas::AGENT,
+                    )
+                    .await?;
+                let agent_doc = gents_store::graphql::created_doc_id(&created_agent, "Agent")?;
+                txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+                    .await?;
+                txn.add_actor_relationship("Agent", &agent_doc, "executor", other_did)
+                    .await?;
+                let created_session = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &json!({
+                            "input": {
+                                "session_id": "other-agent-session",
+                                "node_did": identity.did(),
+                                "requester_did": user.did(),
+                                "agent_did": other_did.as_str(),
+                                "created_at": "2026-10-10T00:00:00Z",
+                                "relationships_pending": false
+                            }
+                        }),
+                        gents_protocol::schemas::AGENT_SESSION,
+                    )
+                    .await?;
+                let session_doc =
+                    gents_store::graphql::created_doc_id(&created_session, "AgentSession")?;
+                txn.add_resource_relationship(
+                    "AgentSession",
+                    &session_doc,
+                    "parent",
+                    "agents",
+                    &agent_doc,
+                )
+                .await?;
+                txn.add_actor_relationship("AgentSession", &session_doc, "working_agent", other_did)
+                    .await?;
+                Ok::<_, anyhow::Error>(session_doc)
+            })
+        })
+        .await
+        .unwrap();
+
+    let agents = vec![other_agent.clone(), f.agent.clone()];
+    reconcile_goal_observations_with_identities(&f.node, &identity, &agents, true, &[])
+        .await
+        .unwrap();
+
+    // Full sweep over already-settled sessions opens zero write transactions.
+    let (res, full_counts) = gents_store::config_client::count_statements(
+        reconcile_goal_observations_with_identities(&f.node, &identity, &agents, true, &[]),
+    )
+    .await;
+    res.unwrap();
+    assert_eq!(
+        full_counts.transactions("goal.project_observation"),
+        0,
+        "settled full sweep must not open project_session_goal write transactions"
+    );
+    assert_eq!(full_counts.mutations(), 0);
+
+    // A change on f.agent's Goal must not escalate other_agent to a full sweep.
+    f.agent_access()
+        .write(
+            "test.goal_obs.bump_goal",
+            &format!(
+                r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "updated objective" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&f.goal.doc_id)
+            ),
+        )
+        .await
+        .unwrap();
+    let changed = vec![("Goal", f.goal.doc_id.clone())];
+    let (res, scoped_counts) = gents_store::config_client::count_statements(
+        reconcile_goal_observations_with_identities(&f.node, &identity, &agents, false, &changed),
+    )
+    .await;
+    res.unwrap();
+    assert_eq!(
+        scoped_counts.transactions("goal.project_observation"),
+        1,
+        "only the owning agent's changed goal session should open a projection write"
+    );
+    assert!(
+        !scoped_counts.statements().any(|(op, doc)| {
+            op == Some("goal.observation_plan") && doc.contains(other_agent.did())
+        }),
+        "non-owning agent must not run a session sweep for another agent's Goal change"
+    );
+
+    // An AgentSession change on other_agent whose observation is already current opens zero writes.
+    let session_changed = vec![("AgentSession", other_session_doc)];
+    let (res, session_counts) =
+        gents_store::config_client::count_statements(reconcile_goal_observations_with_identities(
+            &f.node,
+            &identity,
+            &agents,
+            false,
+            &session_changed,
+        ))
+        .await;
+    res.unwrap();
+    assert_eq!(session_counts.transactions("goal.project_observation"), 0);
+    assert_eq!(session_counts.mutations(), 0);
+
+    f.node.shutdown().await.expect("node shutdown");
+}

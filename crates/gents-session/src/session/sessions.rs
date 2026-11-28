@@ -1106,6 +1106,52 @@ pub(super) async fn max_sequence_in_txn(
     }
 }
 
+/// Plain keyset pagination over pending sessions so the planner selects the
+/// `relationships_pending` index instead of walking `node_did` with a cursor.
+async fn pending_session_doc_ids_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    filter: &str,
+) -> Result<Vec<String>> {
+    const PAGE: usize = 64;
+    let mut ids: Vec<String> = Vec::new();
+    loop {
+        let seek = if ids.is_empty() {
+            String::new()
+        } else {
+            let excluded = ids
+                .iter()
+                .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(r#", _docID: {{ _nin: [{excluded}] }}"#)
+        };
+        let response = txn
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ {filter}{seek} }}, order: [{{ _docID: ASC }}], limit: {limit}) {{ _docID }} }}"#,
+                limit = PAGE + 1
+            ))
+            .await?;
+        let mut page = response
+            .pointer("/data/AgentSession")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .context("session relationship recovery page omitted rows")?;
+        let more = page.len() > PAGE;
+        page.truncate(PAGE);
+        let mut advanced = false;
+        for row in page {
+            let doc_id = row["_docID"]
+                .as_str()
+                .context("session recovery row lacks document ID")?;
+            ids.push(doc_id.to_owned());
+            advanced = true;
+        }
+        if !more || !advanced {
+            return Ok(ids);
+        }
+    }
+}
+
 pub async fn recover_agent_session_relationships_with_access(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -1123,18 +1169,16 @@ pub async fn recover_agent_session_relationships_with_access(
                 r#"node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, relationships_pending: {{ _eq: true }}"#,
                 escape_graphql_string(node_did), escape_graphql_string(agent_did),
             );
-            let rows = txn.cursor_rows("AgentSession", "_docID", &filter).await?;
-            if rows.is_empty() {
+            let row_ids = pending_session_doc_ids_in_txn(txn, &filter).await?;
+            if row_ids.is_empty() {
                 return Ok::<_, anyhow::Error>((String::new(), Vec::new()));
             }
             let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                 txn, gents_store::collection::Collection::Agent, node_did, agent_did,
             ).await?.context("selected agent is unavailable for session relationship recovery")?;
             let mut pending = Vec::new();
-            for chunk in rows.chunks(64) {
-                let ids: Vec<String> = chunk.iter().map(|row| row["_docID"].as_str()
-                    .context("session recovery row lacks document ID").map(str::to_owned))
-                    .collect::<Result<_>>()?;
+            for chunk in row_ids.chunks(64) {
+                let ids: Vec<String> = chunk.to_vec();
                 let owners = txn.document_owners("AgentSession", &ids).await?;
                 anyhow::ensure!(owners.len() == ids.len(), "session ownership observation is incomplete");
                 for owner in owners {

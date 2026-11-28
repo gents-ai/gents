@@ -843,6 +843,17 @@ async fn redrive_records(
     Ok(settled)
 }
 
+struct PrefetchedSession {
+    node_did: String,
+    agent_did: String,
+    stopped_at: Option<String>,
+}
+
+struct HaltedCandidate {
+    session_id: String,
+    prefetched: Option<PrefetchedSession>,
+}
+
 /// The sessions one Agent owns whose halt latch is set within the horizon,
 /// with whether that halt is still current.
 async fn halted_sessions(
@@ -857,44 +868,113 @@ async fn halted_sessions(
             let horizon = horizon.as_str();
             Box::pin(async move {
                 let (node, agent_did) = (escape_graphql_string(node_did), escape_graphql_string(agent));
+                let escaped_horizon = escape_graphql_string(horizon);
                 let stopped = txn
                     .execute(&format!(
-                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, agent_did: {{ _eq: "{agent_did}" }}, stopped_at: {{ _ne: null }} }}, order: {{ stopped_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#
+                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, agent_did: {{ _eq: "{agent_did}" }}, stopped_at: {{ _ge: "{escaped_horizon}" }} }}, order: {{ stopped_at: DESC }}, limit: {bound}) {{ _docID session_id node_did agent_did stopped_at }} }}"#
                     ))
                     .await?;
                 let interrupted = txn
                     .execute(&format!(
-                        r#"{{ AgentSessionInterrupt(filter: {{ node_did: {{ _eq: "{node}" }}, interrupted_at: {{ _ge: "{horizon}" }} }}, order: {{ interrupted_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#,
-                        horizon = escape_graphql_string(horizon)
+                        r#"{{ AgentSessionInterrupt(filter: {{ node_did: {{ _eq: "{node}" }}, interrupted_at: {{ _ge: "{escaped_horizon}" }} }}, order: {{ interrupted_at: DESC }}, limit: {bound}) {{ _docID session_id interrupted_at }} }}"#
                     ))
                     .await?;
-                let mut candidates: Vec<String> = Vec::new();
+                let mut candidates: Vec<HaltedCandidate> = Vec::new();
                 for row in
                     gents_protocol::graphql::graphql_rows_from_response(&stopped, "AgentSession")
-                        .into_iter()
-                        .chain(gents_protocol::graphql::graphql_rows_from_response(
-                            &interrupted,
-                            "AgentSessionInterrupt",
-                        ))
                 {
-                    if let Some(session_id) = row["session_id"].as_str() {
-                        if !candidates.iter().any(|known| known == session_id) {
-                            candidates.push(session_id.to_owned());
-                        }
+                    let (
+                        Some(session_id),
+                        Some(row_node_did),
+                        Some(row_agent_did),
+                        Some(stopped_at),
+                    ) = (
+                        row["session_id"].as_str(),
+                        row["node_did"].as_str(),
+                        row["agent_did"].as_str(),
+                        row["stopped_at"].as_str(),
+                    )
+                    else {
+                        continue;
+                    };
+                    if stopped_at < horizon {
+                        continue;
+                    }
+                    if !candidates
+                        .iter()
+                        .any(|known| known.session_id == session_id)
+                    {
+                        candidates.push(HaltedCandidate {
+                            session_id: session_id.to_owned(),
+                            prefetched: Some(PrefetchedSession {
+                                node_did: row_node_did.to_owned(),
+                                agent_did: row_agent_did.to_owned(),
+                                stopped_at: Some(stopped_at.to_owned()),
+                            }),
+                        });
+                    }
+                }
+                for row in gents_protocol::graphql::graphql_rows_from_response(
+                    &interrupted,
+                    "AgentSessionInterrupt",
+                ) {
+                    let (Some(session_id), Some(interrupted_at)) =
+                        (row["session_id"].as_str(), row["interrupted_at"].as_str())
+                    else {
+                        continue;
+                    };
+                    if interrupted_at < horizon {
+                        continue;
+                    }
+                    if !candidates
+                        .iter()
+                        .any(|known| known.session_id == session_id)
+                    {
+                        candidates.push(HaltedCandidate {
+                            session_id: session_id.to_owned(),
+                            prefetched: None,
+                        });
                     }
                 }
                 let mut sessions = Vec::with_capacity(candidates.len());
-                for session_id in candidates {
-                    let Some(session) =
-                        load_agent_session_owner_in_txn(txn, node_did, &session_id).await?
-                    else {
-                        continue;
+                for HaltedCandidate {
+                    session_id,
+                    prefetched,
+                } in candidates
+                {
+                    let session = match prefetched {
+                        Some(details) => details,
+                        None => {
+                            let response = txn
+                                .execute(&format!(
+                                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID node_did agent_did stopped_at }} }}"#,
+                                    escape_graphql_string(&session_id)
+                                ))
+                                .await?;
+                            let rows = gents_protocol::graphql::graphql_rows_from_response(
+                                &response,
+                                "AgentSession",
+                            );
+                            let [row] = rows.as_slice() else {
+                                continue;
+                            };
+                            let (Some(row_node_did), Some(row_agent_did)) =
+                                (row["node_did"].as_str(), row["agent_did"].as_str())
+                            else {
+                                continue;
+                            };
+                            PrefetchedSession {
+                                node_did: row_node_did.to_owned(),
+                                agent_did: row_agent_did.to_owned(),
+                                stopped_at: row["stopped_at"].as_str().map(str::to_owned),
+                            }
+                        }
                     };
                     let newest = newest_request(txn, node_did, &session_id).await?;
                     let (newest_created, newest_interrupt) = newest.unwrap_or((None, None));
                     // The stop latch is current while no request followed it;
                     // otherwise the session's latest interrupt.
-                    let latch = match session.session.stopped_at.clone() {
+                    let latch = match session.stopped_at {
                         Some(stopped) if not_after(newest_created.as_deref(), &stopped) => {
                             Some(stopped)
                         }
@@ -904,11 +984,11 @@ async fn halted_sessions(
                     sessions.push((
                         HaltedSession {
                             session: session_id,
-                            owner: (session.session.agent_did == agent).then(|| agent.to_owned()),
+                            owner: (session.agent_did == agent).then(|| agent.to_owned()),
                             current: latch.is_some(),
                             latched_at: latch,
                         },
-                        session.session.node_did.clone(),
+                        session.node_did,
                     ));
                 }
                 Ok::<_, anyhow::Error>(sessions)
@@ -1054,4 +1134,81 @@ async fn prune_settled(
         }
     }
     Ok(pruned)
+}
+
+#[cfg(test)]
+mod halted_sessions_tests {
+    use super::*;
+    use crate::test_support::AgentHome;
+    use gents_store::identity::NodeIdentity;
+
+    async fn create_stopped_session(db: &AgentHome, session_id: &str, stopped_at: &str) {
+        let session_doc = crate::test_support::create_agent_owned_session_at(
+            &db.agent_access,
+            db.node_did(),
+            session_id,
+            Some(db.user.did()),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+        db.agent_access
+            .write(
+                "test.halted_sessions.stop",
+                &format!(
+                    r#"mutation {{ update_AgentSession(docID: "{}", input: {{ stopped_at: "{}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&session_doc),
+                    escape_graphql_string(stopped_at),
+                ),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn halted_sessions_filters_expired_stopped_sessions_before_extra_queries() {
+        let db = AgentHome::start("owed-expired-stopped").await;
+        let expired =
+            (chrono::Utc::now() - DERIVED_HALT_HORIZON - chrono::Duration::hours(24)).to_rfc3339();
+        create_stopped_session(&db, "expired-stopped-1", &expired).await;
+        create_stopped_session(&db, "expired-stopped-2", &expired).await;
+
+        let (found, expired_only_counts) = gents_store::config_client::count_statements(
+            halted_sessions(&db.agent_access, db.node_did(), db.agent_did()),
+        )
+        .await;
+        assert!(found.unwrap().is_empty());
+        assert_eq!(
+            expired_only_counts.total(),
+            2,
+            "expired stopped sessions must only run the two bounded discovery queries, never per-session follow-up queries"
+        );
+        assert!(
+            !expired_only_counts
+                .statements()
+                .any(|(_, doc)| doc.contains("AgentRequest")),
+            "expired stopped sessions must never trigger newest_request queries"
+        );
+
+        let recent = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        create_stopped_session(&db, "recent-stopped", &recent).await;
+        let (found, recent_counts) = gents_store::config_client::count_statements(halted_sessions(
+            &db.agent_access,
+            db.node_did(),
+            db.agent_did(),
+        ))
+        .await;
+        let found = found.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.session, "recent-stopped");
+        assert!(found[0].0.current);
+        assert!(
+            !recent_counts
+                .statements()
+                .any(|(_, doc)| doc.contains("expired-stopped-1")
+                    || doc.contains("expired-stopped-2")),
+            "expired stopped sessions must not be queried individually alongside recent halts"
+        );
+
+        db.node.shutdown().await.expect("shut down test node");
+    }
 }

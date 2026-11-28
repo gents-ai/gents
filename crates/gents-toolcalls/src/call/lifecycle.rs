@@ -75,6 +75,7 @@ mod session_activity_conformance;
 
 mod plugin_effect;
 pub(crate) use gents_session::request::streaming::AcceptedToolCall;
+pub(crate) use recovery::RunningToolCallSnapshot;
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
     OrphanedBackgroundToolReport, TerminalParentToolReport, ToolCallRecoveryReport,

@@ -73,6 +73,7 @@ type PeriodicRecoverySweepFn = for<'a> fn(
     &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     &'a dyn gents_session::session::message::SessionMessageGoals,
+    Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
 
 struct PeriodicRecoverySweepExecutor {
@@ -170,9 +171,37 @@ pub async fn run_periodic_recovery_sweeps_with_identities(
     goals: &dyn gents_session::session::message::SessionMessageGoals,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
     let mut runs = Vec::with_capacity(PERIODIC_RECOVERY_SWEEP_EXECUTORS.len());
+    let mut running_tools_snapshot: Option<crate::call::lifecycle::RunningToolCallSnapshot> = None;
     for executor in PERIODIC_RECOVERY_SWEEP_EXECUTORS {
         let metadata = PERIODIC_RECOVERY_SWEEP_METADATA[executor.metadata_index];
-        match (executor.run)(node, node_did, identities, background_executions, goals).await {
+        if executor.metadata_index == 1 && running_tools_snapshot.is_none() {
+            match ToolCallLifecycle::load_running_tool_call_snapshot(node, node_did, identities)
+                .await
+            {
+                Ok(snapshot) => running_tools_snapshot = Some(snapshot),
+                Err(error) => {
+                    tracing::warn!(
+                        sweep_ids = ?metadata.sweep_ids,
+                        rust_function = metadata.rust_function,
+                        error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+                        "shared running tool-call snapshot failed; each sweep will query independently"
+                    );
+                }
+            }
+        }
+        let shared = matches!(executor.metadata_index, 1 | 2)
+            .then_some(running_tools_snapshot.as_ref())
+            .flatten();
+        match (executor.run)(
+            node,
+            node_did,
+            identities,
+            background_executions,
+            goals,
+            shared,
+        )
+        .await
+        {
             Ok(outcome) => runs.push(PeriodicRecoverySweepRun { metadata, outcome }),
             Err(error) => {
                 tracing::warn!(
@@ -193,16 +222,30 @@ fn reconcile_terminal_parent_owned_tools<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(
-            node,
-            node_did,
-            identities,
-            background_executions,
-        )
-        .await
-        .map(PeriodicRecoverySweepOutcome::TerminalParentTools)
+        let outcome = match running_tools {
+            Some(snapshot) => {
+                ToolCallLifecycle::reconcile_terminal_parent_owned_tools_from_snapshot(
+                    node,
+                    node_did,
+                    snapshot,
+                    background_executions,
+                )
+                .await
+            }
+            None => {
+                ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(
+                    node,
+                    node_did,
+                    identities,
+                    background_executions,
+                )
+                .await
+            }
+        };
+        outcome.map(PeriodicRecoverySweepOutcome::TerminalParentTools)
     })
 }
 
@@ -212,16 +255,30 @@ fn reconcile_orphaned_background_tools<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        ToolCallLifecycle::reconcile_orphaned_background_tools(
-            node,
-            node_did,
-            identities,
-            background_executions,
-        )
-        .await
-        .map(PeriodicRecoverySweepOutcome::OrphanedBackgroundTools)
+        let outcome = match running_tools {
+            Some(snapshot) => {
+                ToolCallLifecycle::reconcile_orphaned_background_tools_from_snapshot(
+                    node,
+                    node_did,
+                    snapshot,
+                    background_executions,
+                )
+                .await
+            }
+            None => {
+                ToolCallLifecycle::reconcile_orphaned_background_tools(
+                    node,
+                    node_did,
+                    identities,
+                    background_executions,
+                )
+                .await
+            }
+        };
+        outcome.map(PeriodicRecoverySweepOutcome::OrphanedBackgroundTools)
     })
 }
 
@@ -231,6 +288,7 @@ fn reconcile_background_completion_side_effects<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_background_completion_side_effects(node, node_did, identities)
@@ -245,6 +303,7 @@ fn repair_terminal_requests<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests_with_identities(node, node_did, identities)
@@ -259,6 +318,7 @@ fn recover_inference_calls<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         InferenceCall::recover_all_with_identities(node, node_did, identities)
@@ -273,6 +333,7 @@ fn settle_session_message_rows<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         let mut settled = 0;
@@ -313,6 +374,7 @@ fn recover_task_hook_records<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         crate::call::task_hooks::recover_task_hook_records(
@@ -332,6 +394,7 @@ fn redrive_owed_deliveries<'a>(
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+    _running_tools: Option<&'a crate::call::lifecycle::RunningToolCallSnapshot>,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         gents_session::request::hooks::owed::redrive_pending(node, node_did, identities)
@@ -376,5 +439,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn periodic_recovery_shares_single_running_tool_call_query_across_sweeps() {
+        let db = gents_session::test_support::AgentHome::start("periodic-shared-tools").await;
+        let agent: std::sync::Arc<dyn gents_store::identity::NodeIdentity> =
+            db.agent_identity.clone();
+        let executions =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
+        let goals = gents_session::session::message::NoSessionMessageGoals;
+        let (runs, counts) = gents_store::config_client::count_statements(
+            run_periodic_recovery_sweeps_with_identities(
+                &db.node,
+                db.node_did(),
+                std::slice::from_ref(&agent),
+                &executions,
+                &goals,
+            ),
+        )
+        .await;
+        let runs = runs.unwrap();
+        assert!(runs.iter().any(|run| matches!(
+            run.outcome,
+            PeriodicRecoverySweepOutcome::TerminalParentTools(_)
+        )));
+        assert!(runs.iter().any(|run| matches!(
+            run.outcome,
+            PeriodicRecoverySweepOutcome::OrphanedBackgroundTools(_)
+        )));
+        let running_tool_snapshot_queries = counts
+            .statements()
+            .filter(|(_, doc)| {
+                doc.contains("AgentToolCall")
+                    && doc.contains(r#"lifecycle_state: { _eq: "running" }"#)
+                    && doc.contains("plugin_parent_tool_call_doc_id")
+            })
+            .count();
+        assert_eq!(
+            running_tool_snapshot_queries, 1,
+            "terminal-parent and orphaned-background sweeps must share one running tool-call query"
+        );
+        db.node.shutdown().await.expect("shut down test node");
     }
 }
