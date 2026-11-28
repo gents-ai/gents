@@ -1011,6 +1011,45 @@ async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_messa
             .and_then(|output| output.reasoning.as_deref()),
         Some("[training_safe_redacted]")
     );
+
+    // An in-stage follow-up request in the same session (e.g. a continuation
+    // prod) is not listed in stage_request_ids; export_retained_transcript must
+    // attach it under its preceding stage's child_requests without duplicating
+    // stages already exported.
+    assert!(
+        report.child_requests.is_empty(),
+        "when confirm is its own stage, report must not duplicate it as a follow-up: {report:#?}"
+    );
+    let with_followup = export_retained_transcript(
+        &runtime,
+        &runs_dir,
+        &at,
+        canary.evaluator.as_ref(),
+        vec![stage_requests[0].clone()],
+        TranscriptOptions {
+            calls: TranscriptCalls::Final,
+            redaction: ProjectionRedactionMode::Full,
+        },
+    )
+    .await
+    .unwrap();
+    let [report_with_followup] = with_followup.stages.as_slice() else {
+        panic!("one stage transcript: {with_followup:#?}");
+    };
+    let [followup] = report_with_followup.child_requests.as_slice() else {
+        panic!("expected the same-session follow-up request under child_requests: {report_with_followup:#?}");
+    };
+    assert_eq!(followup.request_id, stage_requests[1]);
+    assert_eq!(followup.caused_by_tool_call_id, None);
+    let followup_transcript = followup
+        .transcript
+        .as_deref()
+        .expect("follow-up transcript exported");
+    assert_eq!(
+        followup_transcript.final_output.as_ref(),
+        confirm.final_output.as_ref(),
+        "follow-up transcript preserves the exact wire output and reasoning"
+    );
 }
 
 #[tokio::test]
