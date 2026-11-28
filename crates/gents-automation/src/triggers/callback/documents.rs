@@ -376,20 +376,25 @@ pub async fn load_invocation_by_key(
     Ok(first_row(&response, "CallbackInvocation")?)
 }
 
+#[cfg(test)]
 pub(super) async fn list_recoverable_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     owner_node_did: &str,
     engine: &super::CallbackEngine,
 ) -> Result<Vec<CallbackInvocationDoc>> {
+    list_recoverable_invocations_with_repair_status(node, owner_node_did, engine)
+        .await
+        .map(|(invocations, _)| invocations)
+}
+
+pub(super) async fn list_recoverable_invocations_with_repair_status(
+    node: &std::sync::Arc<EmbeddedNode>,
+    owner_node_did: &str,
+    engine: &super::CallbackEngine,
+) -> Result<(Vec<CallbackInvocationDoc>, bool)> {
     let mut invocations = Vec::new();
-    for agent in callback_agents(node, owner_node_did).await? {
-        let access = match engine.access_for_agent(&agent) {
-            Ok(access) => access,
-            Err(error) => {
-                tracing::warn!(agent_did = %agent, %error, "callback recovery agent identity unavailable");
-                continue;
-            }
-        };
+    let mut any_repair_failed = false;
+    for (agent, access) in engine.watcher_agent_accesses()? {
         let mut repair_failed = false;
         for collection in ["CallbackInvocation", "CallbackResult"] {
             if let Err(error) =
@@ -397,6 +402,7 @@ pub(super) async fn list_recoverable_invocations(
             {
                 tracing::warn!(agent_did = %agent, %collection, %error, "callback parent repair remains pending");
                 repair_failed = true;
+                any_repair_failed = true;
                 break;
             }
         }
@@ -416,7 +422,7 @@ pub(super) async fn list_recoverable_invocations(
             list_recent_succeeded_missing_result(node, &access, owner_node_did, &agent).await?,
         );
     }
-    Ok(invocations)
+    Ok((invocations, any_repair_failed))
 }
 
 async fn repair_unlinked_children(
@@ -507,11 +513,7 @@ pub(super) async fn list_recent_failed(
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let mut failed = Vec::new();
-    for agent in callback_agents(node, owner_node_did).await? {
-        if let Err(error) = engine.access_for_agent(&agent) {
-            tracing::warn!(agent_did = %agent, %error, "callback retry agent identity unavailable");
-            continue;
-        }
+    for (agent, _access) in engine.watcher_agent_accesses()? {
         let query = format!(
             r#"{{
             CallbackInvocation(
@@ -628,24 +630,6 @@ async fn query_owner_invocations(
         .await
         .with_context(|| format!("query CallbackInvocation states {states}"))?;
     Ok(rows(&response, "CallbackInvocation")?)
-}
-
-async fn callback_agents(node: &EmbeddedNode, owner: &str) -> Result<Vec<String>> {
-    let query = format!(
-        "{{ Agent(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ agent_did }} }}",
-        escape_graphql_string(owner)
-    );
-    let response = graphql_with_transaction_retry(node, &query, "callback.list_agents").await?;
-    rows::<Value>(&response, "Agent")?
-        .into_iter()
-        .map(|row| {
-            row["agent_did"]
-                .as_str()
-                .filter(|did| !did.is_empty())
-                .map(str::to_owned)
-                .context("callback Agent has no DID")
-        })
-        .collect()
 }
 
 async fn callback_query_as(

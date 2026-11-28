@@ -21,13 +21,15 @@ use crate::goal::{
     GOAL_READINESS_WAIT_PREFIX,
 };
 use crate::goal::{
-    publish_claimed_continuation_with_identity, resume_at_reset, GoalReconcileSettled,
+    next_reset_resume_at, publish_claimed_continuation_with_identity,
+    resume_at_reset_with_deadline, GoalReconcileSettled,
 };
 use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::automation::ResolvedTask;
 use gents_documents::ConcurrencyMode;
 use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -38,7 +40,7 @@ use gents_documents::task_delivery::TriggerKind;
 
 mod intent_phases;
 
-const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) fn goal_candidate_in_scope(
     observer: &str,
@@ -72,6 +74,7 @@ pub struct GoalSource {
     subscription: Option<gents_store::subscription_source::ChangeSubscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
+    next_reset_at: Option<chrono::DateTime<Utc>>,
     runtime_status: Option<Arc<dyn GoalReconcileSettled>>,
 }
 
@@ -99,6 +102,7 @@ impl GoalSource {
             subscription: None,
             cancel,
             rescan_tick,
+            next_reset_at: None,
             runtime_status: None,
         }
     }
@@ -151,17 +155,33 @@ impl GoalSource {
         )?)
     }
 
-    async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
-        let snapshot = self.snapshot_rx.borrow().clone();
-        let node_did = snapshot.local_did.clone();
+    fn scan_agents(snapshot: &ActiveRuntimeSnapshot) -> Result<Vec<String>> {
         let mut agents = snapshot
-            .agents
-            .keys()
-            .chain(snapshot.unavailable_agents.keys())
-            .cloned()
+            .watcher_identities()?
+            .into_iter()
+            .map(|identity| identity.did().to_owned())
+            .filter(|agent_did| {
+                !snapshot.unavailable_agents.get(agent_did).is_some_and(|u| {
+                    u.public_reason == AgentReadinessUnavailableReason::AgentDisabled
+                })
+            })
             .collect::<Vec<_>>();
         agents.sort();
         agents.dedup();
+        Ok(agents)
+    }
+
+    async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
+        let snapshot = self.snapshot_rx.borrow().clone();
+        let node_did = snapshot.local_did.clone();
+        let agents = match Self::scan_agents(&snapshot) {
+            Ok(agents) => agents,
+            Err(error) => {
+                tracing::warn!(%error, "goal source watcher identities unavailable");
+                return None;
+            }
+        };
+        let mut earliest_reset: Option<chrono::DateTime<Utc>> = None;
         for agent_did in agents {
             let actor = match identity::Did::new(&agent_did) {
                 Ok(actor) => actor,
@@ -170,87 +190,122 @@ impl GoalSource {
                     continue;
                 }
             };
-            if tick {
-                self.resume_at_reported_resets(&node_did, &actor).await;
-            }
-            match self
+            let goals = match self
                 .load_goals(
                     &node_did,
                     &actor,
-                    r#"status: { _in: ["active", "budget_limited"] }"#,
+                    r#"status: { _in: ["active", "budget_limited", "usage_limited"] }"#,
                 )
                 .await
             {
-                Ok(goals) => {
-                    for goal in goals {
-                        match self.build_intent(&actor, goal).await {
-                            Ok(Some(intent)) => return Some(intent),
-                            Ok(None) => {}
-                            Err(error) => {
-                                tracing::warn!(%error, %agent_did, "goal source candidate failed")
-                            }
+                Ok(goals) => goals,
+                Err(error) => {
+                    tracing::warn!(%error, %agent_did, "goal source rescan failed");
+                    continue;
+                }
+            };
+            for goal in goals {
+                if goal.parsed_status() == Some(GoalStatus::UsageLimited) {
+                    if goal.auto_resume_at_reset == Some(true) {
+                        if let Some(reset_at) = self
+                            .reconcile_usage_limited_reset(&node_did, &actor, &goal, tick)
+                            .await
+                        {
+                            earliest_reset = Some(match earliest_reset {
+                                Some(current) => current.min(reset_at),
+                                None => reset_at,
+                            });
                         }
                     }
+                    continue;
                 }
-                Err(error) => tracing::warn!(%error, %agent_did, "goal source rescan failed"),
+                if goal.parsed_status() == Some(GoalStatus::BudgetLimited)
+                    && goal.wrapup_completed.unwrap_or(false)
+                {
+                    continue;
+                }
+                match self.build_intent(&actor, goal).await {
+                    Ok(Some(intent)) => {
+                        self.next_reset_at = earliest_reset;
+                        return Some(intent);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, %agent_did, "goal source candidate failed")
+                    }
+                }
             }
         }
+        self.next_reset_at = earliest_reset;
         None
     }
 
-    async fn resume_at_reported_resets(&self, node_did: &str, actor: &identity::Did) {
-        let goals = match self
-            .load_goals(
-                node_did,
-                actor,
-                r#"status: { _eq: "usage_limited" }, auto_resume_at_reset: { _eq: true }"#,
-            )
-            .await
-        {
-            Ok(goals) => goals,
+    async fn reconcile_usage_limited_reset(
+        &self,
+        node_did: &str,
+        actor: &identity::Did,
+        goal: &GoalDocument,
+        attempt_resume: bool,
+    ) -> Option<chrono::DateTime<Utc>> {
+        let snapshot = self.snapshot_rx.borrow().clone();
+        let identity = match snapshot.watcher_identities() {
+            Ok(identities) => match identities
+                .into_iter()
+                .find(|identity| identity.did() == actor.as_str())
+            {
+                Some(identity) => identity,
+                None => {
+                    tracing::warn!(goal_id = %goal.goal_id, "goal reset agent identity is unavailable");
+                    return None;
+                }
+            },
             Err(error) => {
-                tracing::warn!(%error, "goal source reset resume scan failed");
-                return;
+                tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset agent identity is unavailable");
+                return None;
             }
         };
-        for goal in goals {
-            let resumed = async {
-                let snapshot = self.snapshot_rx.borrow().clone();
-                let runtime = snapshot
-                    .node
-                    .as_ref()
-                    .context("goal reset runtime identity is unavailable")?;
-                anyhow::ensure!(
-                    runtime.node_did == node_did,
-                    "goal reset runtime identity changed"
-                );
-                let identity = snapshot
-                    .watcher_identities()?
-                    .into_iter()
-                    .find(|identity| identity.did() == actor.as_str())
-                    .context("goal reset agent identity is unavailable")?;
-                resume_at_reset(
-                    &self.node,
-                    runtime.identity.as_ref(),
-                    identity.as_ref(),
-                    &goal,
-                    Utc::now(),
-                )
-                .await
-            }
-            .await;
-            match resumed {
-                Ok(crate::goal::ResetResume::Resumed(receipt)) => tracing::info!(
+        if !attempt_resume {
+            return match next_reset_resume_at(&self.node, identity.as_ref(), goal).await {
+                Ok(reset_at) => reset_at,
+                Err(error) => {
+                    tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset deadline lookup failed");
+                    None
+                }
+            };
+        }
+        let resumed = async {
+            let runtime = snapshot
+                .node
+                .as_ref()
+                .context("goal reset runtime identity is unavailable")?;
+            anyhow::ensure!(
+                runtime.node_did == node_did,
+                "goal reset runtime identity changed"
+            );
+            resume_at_reset_with_deadline(
+                &self.node,
+                runtime.identity.as_ref(),
+                identity.as_ref(),
+                goal,
+                Utc::now(),
+            )
+            .await
+        }
+        .await;
+        match resumed {
+            Ok((crate::goal::ResetResume::Resumed(receipt), _)) => {
+                tracing::info!(
                     request_id = %receipt.request_id,
                     goal_id = %goal.goal_id,
                     "durable goal continuation fired at the reported reset"
-                ),
-                Ok(
-                    crate::goal::ResetResume::NotUsageLimited | crate::goal::ResetResume::Deferred,
-                ) => {}
-                Err(error) => {
-                    tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset resume failed")
-                }
+                );
+                None
+            }
+            Ok((crate::goal::ResetResume::Deferred, next_reset)) => next_reset,
+            Ok((crate::goal::ResetResume::NotUsageLimited, _)) => None,
+            Err(error) => {
+                tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset resume failed");
+                None
             }
         }
     }
@@ -1225,6 +1280,9 @@ impl TriggerSource for GoalSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
+                let reset_delay = self
+                    .next_reset_at
+                    .map(|at| (at - Utc::now()).to_std().unwrap_or_default());
                 let tick = tokio::select! {
                     biased;
                     _ = self.cancel.cancelled() => return None,
@@ -1233,6 +1291,10 @@ impl TriggerSource for GoalSource {
                             return None;
                         }
                         false
+                    }
+                    _ = tokio::time::sleep(reset_delay.unwrap_or_default()), if reset_delay.is_some() => {
+                        self.next_reset_at = None;
+                        true
                     }
                     _ = self.rescan_tick.tick() => true,
                     batch = async {
@@ -1427,5 +1489,74 @@ mod tests {
             &row(None, None, Some(wrapup_input(true))),
             "goal-1"
         ));
+    }
+
+    #[test]
+    fn scan_agents_excludes_disabled_and_unresolved_agents() {
+        use crate::triggers::runtime_snapshot::UnavailableAgent;
+
+        let watched = gents_store::test_support::fixture_agent(
+            gents_store::test_support::FIXTURE_AGENT_NONCE,
+        );
+        let disabled = gents_store::test_support::fixture_agent(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+        );
+        let mut unavailable_agents = rapidhash::RapidHashMap::default();
+        unavailable_agents.insert(
+            watched.did().to_owned(),
+            UnavailableAgent::new(
+                AgentReadinessUnavailableReason::BackendDisabled,
+                "enabled but temporarily unavailable",
+            )
+            .with_watcher_identity(watched.clone()),
+        );
+        unavailable_agents.insert(
+            disabled.did().to_owned(),
+            UnavailableAgent::new(
+                AgentReadinessUnavailableReason::AgentDisabled,
+                "disabled core-pack agent",
+            ),
+        );
+        unavailable_agents.insert(
+            "did:key:zDisabledEvenWithIdentity".to_owned(),
+            UnavailableAgent::new(
+                AgentReadinessUnavailableReason::AgentDisabled,
+                "disabled agent",
+            ),
+        );
+        unavailable_agents.insert(
+            "did:key:zUnresolvedAgent".to_owned(),
+            UnavailableAgent::new(
+                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "unresolved agent without watcher identity",
+            ),
+        );
+        let snapshot = ActiveRuntimeSnapshot {
+            placement_basis: Default::default(),
+            generation: 1,
+            node: None,
+            local_did: gents_store::test_support::PIN_FIXED_DID.to_owned(),
+            default_agent_did: watched.did().to_owned(),
+            agents: Default::default(),
+            tool_surfaces: Default::default(),
+            tool_configs: Default::default(),
+            backend_admission_configs: Default::default(),
+            unavailable_agents,
+            active_schedules: Default::default(),
+            unavailable_schedules: Default::default(),
+            active_event_triggers: Default::default(),
+            unavailable_event_triggers: Default::default(),
+            active_tasks: Default::default(),
+            dispatchers: Default::default(),
+            agent_executor_capacities: Default::default(),
+            agent_executor_queue_capacities: Default::default(),
+        };
+
+        let scanned = GoalSource::scan_agents(&snapshot).unwrap();
+        assert_eq!(
+            scanned,
+            vec![watched.did().to_owned()],
+            "GoalSource must scan only enabled/resolved watcher identities"
+        );
     }
 }

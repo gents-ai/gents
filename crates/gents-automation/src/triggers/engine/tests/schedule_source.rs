@@ -1374,3 +1374,158 @@ async fn schedule_occurrence_dispatches_follow_the_lean_occurrence_model() {
         });
     }
 }
+
+#[test]
+fn schedule_failure_backoff_doubles_and_is_capped() {
+    use crate::triggers::engine::schedule_source::schedule_failure_backoff;
+
+    let base = Duration::from_secs(2);
+    let max = Duration::from_secs(60);
+    assert_eq!(
+        schedule_failure_backoff(1, base, max),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        schedule_failure_backoff(2, base, max),
+        Duration::from_secs(4)
+    );
+    assert_eq!(
+        schedule_failure_backoff(3, base, max),
+        Duration::from_secs(8)
+    );
+    assert_eq!(
+        schedule_failure_backoff(4, base, max),
+        Duration::from_secs(16)
+    );
+    assert_eq!(
+        schedule_failure_backoff(5, base, max),
+        Duration::from_secs(32)
+    );
+    assert_eq!(
+        schedule_failure_backoff(6, base, max),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        schedule_failure_backoff(99, base, max),
+        Duration::from_secs(60)
+    );
+}
+
+#[tokio::test]
+async fn schedule_source_backs_off_after_errored_rejected_and_budget_exhausted() {
+    let behavior = schedule_test_behavior();
+    let node_db = gents_store::test_support::TestStore::start_as(
+        "schedule-source-backs-off-on-failure",
+        behavior.node_did(),
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let owner_did = behavior.node_did().to_string();
+
+    for (index, (trigger_id, result, expected_status)) in [
+        (
+            "sched-err",
+            FireResult::Errored {
+                error: "transient failure".into(),
+            },
+            "error",
+        ),
+        (
+            "sched-rej",
+            FireResult::Rejected {
+                error: "rejected fire".into(),
+            },
+            "error",
+        ),
+        (
+            "sched-budget",
+            FireResult::BudgetExhausted {
+                reason: "hourly budget exhausted".into(),
+            },
+            gents_documents::BUDGET_EXHAUSTED_STATUS,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+        let trigger_doc_id = create_schedule_with_next_run_at(
+            &node,
+            &owner_did,
+            ScheduleFixture {
+                trigger_id,
+                schedule_id: trigger_id,
+                task_id: &format!("task-backoff-{index}"),
+                cadence: interval_cadence_json(),
+                next_run_at: Some(&past),
+                concurrency: "serial",
+            },
+        )
+        .await;
+        let task = ResolvedTask {
+            emit_outcome: false,
+            task_id: format!("task-backoff-{index}"),
+            name: None,
+            agent_did: behavior.agent_did.clone(),
+            prompt_template: "backoff".to_string(),
+            goal_objective_template: None,
+            goal_token_budget: None,
+            goal_max_infrastructure_retries: None,
+            output_schema_ref: None,
+            hooks: Vec::new(),
+            command: None,
+        };
+        let schedule = ResolvedSchedule {
+            session_id_template: None,
+            create_session: false,
+            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
+            trigger_doc_id,
+            schedule_doc_id: schedule_doc_id(&node, &owner_did, trigger_id).await,
+            schedule_id: trigger_id.to_string(),
+            task,
+            cadence: ScheduleCadence::Interval { interval_secs: 60 },
+            concurrency: ConcurrencyMode::Serial,
+        };
+        let snapshot = snapshot_with_agent_and_schedules(
+            behavior.clone(),
+            RapidHashMap::from_iter([(trigger_id.to_string(), schedule)]),
+        );
+        let (_tx, rx) = watch::channel(snapshot);
+        let cancel = CancellationToken::new();
+        let (tick_tx, tick_rx) = watch::channel(0usize);
+        let mut wait_ticks = tick_rx.clone();
+        let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+            .with_tick_every(Duration::from_millis(15))
+            .with_failure_backoff(Duration::from_secs(60), Duration::from_secs(60))
+            .with_idle_tick_signal(tick_tx);
+
+        let intent = tokio::time::timeout(STALL_CEILING, source.next_fire())
+            .await
+            .expect("due schedule should fire initially")
+            .expect("schedule source active");
+        (intent.on_result)(result);
+        let persisted =
+            wait_for_trigger_status(node.as_ref(), &owner_did, trigger_id, expected_status).await;
+        assert_eq!(persisted["last_status"].as_str(), Some(expected_status));
+
+        let cancel_clone = cancel.clone();
+        let canceller = tokio::spawn(async move {
+            wait_ticks.wait_for(|&ticks| ticks >= 3).await.unwrap();
+            cancel_clone.cancel();
+        });
+        let next = tokio::time::timeout(STALL_CEILING, source.next_fire())
+            .await
+            .expect("backed-off schedule should settle on cancel");
+        let _ = canceller.await;
+        assert!(
+            next.is_none(),
+            "backed-off trigger {trigger_id} must not spin-fire before its backoff deadline"
+        );
+        assert!(
+            *tick_rx.borrow() >= 3,
+            "expected idle ticks during backoff window for {trigger_id}"
+        );
+    }
+    node.shutdown().await.expect("node shutdown");
+}
