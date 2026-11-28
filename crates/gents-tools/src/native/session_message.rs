@@ -500,14 +500,14 @@ impl Tool for WaitProcessTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Wait up to timeout_secs for a background process in this session to reach a terminal state, including a handle returned on an earlier turn. A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s unless configured for that process; never more than {MAX_WAIT_PROCESS_TIMEOUT_SECS}s, or less if configured."
+                "Wait up to timeout_secs for a background process started by spawn_process in this session to reach a terminal state, including a handle returned on an earlier turn. Only accepts tool_call_id handles returned by spawn_process — do not pass handles from agent_new, agent_message, or workflow calls (inspect delegated child sessions with sessions or agent_session_read instead). A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s unless configured for that process; never more than {MAX_WAIT_PROCESS_TIMEOUT_SECS}s, or less if configured."
             ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Process handle returned by spawn_process."
+                        "description": "Process handle returned by spawn_process (not agent_new, agent_message, or workflow)."
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -836,5 +836,32 @@ mod description_tests {
                 .ends_with("The exit code is in the final result that wait_process returns."),
             "{description}"
         );
+    }
+
+    #[tokio::test]
+    async fn wait_process_description_restricts_handles_to_spawn_process() {
+        let definition = WaitProcessTool.definition(String::new()).await;
+        assert!(
+            definition
+                .description
+                .contains("Only accepts tool_call_id handles returned by spawn_process"),
+            "{}",
+            definition.description
+        );
+        for rejected in ["agent_new", "agent_message", "workflow"] {
+            assert!(
+                definition.description.contains(rejected),
+                "description must exclude {rejected}: {}",
+                definition.description
+            );
+            assert!(
+                definition.parameters["properties"]["tool_call_id"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains(rejected),
+                "tool_call_id parameter must exclude {rejected}: {}",
+                definition.parameters
+            );
+        }
     }
 }

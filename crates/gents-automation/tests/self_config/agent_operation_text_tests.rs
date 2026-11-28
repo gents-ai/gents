@@ -318,9 +318,9 @@ tool call error: {"error":"display_name is required","recovery":{"next_call":{"a
 ## create without system-prompt (refused)
 tool call error: {"error":"fresh agents require system_prompt","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## create without profile (refused)
-tool call error: {"error":"select a published inference profile","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":true}}
+tool call error: {"error":"select a published inference profile in options.profile; list published profiles with [\"profile\",\"list\"]","recovery":{"next_call":{"argv":["profile","list"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## create with unpublished profile (refused)
-tool call error: {"error":"select a published inference profile","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":true}}
+tool call error: {"error":"select a published inference profile in options.profile; list published profiles with [\"profile\",\"list\"]","recovery":{"next_call":{"argv":["profile","list"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## create with unknown preset (refused)
 tool call error: {"error":"unknown permission preset","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## create with unpublished root (refused)
@@ -340,7 +340,7 @@ tool call error: {"error":"clone requires from","recovery":{"next_call":{"argv":
 ## clone with preset (refused)
 tool call error: {"error":"clone inherits its source tools; edit the cloned Tools to change grants","recovery":{"next_call":{"argv":["help","agent"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## clone without profile (refused)
-tool call error: {"error":"select a published inference profile","recovery":{"next_call":{"argv":["help","agent"]}},"config_execution":{"version":1,"mutation_entered":true}}
+tool call error: {"error":"select a published inference profile in options.profile; list published profiles with [\"profile\",\"list\"]","recovery":{"next_call":{"argv":["profile","list"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## clone from an unknown agent (refused)
 tool call error: {"error":"unknown agent_did \"did:key:absent\"; copy an exact DID from [\"agent\",\"list\"] or an agent create receipt","recovery":{"next_call":{"argv":["agent","list"]}},"config_execution":{"version":1,"mutation_entered":false}}
 ## batch stopping at a refused create (refused)

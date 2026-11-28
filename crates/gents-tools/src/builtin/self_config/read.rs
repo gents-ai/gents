@@ -212,7 +212,7 @@ impl SelfConfigCore {
             "tool_grants": {
                 "configured": { "lsp": lsp_selected, "network_mode": configured_network_mode },
                 "confirmed_by": "canonical Tools selection decoded from durable configuration",
-                "activation": "Your own Tools apply from your next turn, another agent's from its next request. Only a successful call proves a tool works.",
+                "activation": "Your own Tools take effect on your next tool call in this same response (keep working, do not end your reply); another agent's apply from its next request. Only a successful call proves a tool works.",
                 "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed. A read-only bash policy runs no language server, so lsp is offered only with an Unrestricted bash mode whose execution_mode is not read_only.",
             },
             "runtime_effective": {

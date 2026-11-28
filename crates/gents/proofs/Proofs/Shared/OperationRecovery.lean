@@ -222,6 +222,7 @@ def agentTargetRecovery : AgentError → Option NextCall
   | .catalogNotHeld | .agentNotHeld | .selfDisable => some (NextCall.inspect "agent")
   | .defaultAgentDisabled | .agentMissing => some (NextCall.list "agent")
   | .missingAgentContext => some (NextCall.list "context")
+  | .profileNotPublished => some (NextCall.list "profile")
   | _ => none
 
 def agentRecovery (error : AgentError) (operation : AgentCreateOperation) : NextCall :=
@@ -1059,6 +1060,8 @@ theorem missing_target_errors_discover_instead_of_help
     isDiscovery (agentEditRecovery .agentMissing) ∧
     isDiscovery (agentRecovery .missingAgentContext op) ∧
     isDiscovery (agentEditRecovery .missingAgentContext) ∧
+    isDiscovery (agentRecovery .profileNotPublished op) ∧
+    isDiscovery (agentEditRecovery .profileNotPublished) ∧
     isDiscovery (documentRecovery .missing r) ∧
     isDiscovery (documentDeleteRecovery .targetMissing r) ∧
     isDiscovery (goalRecovery .sessionMissing) ∧

@@ -868,7 +868,7 @@ mod tests {
 }
 ## create with an unpublished profile
 Error: select a published inference profile
-Next: gents config agent create --help
+Next: gents config profile list
 ## create with an unpublished root
 Error: Tools.host.root "/pinned/unpublished" is not admitted by published WorkspaceRoot policy: nonexistent path is outside the allowed roots
 Next: gents config agent create --help

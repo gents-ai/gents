@@ -225,7 +225,7 @@ pub fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
 
 /// The operation the parameters request: `operation` on a preview, else the
 /// action.
-fn requested_operation(args: &ConfigureAgentParams) -> &str {
+pub(super) fn requested_operation(args: &ConfigureAgentParams) -> &str {
     args.operation.as_deref().unwrap_or(&args.action)
 }
 
@@ -566,7 +566,14 @@ pub(super) async fn model_agent_outcome(
         Ok(receipt) => Ok(AgentOutcome::Admitted(receipt_text(&receipt)?)),
         Err(AgentApplyError::Operation(error)) => {
             let next_call = recovery_for(&args, &error);
-            error.preview_outcome(next_call).map_err(Into::into)
+            let rendered = command::guidance::agent_error_message(&error, &args);
+            let mut outcome = error
+                .preview_outcome(next_call)
+                .map_err(AgentApplyError::from)?;
+            if let AgentOutcome::Refused { message, .. } = &mut outcome {
+                *message = rendered;
+            }
+            Ok(outcome)
         }
         Err(error) => Err(error),
     }
@@ -988,101 +995,96 @@ async fn agent_apply_in_txn(
             if args.enable_lsp.is_some() || args.network_mode.is_some() {
                 tools.get_or_insert_with(Tools::default);
             }
-            if let Some(mut tools) = tools {
-                tools.tools_id = format!("{id}:tools");
-                admit(
-                    !refs.documents().any(|((c, key), _)| {
-                        *c == gents_store::collection::Collection::Tools && key == &tools.tools_id
-                    }),
-                    AgentOperationError::GeneratedToolsIdExists,
-                )?;
-                tools.node_did = owner.to_owned();
-                let policy = crate::surface::load_workspace_root_policy_in_txn(
-                    txn,
-                    ceiling.root.as_deref(),
-                    owner,
-                )
-                .await?;
-                let stored_root = if args.root.is_present() {
-                    None
-                } else {
-                    tools.host.as_ref().and_then(|host| host.root.clone())
-                };
-                crate::surface::canonicalize_tools_root(
-                    &mut tools,
-                    &policy,
-                    stored_root.as_deref(),
-                )?;
-                apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
-                if let Some(source) = source_overrides {
-                    let requested = [
-                        args.root.is_present(),
-                        args.network_mode.is_some(),
-                        args.enable_lsp.is_some(),
-                    ];
-                    for (((name, before), (_, after)), requested) in source
-                        .into_iter()
-                        .zip(clone_override_values(&tools))
-                        .zip(requested)
-                    {
-                        if override_reported(requested, before != after) {
-                            overridden_on_request.push(format!(
-                                "{name}: overridden on request (source value: {before})"
-                            ));
-                        }
+            let mut tools = tools.unwrap_or_default();
+            tools.tools_id = format!("{id}:tools");
+            admit(
+                !refs.documents().any(|((c, key), _)| {
+                    *c == gents_store::collection::Collection::Tools && key == &tools.tools_id
+                }),
+                AgentOperationError::GeneratedToolsIdExists,
+            )?;
+            tools.node_did = owner.to_owned();
+            let policy = crate::surface::load_workspace_root_policy_in_txn(
+                txn,
+                ceiling.root.as_deref(),
+                owner,
+            )
+            .await?;
+            let stored_root = if args.root.is_present() {
+                None
+            } else {
+                tools.host.as_ref().and_then(|host| host.root.clone())
+            };
+            crate::surface::canonicalize_tools_root(&mut tools, &policy, stored_root.as_deref())?;
+            apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+            if let Some(source) = source_overrides {
+                let requested = [
+                    args.root.is_present(),
+                    args.network_mode.is_some(),
+                    args.enable_lsp.is_some(),
+                ];
+                for (((name, before), (_, after)), requested) in source
+                    .into_iter()
+                    .zip(clone_override_values(&tools))
+                    .zip(requested)
+                {
+                    if override_reported(requested, before != after) {
+                        overridden_on_request.push(format!(
+                            "{name}: overridden on request (source value: {before})"
+                        ));
                     }
                 }
-                if let (true, Some(dropped)) = (report.self_config_not_copied, dropped_self_config)
-                {
-                    not_copied.push(AgentOmittedCapability::new(
-                        "self_config",
-                        &json!({"tools_id": tools.tools_id, "node_did": owner, "self_config": dropped}),
-                        home,
-                    ));
-                }
-                if report.prompt_warning {
-                    prompt_warning = Some("The cloned prompt names config, but the clone does not have self_config. To grant it, run not_copied[0].grant_command against the intended node.".to_owned());
-                }
-                // A new Agent DID holds no WorkspaceRoot relationship yet.
-                let published =
-                    match crate::surface::tools_root_reader_in_txn(txn, owner, &policy, &tools)
-                        .await?
-                    {
-                        crate::surface::ToolRootReader::NotNeeded => None,
-                        crate::surface::ToolRootReader::Published(root) => Some(Some(root)),
-                        crate::surface::ToolRootReader::Unpublished(_) => Some(None),
-                    };
-                if let Some(published) = published {
-                    root_access = Some(crate::surface::reader_grant_step(
-                        &id,
-                        published.as_deref(),
-                        home,
-                        true,
-                    ));
-                }
-                validate_tool_network_selection(args.network_mode)?;
-                context.tools_id = Some(tools.tools_id.clone());
-                if let Some(held) = caller.held {
-                    let candidate = serde_json::to_value(&tools)?;
-                    ops::guard_tools_keep_grants(
-                        held,
-                        None,
-                        candidate
-                            .as_object()
-                            .ok_or(AgentOperationError::ObjectRequired("Tools"))?,
-                    )
-                    .map_err(|source| {
-                        AgentOperationError::CloneSourceGrantNotHeld {
-                            from: input.clone_from.clone().unwrap_or_default(),
-                            source: source.into(),
-                        }
-                    })?;
-                }
-                documents.push(replacement(
-                    gents_store::collection::Collection::Tools,
-                    tools,
-                )?);
             }
+            if let (true, Some(dropped)) = (report.self_config_not_copied, dropped_self_config) {
+                not_copied.push(AgentOmittedCapability::new(
+                    "self_config",
+                    &json!({"tools_id": tools.tools_id, "node_did": owner, "self_config": dropped}),
+                    home,
+                ));
+            }
+            if report.prompt_warning {
+                prompt_warning = Some("The cloned prompt names config, but the clone does not have self_config. To grant it, run not_copied[0].grant_command against the intended node.".to_owned());
+            }
+            // A new Agent DID holds no WorkspaceRoot relationship yet.
+            let published = match crate::surface::tools_root_reader_in_txn(
+                txn, owner, &policy, &tools,
+            )
+            .await?
+            {
+                crate::surface::ToolRootReader::NotNeeded => None,
+                crate::surface::ToolRootReader::Published(root) => Some(Some(root)),
+                crate::surface::ToolRootReader::Unpublished(_) => Some(None),
+            };
+            if let Some(published) = published {
+                root_access = Some(crate::surface::reader_grant_step(
+                    &id,
+                    published.as_deref(),
+                    home,
+                    true,
+                ));
+            }
+            validate_tool_network_selection(args.network_mode)?;
+            context.tools_id = Some(tools.tools_id.clone());
+            if let Some(held) = caller.held {
+                let candidate = serde_json::to_value(&tools)?;
+                ops::guard_tools_keep_grants(
+                    held,
+                    None,
+                    candidate
+                        .as_object()
+                        .ok_or(AgentOperationError::ObjectRequired("Tools"))?,
+                )
+                .map_err(|source| {
+                    AgentOperationError::CloneSourceGrantNotHeld {
+                        from: input.clone_from.clone().unwrap_or_default(),
+                        source: source.into(),
+                    }
+                })?;
+            }
+            documents.push(replacement(
+                gents_store::collection::Collection::Tools,
+                tools,
+            )?);
             doc = serde_json::from_value(
                 json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().ok_or(AgentOperationError::IdentityBindingMissing)?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id,"tags":args.tags}),
             )?;

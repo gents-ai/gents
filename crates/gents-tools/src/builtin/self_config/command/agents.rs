@@ -467,8 +467,14 @@ fn agent_preview_text(
         Ok(outcome) => outcome,
         Err(AgentApplyError::Operation(error)) => {
             let next_call = agent_management::recovery_for(params, &error);
+            let rendered = guidance::agent_error_message(&error, params);
             match error.preview_outcome(next_call) {
-                Ok(outcome) => outcome,
+                Ok(mut outcome) => {
+                    if let AgentOutcome::Refused { message, .. } = &mut outcome {
+                        *message = rendered;
+                    }
+                    outcome
+                }
                 Err(error) => {
                     return Err(guidance::agent_failure(
                         AgentApplyError::Operation(error),

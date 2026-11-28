@@ -21,7 +21,7 @@ mod crud;
 mod datastore;
 mod discovery;
 mod grants;
-mod guidance;
+pub(super) mod guidance;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod help;
 #[cfg(not(any(test, feature = "test-fixtures")))]

@@ -126,7 +126,7 @@ pub(crate) const PREVIEW_EFFECT: &str =
     "preview: nothing was written; send the same create/update call without preview to apply";
 
 pub const EFFECT_TIMING_NOTE: &str =
-    "A change to your own Tools applies from your next turn; any other change applies from the next request.";
+    "A change to your own Tools takes effect on your next tool call in this same response (keep working, do not end your reply); other changes apply from the next request.";
 
 #[derive(Clone)]
 pub struct SelfConfigCore {
@@ -647,7 +647,7 @@ impl SelfConfigCore {
             shared,
             next_turn: None,
             effect: if request.target == SelfConfigTarget::DatastoreToolSurface {
-                "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Your own Tools apply from your next turn."
+                "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Your own Tools take effect on your next tool call in this same response (keep working, do not end your reply)."
             } else if creating && request.target == SelfConfigTarget::InferenceProfile {
                 "Creating a profile does not select it for an agent. To use it, call agent update with set.inference_profile_id equal to this target_id. Selecting it preserves the previous profile and its settings. The selection applies to later requests after reconciliation."
             } else if request.target == SelfConfigTarget::Tools
@@ -660,7 +660,7 @@ impl SelfConfigCore {
                             .is_some_and(|ids| !ids.is_empty())
                 })
             {
-                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_did and set.agents containing enabled:true plus the existing target_ids. Your own Tools apply from your next turn."
+                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_did and set.agents containing enabled:true plus the existing target_ids. Your own Tools take effect on your next tool call in this same response (keep working, do not end your reply)."
             } else {
                 EFFECT_TIMING_NOTE
             },
