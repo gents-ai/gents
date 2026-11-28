@@ -129,8 +129,22 @@ pub struct AgentReceipt<A> {
     /// The experience attempt this commit recorded, when it carried one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experience: Option<serde_json::Value>,
+    /// How a clone's memory access to its source was arranged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<AgentMemoryShare>,
     pub agent: A,
     pub make_default: bool,
+}
+
+/// The memory relationship a clone staged on its source, or why it did not.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AgentMemoryShare {
+    pub shared: bool,
+    /// The call that copies the source's experience to the clone.
+    pub carry_call: String,
+    /// Why the grant was not staged, naming the call that shares it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_shared: Option<String>,
 }
 
 /// A Tools group a clone did not copy, with the command that grants it back
@@ -622,6 +636,7 @@ mod tests {
             overridden_on_request: Vec::new(),
             prompt_warning: None,
             experience: None,
+            memory: None,
             agent: serde_json::json!({"agent_did": "did:key:new"}),
             make_default: false,
         };

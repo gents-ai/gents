@@ -7,8 +7,8 @@ use gents_documents::{
 use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentCreateOperation, AgentOmittedCapability, AgentOperationError,
-    AgentOperationKind, AgentOutcome, AgentReceipt,
+    AgentCreateInput, AgentCreateOperation, AgentMemoryShare, AgentOmittedCapability,
+    AgentOperationError, AgentOperationKind, AgentOutcome, AgentReceipt,
 };
 use gents_protocol::operations::NextCall;
 use gents_session::session::output_render::Ordered;
@@ -905,6 +905,11 @@ async fn agent_apply_in_txn(
     let mut overridden_on_request = Vec::new();
     let mut prompt_warning = None;
     let mut experience_changes = Vec::new();
+    let mut memory = None;
+    let clone_source = match &op {
+        agent::AgentOperation::Create(input) => input.clone_from.clone(),
+        _ => None,
+    };
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
             admit(
@@ -1277,6 +1282,14 @@ async fn agent_apply_in_txn(
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
+        if let Some(source) = clone_source.as_deref() {
+            let not_shared = stage_memory_share(txn, owner, &id, source).await?;
+            memory = Some(AgentMemoryShare {
+                shared: not_shared.is_none(),
+                carry_call: format!("memory carry from_agent={source}"),
+                not_shared,
+            });
+        }
     }
     let mut experience = None;
     if crate::memory::experience_staged(!preview, preview) {
@@ -1315,9 +1328,40 @@ async fn agent_apply_in_txn(
         overridden_on_request,
         prompt_warning,
         experience,
+        memory,
         agent: doc,
         make_default: args.make_default,
     })
+}
+
+/// Stage the clone's `memory_reader` on its source Agent as the creating
+/// identity. A refusal is reported for the receipt, never turned into a
+/// failed clone.
+async fn stage_memory_share(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    clone: &str,
+    source: &str,
+) -> Result<Option<String>, AgentApplyError> {
+    let Some((source_doc, _)) =
+        ops::read_owned_doc(txn, SelfConfigTarget::Agent, owner, source).await?
+    else {
+        return Ok(Some(format!(
+            "memory was not shared with {clone}: no Agent document for {source} is readable here; run memory share to_agent={clone} from {source} to share it"
+        )));
+    };
+    let target = identity::Did::new(clone)
+        .map_err(|error| anyhow::anyhow!("clone agent DID {clone} is not a DID: {error}"))?;
+    match txn
+        .add_actor_relationship("Agent", &source_doc, "memory_reader", &target)
+        .await
+    {
+        Ok(()) => Ok(None),
+        Err(error) if error.is_permission_denied() => Ok(Some(format!(
+            "memory was not shared with {clone}: this identity may not grant memory_reader on {source}; run memory share to_agent={clone} from {source} to share it"
+        ))),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Lean `SelfConfig.CloneReceipt.report`.

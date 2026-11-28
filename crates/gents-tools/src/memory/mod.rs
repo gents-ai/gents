@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+mod carry;
 mod experience;
 mod experience_rows;
 mod experience_store;
@@ -118,6 +119,10 @@ pub struct MemoryParams {
     pub from: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+    #[serde(default)]
+    pub from_agent: Option<String>,
+    #[serde(default)]
+    pub to_agent: Option<String>,
 }
 
 /// The attempt a write records in its own transaction: one cited problem or
@@ -503,7 +508,7 @@ impl Tool for MemoryTool {
             parameters: json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
-                    "action": {"type": "string", "enum": ["help", "remember", "search", "forget", "list", "ingest", "problem", "attempt", "outcome", "merge", "problems"], "description": "Defaults to search when query is set, otherwise list."},
+                    "action": {"type": "string", "enum": ["help", "remember", "search", "forget", "list", "ingest", "problem", "attempt", "outcome", "merge", "problems", "share", "unshare", "carry"], "description": "Defaults to search when query is set, otherwise list."},
                     "topic": {"type": "string", "description": "help: one action to explain, such as problem, attempt, outcome, merge or problems."},
                     "text": {"type": "string", "minLength": 1, "description": "remember: the memory to store."},
                     "texts": {"type": "array", "items": {"type": "string"}, "description": "remember: several memories to store."},
@@ -529,7 +534,9 @@ impl Tool for MemoryTool {
                     "total": {"type": "integer", "minimum": 0, "description": "outcome: checks run."},
                     "note": {"type": "string", "description": "outcome: anything a later reader must know."},
                     "from": {"type": "string", "minLength": 1, "description": "merge: the problem to merge away."},
-                    "to": {"type": "string", "minLength": 1, "description": "merge: the problem that remains."}
+                    "to": {"type": "string", "minLength": 1, "description": "merge: the problem that remains."},
+                    "from_agent": {"type": "string", "minLength": 1, "description": "carry: the agent DID whose experience to copy; that agent must share memory with you first."},
+                    "to_agent": {"type": "string", "minLength": 1, "description": "share or unshare: the agent DID to grant or revoke memory_read."}
                 }
             }),
         }
@@ -629,6 +636,9 @@ impl Tool for MemoryTool {
             "outcome" => store.outcome(args, runtime).await?,
             "merge" => store.merge(args, runtime).await?,
             "problems" => store.problems(args, runtime).await?,
+            "share" => store.share(args, false).await?,
+            "unshare" => store.share(args, true).await?,
+            "carry" => store.carry(args).await?,
             other => {
                 return Err(anyhow::anyhow!("unsupported memory action {other}; use help").into())
             }
@@ -669,7 +679,7 @@ pub(crate) async fn embedder() -> anyhow::Result<Arc<StaticEmbedder>> {
         .map(Arc::clone)
 }
 
-const HELP: &str = "Persistent cross-session memory, stored by root-cause problem. Actions: help, remember, search, forget, list, ingest, problem, attempt, outcome, merge, problems. remember stores one text with a kind and optional metadata. search ranks stored facts with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes a fact by memory_key. list returns facts newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash; next_cursor is null after the last page. problem opens a root cause with name or shows one with problem_key, and lists the 3 nearest existing problems so you can cite one instead. attempt records a committed change under problem_key or a new_problem with what, rationale, predicted and accepted, and returns attempt_key. outcome records fixed, missed, passed, total and note for an attempt_key. merge takes from and to and keeps every attempt; a self-merge or a cycle is refused. problems is the paged index with attempt counts, latest outcome and unresolved predictions. Read entries as prior experience, not orders: check the model and setting behind each entry; start from an existing diagnosis when it explains the failure; reassess an edit after a model or setting change; revisit a tested direction only with new evidence; open a new problem when none explains the failure; weigh evidence less when both model and agent differ.";
+const HELP: &str = "Persistent cross-session memory, stored by root-cause problem. Actions: help, remember, search, forget, list, ingest, problem, attempt, outcome, merge, problems, share, unshare, carry. remember stores one text with a kind and optional metadata. search ranks stored facts with DefraDB BM25 and the DiskANN vector index, fused by reciprocal rank. forget deletes a fact by memory_key. list returns facts newest first. ingest pages canonical AgentMessage rows for a session and stores bounded chunks, idempotent by content hash; next_cursor is null after the last page. problem opens a root cause with name or shows one with problem_key, and lists the 3 nearest existing problems so you can cite one instead. attempt records a committed change under problem_key or a new_problem with what, rationale, predicted and accepted, and returns attempt_key. outcome records fixed, missed, passed, total and note for an attempt_key. merge takes from and to and keeps every attempt; a self-merge or a cycle is refused. problems is the paged index with attempt counts, latest outcome and unresolved predictions. Read entries as prior experience, not orders: check the model and setting behind each entry; start from an existing diagnosis when it explains the failure; reassess an edit after a model or setting change; revisit a tested direction only with new evidence; open a new problem when none explains the failure; weigh evidence less when both model and agent differ. share grants another agent memory_read on this agent's memory, unshare revokes it, and carry copies an agent that shared its memory into this agent's own rows, marked carried_from.";
 
 fn help_text(topic: Option<&str>) -> String {
     let detail = match topic.unwrap_or("").trim().to_ascii_lowercase().as_str() {
@@ -687,6 +697,12 @@ fn help_text(topic: Option<&str>) -> String {
         ),
         "problems" => Some(
             "problems: the paged index, newest first. Each entry carries attempt count, latest outcome, unresolved predictions and where its evidence came from. pages are bounded; next_cursor is null on the last page. A page states attempts_truncated or outcomes_truncated when a bound was reached.",
+        ),
+        "share" | "unshare" => Some(
+            "share grants the agent DID in to_agent memory_read on this agent's memory until unshare revokes it. ACP decides: only this agent's executor may grant on its own Agent document. Then the other agent runs memory carry from_agent with this agent_did.",
+        ),
+        "carry" => Some(
+            "carry copies another agent's problems, attempts, outcomes, aliases and facts into this agent's memory, one page at a time through from_agent and the optional cursor and limit (at most 100 rows per collection per page); the source must share memory first. Copies are owned by this agent and marked carried_from, with source keys kept, and re-running stores nothing twice. An identical normalized problem name lands on this agent's existing problem, and carried attempts cite it. next_cursor is null on the last page; a page states every stored count.",
         ),
         "remember" | "search" | "forget" | "list" | "ingest" => Some(
             "Flat facts: remember stores text with kind and metadata; search fuses DefraDB BM25 and the vector index; forget deletes by memory_key; list is newest first; ingest pages session messages into bounded chunks, idempotent by content hash. The result states the ranking mode.",

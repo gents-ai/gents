@@ -864,6 +864,10 @@ mod tests {
     "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED>"
   },
   "make_default": false,
+  "memory": {
+    "carry_call": "memory carry from_agent=<CREATED>",
+    "shared": true
+  },
   "operation": "clone"
 }
 ## create with an unpublished profile

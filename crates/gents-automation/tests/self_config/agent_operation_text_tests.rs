@@ -309,6 +309,7 @@ Next: give it tools (["help","tools"]) and test it in a fresh session.
   "admitted": true,
   "operation": "clone",
   "agent_did": "<CREATED_10>",
+  "memory": {"shared":true,"carry_call":"memory carry from_agent=<SIBLING>"},
   "agent": {"agent_did":"<CREATED_10>","creation_nonce":"<NONCE_10>","node_did":"<NODE>","display_name":"Copy","context_id":"<CREATED_10>:context","inference_profile_id":"<SIBLING>:inference"},
   "make_default": false,
   "config_execution": {"version":1,"mutation_entered":true}
