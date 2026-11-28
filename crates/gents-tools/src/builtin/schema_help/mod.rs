@@ -9,9 +9,12 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+mod correction;
 mod help;
 #[cfg(test)]
 mod tests;
+
+use correction::argument_correction;
 
 pub fn help_paths() -> &'static [&'static str] {
     help::PATHS
@@ -356,7 +359,7 @@ impl SchemaTool {
             ["migration", "set"] => &["config"],
             ["collection", "list"] => &["scope"],
             ["collection", "get" | "materialize" | "empty" | "remove"] | ["version", "list" | "get" | "activate"] => &[],
-            _ => bail!("unknown schema command; use RESOURCE VERB [ID]. Read [\"help\"] for resources, or RESOURCE VERB --help for parameters"),
+            _ => bail!("unknown schema command; use RESOURCE VERB [ID] where RESOURCE is collection (list|get|create|update|materialize|empty|remove), version (list|get|activate), view (create), migration (set), or batch. Read [\"help\"] for details, or RESOURCE VERB --help for parameters"),
         };
         for key in args.options.keys() {
             ensure!(
@@ -678,9 +681,9 @@ impl Tool for SchemaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Manage DefraDB application schemas. Commands: argv:[RESOURCE,VERB]. collection/view create names come from options.sdl; omit IDs. Commands taking an ID accept it after the verb or in target_id. Discover commands and SDL concepts with [\"help\"], then [\"help\",TOPIC,SUBTOPIC]; command inputs: [RESOURCE,VERB,\"--help\"]. Configuration and document access use their own tools.".into(),
+            description: "Manage DefraDB application schemas. Commands: argv:[RESOURCE,VERB] where RESOURCE is collection (list, get, create, update, materialize, empty, remove), version (list, get, activate), view (create), migration (set), or batch. Put collection names after the verb or in target_id (never first in argv); collection/view create names come from options.sdl. Help: [\"help\"], [\"help\",TOPIC,SUBTOPIC], or [RESOURCE,VERB,\"--help\"]. Querying documents or query plans uses query; configuration uses config.".into(),
             parameters: json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{
-                "argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Required array of command strings, not a single string. Start with a resource, not a collection name. Copy returned next_call.args for apply."},
+                "argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Required array of command strings, not a single string. Start with a singular resource (collection, version, view, migration, batch, or help), never a collection name (e.g. [\"collection\",\"list\"] or [\"collection\",\"get\",\"MyType\"]). Copy returned next_call.args for apply."},
                 "target_id":{"type":"string","description":"Existing collection name or exact version ID for commands that take one. Omit for collection/view create: names come from options.sdl."},
                 "options":{"type":"object","additionalProperties":true,"description":"JSON object of command inputs, not a JSON-encoded string. Put SDL text in options.sdl. Read command --help for its fields."}
             }})
@@ -763,15 +766,24 @@ impl SchemaTool {
             .is_some_and(|word| matches!(word.as_str(), "--help" | "-h"))
         {
             args.argv.pop();
-            if args.argv.get(1).is_some_and(|word| word == "preview") {
-                args.argv.remove(1);
+            if args.argv.first().is_some_and(|word| word == "help") {
+                if args.argv.len() >= 4 && args.argv.get(2).is_some_and(|word| word == "preview") {
+                    args.argv.remove(2);
+                }
+            } else {
+                if args.argv.get(1).is_some_and(|word| word == "preview") {
+                    args.argv.remove(1);
+                }
+                args.argv.truncate(2);
+                args.argv.insert(0, "help".into());
             }
-            args.argv.truncate(2);
-            args.argv.insert(0, "help".into());
             args.target_id = None;
             args.options.clear();
         }
         if args.argv.first().is_some_and(|s| s == "help") {
+            if args.argv.len() >= 4 && args.argv.get(2).is_some_and(|word| word == "preview") {
+                args.argv.remove(2);
+            }
             if args.target_id.is_some() || !args.options.is_empty() {
                 return Err(schema_error(
                     anyhow::anyhow!("help accepts argv only; use this call to inspect the topic"),
@@ -866,58 +878,6 @@ impl SchemaTool {
             }
         }
     }
-}
-
-fn argument_correction(args: &SchemaParams) -> Option<(String, SchemaParams)> {
-    let mut next = args.clone();
-    if next.argv.get(1).is_some_and(|word| word == "preview") {
-        next.argv.remove(1);
-    }
-    let mut reasons = Vec::new();
-    let create = matches!(
-        next.argv.first().map(String::as_str),
-        Some("collection" | "view")
-    ) && next.argv.get(1).is_some_and(|word| word == "create");
-    if create && (next.target_id.is_some() || next.argv.len() == 3) {
-        next.target_id = None;
-        next.argv.truncate(2);
-        reasons.push(
-            "create takes collection names from options.sdl; omit target_id and positional names",
-        );
-    }
-    if create && !next.options.contains_key("sdl") && next.options.contains_key("schema") {
-        let sdl = next.options.remove("schema").unwrap();
-        next.options.insert("sdl".into(), sdl);
-        reasons.push("SDL belongs in options.sdl, not options.schema");
-    }
-    let read = matches!(
-        next.argv
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        ["collection" | "version", "list" | "get"] | ["collection" | "version", "list" | "get", _]
-    );
-    if read
-        && (args.argv.get(1).is_some_and(|word| word == "preview")
-            || next.options.contains_key("digest"))
-    {
-        next.options.remove("digest");
-        reasons.push("reads need neither preview nor digest");
-    }
-    if reasons.is_empty() {
-        return None;
-    }
-    if !read {
-        next = preview_call(&next);
-    }
-    Some((
-        format!(
-            "{}. Review the corrected call; it has not been executed",
-            reasons.join("; ")
-        ),
-        next,
-    ))
 }
 
 fn help_call(args: &SchemaParams) -> Value {

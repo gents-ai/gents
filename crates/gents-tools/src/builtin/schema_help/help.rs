@@ -92,10 +92,26 @@ fn equivalent(left: &str, right: &str) -> bool {
             "embedding" | "embeddings" => "embedding",
             "version" | "versions" => "version",
             "migration" | "migrations" => "migration",
+            "evolve" | "evolving" => "evolution",
             other => other,
         }
     }
     normalize(left) == normalize(right)
+}
+
+fn suffix_matches(requested: &[String]) -> Vec<Vec<String>> {
+    PATHS
+        .iter()
+        .filter_map(|candidate| {
+            let words: Vec<_> = candidate.split_whitespace().map(str::to_owned).collect();
+            (words.len() >= requested.len()
+                && words[words.len() - requested.len()..]
+                    .iter()
+                    .zip(requested)
+                    .all(|(actual, requested)| equivalent(actual, requested)))
+            .then_some(words)
+        })
+        .collect()
 }
 
 pub(super) fn resolve(path: &[String]) -> Option<Vec<String>> {
@@ -110,19 +126,7 @@ pub(super) fn resolve(path: &[String]) -> Option<Vec<String>> {
         return Some(path.to_vec());
     }
     for start in 0..path.len() {
-        let requested = &path[start..];
-        let matches: Vec<Vec<String>> = PATHS
-            .iter()
-            .filter_map(|candidate| {
-                let words: Vec<_> = candidate.split_whitespace().map(str::to_owned).collect();
-                (words.len() >= requested.len()
-                    && words[words.len() - requested.len()..]
-                        .iter()
-                        .zip(requested)
-                        .all(|(actual, requested)| equivalent(actual, requested)))
-                .then_some(words)
-            })
-            .collect();
+        let matches = suffix_matches(&path[start..]);
         if matches.len() == 1 {
             return matches.into_iter().next();
         }
@@ -138,6 +142,9 @@ pub(super) fn recovery_path(path: &[String]) -> Vec<String> {
         return path;
     }
     for depth in (1..path.len()).rev() {
+        if depth == 1 && path[0] == "collections" {
+            return vec!["collection".to_owned()];
+        }
         if let Some(parent) = resolve(&path[..depth]) {
             return parent;
         }
@@ -145,16 +152,65 @@ pub(super) fn recovery_path(path: &[String]) -> Vec<String> {
     Vec::new()
 }
 
+fn direct_children(parent: &[String]) -> Vec<&'static str> {
+    let mut children = Vec::new();
+    for candidate in PATHS {
+        let words: Vec<_> = candidate.split_whitespace().collect();
+        if words.len() == parent.len() + 1
+            && words[..parent.len()]
+                .iter()
+                .zip(parent)
+                .all(|(actual, expected)| *actual == expected)
+            && !children.contains(&words[parent.len()])
+        {
+            children.push(words[parent.len()]);
+        }
+    }
+    children
+}
+
 pub(super) fn page(path: &[String]) -> Result<&'static str> {
     if let Some(canonical) = resolve(path) {
         return lookup(&canonical);
     }
+    let parent = recovery_path(path);
     let mut next = vec!["help".to_owned()];
-    next.extend(recovery_path(path));
-    bail!(
-        "unknown or ambiguous schema help topic; read available topics with argv:{}",
-        serde_json::to_string(&next)?
-    )
+    next.extend(parent.iter().cloned());
+    let next_json = serde_json::to_string(&next)?;
+    if path.first().map(String::as_str) == Some("explain") {
+        bail!(
+            "schema has no \"explain\" help topic; query plans belong to the query tool (query argv:[\"help\",\"explain\"]). Inspect collection schemas with [\"collection\",\"get\",NAME], or read schema topics with argv:{next_json}"
+        );
+    }
+    let ambiguous = suffix_matches(path);
+    if ambiguous.len() > 1 {
+        let options = ambiguous
+            .into_iter()
+            .map(|words| words.join(" "))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "ambiguous schema help topic; matching topics: {options}. Read available topics with argv:{next_json}"
+        );
+    }
+    if matches!(parent.as_slice(), [word] if word == "collection" || word == "collections") {
+        let verbs = direct_children(&["collection".to_owned()]).join(", ");
+        let sdl_topics = direct_children(&["collections".to_owned()]).join(", ");
+        bail!(
+            "unknown schema help topic; valid collection verbs: {verbs}; SDL collection topics: {sdl_topics} (and evolution for schema changes). Read available topics with argv:{next_json}"
+        );
+    }
+    if !parent.is_empty() {
+        let children = direct_children(&parent);
+        if !children.is_empty() {
+            bail!(
+                "unknown schema help topic; valid subtopics under {:?}: {}. Read available topics with argv:{next_json}",
+                parent.join(" "),
+                children.join(", ")
+            );
+        }
+    }
+    bail!("unknown or ambiguous schema help topic; read available topics with argv:{next_json}")
 }
 
 fn lookup(path: &[String]) -> Result<&'static str> {

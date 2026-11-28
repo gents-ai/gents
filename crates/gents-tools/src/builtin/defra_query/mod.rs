@@ -133,7 +133,7 @@ impl Tool for DefraQueryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Read application and runtime documents. Pass only the verb in argv ([\"fields\"], [\"find\"], [\"count\"], [\"search\"], [\"explain\"], or [\"help\",COMMAND]) and put the collection name in collection (never in argv). Count aggregates every matching row; find returns a bounded ordered page; search ranks by BM25 (options.text + options.search_fields) or vector (options.vector + options.vector_field). Explain inspects a native plan; executing it requires options.mode:\"execute\". Configuration uses config, definitions use schema.".into(),
+            description: "Read application and runtime documents. Pass only the verb in argv ([\"fields\"], [\"find\"], [\"count\"], [\"search\"], [\"explain\"], or [\"help\",COMMAND]) and put the collection name in collection (never in argv). Count aggregates every matching row; find returns a bounded ordered page; search ranks by BM25 (options.text + options.search_fields) or vector (options.vector + options.vector_field). Use argv:[\"explain\"] (not an option on find) to inspect a native plan without running it (options.mode:\"simple\", default) or to measure a bounded read (options.mode:\"execute\", only when requested); explain is read-only. Configuration uses config, definitions use schema.".into(),
             parameters: json!({
                 "type": "object",
                 "required": ["argv"],
@@ -196,7 +196,7 @@ impl Tool for DefraQueryTool {
                             },
                             "mode": {
                                 "type": "string",
-                                "description": "For explain: \"simple\" (default) or \"execute\"."
+                                "description": "For argv:[\"explain\"] only (not find): \"simple\" (default, inspect plan without running) or \"execute\" (run bounded read for native execution metrics)."
                             },
                             "field_page": {
                                 "type": "object",

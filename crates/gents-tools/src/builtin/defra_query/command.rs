@@ -116,7 +116,7 @@ const COMMANDS: [&str; 5] = ["fields", "find", "count", "search", "explain"];
 
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
-        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields lists names/types; find returns a bounded page; count totals matching rows; search ranks by BM25 keywords or vector similarity. Configuration uses config; definitions use schema."),
+        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields lists names/types; find returns a bounded page; count totals matching rows; search ranks by BM25 keywords or vector similarity; explain inspects a native plan without running it (or measures execution with mode:\"execute\"). Configuration uses config; definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
         Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\",\"carrier.name\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required; relation.field reads a related document's field, one relationship deep. A list relationship shows up to 20 per row; truncated_relations names rows with more. Grants and ACP apply to related documents. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_geq,_lt,_leq,_in,_nin,_like,_nlike,_ilike,_nilike; compose with _and,_or,_not; cross a relationship as {carrier:{name:{_eq:\"Ada\"}}}. A repeated key keeps only the last, so join conditions on one field with _and. Use search for BM25 keywords or vector similarity. Truncated strings: help field_page. Provenance: help signer."),
         Some("field_page") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"notes\"],field_page:{doc_id:\"DOC_ID\",field:\"notes\",offset_bytes:0}}} reads a truncated string; field_recovery names the call. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Not combinable with offset, order or signer."),
@@ -246,12 +246,101 @@ fn positional_collection_refusal(args: &QueryParams, verb: &str, extra: &str) ->
     }
 }
 
+const EXPLAIN_OPTIONS: &[&str] = &["fields", "filter", "limit", "offset", "order", "mode"];
+
+fn extract_explain_mode(value: &Value) -> Option<&'static str> {
+    let raw = match value {
+        Value::String(mode) => Some(mode.as_str()),
+        Value::Object(obj) => obj
+            .get("mode")
+            .or_else(|| obj.get("type"))
+            .and_then(Value::as_str),
+        _ => None,
+    };
+    match raw {
+        Some("simple") => Some("simple"),
+        Some("execute") => Some("execute"),
+        _ => None,
+    }
+}
+
+fn rewrite_to_explain(args: &QueryParams, mode_source_key: &str) -> QueryParams {
+    let mode = args
+        .options
+        .get(mode_source_key)
+        .and_then(extract_explain_mode)
+        .or_else(|| args.options.get("mode").and_then(extract_explain_mode));
+    let mut corrected = args.clone();
+    corrected.argv = vec!["explain".into()];
+    corrected
+        .options
+        .retain(|key, _| EXPLAIN_OPTIONS.contains(&key.as_str()));
+    match mode {
+        Some(mode) => {
+            corrected.options.insert("mode".into(), json!(mode));
+        }
+        None => {
+            corrected.options.remove("mode");
+        }
+    }
+    corrected
+}
+
 fn unknown_option_error(
     args: &QueryParams,
     command: &str,
     key: &str,
     allowed: &[&str],
 ) -> QueryCommandError {
+    if command == "find" && key == "explain" {
+        if args.options.get("explain") == Some(&Value::Bool(false)) {
+            let mut corrected = args.clone();
+            corrected.options.remove("explain");
+            return SelectionRefusal {
+                message: "unknown option \"explain\"; find does not take an explain option. Omit it for find, or use argv:[\"explain\"] to inspect a native query plan".into(),
+                next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected}),
+            }
+            .into();
+        }
+        let corrected = rewrite_to_explain(args, "explain");
+        let fields_note = if corrected.options.contains_key("fields") {
+            ""
+        } else {
+            " (and pass options.fields, or discover fields with argv:[\"fields\"])"
+        };
+        return SelectionRefusal {
+            message: format!(
+                "unknown option \"explain\"; find does not accept an explain option. Use the dedicated argv:[\"explain\"] command (with optional options.mode:\"simple\" or \"execute\") instead{fields_note}"
+            ),
+            next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected}),
+        }
+        .into();
+    }
+    if command == "find"
+        && key == "mode"
+        && args
+            .options
+            .get("mode")
+            .and_then(extract_explain_mode)
+            .is_some()
+    {
+        let corrected = rewrite_to_explain(args, "mode");
+        return SelectionRefusal {
+            message: "unknown option \"mode\"; options.mode belongs to the dedicated argv:[\"explain\"] command (\"simple\" or \"execute\"), not find".into(),
+            next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected}),
+        }
+        .into();
+    }
+    if command == "explain" && matches!(key, "explain" | "type") {
+        let corrected = rewrite_to_explain(args, key);
+        return SelectionRefusal {
+            message: format!(
+                "unknown option {key:?}; explain selects its mode with options.mode (\"simple\" or \"execute\"), not options.{key}"
+            ),
+            next_call: json!({"tool": DEFRA_QUERY_TOOL_NAME, "args": corrected}),
+        }
+        .into();
+    }
     if command == "search" && matches!(key, "query" | "keywords") {
         let next_call =
             if !args.options.contains_key("text") && args.options.contains_key("search_fields") {
