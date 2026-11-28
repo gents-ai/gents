@@ -839,8 +839,9 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             # `partitions` hash partitions; each job builds the tests from
             # its runner's compiler cache and kept target tree and runs its
             # partition there, on any free portable runner. The Vera feature
-            # tests run in their own parallel partition against the warm
-            # `vera` side tree instead of adding a serial tail onto partition 1.
+            # tests run in their own parallel partition against the runner's
+            # shared target tree and compiler cache instead of adding a serial
+            # tail onto partition 1.
             count_partitions = min(partitions("portable"), tested_crates) if single else 0
             if count_partitions > 1:
                 archives += [{**entry, **placement("portable"),
@@ -1571,25 +1572,27 @@ def macos_filterset(packages):
 
 def run_vera_tests(packages):
     """The `vera` tests of an archive's packages, built apart from the archive in
-    one `cargo nextest run` per target kind against the persistent `vera` side
-    tree: enabling the feature in the archive would build every archived crate
-    against a gents-store with the Vera node, and naming one package's test
-    target would build every package's."""
+    one unified `cargo nextest run` against the runner's shared target tree and
+    compiler cache: enabling the feature in the archive would build every
+    archived crate against a gents-store with the Vera node, while splitting by
+    target kind gives Cargo different package/feature graphs and recompiles the
+    shared stack twice."""
     if not packages:
         return
     os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
-    vera_env = side_tree_env("vera")
-    for target in sorted({VERA_TESTS[package][0] for package in packages}):
-        members = [package for package in packages if VERA_TESTS[package][0] == target]
-        features = ",".join(f"{package}/vera" for package in members)
-        filterset = " | ".join(f"(binary_id(={binary_id(package, target)}) & test(~{VERA_TESTS[package][1]}))"
-                               for package in members)
-        native_tests(f"{' '.join(members)} {' '.join(target)} (vera)", members, [*target, "--features", features],
-                     filterset, {binary_id(package, target) for package in members},
-                     profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE, extra_env=vera_env)
+    targets = sorted({VERA_TESTS[package][0] for package in packages})
+    target_flags = [flag for target in targets for flag in target]
+    features = ",".join(f"{package}/vera" for package in packages)
+    filterset = " | ".join(
+        f"(binary_id(={binary_id(package, VERA_TESTS[package][0])}) & test(~{VERA_TESTS[package][1]}))"
+        for package in packages
+    )
+    expected = {binary_id(package, VERA_TESTS[package][0]) for package in packages}
+    native_tests(f"{' '.join(packages)} (vera)", packages, [*target_flags, "--features", features],
+                 filterset, expected, profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE)
 
 
-def native_tests(label, packages, flags, filterset, expected, profile=None, extra_env=None):
+def native_tests(label, packages, flags, filterset, expected, profile=None):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
     Its JUnit report then fails a crate, or a macOS-only target, that ran no
@@ -1604,8 +1607,7 @@ def native_tests(label, packages, flags, filterset, expected, profile=None, extr
     if profile:
         arguments += ["--cargo-profile", profile]
     # Tests that spawn Cargo for plugin builds must not inherit the job's target directory.
-    run_env = dict(extra_env or {})
-    target_dir = run_env.pop("CARGO_TARGET_DIR", None) or os.environ.get("CARGO_TARGET_DIR")
+    target_dir = os.environ.get("CARGO_TARGET_DIR")
     drop = ()
     if target_dir:
         arguments += ["--target-dir", target_dir]
@@ -1617,7 +1619,7 @@ def native_tests(label, packages, flags, filterset, expected, profile=None, extr
         arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
     junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
     junit.unlink(missing_ok=True)
-    nextest(["run", *arguments], label=label, extra_env=run_env or None, drop_env=drop)
+    nextest(["run", *arguments], label=label, drop_env=drop)
     if not junit.exists():
         return
     ran = junit_outcomes(junit)
