@@ -330,6 +330,12 @@ impl WriteToolDecl {
             gents_store::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
             })?;
+            if field.name.trim() == crate::SIGNER_FIELD {
+                anyhow::bail!(
+                    "field[{index}] {} is read from the document's signature and cannot be written",
+                    crate::SIGNER_FIELD
+                );
+            }
             if field.fill.is_some() && field.required {
                 anyhow::bail!(
                     "field[{index}] {:?} is runtime-filled and cannot be required",

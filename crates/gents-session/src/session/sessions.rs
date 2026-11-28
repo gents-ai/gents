@@ -1043,6 +1043,12 @@ pub async fn max_sequence_as(
     requester_did: Option<&str>,
     actor: Option<::identity::Did>,
 ) -> Result<u32> {
+    gents_store::config_client::ensure_runtime_path_actor(
+        node,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionResume,
+        actor.as_ref().map(::identity::Did::as_str),
+    )?;
     gents_store::config_client::ConfigAccess::transact_local_readonly(
         node,
         actor,
@@ -1063,7 +1069,17 @@ pub async fn max_sequence(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<u32> {
-    max_sequence_as(node, session_id, node_did, requester_did, None).await
+    gents_store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.max_sequence",
+        |txn| {
+            Box::pin(
+                async move { max_sequence_in_txn(txn, session_id, node_did, requester_did).await },
+            )
+        },
+    )
+    .await
 }
 
 pub(super) async fn max_sequence_in_txn(

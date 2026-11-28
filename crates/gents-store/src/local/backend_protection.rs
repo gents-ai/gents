@@ -19,8 +19,9 @@ use crate::identity::NodeIdentity;
 /// [`MARKER_PREFIX`] followed by [`VERSION`]. A new lineage bumps this name,
 /// [`VERSION`] and [`DOMAIN`] together.
 const MARKER: &str = ".gents-private-backend-v3";
-const MARKER_PREFIX: &str = ".gents-private-backend-v";
+pub(crate) const MARKER_PREFIX: &str = ".gents-private-backend-v";
 const VERSION: u64 = 3;
+pub const LINEAGE_VERSION: u64 = VERSION;
 pub const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v3\0";
 type MarkerMac = Hmac<Sha256>;
@@ -127,43 +128,54 @@ type Result<T> = std::result::Result<T, BackendProtectionError>;
 /// Lean `BackendPreflight.refusal` of `BackendPreflight.lineage`: what the
 /// lineage markers among a store directory's `names` refuse it as, for a build
 /// of lineage `current`, read before the store lock (`before_lock`) or not.
-pub(crate) fn lineage_refusal(
+pub fn lineage_refusal(
     current: u64,
     names: &[String],
     before_lock: bool,
 ) -> Option<BackendProtectionError> {
-    let (mut marked, mut newer) = (false, false);
-    for suffix in names
-        .iter()
-        .filter_map(|name| name.strip_prefix(MARKER_PREFIX))
-    {
-        match suffix
-            .parse::<u64>()
-            .ok()
-            .filter(|version| version.to_string() == suffix)
-        {
-            Some(version) if version == current => return None,
-            Some(version) => newer |= version > current,
-            None => newer = true,
-        }
-        marked = true;
-    }
-    if newer {
-        Some(BackendProtectionError::NewerLineage)
-    } else if marked || !before_lock {
-        Some(BackendProtectionError::MissingProvenance)
-    } else {
-        None
+    use super::store_migration::{classify_markers, Lineage};
+    match classify_markers(current, names).0 {
+        Lineage::Current => None,
+        Lineage::Newer => Some(BackendProtectionError::NewerLineage),
+        Lineage::Older => Some(BackendProtectionError::MissingProvenance),
+        Lineage::Unmarked if before_lock => None,
+        Lineage::Unmarked => Some(BackendProtectionError::MissingProvenance),
     }
 }
 
-/// Refuses the store at `data` by its lineage markers, reading the
-/// directory's names only.
+/// Refuses the store at `data` by its lineage markers and typed store manifest,
+/// reading only directory names and `.gents-store-manifest.json` without
+/// writing a byte.
 pub(crate) fn refuse_lineage(data: &Path, before_lock: bool) -> Result<()> {
-    let names = std::fs::read_dir(data)?
-        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    lineage_refusal(VERSION, &names, before_lock).map_or(Ok(()), Err)
+    use super::store_migration::{inspect_store_disposition, OpenDisposition, StoreMigrationError};
+    use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
+
+    let disposition = match inspect_store_disposition(data, VERSION, false, before_lock) {
+        Ok(disposition) => disposition,
+        Err(StoreMigrationError::Io(source))
+        | Err(StoreMigrationError::ReadManifest { source, .. }) => {
+            return Err(BackendProtectionError::Io(source))
+        }
+        Err(_) => {
+            return Err(BackendProtectionError::Incompatible(IncompatibleStore {
+                kind: IncompatibleStoreKind::UnsupportedOrCorrupt,
+                data_path: data.to_path_buf(),
+            }))
+        }
+    };
+    match disposition {
+        OpenDisposition::Open => Ok(()),
+        OpenDisposition::RefuseOlder | OpenDisposition::Migrate => {
+            Err(BackendProtectionError::MissingProvenance)
+        }
+        OpenDisposition::RefuseNewer => Err(BackendProtectionError::NewerLineage),
+        OpenDisposition::RefuseCorrupt => {
+            Err(BackendProtectionError::Incompatible(IncompatibleStore {
+                kind: IncompatibleStoreKind::UnsupportedOrCorrupt,
+                data_path: data.to_path_buf(),
+            }))
+        }
+    }
 }
 
 /// Refuses a store that carries another lineage's marker and not this
@@ -469,36 +481,60 @@ impl<'a> FreshBackendStore<'a> {
             tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
         }
         super::store_compat::record_compatible(&self.data, ids)?;
-        let nonce = *uuid::Uuid::new_v4().as_bytes();
-        let mut mac = key
-            .with_secret(|secret| MarkerMac::new_from_slice(secret).expect("HMAC accepts any key"));
-        mac.update(DOMAIN);
-        mac.update(&nonce);
-        let mut bytes = Vec::from(DOMAIN);
-        bytes.extend_from_slice(&nonce);
-        bytes.extend_from_slice(&mac.finalize().into_bytes());
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.data.join(MARKER))
-            .await?;
-        file.write_all(&bytes).await?;
-        // tokio::fs::File completes writes on a blocking thread; flush waits
-        // for the OS write to finish before drop when sync_all is skipped.
-        file.flush().await?;
-        if self.durability == storage::backends::DurabilityMode::Immediate {
-            file.sync_all().await?;
-            // A directory handle is unix-only: Windows refuses `File::open` on a
-            // directory (os error 5), and NTFS journals the new entry itself.
-            #[cfg(unix)]
-            {
-                let data = self.data.clone();
-                tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all())
-                    .await??;
-            }
-        }
-        Ok(())
+        let manifest = super::store_migration::StoreManifest::for_fresh_store(
+            VERSION,
+            document_acp,
+            ids,
+            super::store_compat::fingerprint(ids),
+        );
+        super::store_migration::write_manifest_async(&self.data, &manifest, self.durability)
+            .await
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        write_provenance_marker_for_lineage(&self.data, key, VERSION, self.durability).await
     }
+}
+
+pub(crate) async fn write_provenance_marker_for_lineage(
+    data: &Path,
+    key: &StoreKey,
+    lineage: u64,
+    durability: storage::backends::DurabilityMode,
+) -> Result<()> {
+    let marker_name = format!("{MARKER_PREFIX}{lineage}");
+    let domain_owned = format!("gents private backend fresh store v{lineage}\0");
+    let domain = if lineage == VERSION {
+        DOMAIN
+    } else {
+        domain_owned.as_bytes()
+    };
+    let nonce = *uuid::Uuid::new_v4().as_bytes();
+    let mut mac =
+        key.with_secret(|secret| MarkerMac::new_from_slice(secret).expect("HMAC accepts any key"));
+    mac.update(domain);
+    mac.update(&nonce);
+    let mut bytes = Vec::from(domain);
+    bytes.extend_from_slice(&nonce);
+    bytes.extend_from_slice(&mac.finalize().into_bytes());
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(data.join(marker_name))
+        .await?;
+    file.write_all(&bytes).await?;
+    // tokio::fs::File completes writes on a blocking thread; flush waits
+    // for the OS write to finish before drop when sync_all is skipped.
+    file.flush().await?;
+    if durability == storage::backends::DurabilityMode::Immediate {
+        file.sync_all().await?;
+        // A directory handle is unix-only: Windows refuses `File::open` on a
+        // directory (os error 5), and NTFS journals the new entry itself.
+        #[cfg(unix)]
+        {
+            let data = data.to_path_buf();
+            tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all()).await??;
+        }
+    }
+    Ok(())
 }
 
 /// Trusted local storage must retain this marker with the same encrypted data

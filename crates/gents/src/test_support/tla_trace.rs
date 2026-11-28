@@ -8,6 +8,7 @@ use crate::support::commit_race_proxy::{CommitRaceProxy, ProxyHook, WriteCheckpo
 
 pub enum Action<E> {
     Environment(E),
+    Begin,
     Commit,
     Internal,
 }
@@ -22,9 +23,16 @@ pub struct CommitReplay {
     pub proxy: CommitRaceProxy,
     commits: Arc<AtomicUsize>,
     scheduled: usize,
+    after: Option<futures::future::BoxFuture<'static, ()>>,
 }
 
 impl CommitReplay {
+    pub async fn finish(&mut self) {
+        if let Some(after) = self.after.take() {
+            after.await;
+        }
+    }
+
     pub fn commits(&self) -> usize {
         let count = self.commits.load(Ordering::SeqCst);
         assert!(
@@ -55,27 +63,25 @@ where
         F: Fn(E, usize) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        let mut first_begin: Vec<_> = before_first_begin.into_iter().collect();
         let mut checkpoints = Vec::new();
         let mut pending = Vec::new();
         for step in &trace.steps {
             match (self.action)(step) {
                 Action::Environment(action) => pending.push(action),
+                Action::Begin => first_begin.append(&mut pending),
                 Action::Commit => checkpoints.push(std::mem::take(&mut pending)),
                 Action::Internal => {}
             }
         }
-        assert!(
-            pending.is_empty(),
-            "{} has trailing environment actions",
-            trace.config
-        );
+        let perform = Arc::new(perform);
         let scheduled = checkpoints.len();
         let commits = Arc::new(AtomicUsize::new(0));
         let hook: ProxyHook = {
             let commits = commits.clone();
             let checkpoints = Arc::new(checkpoints);
-            let perform = Arc::new(perform);
-            let before_first_begin = std::sync::Mutex::new(before_first_begin);
+            let perform = perform.clone();
+            let before_first_begin = std::sync::Mutex::new(Some(first_begin));
             Arc::new(move |checkpoint| {
                 let (commits, checkpoints, perform) =
                     (commits.clone(), checkpoints.clone(), perform.clone());
@@ -85,8 +91,10 @@ where
                     None
                 };
                 Box::pin(async move {
-                    if let Some(action) = begin {
-                        perform(action, 0).await;
+                    if let Some(actions) = begin {
+                        for action in actions {
+                            perform(action, 0).await;
+                        }
                     }
                     if checkpoint == WriteCheckpoint::Commit {
                         let index = commits.fetch_add(1, Ordering::SeqCst);
@@ -103,6 +111,11 @@ where
             proxy: CommitRaceProxy::spawn(upstream, hook).await,
             commits,
             scheduled,
+            after: Some(Box::pin(async move {
+                for action in pending {
+                    perform(action, scheduled).await;
+                }
+            })),
         }
     }
 }

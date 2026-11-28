@@ -1,0 +1,185 @@
+{
+  "config": "MCEnrollmentRouteFence",
+  "constants": {
+    "Merges": true,
+    "PeerTrustsRoute": false,
+    "ReconcileLocks": true
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 15,
+    "sample": 0,
+    "seed": 2
+  },
+  "spec": "EnrollmentRouteFence",
+  "steps": [
+    {
+      "action": "RouteRead",
+      "actor": null,
+      "after": {
+        "authorized": true,
+        "lock": true,
+        "pending": false,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "idle",
+        "readAuth": false,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "RouteCommit",
+      "actor": null,
+      "after": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": true,
+        "pending": false,
+        "rc": "read",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "PeerInstall",
+      "actor": null,
+      "after": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": true,
+        "revokedBy": "none",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "none",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "Revoke",
+      "actor": null,
+      "after": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": true,
+        "revokedBy": "local",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": true,
+        "lock": false,
+        "pending": false,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": true,
+        "revokedBy": "none",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "PeerTeardown",
+      "actor": null,
+      "after": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": true,
+        "revokedBy": "local",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    },
+    {
+      "action": "Sweep",
+      "actor": null,
+      "after": {
+        "authorized": false,
+        "lock": false,
+        "pending": false,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": false,
+        "staleInstall": false,
+        "staleRoute": false
+      },
+      "before": {
+        "authorized": false,
+        "lock": false,
+        "pending": true,
+        "rc": "done",
+        "readAuth": true,
+        "replicator": false,
+        "revokedBy": "local",
+        "route": true,
+        "staleInstall": false,
+        "staleRoute": false
+      }
+    }
+  ]
+}

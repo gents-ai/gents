@@ -63,6 +63,31 @@ pub async fn budget_hook_fixture(
     }
 }
 
+pub fn admission_receipt_matches(
+    parent: &serde_json::Value,
+    calls: &[serde_json::Value],
+    receipt: &serde_json::Value,
+    limit: gents_protocol::job::BackgroundLimit,
+) -> bool {
+    let mut children = calls
+        .iter()
+        .filter(|r| r["spawned_by_tool_call_doc_id"] == parent["_docID"]);
+    match (children.next(), children.next()) {
+        (Some(child), None) => {
+            receipt["status"] == "running"
+                && receipt["tool_call_id"] == child["tool_call_id"]
+                && parent["lifecycle_state"] == "completed"
+        }
+        (None, None) => {
+            receipt["code"] == "background_tool_budget_exceeded"
+                && receipt["max_backgrounded"] == limit.get()
+                && receipt["current_backgrounded"] == limit.get()
+                && parent["lifecycle_state"] == "failed"
+        }
+        _ => false,
+    }
+}
+
 pub async fn tool_row(
     access: &gents_store::config_client::ConfigAccess,
     session: &str,

@@ -34,7 +34,7 @@ const MAP: SpecTraceMap<Writer> = SpecTraceMap {
         "Renew" => Action::Environment(Writer::Renew),
         "OtherLatch" => Action::Environment(Writer::OtherLatch),
         "Commit" => Action::Commit,
-        "Open" => Action::Internal,
+        "Open" => Action::Begin,
         other => panic!("unknown interrupt action {other}"),
     },
 };
@@ -117,7 +117,7 @@ async fn replay(trace: &Trace, stage: Stage) {
         .drive(stage)
         .await;
     let other_stamp = Arc::new(std::sync::OnceLock::new());
-    let replay = MAP
+    let mut replay = MAP
         .drive(trace, home.graphql_endpoint(), None, {
             let home = home.clone();
             let doc = request.doc_id.clone();
@@ -129,8 +129,9 @@ async fn replay(trace: &Trace, stage: Stage) {
                         Writer::Renew => renew(&home, &doc, stage, index).await,
                         Writer::OtherLatch => {
                             let first = interrupt(&home.user_access, input(&home)).await.unwrap();
-                            assert!(!first.already_interrupted);
-                            stamp.set(first.interrupted_at.unwrap()).unwrap();
+                            if !first.already_interrupted {
+                                stamp.set(first.interrupted_at.unwrap()).unwrap();
+                            }
                         }
                     }
                 }
@@ -144,6 +145,7 @@ async fn replay(trace: &Trace, stage: Stage) {
     .await;
     let done = receipt.is_ok();
     let commits = replay.commits();
+    let green = trace.config == "MCInterruptLatchContention";
     let writes = trace
         .steps
         .iter()
@@ -152,10 +154,15 @@ async fn replay(trace: &Trace, stage: Stage) {
     let attempts = trace.constants["Attempts"].as_u64().unwrap() as usize;
     assert_eq!(
         commits,
-        (writes + 1).min(attempts),
+        if green {
+            trace.steps.iter().filter(|s| s.action == "Commit").count()
+        } else {
+            (writes + 1).min(attempts)
+        },
         "{} {stage:?}",
         trace.config
     );
+    replay.finish().await;
     let row = request_row(&home, &request.doc_id).await;
     let marker = home
         .agent_access
@@ -208,6 +215,8 @@ async fn replay(trace: &Trace, stage: Stage) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replays_interrupt_latch_contention() {
     for json in [
+        include_str!("../../proofs/tla/generated/traces/MCInterruptLatchContention.sample-1.json"),
+        include_str!("../../proofs/tla/generated/traces/MCInterruptLatchContention.sample-2.json"),
         include_str!(
             "../../proofs/tla/generated/traces/MCInterruptLatchContentionSingleAttempt.json"
         ),

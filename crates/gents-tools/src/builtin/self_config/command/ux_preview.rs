@@ -84,6 +84,18 @@ impl ConfigCommandTool {
                 })?;
             Some(file)
         };
+        let lint_next = match (&page, &draft) {
+            (Some(page), _) => json!({"argv": ["page", "lint"], "target_id": page.page_id}),
+            (None, Some(_)) => json!({"argv": ["ux", "lint", plugin]}),
+            (None, None) => json!({"argv": ["ux", "list"]}),
+        };
+        if !renders(self.ux_preview_assets.as_deref()) {
+            return Err(CommandGuidance {
+                message: preview::NO_RENDERER_MESSAGE.to_owned(),
+                next_call: lint_next,
+            }
+            .into());
+        }
         let target = match (page, draft) {
             (Some(page), _) => preview::PreviewTarget::page(&page)?,
             (None, Some(draft)) => {

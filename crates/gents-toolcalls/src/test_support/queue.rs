@@ -212,6 +212,15 @@ impl CanonicalBackgroundFixture {
         &mut self,
         notification_content: &str,
     ) -> anyhow::Result<ToolNotificationPublication> {
+        self.prepare_notification_at(notification_content, self.claimed_at)
+            .await
+    }
+
+    pub async fn prepare_notification_at(
+        &mut self,
+        notification_content: &str,
+        wall_observation: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<ToolNotificationPublication> {
         let turn = self.next_turn;
         self.next_turn += 1;
         self.writer
@@ -271,6 +280,26 @@ impl CanonicalBackgroundFixture {
         let binding = tool
             .tool_output_binding()
             .context("accepted fixture tool has output binding")?;
+        if wall_observation > deadline {
+            use crate::call::lifecycle::delivery::{
+                append_tool_output_at, ToolOutputAppendRejection,
+            };
+            let refusal = append_tool_output_at(
+                &binding,
+                notification_content,
+                self.claimed_at,
+                wall_observation,
+            )
+            .await
+            .expect_err("an observation past the accepted deadline");
+            assert!(
+                matches!(
+                    ToolOutputAppendRejection::in_failure(&refusal),
+                    Some(ToolOutputAppendRejection::DeadlineExceeded)
+                ),
+                "{refusal:#}"
+            );
+        }
         // The append checks its observation time against the accepted deadline,
         // which the claim set from the wall clock. Observing it at the claim
         // instant keeps fixture setup time out of the deadline the test

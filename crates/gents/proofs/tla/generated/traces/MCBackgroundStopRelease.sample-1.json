@@ -1,0 +1,107 @@
+{
+  "config": "MCBackgroundStopRelease",
+  "constants": {
+    "Bound": "unreached",
+    "Completes": false,
+    "Decision": "lean"
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 16,
+    "sample": 0,
+    "seed": 23
+  },
+  "spec": "BackgroundStopRelease",
+  "steps": [
+    {
+      "action": "Load",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      },
+      "before": {
+        "canceller": "idle",
+        "reply": "none",
+        "row": "running",
+        "signalled": false,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "Observe",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "dropped"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "busy"
+      }
+    },
+    {
+      "action": "CommitCancel",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "running",
+        "signalled": true,
+        "worker": "dropped"
+      }
+    },
+    {
+      "action": "Release",
+      "actor": null,
+      "after": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "released"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "committed"
+      }
+    },
+    {
+      "action": "Released",
+      "actor": null,
+      "after": {
+        "canceller": "done",
+        "reply": "cancelled",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "released"
+      },
+      "before": {
+        "canceller": "waiting",
+        "reply": "none",
+        "row": "cancelled",
+        "signalled": true,
+        "worker": "released"
+      }
+    }
+  ]
+}

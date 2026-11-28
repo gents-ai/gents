@@ -149,7 +149,7 @@ pub use surface_tool::validate_surface_tool_names;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 pub use surface_tool::{
-    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
+    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, SIGNER_FIELD,
 };
 pub use surface_tool::{validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource};
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
@@ -171,8 +171,9 @@ pub use agent_tool_config::AgentToolConfig;
 
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use page::{
-    is_snake_case_name, is_valid_ux_data_tool_name, list_pages, validate_ux_data, PageDocument,
-    UxDataSurface, MAX_PAGE_SOURCE_BYTES, MAX_UX_DATA_SURFACE_ID_LEN, PAGE_AREAS,
+    is_snake_case_name, is_valid_ux_data_tool_name, list_pages, suggest_snake_case_name,
+    validate_ux_data, PageDocument, UxDataSurface, MAX_PAGE_SOURCE_BYTES,
+    MAX_UX_DATA_SURFACE_ID_LEN, PAGE_AREAS,
 };
 pub use plugin_source::{
     PluginSourceCase, PluginSourceDocument, MAX_PLUGIN_SOURCE_BYTES, PLUGIN_SOURCE_NAMESPACE,

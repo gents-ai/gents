@@ -207,6 +207,209 @@ theorem invalid_signature_run_cannot_be_published :
     validateReasoningSignature [invalidUtf8] [] ⟨⟨100, 0⟩, .full⟩ none =
       .error (.reconstruction (.extent .malformedRuns)) := by native_decide
 
+def sigFragA : Segment :=
+  { observed with
+    id := 120,
+    flush := some ⟨0, [⟨0, 1, some body⟩, ⟨1, 1, some signature⟩], [65, 83]⟩,
+    createdAt := 5 }
+
+def sigFragB : Segment :=
+  { observed with
+    id := 121,
+    flush := some ⟨1, [⟨1, 1, none⟩], [49]⟩,
+    createdAt := 6 }
+
+def sigFragStop : Segment :=
+  { observed with
+    id := 122,
+    flush := some ⟨1,
+      [⟨1, 1, none⟩, ⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], [49]⟩,
+    createdAt := 6 }
+
+def interruptedSecondBlock : Segment :=
+  { observed with
+    id := 123,
+    flush := some ⟨2,
+      [⟨3, 1, some { body with block := 1 }⟩,
+       ⟨4, 1, some { signature with block := 1 }⟩], [66, 50]⟩,
+    createdAt := 7 }
+
+def foreignAttemptStop : Segment :=
+  { stoppedObserved with
+    id := 124,
+    coordinate := ⟨10, .provider 0 0 1⟩,
+    createdAt := 6 }
+
+def foreignRequestStop : Segment :=
+  { stoppedObserved with
+    id := 125,
+    coordinate := ⟨11, .provider 0 0 0⟩,
+    createdAt := 6 }
+
+def redactedBlock : Declaration := ⟨0, 0, .redacted, none, none⟩
+
+def redactedStopped : Segment :=
+  { observed with
+    id := 126,
+    flush := some ⟨0,
+      [⟨0, 1, some redactedBlock⟩,
+       ⟨1, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], [82]⟩,
+    createdAt := 5 }
+
+def redactedUnstopped : Segment :=
+  { observed with
+    id := 127,
+    flush := some ⟨0, [⟨0, 1, some redactedBlock⟩], [82]⟩,
+    createdAt := 5 }
+
+def textBlock2 : Declaration := ⟨2, 0, .text, none, none⟩
+
+def stoppedThenGapThenText : Segment :=
+  { observed with
+    id := 128,
+    flush := some ⟨0,
+      [⟨0, 1, some body⟩, ⟨1, 1, some signature⟩,
+       ⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩,
+       ⟨3, 1, some { body with block := 1 }⟩,
+       ⟨4, 1, some textBlock2⟩], [65, 83, 66, 84]⟩,
+    createdAt := 5 }
+
+def lateStopAfterRecovery : Segment :=
+  { observed with
+    id := 129,
+    flush := some ⟨1, [⟨2, 0, some ⟨0, 0, .reasoningStop, none, none⟩⟩], []⟩,
+    createdAt := 11 }
+
+structure RecoveryEntry where
+  stream : Nat
+  blockIndex : Nat
+  kind : String
+  signature : Option String
+  deriving DecidableEq, Repr
+
+structure RecoveryPlan where
+  closeStreamBytes : List Nat
+  retained : List RecoveryEntry
+  deriving DecidableEq, Repr
+
+private def recoverySignature (streams : Streams) (declaration : Declaration) :
+    Except ExtentError (Option String) :=
+  match streams.filter fun entry =>
+      entry.1.block == declaration.block && entry.1.part == declaration.part &&
+        entry.1.kind == .signature with
+  | [] => .ok none
+  | [(_, bytes)] =>
+      match utf8? bytes with
+      | some text => .ok (some text)
+      | none => .error .malformedRuns
+  | _ => .error .malformedRuns
+
+private def recoveryEntry (streams : Streams) (entry : Nat × Declaration) :
+    Except ExtentError RecoveryEntry :=
+  match entry.2.kind with
+  | .text => .ok ⟨entry.1, entry.2.block, "text", none⟩
+  | .reasoning => do
+      let sig ← recoverySignature streams entry.2
+      .ok ⟨entry.1, entry.2.block, "reasoning", sig⟩
+  | .redacted => .ok ⟨entry.1, entry.2.block, "redacted", none⟩
+  | _ => .error .malformedRuns
+
+/-- Pure recovery plan for one open provider source, composing the canonical
+extent and `recoveryPayloads` owners without a second journal. -/
+def planRecovery (records : List Segment) (coordinate : Coordinate)
+    (writer : Writer) : Except ExtentError RecoveryPlan := do
+  let matching := sourceRecords records coordinate
+  if matching.isEmpty then .error .invalidClosure
+  else if matching.any fun r => r.close.isSome then .error .invalidClosure
+  else if !writerMatchesSource coordinate writer then .error .invalidWriter
+  else if matching.any fun r => r.writer != writer then .error .invalidWriter
+  else if matching.any fun r => !exactIdentityAt matching r then .error .malformedRuns
+  else if matching.any fun r => r.flush.isNone then .error .malformedRuns
+  else if !timestampsNondecreasing matching then .error .malformedRuns
+  else
+    let count := (matching.filterMap fun r => r.flush.map (·.ordinal)).eraseDups.length
+    let flushes ← (List.range count).mapM (flushAt matching writer)
+    let streams ← consumeFlushes flushes []
+    let selected ← recoveryPayloads streams
+    let retained ← selected.mapM (recoveryEntry streams)
+    .ok { closeStreamBytes := streams.map fun s => s.2.length, retained }
+
+theorem completed_then_interrupted_audit_retains_both_blocks :
+    reconstructAuditPrefix
+      (observation [sigFragA, sigFragStop, interruptedSecondBlock]) none =
+      .ok [(body, [65]), (signature, [83, 49]),
+        (⟨0, 0, .reasoningStop, none, none⟩, []),
+        ({ body with block := 1 }, [66]),
+        ({ signature with block := 1 }, [50])] := by
+  native_decide
+
+theorem completed_then_interrupted_recovery_selects_only_stopped_block :
+    planRecovery [sigFragA, sigFragStop, interruptedSecondBlock] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 2, 0, 1, 1],
+            retained := [⟨0, 0, "reasoning", some "S1"⟩] } := by
+  native_decide
+
+theorem signature_fragments_without_stop_are_audit_only :
+    reconstructAuditPrefix (observation [sigFragA, sigFragB]) none =
+      .ok [(body, [65]), (signature, [83, 49])] ∧
+    planRecovery [sigFragA, sigFragB] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 2], retained := [] } := by
+  native_decide
+
+theorem foreign_source_stop_cannot_complete_target_block :
+    planRecovery [sigFragA, sigFragB, foreignAttemptStop, foreignRequestStop]
+      coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 2], retained := [] } := by
+  native_decide
+
+theorem duplicate_stopped_segment_arrival_is_idempotent_for_recovery :
+    planRecovery [sigFragA, sigFragStop, sigFragStop] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 2, 0],
+            retained := [⟨0, 0, "reasoning", some "S1"⟩] } := by
+  native_decide
+
+theorem stopped_redacted_recovers_and_unstopped_redacted_is_audit_only :
+    planRecovery [redactedStopped] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 0], retained := [⟨0, 0, "redacted", none⟩] } ∧
+    planRecovery [redactedUnstopped] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1], retained := [] } := by
+  native_decide
+
+theorem interleaved_unstopped_block_preserves_order_and_indices :
+    planRecovery [stoppedThenGapThenText] coordinate (.request 7) =
+      .ok { closeStreamBytes := [1, 1, 0, 1, 1],
+            retained := [⟨0, 0, "reasoning", some "S"⟩, ⟨4, 2, "text", none⟩] } := by
+  native_decide
+
+structure RecoveryCase where
+  name : String
+  input : Observation
+  deriving Repr
+
+def recoveryCases : List RecoveryCase :=
+  [ { name := "completed_then_interrupted_block",
+      input := observation [sigFragA, sigFragStop, interruptedSecondBlock] }
+  , { name := "signature_fragments_without_stop",
+      input := observation [sigFragA, sigFragB] }
+  , { name := "signature_fragments_before_stop",
+      input := observation [sigFragA, sigFragStop] }
+  , { name := "foreign_attempt_stop_does_not_complete_target",
+      input := observation [sigFragA, sigFragB, foreignAttemptStop] }
+  , { name := "foreign_request_stop_does_not_complete_target",
+      input := observation [sigFragA, sigFragB, foreignRequestStop] }
+  , { name := "duplicate_stopped_segment_arrival",
+      input := observation [sigFragA, sigFragStop, sigFragStop] }
+  , { name := "duplicate_stop_declarations_rejected",
+      input := observation [duplicateStops] }
+  , { name := "late_signature_after_stop_rejected",
+      input := observation [stoppedObserved, signatureContinuation] }
+  , { name := "stopped_redacted_recovers",
+      input := observation [redactedStopped] }
+  , { name := "unstopped_redacted_is_audit_only",
+      input := observation [redactedUnstopped] }
+  , { name := "interleaved_unstopped_block_keeps_order_and_indices",
+      input := observation [stoppedThenGapThenText] } ]
+
 structure AuditCase where
   name : String
   input : Observation
@@ -216,6 +419,17 @@ structure AuditCase where
 def auditCases : List AuditCase :=
   [ { name := "reasoning_audit_stopped", input := observation [stoppedObserved],
       expected := reconstructAuditPrefix (observation [stoppedObserved]) none }
+  , { name := "reasoning_audit_completed_then_interrupted",
+      input := observation [sigFragA, sigFragStop, interruptedSecondBlock],
+      expected := reconstructAuditPrefix
+        (observation [sigFragA, sigFragStop, interruptedSecondBlock]) none }
+  , { name := "reasoning_audit_signature_fragments_without_stop",
+      input := observation [sigFragA, sigFragB],
+      expected := reconstructAuditPrefix (observation [sigFragA, sigFragB]) none }
+  , { name := "reasoning_audit_foreign_source_stop_ignored",
+      input := observation [sigFragA, sigFragB, foreignAttemptStop, foreignRequestStop],
+      expected := reconstructAuditPrefix
+        (observation [sigFragA, sigFragB, foreignAttemptStop, foreignRequestStop]) none }
   , { name := "reasoning_audit_duplicate_arrival", input := observation [stoppedObserved, stoppedObserved],
       expected := reconstructAuditPrefix (observation [stoppedObserved, stoppedObserved]) none }
   , { name := "reasoning_audit_duplicate_stops", input := observation [duplicateStops],

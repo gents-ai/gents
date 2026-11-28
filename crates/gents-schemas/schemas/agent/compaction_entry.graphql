@@ -1,17 +1,18 @@
 type CompactionEntry @policy(id: "$household", resource: "children") {
-    compaction_key: String @index(unique: true)
-    session_id: String @index
+    compaction_key: String @index(unique: true) @immutable
+    session_id: String @index @immutable
     node_did: String @index @immutable
     requester_did: String @index @immutable
-    request_id: String @index
+    request_id: String @index @immutable
     request_doc_id: String @index @immutable
-    sequence: Int @index
-    summary: String
-    files_read: String
-    files_modified: String
-    messages_compacted: Int
-    compacted_through_sequence: Int
-    original_tokens: Int
-    compacted_tokens: Int
-    created_at: DateTime
+    sequence: Int @index @immutable
+    summary: String @immutable
+    files_read: String @immutable
+    files_modified: String @immutable
+    messages_compacted: Int @immutable
+    compacted_through_sequence: Int @immutable
+    source_message_versions: JSON @immutable
+    original_tokens: Int @immutable
+    compacted_tokens: Int @immutable
+    created_at: DateTime @immutable
 }

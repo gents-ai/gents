@@ -464,6 +464,8 @@ pub struct CompactionEntryRow {
     #[serde(default)]
     pub compacted_through_sequence: Option<i64>,
     #[serde(default)]
+    pub source_message_versions: Option<Vec<crate::transcript::TranscriptFactRef>>,
+    #[serde(default)]
     pub original_tokens: Option<i64>,
     #[serde(default)]
     pub compacted_tokens: Option<i64>,

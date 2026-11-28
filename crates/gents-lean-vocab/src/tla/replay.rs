@@ -13,7 +13,7 @@ pub struct Step {
 pub struct Trace {
     spec: String,
     pub config: String,
-    expect: String,
+    pub expect: String,
     pub constants: Value,
     pub steps: Vec<Step>,
 }
@@ -39,6 +39,12 @@ impl Trace {
     }
 
     pub fn check(&self, red: Red, properties: &[(&str, bool)]) {
+        if self.expect == "holds" {
+            for &(property, holds) in properties {
+                assert!(holds, "{}: {property}", self.config);
+            }
+            return;
+        }
         let violated = self
             .expect
             .strip_prefix("violates ")

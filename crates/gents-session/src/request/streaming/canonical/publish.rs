@@ -19,8 +19,8 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransac
 use gents_store::graphql::{created_doc_id, mutation_documents};
 
 use super::{
-    source::load_request_in_txn, ProviderCloseRejection, ProviderPublicationPlan,
-    ProviderReplayRejection, PublishedProviderTurn,
+    source::load_request_in_txn, MessageKeyConflict, ProviderCloseRejection,
+    ProviderPublicationPlan, ProviderReplayRejection, PublishedProviderTurn,
 };
 
 fn created_tool_call_doc_ids(
@@ -187,6 +187,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 return Ok(published);
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
+            ensure_message_key_unused_in_txn(txn, exemplar, &message_key).await?;
 
             let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();
@@ -343,6 +344,42 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
     Ok(result)
 }
 
+async fn ensure_message_key_unused_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    exemplar: &OutputSegment,
+    message_key: &str,
+) -> Result<()> {
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_message as fields, session_scope, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id())
+            .filter(session_scope(
+                &exemplar.node_did,
+                &exemplar.session_id,
+                exemplar.requester_did.as_deref(),
+            ))
+            .filter(Filter::eq(fields::MESSAGE_KEY, message_key))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(serde_json::Value::as_array)
+        .context("message key uniqueness check omitted headers")?;
+    if !rows.is_empty() {
+        return Err(MessageKeyConflict::new(
+            message_key,
+            "message key already committed under a different source",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 struct ReplayPublication<'a> {
     actor: &'a identity::Did,
     exemplar: &'a OutputSegment,
@@ -369,17 +406,16 @@ async fn replay_publication_in_txn(
     } = replay;
     let rendered = {
         use gents_protocol::document_query::{
-            fields::agent_message as fields, Filter, Query, Selection,
-        };
-        let requester = match exemplar.requester_did.as_deref() {
-            Some(did) => Filter::eq(fields::REQUESTER_DID, did),
-            None => Filter::is_null(fields::REQUESTER_DID),
+            fields::agent_message as fields, session_scope, Filter, Query, Selection,
         };
         Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+            .filter(session_scope(
+                &exemplar.node_did,
+                &exemplar.session_id,
+                exemplar.requester_did.as_deref(),
+            ))
             .filter(Filter::eq(fields::MESSAGE_KEY, message_key))
-            .filter(Filter::eq(fields::REQUEST_DOC_ID, &exemplar.request_doc_id))
-            .filter(Filter::eq(fields::NODE_DID, &exemplar.node_did))
-            .filter(requester)
+            .limit(2)
             .render()
     };
     let response = txn.run_local_response(&rendered).await?;
@@ -389,32 +425,49 @@ async fn replay_publication_in_txn(
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
         .context("publication replay omitted headers")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "closed provider source has no unique accepted header"
-    );
+    if rows.len() != 1 {
+        return Err(MessageKeyConflict::new(
+            message_key,
+            "closed provider source has no unique accepted header",
+        )
+        .into());
+    }
     let row = decode_transcript_message_row(&rows[0])?;
+    if row.message.request_doc_id.as_deref() != Some(exemplar.request_doc_id.as_str()) {
+        return Err(MessageKeyConflict::new(
+            message_key,
+            "publication replay request binding changed",
+        )
+        .into());
+    }
     let MessagePublication::RequestExecution {
         execution_generation: accepted_generation,
     } = &row.message.publication
     else {
-        anyhow::bail!("publication replay generation changed");
+        return Err(
+            MessageKeyConflict::new(message_key, "publication replay generation changed").into(),
+        );
     };
-    anyhow::ensure!(
-        accepted_generation == generation
-            || (matches!(exemplar.source, OutputSource::Authored { .. })
-                && accepted_writer
-                    == Some(&OutputWriter::RequestExecution {
-                        execution_generation: accepted_generation.clone(),
-                    })),
-        "publication replay generation changed"
-    );
+    if !(accepted_generation == generation
+        || (matches!(exemplar.source, OutputSource::Authored { .. })
+            && accepted_writer
+                == Some(&OutputWriter::RequestExecution {
+                    execution_generation: accepted_generation.clone(),
+                })))
+    {
+        return Err(
+            MessageKeyConflict::new(message_key, "publication replay generation changed").into(),
+        );
+    }
     reader.observe_headers(std::slice::from_ref(&row));
     let (_, reconstructed) = reader.load_message(&row.doc_id).await?;
-    anyhow::ensure!(
-        &reconstructed == expected,
-        "publication replay native message changed"
-    );
+    if &reconstructed != expected {
+        return Err(MessageKeyConflict::new(
+            message_key,
+            "publication replay native message changed",
+        )
+        .into());
+    }
     let mut accepted_tools = Vec::new();
     for block in &row.message.blocks {
         let MessageBlock::ToolCall {

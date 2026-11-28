@@ -2,6 +2,7 @@
 \* lean: none
 \* crates: gents-toolcalls, gents
 \* models: Background.ProcessControl.signalledReply
+\* traces: violates
 (***************************************************************************)
 (* `cancel_process` stopping a running background invocation its runtime   *)
 (* executes, while the invocation's worker settles it                       *)

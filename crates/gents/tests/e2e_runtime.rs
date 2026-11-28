@@ -1,5 +1,8 @@
 #[path = "e2e_runtime/agent_workers.rs"]
 mod agent_workers;
+#[cfg(unix)]
+#[path = "e2e_runtime/background_admission_contention.rs"]
+mod background_admission_contention;
 #[path = "e2e_runtime/client_submission_contention.rs"]
 mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
@@ -46,5 +49,9 @@ mod enrollment_renewal;
 
 #[path = "e2e_runtime/goal_stop_conditions.rs"]
 mod goal_stop_conditions;
+#[path = "e2e_runtime/lease_renewal_starvation.rs"]
+mod lease_renewal_starvation;
 #[path = "e2e_runtime/queued_user_turns.rs"]
 mod queued_user_turns;
+#[path = "e2e_runtime/session_head_observation.rs"]
+mod session_head_observation;

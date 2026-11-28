@@ -188,13 +188,16 @@ pub use schema_install::{
 pub use txn::NativeOperationObservation;
 pub(crate) use txn::ReadAccess;
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use txn::{count_statements, StatementCounts};
 pub use txn::{
-    CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry,
-    LocalConfigAccess, NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
+    actor_admitted, check_runtime_actor_authority, classify_acting_principal,
+    ensure_access_for_runtime_path, ensure_runtime_path_actor, is_runtime_actor_authority_error,
+    required_authority, ActingPrincipal, CallbackAgentSelection, ConfigApplyTxn, ConfigCursor,
+    IdempotentTransactionRetry, LocalConfigAccess, NativeOperationAbandoned, ReceiptWriteError,
+    ReentrantEmbeddedWrite, RequiredAuthority, RuntimeActorAuthorityError, RuntimePath,
     TransactionFinalityError,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use txn::{count_statements, StatementCounts};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 

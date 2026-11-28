@@ -107,6 +107,11 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 sequence: compaction.sequence,
                 summary: compaction.summary.clone(),
                 messages_compacted: compaction.messages_compacted,
+                compacted_through_sequence: compaction.compacted_through_sequence,
+                source_message_versions: compaction
+                    .source_message_versions
+                    .clone()
+                    .unwrap_or_default(),
                 original_tokens: compaction.original_tokens,
                 compacted_tokens: compaction.compacted_tokens,
                 timestamp: compaction.created_at.clone(),

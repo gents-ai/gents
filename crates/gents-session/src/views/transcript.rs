@@ -587,6 +587,7 @@ impl View for CompactionRows {
                 .field(compaction::FILES_MODIFIED)
                 .field(compaction::MESSAGES_COMPACTED)
                 .field(compaction::COMPACTED_THROUGH_SEQUENCE)
+                .field(compaction::SOURCE_MESSAGE_VERSIONS)
                 .field(compaction::ORIGINAL_TOKENS)
                 .field(compaction::COMPACTED_TOKENS)
                 .field(compaction::CREATED_AT),

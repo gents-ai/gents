@@ -11,7 +11,7 @@ default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
 typescript = ["gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
-test-fixtures = ["test-home-guard", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
+test-fixtures = ["dep:edge", "test-home-guard", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
 
 [dependencies]
 gents-store.workspace = true
@@ -27,6 +27,7 @@ defra-p2p-adapter.workspace = true
 gents-protocol.workspace = true
 defra-node.workspace = true
 events.workspace = true
+edge = { workspace = true, optional = true }
 futures = "0.3"
 identity.workspace = true
 p2p.workspace = true

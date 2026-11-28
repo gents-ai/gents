@@ -1,0 +1,271 @@
+{
+  "config": "MCLeaseRenewalStarvationSyncInsideLease",
+  "constants": {
+    "FenceDeadline": true,
+    "Horizon": 14,
+    "Lease": 4,
+    "MaxSync": 8,
+    "SyncInsideLease": true,
+    "SyncOffRuntime": false
+  },
+  "expect": "violates OwnerPublishes",
+  "spec": "LeaseRenewalStarvation",
+  "steps": [
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 0,
+        "outcome": "none",
+        "pc": "claimed",
+        "renewing": true,
+        "ret": "init",
+        "syncTicks": 0,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 0,
+        "gen": 0,
+        "live": false,
+        "nextPoll": 0,
+        "now": 0,
+        "outcome": "none",
+        "pc": "init",
+        "renewing": false,
+        "ret": "init",
+        "syncTicks": 0,
+        "synced": false
+      }
+    },
+    {
+      "action": "SyncStart",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 0,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 0,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 0,
+        "outcome": "none",
+        "pc": "claimed",
+        "renewing": true,
+        "ret": "init",
+        "syncTicks": 0,
+        "synced": false
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 1,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 1,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 0,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 0,
+        "synced": false
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 2,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 2,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 1,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 1,
+        "synced": false
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 3,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 3,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 2,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 2,
+        "synced": false
+      }
+    },
+    {
+      "action": "Tick",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 4,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 4,
+        "synced": false
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 3,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 3,
+        "synced": false
+      }
+    },
+    {
+      "action": "SyncEnd",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 4,
+        "outcome": "none",
+        "pc": "claimed",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 4,
+        "synced": true
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 4,
+        "outcome": "none",
+        "pc": "syncing",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 4,
+        "synced": false
+      }
+    },
+    {
+      "action": "Publish",
+      "actor": null,
+      "after": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 4,
+        "outcome": "rejected",
+        "pc": "published",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 4,
+        "synced": true
+      },
+      "before": {
+        "claimedAt": 0,
+        "deadline": 4,
+        "gen": 1,
+        "live": false,
+        "nextPoll": 1,
+        "now": 4,
+        "outcome": "none",
+        "pc": "claimed",
+        "renewing": true,
+        "ret": "claimed",
+        "syncTicks": 4,
+        "synced": true
+      }
+    }
+  ]
+}

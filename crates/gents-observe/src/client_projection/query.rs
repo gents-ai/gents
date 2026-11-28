@@ -52,6 +52,8 @@ pub use session_transcript::{
 };
 #[cfg(test)]
 use snapshot_loaders::{complete_access_snapshot_requests, scoped_session_heads};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use snapshot_loaders::{read_node_snapshot_root, NodeSnapshotRoot};
 
 pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
 /// Bound a page's message read and the work needed to project it.

@@ -23,9 +23,16 @@ pub(super) struct Page {
 impl ConfigCommandTool {
     pub(super) fn help(&self, resource: Option<&str>, command: Vec<&str>) -> Result<String> {
         let enabled = model_resources(&self.categories, self.core.held_grants().pack_install);
+        let renders = super::ux_preview::renders(self.ux_preview_assets.as_deref());
         let Some(requested) = resource else {
-            return Ok(self.help_index(&enabled));
+            return Ok(self.help_index(&enabled, renders));
         };
+        if matches!(requested, "documents" | "document" | "docs" | "doc") {
+            bail!(
+                "config manages Gents configuration resources, not application documents. Use the query, write, and schema tools for application data (or grant them in Tools). Granted config resources: {}. See [\"help\"]",
+                enabled.join(", ")
+            );
+        }
         let resource = help_resource(requested);
         let granted = resource == "get"
             || enabled
@@ -43,6 +50,7 @@ impl ConfigCommandTool {
                 SelfConfigTarget::AgentContext,
                 &self::page("context").expect("context help"),
                 &command[1..],
+                renders,
             );
         }
         if resource == "page" && command.first() == Some(&"sdk") {
@@ -62,7 +70,7 @@ impl ConfigCommandTool {
             }
         }
         if let Some(target) = crud::resource_target(resource) {
-            return crud_help(resource, target, &page, &command);
+            return crud_help(resource, target, &page, &command, renders);
         }
         if let Some(text) = command_help(resource, &page, &command) {
             return Ok(text);
@@ -146,7 +154,7 @@ impl ConfigCommandTool {
         }
     }
 
-    fn help_index(&self, enabled: &[&str]) -> String {
+    fn help_index(&self, enabled: &[&str], renders: bool) -> String {
         let mut out = String::from(
             "config resources. [\"help\",RESOURCE] explains one; [RESOURCE,VERB,\"--help\"] gives field shapes. Commands go in argv; IDs may follow the verb or use target_id.\n",
         );
@@ -155,6 +163,11 @@ impl ConfigCommandTool {
                 .iter()
                 .any(|name| name.split(' ').next() == Some(*resource));
             if granted {
+                let line = if *resource == "ux" && !renders {
+                    "inspect or lint a UI page (ux list, ux module, ux lint)"
+                } else {
+                    *line
+                };
                 let _ = writeln!(out, "  {resource}: {line}");
             }
         }
@@ -349,17 +362,17 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "report what was found; import a skill only when asked.",
         },
         "datastore" => Page {
-            what: "a surface defines collection tools; selecting it in Tools grants them (tools grant). target_id: SURFACE_ID.",
+            what: "surface of collection tools; select it in Tools to grant them (tools grant). target_id: SURFACE_ID.",
             commands: &[
                 "datastore get",
                 "datastore [preview] create|edit  set: surface fields, or options.mailbox",
             ],
             notes: concat!(
-                "Named surface entries are create, upsert or query. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use, inputs and effects.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas before selection; selection checks names only. Grant requested operations only.\n",
+                "Named surface entries are create, upsert or query. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use and inputs.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas first; selection checks names only. Grant requested ops only.\n",
                 mailbox_identity_choice!(),
                 " A monitor uses condition identity: {\"argv\":[\"datastore\",\"create\"],\"target_id\":\"monitor-mailbox\",\"options\":{\"mailbox\":{\"identity\":{\"mode\":\"condition\",\"key\":\"host-health\"},\"kind\":\"flag\",\"action\":\"ack\"}}}"
             ),
-            next: "call the tool in your next turn; another agent gets it from its next request.",
+            next: "the new tool is active on your next tool call in this response (do not stop to wait for the user); another agent gets it next request.",
         },
         "agent-target" => Page {
             what: "a named route to an agent for agent_new (tools grant). TARGET_ID goes in target_id or argv.",
@@ -476,15 +489,15 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack install|update PACKAGE  the same pairs, options.digest from the preview, options.edited (overwrite|keep) for live-edited documents",
                 "pack [preview] remove PACKAGE [--with-collections]  options.edited",
                 "pack [preview] wire PACKAGE [--remove]  options.agent; selects its plugins",
-                "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true adds a page)",
+                "pack scaffold NAME  from scratch (prefer pack export for live docs); options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true)",
                 "pack add PART ID  options.dir: the pack (default tool root); PART: agent (options.slot), task (options.agent), trigger (options.task, options.on), schema (ID is the collection), skill (options.from), plugin (options.language or options.prebuilt), page",
-                "pack export NAME  options: IDs per kind (agent, context, tools, skill, compaction, datastore, agent-target, task, trigger, event-source, schedule, page, plugin-source), collection, tag, namespace; writes live documents and what they reference to a new pack at NAME",
+                "pack export NAME  prefer over scaffold for live docs; options: dir (default NAME), version (semver), namespace, collection, tag, IDs per kind (agent, context, tools, skill, compaction, datastore, agent-target, task, trigger, event-source, schedule, page, plugin-source)",
                 "pack check [DIR]  every validation an install runs; reports unverified in problems' place, never full success",
                 "pack build [DIR]  compiles plugin source in the command sandbox, then writes the .pack beside DIR",
                 "pack test [DIR]  compiles plugin source and runs its tests/*.json cases in the command sandbox; options.case: one case file name, for that case's whole returned output and expect",
                 "pack verify PACK  verify a built .pack file in place",
             ],
-            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local paths require the held file read grant and the explicit tool root; symlinks and request workspace paths use the file owner. A pack directory must be spelled ./DIR, or the name is looked up as a pack. Local pack authoring runs inside the effective tool root: scaffold, add, build and test need readwrite file tools, check and verify only read, and all take the pack grant. Compiling plugin source also needs the pack authority grant (self_config.enable_pack_authority): it runs in the command sandbox, writes confined to the tool root and no network, so dependencies must already be in the toolchain's cache. A directory install refuses plugin source: build first, then preview the .pack. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. With the pack authority grant an install grants what each plugin asks for (file, network, environment); preview lists it as would_grant and the install receipt as granted_authority. Without that grant plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Installing does not select model tools: pack wire PACKAGE writes integrations.plugins for your next turn. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it exposes it from your next turn as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs; the operator CLI `gents automation job list` does. Remove deletes the package's documents and retires its plugins once no Tools selects them; its collections stay unless --with-collections, which empties and removes each one nothing else uses (schema tool grant).",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local paths need file read and the tool root; symlinks/request paths use the file owner. A pack directory must be spelled ./DIR, or the name is looked up as a pack. Authoring runs inside the tool root: scaffold/add/build/test need readwrite files, check/verify read-only, all need pack grant. Compiling plugin source also needs the pack authority grant (self_config.enable_pack_authority): it runs in the command sandbox, writes confined to the tool root and no network, so dependencies must already be in the toolchain's cache. A directory install refuses plugin source: build first, then preview the .pack. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. With the pack authority grant an install grants what each plugin asks for (file, network, environment); preview lists it as would_grant and the install receipt as granted_authority. Without that grant plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Installing does not select model tools: pack wire PACKAGE writes integrations.plugins for your next turn. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it exposes it from your next turn as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs; the operator CLI `gents automation job list` does. Remove deletes the package's documents and retires its plugins once no Tools selects them; its collections stay unless --with-collections, which empties and removes each one nothing else uses (schema tool grant).",
             next: "Inspect plugin selection with plugin get, or call an installed workflow plugin by its tool name in your next turn and list its runs with gents automation job list.",
         },
         _ => return None,
@@ -615,7 +628,7 @@ pub fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 ),
                 (
                     json!({"argv":["tools","update"],"options":{"agent":"<AGENT_DID>"},"set":{"datastore":{"datastore_tool_surface_ids":["handoff-tools"]}}}),
-                    Some("replace <AGENT_DID> with the exact DID from agent list; if tools get shows a datastore group, send it back with this ID added"),
+                    Some("copy <AGENT_DID> from agent list; keep any existing datastore fields from tools get"),
                 ),
                 (
                     json!({"argv":["agent","get","<AGENT_DID>"]}),
@@ -649,6 +662,7 @@ fn crud_help(
     target: SelfConfigTarget,
     page: &Page,
     command: &[&str],
+    renders: bool,
 ) -> Result<String> {
     let verb = command.iter().copied().find(|word| *word != "preview");
     if matches!(
@@ -671,7 +685,7 @@ fn crud_help(
         }
     }
     let Some(mut verb) = verb else {
-        return crud_page(resource, target, page);
+        return crud_page(resource, target, page, renders);
     };
     let names_field = contracts(resource, None)
         .iter()
@@ -684,7 +698,7 @@ fn crud_help(
     ) {
         return match command_help(resource, page, command) {
             Some(text) => Ok(text),
-            None => crud_page(resource, target, page),
+            None => crud_page(resource, target, page, renders),
         };
     }
     let mut out = format!("{resource} {verb}: ");
@@ -727,7 +741,12 @@ fn crud_help(
 
 /// `help RESOURCE`: what it is, its verbs, the notes and one recipe. Field
 /// shapes belong to the verb pages.
-fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<String> {
+fn crud_page(
+    resource: &str,
+    target: SelfConfigTarget,
+    page: &Page,
+    renders: bool,
+) -> Result<String> {
     let mut out = format!("{resource}: {}\n", page.what);
     writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
     if resource == "agent" {
@@ -770,6 +789,9 @@ fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<St
     if resource == "page" {
         writeln!(out, "Also:")?;
         for line in page.commands {
+            if !renders && line.starts_with("ux preview ") {
+                continue;
+            }
             writeln!(out, "  {line}")?;
         }
         writeln!(
@@ -786,13 +808,27 @@ fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<St
     for (title, steps) in recipes(resource).into_iter().take(1) {
         writeln!(out, "Recipe: {title}")?;
         for (call, next) in steps {
+            if resource == "page"
+                && !renders
+                && call["argv"].as_array().is_some_and(|argv| {
+                    argv.first().and_then(Value::as_str) == Some("ux")
+                        && argv.get(1).and_then(Value::as_str) == Some("preview")
+                })
+            {
+                continue;
+            }
             writeln!(out, "  {}", render_call(&call))?;
             if let Some(next) = next {
                 writeln!(out, "  {next}")?;
             }
         }
     }
-    write!(out, "Next: {}", page.next)?;
+    let next = if resource == "page" && !renders {
+        "page lint ID (this build has no page renderer, so stop after page lint); fix what the report names before saying the page works."
+    } else {
+        page.next
+    };
+    write!(out, "Next: {next}")?;
     Ok(out)
 }
 

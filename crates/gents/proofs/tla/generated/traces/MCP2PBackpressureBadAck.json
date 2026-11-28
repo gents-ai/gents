@@ -1,0 +1,191 @@
+{
+  "config": "MCP2PBackpressureBadAck",
+  "constants": {
+    "AckWithoutPendingAllowed": true,
+    "InboundPeer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      }
+    ],
+    "MaxPending": 1,
+    "Peer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      },
+      {
+        "$model": "slow"
+      }
+    ],
+    "PushWorkers": 1,
+    "ResponsivePeer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      }
+    ],
+    "TimeoutReleasesSlot": true
+  },
+  "expect": "violates SuccessAckBacked",
+  "spec": "P2PBackpressure",
+  "steps": [
+    {
+      "action": "ReceiveMissingAndRegister",
+      "actor": {
+        "$model": "good1"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          }
+        ],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Queued"
+            ]
+          ]
+        },
+        "pending": [
+          {
+            "$model": "good1"
+          }
+        ]
+      },
+      "before": {
+        "acked": [],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Queued"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "BadAckAtCapacity",
+      "actor": {
+        "$model": "good2"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Queued"
+            ]
+          ]
+        },
+        "pending": [
+          {
+            "$model": "good1"
+          }
+        ]
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good1"
+          }
+        ],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Queued"
+            ]
+          ]
+        },
+        "pending": [
+          {
+            "$model": "good1"
+          }
+        ]
+      }
+    }
+  ]
+}

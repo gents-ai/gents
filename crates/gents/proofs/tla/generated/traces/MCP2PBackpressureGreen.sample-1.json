@@ -1,0 +1,699 @@
+{
+  "config": "MCP2PBackpressureGreen",
+  "constants": {
+    "AckWithoutPendingAllowed": false,
+    "InboundPeer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      }
+    ],
+    "MaxPending": 1,
+    "Peer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      },
+      {
+        "$model": "slow"
+      }
+    ],
+    "PushWorkers": 1,
+    "ResponsivePeer": [
+      {
+        "$model": "good1"
+      },
+      {
+        "$model": "good2"
+      }
+    ],
+    "TimeoutReleasesSlot": true
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 23,
+    "sample": 0,
+    "seed": 3042905
+  },
+  "spec": "P2PBackpressure",
+  "steps": [
+    {
+      "action": "StartPush",
+      "actor": {
+        "$model": "slow"
+      },
+      "after": {
+        "acked": [],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "InFlight"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Queued"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "ReceiveComplete",
+      "actor": {
+        "$model": "good2"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "InFlight"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [],
+        "merged": [],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "InFlight"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "PushTimesOut",
+      "actor": {
+        "$model": "slow"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "InFlight"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "ReceiveComplete",
+      "actor": {
+        "$model": "good1"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "StartPush",
+      "actor": {
+        "$model": "good2"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "InFlight"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "PushSucceeds",
+      "actor": {
+        "$model": "good2"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "InFlight"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "StartPush",
+      "actor": {
+        "$model": "good1"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "InFlight"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Queued"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    },
+    {
+      "action": "PushSucceeds",
+      "actor": {
+        "$model": "good1"
+      },
+      "after": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      },
+      "before": {
+        "acked": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "merged": [
+          {
+            "$model": "good1"
+          },
+          {
+            "$model": "good2"
+          }
+        ],
+        "nacked": [],
+        "outState": {
+          "$function": [
+            [
+              {
+                "$model": "good1"
+              },
+              "InFlight"
+            ],
+            [
+              {
+                "$model": "good2"
+              },
+              "Delivered"
+            ],
+            [
+              {
+                "$model": "slow"
+              },
+              "Failed"
+            ]
+          ]
+        },
+        "pending": []
+      }
+    }
+  ]
+}

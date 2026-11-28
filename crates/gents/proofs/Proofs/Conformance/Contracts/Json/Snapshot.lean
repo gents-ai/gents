@@ -25,6 +25,10 @@ import Proofs.Conformance.Contracts.Json.Shards.S22
 import Proofs.Conformance.Contracts.Json.Shards.S23
 import Proofs.Conformance.Contracts.Json.Shards.S24
 import Proofs.Conformance.DatastoreUpsert
+import Proofs.Conformance.DocumentSigner
+import Proofs.Conformance.Identity.RuntimeActorAuthority
+import Proofs.Conformance.StoreMigration
+import Proofs.Conformance.ImmutableCompaction
 
 namespace Conformance.Contracts
 

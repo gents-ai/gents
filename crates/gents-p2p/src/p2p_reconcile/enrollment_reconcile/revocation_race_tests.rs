@@ -1,3 +1,4 @@
+use gents_lean_vocab::tla::replay::{Red, Trace};
 use std::sync::Arc;
 
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -24,8 +25,7 @@ fn serve_authority(store: GraphqlEnrollmentStore) -> EnrollmentAuthorityHandle {
     handle
 }
 
-#[tokio::test]
-async fn a_route_write_and_a_revocation_of_its_member_are_never_interleaved() {
+async fn replay(trace: &Trace) {
     let keys = tempfile::tempdir().unwrap();
     let admin: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(keys.path().join("admin.key"), None).unwrap());
@@ -88,20 +88,8 @@ async fn a_route_write_and_a_revocation_of_its_member_are_never_interleaved() {
         reconcile_data_plane(server, admin.did(), &store, &before),
     );
     tokio::pin!(reconcile);
-    tokio::select! {
-        () = reached.notified() => {}
-        settled = &mut reconcile => panic!("the route write settled before its commit: {settled:?}"),
-    }
-    assert!(
-        gents_store::identity::enrollment_decision_gate(server)
-            .try_lock()
-            .is_err(),
-        "a revocation cannot commit while the route write is open"
-    );
-    release.notify_one();
-    let (reconciled, paused) = reconcile.await;
-    reconciled.unwrap();
-    assert!(paused);
+    let revoke = store.revoke_request(&enrolled.request_id);
+    tokio::pin!(revoke);
     let routes = |label: &'static str| {
         let server = server.clone();
         async move {
@@ -112,22 +100,86 @@ async fn a_route_write_and_a_revocation_of_its_member_are_never_interleaved() {
                 .len()
         }
     };
-    assert_eq!(routes("authorized at commit").await, 1);
-
-    store.revoke_request(&enrolled.request_id).await.unwrap();
-    let after = store.load_projection().await.unwrap();
-    assert!(after.active.is_empty() && after.revoked.len() == 1);
-
     let pairing = GraphqlPairingStateStore::with_enrollment_authority(
         server.clone(),
         admin.clone(),
         serve_authority(store.clone()),
     );
-    let tick = reconcile_peer_tick(&server_admin, &pairing, &peer)
-        .await
-        .unwrap();
-    assert!(tick.ops_applied.is_empty(), "{:?}", tick.ops_applied);
-    assert!(server_admin.list_replicators().await.unwrap().is_empty());
+    let mut committed = false;
+    let mut revoked = false;
+    let mut waiting = false;
+    let mut stale_route = false;
+    let mut stale_install = false;
+    for step in &trace.steps {
+        match step.action.as_str() {
+            "RouteRead" => {
+                tokio::select! {
+                    () = reached.notified() => {}
+                    settled = &mut reconcile => panic!("route write settled before commit: {settled:?}"),
+                }
+            }
+            "Revoke" if !committed => {
+                assert!(gents_store::identity::enrollment_decision_gate(server)
+                    .try_lock()
+                    .is_err());
+                assert!(futures::poll!(&mut revoke).is_pending());
+                waiting = true;
+            }
+            "Revoke" => {
+                (&mut revoke).await.unwrap();
+                revoked = true;
+            }
+            "RouteCommit" => {
+                release.notify_one();
+                let (result, paused) = (&mut reconcile).await;
+                result.unwrap();
+                assert!(paused);
+                let projection = store.load_projection().await.unwrap();
+                stale_route = routes("at commit").await == 1 && projection.active.is_empty();
+                assert_eq!(routes("new route").await, 1);
+                committed = true;
+                if waiting {
+                    (&mut revoke).await.unwrap();
+                    revoked = true;
+                }
+            }
+            "PeerInstall" => {
+                let tick = reconcile_peer_tick(&server_admin, &pairing, &peer)
+                    .await
+                    .unwrap();
+                let installed = !server_admin.list_replicators().await.unwrap().is_empty();
+                if revoked {
+                    stale_install |= !tick.ops_applied.is_empty() || installed;
+                } else {
+                    assert!(installed, "enrolled peer installed before revocation");
+                }
+            }
+            "PeerTeardown" => {
+                assert!(revoked);
+                reconcile_peer_tick(&server_admin, &pairing, &peer)
+                    .await
+                    .unwrap();
+                assert!(server_admin.list_replicators().await.unwrap().is_empty());
+            }
+            "Sweep" => {
+                let current = store.load_projection().await.unwrap();
+                reconcile_data_plane(server, admin.did(), &store, &current)
+                    .await
+                    .unwrap();
+                assert_eq!(routes("sweep of revoked route").await, 0);
+            }
+            action => panic!("unmapped enrollment action {action}"),
+        }
+    }
+    let after = store.load_projection().await.unwrap();
+    assert!(revoked && after.active.is_empty() && after.revoked.len() == 1);
+    trace.check(
+        Red::Defect,
+        &[
+            ("NoRouteForRevokedMember", !stale_route),
+            ("NoInstallForRevokedMember", !stale_install),
+        ],
+    );
 
     reconcile_data_plane(server, admin.did(), &store, &before)
         .await
@@ -138,4 +190,15 @@ async fn a_route_write_and_a_revocation_of_its_member_are_never_interleaved() {
     );
     member_node.shutdown().await.expect("node shutdown");
     server.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn enrollment_route_fence_traces() {
+    for json in [
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFence.sample-1.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFenceFilteredRead.json"),
+        include_str!("../../../../gents/proofs/tla/generated/traces/MCEnrollmentRouteFencePeerTrustsRoute.json"),
+    ] {
+        replay(&Trace::load(json, "EnrollmentRouteFence", &[])).await;
+    }
 }

@@ -319,10 +319,7 @@ impl BoundedWriteTool {
             [] => Ok(None),
             [id] => {
                 let signers = gents_store::provenance::document_signers(txn, id).await?;
-                let signed_by_writer = !signers.unsigned
-                    && signers.writers.len() == 1
-                    && writer.is_some_and(|writer| signers.writers.contains(writer));
-                if !signed_by_writer {
+                if !writer.is_some_and(|writer| signers.signed_only_by(writer)) {
                     bail!(
                         "tool `{}` will not update {collection} {id}: {}; an upsert updates only a document its writer signed",
                         self.decl.tool_name,

@@ -1,0 +1,675 @@
+{
+  "config": "MCBackgroundEnvelopeProjection",
+  "constants": {
+    "ClassifyByText": false,
+    "WaitForInputs": true
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 16,
+    "sample": 0,
+    "seed": 23
+  },
+  "spec": "BackgroundEnvelopeProjection",
+  "steps": [
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [],
+        "queue": [
+          "R0"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": false,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Submit",
+      "actor": null,
+      "after": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 0,
+        "waked": false
+      }
+    },
+    {
+      "action": "Deliver",
+      "actor": null,
+      "after": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      },
+      "before": {
+        "delivered": 0,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      }
+    },
+    {
+      "action": "Finish",
+      "actor": null,
+      "after": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      },
+      "before": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "R0",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      }
+    },
+    {
+      "action": "Deliver",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      },
+      "before": {
+        "delivered": 1,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      }
+    },
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "R0"
+        ],
+        "queue": [
+          "PW"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      }
+    },
+    {
+      "action": "Submit",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": false
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 1,
+        "waked": false
+      }
+    },
+    {
+      "action": "Wake",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ",
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": false
+      }
+    },
+    {
+      "action": "Finish",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ",
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ",
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PW",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    },
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PQ",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "PQ",
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    },
+    {
+      "action": "Finish",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "PQ",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    },
+    {
+      "action": "Claim",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0"
+        ],
+        "queue": [
+          "W"
+        ],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    },
+    {
+      "action": "Finish",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "W",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    },
+    {
+      "action": "Observe",
+      "actor": null,
+      "after": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "background_result",
+          "PQ": "person",
+          "PW": "person",
+          "R0": "person",
+          "W": "background_wake"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": true,
+        "submitted": 2,
+        "waked": true
+      },
+      "before": {
+        "delivered": 2,
+        "published": [
+          "PQ",
+          "PW",
+          "R0",
+          "W"
+        ],
+        "queue": [],
+        "rendered": {
+          "N": "none",
+          "PQ": "none",
+          "PW": "none",
+          "R0": "none",
+          "W": "none"
+        },
+        "running": "none",
+        "spawned": true,
+        "stopped": false,
+        "submitted": 2,
+        "waked": true
+      }
+    }
+  ]
+}

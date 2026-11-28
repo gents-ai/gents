@@ -471,6 +471,8 @@ pub struct CompactionEntrySnapshot {
     pub sequence: u32,
     pub summary: String,
     pub messages_compacted: u32,
+    #[serde(default)]
+    pub source_message_versions: Option<Vec<gents_protocol::transcript::TranscriptFactRef>>,
     pub created_at: String,
 }
 
@@ -488,7 +490,7 @@ where
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
             ) {{
-                compaction_key session_id request_id request_doc_id sequence summary messages_compacted compacted_through_sequence created_at
+                compaction_key session_id request_id request_doc_id sequence summary messages_compacted compacted_through_sequence source_message_versions created_at
             }}
         }}"#
     );

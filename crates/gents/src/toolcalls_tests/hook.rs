@@ -12,6 +12,7 @@ use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegis
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
+mod admission_trace;
 mod background_admission;
 mod background_budget;
 

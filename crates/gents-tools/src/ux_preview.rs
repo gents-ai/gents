@@ -162,6 +162,8 @@ pub fn draft_target(entry: &Located) -> Result<PreviewTarget> {
     })
 }
 
+pub(crate) const NO_RENDERER_MESSAGE: &str = "this build has no page renderer, so ux preview renders nothing here and no config call adds one. The available check is page lint ID for a page document, or ux lint PATH for a pack page; the page itself is seen in the desktop app";
+
 /// Whether this build can render a page: an installed build carries no
 /// preview page, so `ux preview` has nothing to load there unless the process
 /// was started with one (`assets`).
@@ -177,9 +179,7 @@ fn assets_dir(assets: Option<&Path>) -> Result<PathBuf> {
     exe.ancestors()
         .map(|dir| dir.join(ASSETS_DEV_DIR))
         .find(|dir| dir.join(PAGE_ENTRY).is_file())
-        .context(
-            "this build has no page renderer, so ux preview renders nothing here and no config call adds one. The available check is page lint ID for a page document, or ux lint PATH for a pack page; the page itself is seen in the desktop app",
-        )
+        .context(NO_RENDERER_MESSAGE)
 }
 
 /// Everything the page asks of the runtime, for one preview.

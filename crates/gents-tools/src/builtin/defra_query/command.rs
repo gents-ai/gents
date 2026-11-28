@@ -192,7 +192,22 @@ pub async fn execute_command(
     args: &QueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
-    execute_typed_command(access, args, scope)
+    execute_typed_command(access, args, scope, None)
+        .await
+        .map_err(QueryCommandError::erased)
+}
+
+/// `find` keeping only the rows `signed_by` wrote every version of
+/// ([`gents_store::provenance::DocumentSigners::signed_only_by`]). The result
+/// carries `scanned_count`, the rows read before the filter, so a page the
+/// filter shortened still says where the next one starts.
+pub(crate) async fn execute_find_signed_by(
+    access: &dyn ConfigRead,
+    args: &QueryParams,
+    scope: &CollectionScope,
+    signed_by: Option<&str>,
+) -> Result<Value> {
+    execute_typed_command(access, args, scope, signed_by)
         .await
         .map_err(QueryCommandError::erased)
 }
@@ -263,6 +278,7 @@ pub(super) async fn execute_typed_command(
     access: &dyn ConfigRead,
     args: &QueryParams,
     scope: &CollectionScope,
+    signed_by: Option<&str>,
 ) -> std::result::Result<Value, QueryCommandError> {
     let mut argv = args.argv.iter().map(String::as_str).collect::<Vec<_>>();
     let dash_help = argv.last() == Some(&"--help");
@@ -387,6 +403,9 @@ pub(super) async fn execute_typed_command(
         Some(Value::Bool(true)) => true,
         Some(_) => return Err(anyhow!("signer must be true or false").into()),
     };
+    if signed_by.is_some() && command != "find" {
+        return Err(anyhow!("a signer filter applies only to find").into());
+    }
     let selected_fields = params.fields.clone();
     if let Some(page) = &field_page {
         if !relations.is_empty() {
@@ -523,6 +542,28 @@ pub(super) async fn execute_typed_command(
     if !rows.is_array() {
         return Err(anyhow!("DefraDB returned no collection result").into());
     }
+    let scanned_count = rows.as_array().unwrap().len();
+    let mut signers = Vec::new();
+    if command == "find" && (signer || signed_by.is_some()) {
+        for row in rows.as_array().unwrap() {
+            let doc_id = row["_docID"]
+                .as_str()
+                .context("a find row came back without _docID")?;
+            signers.push(
+                gents_store::provenance::document_signers(access, doc_id)
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .with_context(|| format!("name the signers of document {doc_id}"))?,
+            );
+        }
+        if let Some(only) = signed_by {
+            let mut kept = signers.iter().map(|signers| signers.signed_only_by(only));
+            rows.as_array_mut()
+                .unwrap()
+                .retain(|_| kept.next().unwrap_or(false));
+            signers.retain(|signers| signers.signed_only_by(only));
+        }
+    }
     if let Some(page) = field_page {
         let rows = rows.as_array().unwrap();
         if rows.len() != 1 {
@@ -541,16 +582,8 @@ pub(super) async fn execute_typed_command(
     } else {
         Vec::new()
     };
-    if command == "find" && signer {
-        for row in rows.as_array_mut().unwrap() {
-            let doc_id = row["_docID"]
-                .as_str()
-                .context("a find row came back without _docID")?
-                .to_owned();
-            let signers = gents_store::provenance::document_signers(access, &doc_id)
-                .await
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("name the signers of document {doc_id}"))?;
+    if signer {
+        for (row, signers) in rows.as_array_mut().unwrap().iter_mut().zip(signers) {
             row["_signer"] = serde_json::to_value(signers).map_err(anyhow::Error::from)?;
         }
     }
@@ -579,6 +612,9 @@ pub(super) async fn execute_typed_command(
     }
     if command == "search" {
         result["ranking"] = json!(super::search::ranking_name(&args.options));
+    }
+    if signed_by.is_some() {
+        result["scanned_count"] = json!(scanned_count);
     }
     Ok(result)
 }

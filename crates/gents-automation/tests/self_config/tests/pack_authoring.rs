@@ -638,6 +638,8 @@ async fn page_help_discloses_detail_per_command_and_topic() {
         "build first, then preview the .pack",
         "Installing does not select model tools",
         "a preview with ready:false supplies no apply call",
+        "prefer pack export",
+        "options: dir (default NAME), version",
     ] {
         assert!(pack.contains(fact), "{fact}: {pack}");
     }
@@ -659,4 +661,67 @@ async fn page_help_discloses_detail_per_command_and_topic() {
     assert!(build.contains("command sandbox"), "{build}");
     let run = help(vec!["task", "run", "--help"]).await;
     assert!(run.contains("options: args"), "{run}");
+}
+
+#[tokio::test]
+async fn pack_export_supports_decoupled_dir_and_version_options() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let (fixture, tools) = authoring_tool(
+        "pack-export-dir-ver",
+        home.path(),
+        root.path(),
+        &["tools"],
+        false,
+    )
+    .await;
+    fixture
+        .add_collection("type HarborFee { code: String @index(unique: true) amount: Int }")
+        .await;
+
+    let exported = config_json(
+        &tools,
+        &[
+            "pack",
+            "export",
+            "fees",
+            "--namespace",
+            "harbor",
+            "--dir",
+            "harbor_fees",
+            "--version",
+            "1.2.0",
+            "--collection",
+            "HarborFee",
+        ],
+    )
+    .await;
+    assert_eq!(exported["pack"], "fees", "{exported}");
+    assert_eq!(exported["version"], "1.2.0", "{exported}");
+    assert_eq!(exported["dir"], "harbor_fees", "{exported}");
+    let manifest =
+        gents_pack::pack::authoring::read_manifest(&root.path().join("harbor_fees")).unwrap();
+    assert_eq!(manifest.name, "fees");
+    assert_eq!(manifest.metadata.namespace, "harbor");
+    assert_eq!(manifest.version, "1.2.0");
+
+    let bad_version = config_call(
+        &tools,
+        &[
+            "pack",
+            "export",
+            "fees",
+            "--dir",
+            "harbor_fees_bad",
+            "--version",
+            "not-semver",
+            "--collection",
+            "HarborFee",
+        ],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(bad_version.contains("semver"), "{bad_version}");
+    assert!(!root.path().join("harbor_fees_bad").exists());
 }

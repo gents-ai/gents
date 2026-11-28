@@ -28,6 +28,10 @@ pub struct PluginCases {
     pub plugin: String,
     pub passed: usize,
     pub failures: Vec<String>,
+    /// True when at least one failing case returned a `data_calls` request
+    /// object (unit tests run single-round without DefraDB).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub returned_data_calls: bool,
     /// The whole documents of every failure whose text names only the paths
     /// that differ, so a caller can still read one case in full.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -78,6 +82,7 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             plugin: plugin.name.clone(),
             passed: 0,
             failures: Vec::new(),
+            returned_data_calls: false,
             shortened: Vec::new(),
         };
         for path in cases {
@@ -88,6 +93,9 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             match run_case(&coordinate, &runner, budget, &path).await {
                 Ok(None) => report.passed += 1,
                 Ok(Some((returned, expect))) => {
+                    if returned.get("data_calls").is_some() {
+                        report.returned_data_calls = true;
+                    }
                     let (text, shortened) = describe_mismatch(&returned, &expect);
                     report.failures.push(format!("{name}: {text}"));
                     if shortened {

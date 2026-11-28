@@ -179,6 +179,22 @@ impl ConfigCommandTool {
                 );
             }
         }
+        if argv.first().is_some_and(|word| word == "ux")
+            && argv.get(1).is_some_and(|word| word == "preview")
+        {
+            let next = match argv.get(2).map(String::as_str) {
+                Some(target) => match gents_pack::plugin::ux::page::page_id(target) {
+                    Some(id) => json!({"argv": ["page", "lint"], "target_id": id}),
+                    None if target.ends_with(".js") => json!({"argv": ["ux", "lint", target]}),
+                    None if gents_documents::is_snake_case_name(target) => {
+                        json!({"argv": ["page", "lint"], "target_id": target})
+                    }
+                    None => json!({"argv": ["page", "list"]}),
+                },
+                None => json!({"argv": ["help", "page"]}),
+            };
+            return (message, json!({"next_call": next}));
+        }
         let resource = argv.first().map(String::as_str).unwrap_or("help");
         let next = if resources
             .iter()

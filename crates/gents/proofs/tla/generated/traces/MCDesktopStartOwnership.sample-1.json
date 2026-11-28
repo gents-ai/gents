@@ -1,0 +1,63 @@
+{
+  "config": "MCDesktopStartOwnership",
+  "constants": {
+    "ObservePending": true
+  },
+  "expect": "holds",
+  "simulation": {
+    "depth": 8,
+    "sample": 0,
+    "seed": 3
+  },
+  "spec": "DesktopStartOwnership",
+  "steps": [
+    {
+      "action": "FirstStart",
+      "actor": null,
+      "after": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 1
+      },
+      "before": {
+        "cancelled": [],
+        "owner": 0,
+        "service": "stopped",
+        "starts": 0
+      }
+    },
+    {
+      "action": "RepeatedStart",
+      "actor": null,
+      "after": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 2
+      },
+      "before": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 1
+      }
+    },
+    {
+      "action": "Ready",
+      "actor": null,
+      "after": {
+        "cancelled": [],
+        "owner": 0,
+        "service": "ready",
+        "starts": 2
+      },
+      "before": {
+        "cancelled": [],
+        "owner": 1,
+        "service": "booting",
+        "starts": 2
+      }
+    }
+  ]
+}

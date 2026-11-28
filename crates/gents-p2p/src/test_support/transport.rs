@@ -88,3 +88,45 @@ pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
             .expect("peer connection subscription closed");
     }
 }
+
+pub struct LoopbackEndpoint {
+    pub transport: p2p::iroh::IrohTransport,
+    pub events: p2p::sync::DispatchReceiver<
+        p2p::transport::TransportEvent<
+            <p2p::iroh::IrohTransport as p2p::transport::P2PTransport>::ResponseToken,
+        >,
+    >,
+    pub network: p2p::network::Network,
+    task: edge::Task<()>,
+}
+
+impl LoopbackEndpoint {
+    pub async fn start() -> Self {
+        use p2p::iroh::{
+            spawn_endpoint, IrohAllowlistConfig, IrohDiscoveryConfig, IrohEndpointConfig,
+            IrohRelayModeConfig, IrohTransport,
+        };
+        let config = IrohEndpointConfig {
+            relay_mode: IrohRelayModeConfig::Disabled,
+            discovery: IrohDiscoveryConfig::Disabled,
+            allowlist: IrohAllowlistConfig::AcceptAll,
+            bind_addr: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            ..Default::default()
+        };
+        let key = config.secret_key.clone();
+        let edge = edge::on_demand().unwrap().clone();
+        let (commands, events, _, task) = spawn_endpoint(config, edge.clone()).await.unwrap();
+        Self {
+            transport: IrohTransport::new(commands, key),
+            events,
+            network: p2p::network::Network::on(edge),
+            task,
+        }
+    }
+
+    pub async fn shutdown(self) {
+        use p2p::transport::P2PTransport;
+        self.transport.shutdown().await.unwrap();
+        self.task.await.unwrap();
+    }
+}

@@ -228,7 +228,7 @@ fn responses_items(script: &StreamScript, ordinal: usize) -> Vec<(usize, Value)>
             } => items.push((
                 index,
                 json!({
-                    "type": "function_call", "id": format!("fc_{ordinal}"),
+                    "type": "function_call", "id": format!("fc_{ordinal}_{index}"),
                     "call_id": id, "name": name, "arguments": arguments,
                     "status": "completed",
                 }),

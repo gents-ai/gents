@@ -15,6 +15,8 @@ pub enum SessionControlError {
     ActorUnavailable,
     #[error("session resume requires a managed Agent signer")]
     ManagedSignerRequired,
+    #[error(transparent)]
+    RuntimeActorAuthority(#[from] gents_store::config_client::RuntimeActorAuthorityError),
     #[error("{blocker}; retry resume after it settles")]
     ResumeBlocked {
         session_id: String,
@@ -65,6 +67,11 @@ pub async fn stop_session_with_access(
             node_did: node_did.to_owned(),
         });
     }
+    gents_store::config_client::ensure_access_for_runtime_path(
+        access,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionResume,
+    )?;
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -176,6 +183,11 @@ pub async fn resume_session_with_access(
             node_did: node_did.to_owned(),
         });
     }
+    gents_store::config_client::ensure_access_for_runtime_path(
+        access,
+        node_did,
+        gents_store::config_client::RuntimePath::SessionResume,
+    )?;
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -183,16 +195,10 @@ pub async fn resume_session_with_access(
     {
         Some(signer) => Arc::new(signer),
         None => {
-            let actor = access
-                .actor_did()
-                .ok_or(SessionControlError::ActorUnavailable)?;
-            if node.node_identity_did() != Some(actor.as_str()) {
-                return Err(SessionControlError::ManagedSignerRequired);
+            if access.actor_did().is_none() {
+                return Err(SessionControlError::ActorUnavailable);
             }
-            Arc::new(
-                gents_store::identity::RegisteredIdentity::from_registered_did(actor, None)
-                    .map_err(anyhow::Error::from)?,
-            )
+            return Err(SessionControlError::ManagedSignerRequired);
         }
     };
     access

@@ -1,7 +1,8 @@
 ---- MODULE SessionHeadObservation ----
 \* lean: AgentSession.newerByKeys
-\* crates: gents-session
+\* crates: gents-session, gents-observe
 \* models: AgentSession.advance, AgentSession.refresh, ClientDataPublication.uncached_request_event_rejects_old_read
+\* traces: violates
 \* A session's observed request head and the client that projects it on
 \* reopen (#3604).
 \*
@@ -45,6 +46,7 @@
 \* the observation names B. A refusal admitted in the second of a still-live
 \* turn deliberately leaves the live turn as the head (the order errs toward a
 \* busy session), so neither property claims it (`refusedWhileLive`).
+\* trace actors: Complete => state
 EXTENDS Naturals, LeanDecision_AgentSession
 
 CONSTANTS

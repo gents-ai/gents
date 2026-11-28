@@ -64,7 +64,10 @@ pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub use compaction_entries::load_prompt_compaction_state_with_access;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
-pub use compaction_entries::{CompactionCursorNamesNoMessage, StaleCompactionGeneration};
+pub use compaction_entries::{
+    CompactionCursorNamesNoMessage, CompactionCursorRegression, CompactionIntegrityConflict,
+    StaleCompactionGeneration,
+};
 #[cfg(test)]
 pub(crate) use control::stage_session_resume_in_txn;
 pub use control::{
@@ -158,6 +161,10 @@ pub struct CompactionEntry {
     /// compacted provider prefix. Storage decoding remains nullable so missing
     /// cursors can be rejected explicitly at the validation boundary.
     pub compacted_through_sequence: Option<u32>,
+    /// Exact pinned `(doc_id, sequence, commit_cid)` versions of the source
+    /// `AgentMessage` documents covered by this compaction entry.
+    #[serde(default)]
+    pub source_message_versions: Vec<gents_protocol::transcript::TranscriptFactRef>,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
     pub created_at: String,
