@@ -155,6 +155,9 @@ pub struct ToolCallLifecycle {
     /// Data writes a plugin tool returned beside its output; committed with a
     /// Completed terminal and discarded by any other.
     plugin_writes: Option<delivery::PluginToolWrites>,
+    /// Model-facing refusal text persisted when deferred plugin writes failed
+    /// and rolled back a `Completed` terminal into `Failed`.
+    plugin_writes_refusal: Option<String>,
     file_capture: Option<file_inventory::FileCapture>,
     /// Immutable physical provenance for dispatch, recovery, and completion routing.
     spawned_by_tool_call_doc_id: Option<String>,
@@ -257,6 +260,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
+            plugin_writes_refusal: None,
             file_capture: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
@@ -303,6 +307,10 @@ impl ToolCallLifecycle {
                 });
             }
         }
+    }
+
+    pub(crate) fn take_plugin_writes_refusal(&mut self) -> Option<String> {
+        self.plugin_writes_refusal.take()
     }
 
     pub fn doc_id(&self) -> Option<&str> {

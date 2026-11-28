@@ -142,11 +142,49 @@ impl ConfigClientError {
             if !errors.is_empty() && errors.iter().all(|item|
                 item.message == "document not found: document not found or not authorized to access"))
     }
+
+    /// External premise: the pinned DefraDB execution layer reports permanent
+    /// document identity and unique-index constraint rejections as unstructured
+    /// `QueryError::Execution` GraphQL errors (`"a document with the given ID
+    /// already exists..."`, `"a document with the given ID has been deleted..."`,
+    /// `"can not index a doc's field(s) that violates unique index..."`), and
+    /// marks invalid GraphQL requests with `is_invalid_request()` (excluding
+    /// `DELEGATION_OUTSIDE_WINDOW`, which is recovered as a credential refusal).
+    /// None of these are transient storage failures.
+    pub fn is_permanent_write_rejection(&self) -> bool {
+        let is_constraint_message = |message: &str| {
+            message == "document not found: document not found or not authorized to access"
+                || message.starts_with("a document with the given ID already exists")
+                || message.starts_with("a document with the given ID has been deleted")
+                || message.starts_with("can not index a doc's field(s) that violates unique index")
+        };
+        match self {
+            ConfigClientError::EmbeddedGraphqlErrors { errors } => {
+                !errors.is_empty()
+                    && errors.iter().all(|item| {
+                        is_constraint_message(&item.message)
+                            || (item.is_invalid_request()
+                                && item.code()
+                                    != Some(
+                                        gents_protocol::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE,
+                                    ))
+                    })
+            }
+            ConfigClientError::Database(failure) => {
+                let messages = failure.error_messages();
+                !messages.is_empty()
+                    && !failure.is_delegation_outside_window()
+                    && messages.iter().all(|message| is_constraint_message(message))
+            }
+            _ => false,
+        }
+    }
 }
 
 pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
     if error.transaction_conflict().is_some()
         || error.is_missing_or_denied_write()
+        || error.is_permanent_write_rejection()
         || matches!(
             error,
             ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch
@@ -214,6 +252,54 @@ mod tests {
         #[error("callback step")]
         struct Step(#[source] ConfigClientError);
         Box::new(Step(error))
+    }
+
+    #[test]
+    fn permanent_document_constraint_rejections_are_not_storage_failures() {
+        for message in [
+            "a document with the given ID already exists. DocID: bae-7ce7e445-bee3-5519-9b05-5855a68017a7",
+            "a document with the given ID has been deleted. DocID: bae-35653c28-3120-5194-bb5f-69a3357395a1",
+            "can not index a doc's field(s) that violates unique index. DocID: bae-123",
+            "document not found: document not found or not authorized to access",
+        ] {
+            let embedded = transaction_storage_failure(ConfigClientError::EmbeddedGraphqlErrors {
+                errors: vec![query::QueryResponseError::new(message)],
+            });
+            assert!(
+                !embedded.is_storage_failure(),
+                "embedded constraint must not be a storage failure: {message}"
+            );
+            assert!(!is_transaction_storage_failure(&erased(embedded)));
+
+            let http = transaction_storage_failure(ConfigClientError::Database(
+                gents_protocol::database_error::GraphqlFailure::new(
+                    "config mutation",
+                    serde_json::json!([{"message": message}]),
+                ),
+            ));
+            assert!(
+                !http.is_storage_failure(),
+                "http constraint must not be a storage failure: {message}"
+            );
+            assert!(!is_transaction_storage_failure(&erased(http)));
+        }
+
+        let invalid_request =
+            transaction_storage_failure(ConfigClientError::EmbeddedGraphqlErrors {
+                errors: vec![query::QueryResponseError::from_query_error(
+                    query::error::QueryError::InvalidMutationInput("bad field".into()),
+                )],
+            });
+        assert!(!invalid_request.is_storage_failure());
+
+        let unknown_execution =
+            transaction_storage_failure(ConfigClientError::EmbeddedGraphqlErrors {
+                errors: vec![query::QueryResponseError::new(
+                    "unexpected engine I/O fault",
+                )],
+            });
+        assert!(unknown_execution.is_storage_failure());
+        assert!(is_transaction_storage_failure(&erased(unknown_execution)));
     }
 
     #[test]

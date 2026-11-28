@@ -43,7 +43,7 @@ where
         call_id: Option<String>,
         arguments: &str,
         outcome: &ToolOutcome,
-    ) -> HookAction {
+    ) -> crate::ToolResultHookAction {
         if let Err(reason) =
             crate::tool_effects::ToolEffectDispatcher::settle_stopped(self, outcome).await
         {
@@ -54,7 +54,7 @@ where
             .on_tool_result(name, call_id, &self.parent_internal_id, arguments, outcome)
             .await;
         match self.fatal.lock().await.as_ref() {
-            Some(reason) => HookAction::Terminate {
+            Some(reason) => crate::ToolResultHookAction::Terminate {
                 reason: reason.clone(),
             },
             None => action,
@@ -585,7 +585,7 @@ pub(super) async fn settle_foreground<H>(
     internal_id: &str,
     args: &str,
     outcome: &ToolOutcome,
-) -> HookAction
+) -> crate::ToolResultHookAction
 where
     H: SessionHook + 'static,
 {
@@ -951,7 +951,7 @@ mod tests {
                 .settle_parent_result("plugin", None, "{}", &outcome)
                 .await;
             assert!(hook.parent_settled.load(Ordering::SeqCst));
-            let HookAction::Terminate { reason } = action else {
+            let crate::ToolResultHookAction::Terminate { reason } = action else {
                 panic!("fatal child allowed outer continuation");
             };
             assert_eq!(

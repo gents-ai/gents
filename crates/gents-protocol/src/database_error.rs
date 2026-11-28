@@ -109,6 +109,15 @@ impl GraphqlFailure {
                 == Some(PERMISSION_DENIED_CODE)
         })
     }
+
+    pub fn error_messages(&self) -> Vec<&str> {
+        self.errors
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|error| error.get("message").and_then(Value::as_str))
+            .collect()
+    }
 }
 
 impl fmt::Display for GraphqlFailure {

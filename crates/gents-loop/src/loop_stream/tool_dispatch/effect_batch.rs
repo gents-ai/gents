@@ -128,8 +128,11 @@ where
             )
             .await
         {
-            HookAction::Continue => Ok(outcome),
-            HookAction::Terminate { reason } => Err(ToolEffectError::Fatal(reason)),
+            crate::ToolResultHookAction::Continue => Ok(outcome),
+            crate::ToolResultHookAction::ReplaceOutcome(replaced) => Ok(*replaced),
+            crate::ToolResultHookAction::Terminate { reason } => {
+                Err(ToolEffectError::Fatal(reason))
+            }
         };
         self.finish_effect(&admitted.internal_id, result).await
     }

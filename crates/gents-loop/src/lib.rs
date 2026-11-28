@@ -70,6 +70,29 @@ impl HookAction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolResultHookAction {
+    Continue,
+    ReplaceOutcome(Box<crate::tool_call_lifecycle::ToolOutcome>),
+    Terminate { reason: String },
+}
+
+impl ToolResultHookAction {
+    pub fn cont() -> Self {
+        Self::Continue
+    }
+
+    pub fn replace_outcome(outcome: crate::tool_call_lifecycle::ToolOutcome) -> Self {
+        Self::ReplaceOutcome(Box::new(outcome))
+    }
+
+    pub fn terminate(reason: impl Into<String>) -> Self {
+        Self::Terminate {
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCallHookAction {
     Continue,

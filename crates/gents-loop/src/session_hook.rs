@@ -4,7 +4,7 @@ use gents_protocol::message::Message;
 use crate::live_output::LiveToolOutputWriter;
 use crate::tool::ToolCallEnvelope;
 use crate::tool_call_lifecycle::ToolOutcome;
-use crate::{HookAction, ToolCallHookAction};
+use crate::{HookAction, ToolCallHookAction, ToolResultHookAction};
 
 pub type NativeCleanupCheck = std::sync::Arc<dyn Fn(Option<&ToolOutcome>) -> bool + Send + Sync>;
 /// Runs a foreground tool call under the envelope its hook gives it: the hook's
@@ -148,7 +148,7 @@ pub trait SessionHook: Send + Sync {
         internal_call_id: &str,
         args: &str,
         outcome: &ToolOutcome,
-    ) -> HookAction;
+    ) -> ToolResultHookAction;
 
     async fn foreground_live_output_writer(&self, internal_call_id: &str) -> LiveToolOutputWriter;
 
@@ -207,8 +207,8 @@ impl SessionHook for NoopSessionHook {
         _internal_call_id: &str,
         _args: &str,
         _outcome: &ToolOutcome,
-    ) -> HookAction {
-        HookAction::Continue
+    ) -> ToolResultHookAction {
+        ToolResultHookAction::Continue
     }
 
     async fn foreground_live_output_writer(&self, internal_call_id: &str) -> LiveToolOutputWriter {

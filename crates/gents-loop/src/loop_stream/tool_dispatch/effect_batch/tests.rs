@@ -348,3 +348,24 @@ async fn a_call_without_a_request_scope_is_unavailable() {
         .all(|result| matches!(result, Err(ToolEffectError::Unavailable(_)))));
     assert!(events.lock().unwrap().is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn replaced_tool_result_reaches_caller_without_fatal_termination() {
+    let refusal = ToolOutcome::Failed {
+        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+        denial: None,
+        text: "plugin data writes were refused and nothing was committed: duplicate".into(),
+    };
+    let (dispatcher, events) = dispatcher(Hook {
+        replace_result: Some((1, refusal.clone())),
+        ..Hook::default()
+    });
+    let results = run(&dispatcher, calls(2)).await;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].as_ref().unwrap(), &refusal);
+    assert_eq!(results[1].as_ref().unwrap().model_facing_text(), "2");
+    assert!(dispatcher.fatal.lock().await.is_none());
+    let events = events.lock().unwrap();
+    assert!(events.contains(&"finish:1:false".into()));
+    assert!(events.contains(&"finish:2:false".into()));
+}

@@ -36,9 +36,7 @@ where
 
 #[cfg(test)]
 use super::RigToolFunction;
-use super::{
-    tool_dispatch, HookAction, RigToolCall as ToolCall, SessionHook, ToolCallHookAction, ToolDyn,
-};
+use super::{tool_dispatch, RigToolCall as ToolCall, SessionHook, ToolCallHookAction, ToolDyn};
 use crate::session_hook::ForegroundResult;
 use crate::tool_call_lifecycle::runtime::{CurrentToolRuntimeContext, ToolOutcome};
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -222,7 +220,7 @@ where
                     .await,
                 ),
             };
-            let (outcome, already_persisted) = match execution {
+            let (mut outcome, already_persisted) = match execution {
                 ForegroundResult::Settled(outcome) => (outcome, false),
                 ForegroundResult::Backgrounded(receipt) => (ToolOutcome::Completed(receipt), true),
             };
@@ -238,8 +236,12 @@ where
                 )
                 .await
                 {
-                    HookAction::Continue => None,
-                    HookAction::Terminate { reason } => {
+                    crate::ToolResultHookAction::Continue => None,
+                    crate::ToolResultHookAction::ReplaceOutcome(replaced) => {
+                        outcome = *replaced;
+                        None
+                    }
+                    crate::ToolResultHookAction::Terminate { reason } => {
                         token.cancel();
                         Some(reason)
                     }

@@ -6,7 +6,7 @@ use gents_inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
-use gents_inference::llm::{HookAction, ToolCallHookAction};
+use gents_inference::llm::{HookAction, ToolCallHookAction, ToolResultHookAction};
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
@@ -683,7 +683,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
             },
         )
         .await;
-    assert!(matches!(action, HookAction::Terminate { .. }));
+    assert!(matches!(action, ToolResultHookAction::Terminate { .. }));
 
     let row = fetch_tool_call_row(&hook, &session_id, "internal-timeout").await;
     assert_eq!(
@@ -812,7 +812,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(full_output.clone()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let tool_call = fetch_tool_call_row(&hook, &session_id, "internal-oversized").await;
@@ -1327,7 +1327,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("fn main() {}\n".to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     publish_claimed_provider_turn(
@@ -1493,7 +1493,7 @@ async fn read_file_result_persists_raw_output() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(raw_read_output.to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let session_id = hook.session_id().await.expect("session id");
@@ -1572,7 +1572,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(tool_result_text.to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let session_id = hook.session_id().await.expect("session id");
@@ -1692,7 +1692,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
                 ),
             )
             .await,
-            HookAction::Continue
+            ToolResultHookAction::Continue
         ));
     }
 
@@ -1759,7 +1759,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("second result".to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let session_id = hook.session_id().await.expect("session id");
@@ -2037,7 +2037,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     assert!(matches!(
         hook.on_tool_result("cat_log", None, "internal-forgery", "{}", &outcome)
             .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let row = fetch_tool_call_row(&hook, &session_id, "internal-forgery").await;
@@ -2106,7 +2106,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     assert!(matches!(
         hook.on_tool_result("bash", None, "internal-reported-failure", "{}", &outcome)
             .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     let row = fetch_tool_call_row(&hook, &session_id, "internal-reported-failure").await;
@@ -2168,7 +2168,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
         )
         .await;
     assert!(
-        matches!(&action, HookAction::Terminate { reason } if reason.contains("cancelled")),
+        matches!(&action, ToolResultHookAction::Terminate { reason } if reason.contains("cancelled")),
         "a cancelled outcome must terminate the turn, got {action:?}"
     );
 
@@ -2257,7 +2257,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         )
         .await;
     assert!(
-        matches!(action, HookAction::Continue),
+        matches!(action, ToolResultHookAction::Continue),
         "a reported failure persists and continues the turn, got {action:?}"
     );
 
@@ -2341,7 +2341,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("table".into())
         )
         .await,
-        HookAction::Terminate { .. }
+        ToolResultHookAction::Terminate { .. }
     ));
     assert!(hook.finish_tool_effect(&child, None).await.is_err());
     assert!(hook.effect_lifecycles.lock().await.contains_key(&child));
@@ -2411,7 +2411,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { deadline_at: None }
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
     hook.finish_tool_effect(&child, None).await.unwrap();
     assert!(matches!(
@@ -2425,7 +2425,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             )
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
     let rows = hook_query(
         &hook,
@@ -2647,4 +2647,259 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     );
     node.shutdown().await.expect("shut down test node");
     drop(path);
+}
+
+#[tokio::test]
+async fn deferred_write_doc_id_constraints_surface_tool_failure_without_terminating_hook() {
+    use crate::call::lifecycle::delivery::PluginToolWrites;
+    use gents_loop::live_output::DeferredToolWrites;
+    use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
+    use gents_loop::SessionHook;
+    use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
+    use std::collections::BTreeMap;
+
+    for (case_name, delete_first, expected_phrase) in [
+        (
+            "duplicate-doc-id",
+            false,
+            "a document with the given ID already exists",
+        ),
+        (
+            "deleted-doc-id",
+            true,
+            "a document with the given ID has been deleted",
+        ),
+    ] {
+        let node_db = gents_store::test_support::TestStore::start(
+            &format!("deferred-write-constraint-{case_name}"),
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        node.add_collection("type TicketRow { code: String }\n type AuditRow { note: String }")
+            .await
+            .unwrap();
+        let hook = signed_hook(&node, FailurePolicy::FailClosed).await;
+        hook.on_completion_call(&user_text_message("import tickets"), &[])
+            .await;
+        let session_id = hook.session_id().await.unwrap();
+        bind_interruptible_request(&hook, &format!("req-{case_name}"), &session_id).await;
+
+        let actor_access = hook.actor_access().unwrap();
+        let admin_access = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(hook.node_did.as_str()).unwrap(),
+        );
+        let seeded = actor_access
+            .write(
+                "test.seed_ticket_row",
+                r#"mutation { create_TicketRow(input: { code: "HD-42" }) { _docID } }"#,
+            )
+            .await
+            .unwrap();
+        let doc_id = gents_store::graphql::created_doc_id(&seeded, "TicketRow").unwrap();
+        if delete_first {
+            admin_access
+                .write(
+                    "test.delete_ticket_row",
+                    &format!(
+                        r#"mutation {{ delete_TicketRow(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        gents_store::graphql::escape_graphql_string(&doc_id)
+                    ),
+                )
+                .await
+                .unwrap();
+        }
+
+        let actor = hook.actor.clone().unwrap();
+        let make_writes = || {
+            DeferredToolWrites::new(PluginToolWrites {
+                actor: actor.clone(),
+                grant: gents_pack::plugin::store::PluginData {
+                    declaration: PluginDataDeclaration {
+                        collections: vec!["AuditRow".into(), "TicketRow".into()],
+                        ops: vec!["insert".into()],
+                        stamped: BTreeMap::new(),
+                    },
+                    collection_fields: BTreeMap::from([
+                        ("AuditRow".into(), vec!["note".into()]),
+                        ("TicketRow".into(), vec!["code".into()]),
+                    ]),
+                    unique_keys: BTreeMap::new(),
+                },
+                writes: vec![
+                    DataWrite {
+                        op: DataOp::Insert,
+                        collection: "AuditRow".into(),
+                        doc_id: None,
+                        fields: json!({"note": "rolled-back"}).as_object().unwrap().clone(),
+                        on_conflict: None,
+                    },
+                    DataWrite {
+                        op: DataOp::Insert,
+                        collection: "TicketRow".into(),
+                        doc_id: None,
+                        fields: json!({"code": "HD-42"}).as_object().unwrap().clone(),
+                        on_conflict: None,
+                    },
+                ],
+            })
+        };
+
+        // 1. Plugin effect child call path (`is_plugin_effect == true`, previously `context=persist plugin effect`).
+        accept_hook_tool_call(&hook, "script-parent", "script", "{}", None).await;
+        assert!(matches!(
+            hook.on_tool_call(
+                "script",
+                None,
+                "script-parent",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::default()
+            )
+            .await,
+            ToolCallHookAction::Continue
+        ));
+        let child = hook
+            .admit_tool_effect(
+                "script-parent",
+                1,
+                "import_ticket",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            hook.on_tool_call(
+                "import_ticket",
+                None,
+                &child,
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::default()
+            )
+            .await,
+            ToolCallHookAction::Continue
+        ));
+        hook.foreground_live_output_writer(&child)
+            .await
+            .record_deferred_writes(make_writes())
+            .await
+            .unwrap();
+        let child_action = hook
+            .on_tool_result(
+                "import_ticket",
+                None,
+                &child,
+                "{}",
+                &ToolOutcome::Completed(r#"{"imported":true}"#.into()),
+            )
+            .await;
+        match child_action {
+            ToolResultHookAction::ReplaceOutcome(replaced) => match *replaced {
+                ToolOutcome::Failed {
+                    class: FailureClass::ToolReturnedError,
+                    denial: None,
+                    text,
+                } => {
+                    assert!(
+                        text.contains("plugin data writes were refused and nothing was committed")
+                            && text.contains(expected_phrase),
+                        "{case_name}: unexpected plugin-effect refusal text: {text}"
+                    );
+                }
+                other => panic!("{case_name}: expected Failed replacement outcome, got {other:?}"),
+            },
+            other => panic!("{case_name}: plugin effect must not fail-closed; got {other:?}"),
+        }
+        hook.finish_tool_effect(&child, None).await.unwrap();
+        assert!(
+            !hook.effect_lifecycles.lock().await.contains_key(&child),
+            "{case_name}: settled plugin effect must clear effect_lifecycles"
+        );
+        assert!(matches!(
+            hook.on_tool_result(
+                "script",
+                None,
+                "script-parent",
+                "{}",
+                &ToolOutcome::Completed(r#"{"handled_error":true}"#.into()),
+            )
+            .await,
+            ToolResultHookAction::Continue
+        ));
+
+        // 2. Direct model tool call path (`is_plugin_effect == false`, previously `context=persist tool result`).
+        accept_hook_tool_call(&hook, "direct-import", "import_ticket", "{}", None).await;
+        assert!(matches!(
+            hook.on_tool_call(
+                "import_ticket",
+                None,
+                "direct-import",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::default()
+            )
+            .await,
+            ToolCallHookAction::Continue
+        ));
+        hook.foreground_live_output_writer("direct-import")
+            .await
+            .record_deferred_writes(make_writes())
+            .await
+            .unwrap();
+        let direct_action = hook
+            .on_tool_result(
+                "import_ticket",
+                None,
+                "direct-import",
+                "{}",
+                &ToolOutcome::Completed(r#"{"imported":true}"#.into()),
+            )
+            .await;
+        match direct_action {
+            ToolResultHookAction::ReplaceOutcome(replaced) => match *replaced {
+                ToolOutcome::Failed {
+                    class: FailureClass::ToolReturnedError,
+                    denial: None,
+                    text,
+                } => {
+                    assert!(
+                        text.contains("plugin data writes were refused and nothing was committed")
+                            && text.contains(expected_phrase),
+                        "{case_name}: unexpected direct refusal text: {text}"
+                    );
+                }
+                other => panic!("{case_name}: expected Failed replacement outcome, got {other:?}"),
+            },
+            other => panic!("{case_name}: direct tool call must not fail-closed; got {other:?}"),
+        }
+
+        // 3. No partial writes committed and a subsequent call on the same session succeeds cleanly.
+        let audits = actor_access.execute("{ AuditRow { note } }").await.unwrap();
+        assert_eq!(audits["data"]["AuditRow"], json!([]));
+        accept_hook_tool_call(&hook, "follow-up", "import_ticket", "{}", None).await;
+        assert!(matches!(
+            hook.on_tool_call(
+                "import_ticket",
+                None,
+                "follow-up",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::default()
+            )
+            .await,
+            ToolCallHookAction::Continue
+        ));
+        assert!(matches!(
+            hook.on_tool_result(
+                "import_ticket",
+                None,
+                "follow-up",
+                "{}",
+                &ToolOutcome::Completed(r#"{"ok":true}"#.into()),
+            )
+            .await,
+            ToolResultHookAction::Continue
+        ));
+        assert_eq!(hook.stats().persistence_failures, 0);
+        node.shutdown().await.expect("shut down test node");
+    }
 }

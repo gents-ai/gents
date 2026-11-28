@@ -100,7 +100,7 @@ async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, pa
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(payload.into())
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 }
 

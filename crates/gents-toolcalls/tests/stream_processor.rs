@@ -4,7 +4,7 @@ use std::time::Duration;
 use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
-use gents_inference::llm::HookAction;
+use gents_inference::llm::{HookAction, ToolResultHookAction};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_store::identity::NodeIdentity;
 
@@ -355,7 +355,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(tool_result.to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     processor
@@ -576,7 +576,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("source bytes".to_string()),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     processor
@@ -734,7 +734,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 )),
             )
             .await,
-            HookAction::Continue
+            ToolResultHookAction::Continue
         ));
     }
 
@@ -850,7 +850,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
     processor
         .process_item(tool_result_item("call-1", r#"{"hit":1}"#, "call-1"))
@@ -1170,7 +1170,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             ),
         )
         .await,
-        HookAction::Continue
+        ToolResultHookAction::Continue
     ));
 
     processor

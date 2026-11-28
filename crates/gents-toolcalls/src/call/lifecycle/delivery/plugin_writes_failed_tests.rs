@@ -220,3 +220,131 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
     assert_eq!(closures, 1);
     fixture.node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn duplicate_and_deleted_doc_id_plugin_writes_roll_back_and_settle_failed() {
+    use crate::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    for (name, delete_first, expected_phrase) in [
+        (
+            "plugin-duplicate-doc-id",
+            false,
+            "a document with the given ID already exists",
+        ),
+        (
+            "plugin-deleted-doc-id",
+            true,
+            "a document with the given ID has been deleted",
+        ),
+    ] {
+        let (mut fixture, _request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: name.into(),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        fixture
+            .node
+            .add_collection(
+                "type ImportTicket { code: String }\n type ImportAudit { note: String }",
+            )
+            .await
+            .unwrap();
+        let actor_access = fixture.tool.access().unwrap();
+        let admin_access = gents_store::config_client::ConfigAccess::local_as(
+            fixture.node.clone(),
+            identity::Did::new(fixture.node_did.as_str()).unwrap(),
+        );
+        let created = actor_access
+            .write(
+                "test.seed_ticket",
+                r#"mutation { create_ImportTicket(input: { code: "T-100" }) { _docID } }"#,
+            )
+            .await
+            .unwrap();
+        let ticket_doc_id = gents_store::graphql::created_doc_id(&created, "ImportTicket").unwrap();
+        if delete_first {
+            admin_access
+                .write(
+                    "test.delete_ticket",
+                    &format!(
+                        r#"mutation {{ delete_ImportTicket(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        gents_store::graphql::escape_graphql_string(&ticket_doc_id)
+                    ),
+                )
+                .await
+                .unwrap();
+        }
+        fixture.tool.plugin_writes = Some(PluginToolWrites {
+            actor: fixture.tool.actor.clone(),
+            grant: gents_pack::plugin::store::PluginData {
+                declaration: PluginDataDeclaration {
+                    collections: vec!["ImportAudit".into(), "ImportTicket".into()],
+                    ops: vec!["insert".into()],
+                    stamped: BTreeMap::new(),
+                },
+                collection_fields: BTreeMap::from([
+                    ("ImportAudit".into(), vec!["note".into()]),
+                    ("ImportTicket".into(), vec!["code".into()]),
+                ]),
+                unique_keys: BTreeMap::new(),
+            },
+            writes: vec![
+                DataWrite {
+                    op: DataOp::Insert,
+                    collection: "ImportAudit".into(),
+                    doc_id: None,
+                    fields: json!({"note": "should roll back"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                    on_conflict: None,
+                },
+                DataWrite {
+                    op: DataOp::Insert,
+                    collection: "ImportTicket".into(),
+                    doc_id: None,
+                    fields: json!({"code": "T-100"}).as_object().unwrap().clone(),
+                    on_conflict: None,
+                },
+            ],
+        });
+
+        fixture.tool.complete("imported ticket").await.unwrap();
+        assert_eq!(
+            fixture.tool.state,
+            gents_protocol::tool_call::ToolCallState::Failed,
+            "{name}: constraint rejection must settle as Failed, not fail-closed"
+        );
+        assert_eq!(
+            fixture.tool.failure_class,
+            Some(crate::call::lifecycle::FailureClass::ToolReturnedError)
+        );
+        let refusal = fixture
+            .tool
+            .take_plugin_writes_refusal()
+            .expect("refused plugin write must surface refusal text");
+        assert!(
+            refusal.contains("plugin data writes were refused and nothing was committed")
+                && refusal.contains(expected_phrase),
+            "{name}: unexpected refusal {refusal}"
+        );
+        let audits = actor_access
+            .execute("{ ImportAudit { note } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            audits["data"]["ImportAudit"],
+            json!([]),
+            "{name}: partial write before rejected write must roll back"
+        );
+        fixture.node.shutdown().await.expect("shut down test node");
+    }
+}

@@ -315,9 +315,12 @@ pub async fn run_step0(
         }
     }
     if terminal.state == ToolCallState::Completed && lifecycle.state() == ToolCallState::Failed {
+        let message = lifecycle.take_plugin_writes_refusal().unwrap_or_else(|| {
+            "plugin data writes were refused and nothing was committed".to_owned()
+        });
         return Ok(json!({
             "status": "failed",
-            "message": "plugin data writes were refused and nothing was committed",
+            "message": message,
             "next": format!("Next: call `{tool}` again with writes the plugin's data grant allows"),
         })
         .to_string());
