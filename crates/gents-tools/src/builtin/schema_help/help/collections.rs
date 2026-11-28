@@ -1,6 +1,6 @@
 pub(super) fn page(path: &[&str]) -> Option<&'static str> {
     Some(match path {
-        ["collections"] => "An SDL type defines a document collection. Fields describe values; collection directives affect authorization, identity and history. Read help collections TOPIC: policy, branchable, governed, downsample. Query-backed collections: help views. Ordinary collections must be materialized. Publish with collection create; use view create when a source query is required.",
+        ["collections"] => "An SDL type defines a document collection. Fields describe values; collection directives affect authorization, identity and history. Read help collections TOPIC: policy, branchable, governed, downsample. Query-backed collections: help views. Ordinary collections must be materialized. Publish with collection create; use view create when a source query is required. Commands: help collection (list, get, create, update, materialize, empty, remove); schema changes: help evolution.",
         ["collections", "policy"] => r#"Collection-level @policy binds a document access policy and one of its resources to a new collection.
 ```graphql
 type Report @policy(id: "POLICY_ID", resource: "report") {

@@ -1721,3 +1721,280 @@ async fn collection_list_names_application_collections_unless_all_are_asked_for(
     assert!(all.get("next_call").is_none(), "{all}");
     node.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn schema_definition_names_resources_and_verbs() {
+    let db = node().await;
+    let tool = SchemaTool::new(db.node.clone());
+    let def = Tool::definition(&tool, String::new()).await;
+    assert_eq!(def.name, SCHEMA_TOOL_NAME);
+    for expected in [
+        "collection",
+        "version",
+        "view",
+        "migration",
+        "batch",
+        "never first in argv",
+    ] {
+        assert!(
+            def.description.contains(expected),
+            "missing {expected:?} in description: {}",
+            def.description
+        );
+    }
+    let argv_desc = def.parameters["properties"]["argv"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        argv_desc.contains("singular resource")
+            && argv_desc.contains("collection")
+            && argv_desc.contains("never a collection name"),
+        "{argv_desc}"
+    );
+    db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn schema_command_mistakes_return_executable_recovery() {
+    let db = node().await;
+    let node = db.node.clone();
+    let tool = SchemaTool::new(node.clone());
+    for sdl in [
+        "type ScanDelivery { reference: String status: String priority: Int }",
+        "type IndexedDelivery { reference: String status: String @index priority: Int }",
+    ] {
+        ConfigAccess::local(node.clone())
+            .add_collection(sdl)
+            .await
+            .unwrap();
+    }
+
+    for (bad, expected_name) in [
+        (
+            json!({"argv": ["IndexedDelivery", "get"]}),
+            "IndexedDelivery",
+        ),
+        (json!({"argv": ["ScanDelivery", "get"]}), "ScanDelivery"),
+        (
+            json!({"argv": ["IndexedDelivery", "describe"]}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["IndexedDelivery", "inspect"]}),
+            "IndexedDelivery",
+        ),
+        (json!({"argv": ["IndexedDelivery"]}), "IndexedDelivery"),
+        (
+            json!({"argv": ["get", "IndexedDelivery"]}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["describe", "IndexedDelivery"]}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["get"], "target_id": "IndexedDelivery"}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["collections", "get", "IndexedDelivery"]}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["collection", "describe", "IndexedDelivery"]}),
+            "IndexedDelivery",
+        ),
+        (
+            json!({"argv": ["collection", "inspect", "IndexedDelivery"]}),
+            "IndexedDelivery",
+        ),
+    ] {
+        let refused = refusal(&tool, bad.clone()).await;
+        assert_eq!(
+            refused["recovery"],
+            json!({"tool": "schema", "args": {"argv": ["collection", "get", expected_name]}}),
+            "{bad}: {refused}"
+        );
+        let recovered = call(&tool, refused["recovery"]["args"].clone()).await;
+        assert_eq!(recovered["collection"]["Name"], expected_name, "{bad}");
+    }
+
+    // explain on schema points to both schema collection get and query explain, and replays cleanly.
+    for bad in [
+        json!({"argv": ["explain", "IndexedDelivery"]}),
+        json!({"argv": ["IndexedDelivery", "explain"]}),
+        json!({"argv": ["collection", "explain", "IndexedDelivery"]}),
+    ] {
+        let refused = refusal(&tool, bad.clone()).await;
+        let msg = refused["error"].as_str().unwrap();
+        assert!(
+            msg.contains("query tool")
+                && msg.contains("collection")
+                && msg.contains("IndexedDelivery"),
+            "{bad}: {refused}"
+        );
+        assert_eq!(
+            refused["recovery"],
+            json!({"tool": "schema", "args": {"argv": ["collection", "get", "IndexedDelivery"]}})
+        );
+        let recovered = call(&tool, refused["recovery"]["args"].clone()).await;
+        assert_eq!(recovered["collection"]["Name"], "IndexedDelivery");
+    }
+
+    // List mistakes and bare explain return executable collection list calls.
+    for bad in [
+        json!({"argv": ["list"]}),
+        json!({"argv": ["list", "collections"]}),
+        json!({"argv": ["collections"]}),
+        json!({"argv": ["collections", "list"]}),
+        json!({"argv": ["explain"]}),
+    ] {
+        let refused = refusal(&tool, bad.clone()).await;
+        assert_eq!(
+            refused["recovery"],
+            json!({"tool": "schema", "args": {"argv": ["collection", "list"]}}),
+            "{bad}: {refused}"
+        );
+        let recovered = call(&tool, refused["recovery"]["args"].clone()).await;
+        let listed = recovered["collections"].as_array().unwrap();
+        assert!(
+            listed.contains(&json!("IndexedDelivery")),
+            "{bad}: {recovered}"
+        );
+    }
+
+    // Plural create with SDL previews without publishing; missing patch/evolve points to help.
+    let refused = refusal(
+        &tool,
+        json!({"argv": ["collections", "create"], "options": {"sdl": "type PluralProbe { title: String }"}}),
+    )
+    .await;
+    assert_eq!(
+        refused["recovery"]["args"]["argv"],
+        json!(["collection", "preview", "create"])
+    );
+    let preview = call(&tool, refused["recovery"]["args"].clone()).await;
+    assert_eq!(preview["metadata"]["committed"], false);
+    assert!(ConfigAccess::local(node.clone())
+        .collection_version("PluralProbe")
+        .await
+        .unwrap()
+        .is_none());
+
+    for bad in [
+        json!({"argv": ["collections", "evolve", "IndexedDelivery"]}),
+        json!({"argv": ["IndexedDelivery", "update"]}),
+    ] {
+        let refused = refusal(&tool, bad.clone()).await;
+        assert_eq!(
+            refused["recovery"]["args"]["argv"],
+            json!(["help", "collection", "update"]),
+            "{bad}: {refused}"
+        );
+        let page = tool
+            .call(
+                args(refused["recovery"]["args"].clone()),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .unwrap();
+        assert!(page.starts_with("collection preview update"));
+    }
+
+    // Collection-first versions lists versions for that collection.
+    let refused = refusal(&tool, json!({"argv": ["IndexedDelivery", "versions"]})).await;
+    assert_eq!(
+        refused["recovery"]["args"],
+        json!({"argv": ["version", "list", "IndexedDelivery"]})
+    );
+    let versions = call(&tool, refused["recovery"]["args"].clone()).await;
+    assert_eq!(versions["versions"].as_array().unwrap().len(), 1);
+
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn schema_help_topics_and_dash_help_recover_cleanly() {
+    let db = node().await;
+    let tool = SchemaTool::new(db.node.clone());
+
+    // ["help", "collections", "update", "--help"] resolves directly instead of failing.
+    let update_help = tool
+        .call(
+            args(json!({"argv": ["help", "collections", "update", "--help"]})),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        update_help.starts_with("collection preview update"),
+        "{update_help}"
+    );
+
+    // ["help", "collections", "evolve"] and ["help", "evolve"] resolve to evolution.
+    for argv in [
+        json!(["help", "collections", "evolve"]),
+        json!(["help", "evolve"]),
+    ] {
+        let page = tool
+            .call(
+                args(json!({"argv": argv})),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .unwrap();
+        assert!(page.contains("collection update"), "{argv}: {page}");
+    }
+
+    // Unknown collections subtopic names valid collection verbs and recovers to help collection.
+    let refused = refusal(&tool, json!({"argv": ["help", "collections", "add"]})).await;
+    let msg = refused["error"].as_str().unwrap();
+    assert!(
+        msg.contains("list, get, create, update, materialize, empty, remove"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["recovery"],
+        json!({"tool": "schema", "args": {"argv": ["help", "collection"]}})
+    );
+    let page = tool
+        .call(
+            args(refused["recovery"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .unwrap();
+    assert!(page.contains("list and get inspect definitions"), "{page}");
+
+    // help explain points to query explain and recovers to root help.
+    let refused = refusal(&tool, json!({"argv": ["help", "explain"]})).await;
+    assert!(
+        refused["error"].as_str().unwrap().contains("query tool"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["recovery"],
+        json!({"tool": "schema", "args": {"argv": ["help"]}})
+    );
+    assert!(tool
+        .call(
+            args(refused["recovery"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .is_ok());
+
+    // Ambiguous topic names matching topics without guessing.
+    let refused = refusal(&tool, json!({"argv": ["help", "get"]})).await;
+    let msg = refused["error"].as_str().unwrap();
+    assert!(
+        msg.contains("collection get") && msg.contains("version get"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["recovery"],
+        json!({"tool": "schema", "args": {"argv": ["help"]}})
+    );
+
+    db.node.shutdown().await.unwrap();
+}

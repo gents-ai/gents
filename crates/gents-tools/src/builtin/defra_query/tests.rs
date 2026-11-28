@@ -1354,6 +1354,181 @@ async fn definition_documents_verb_only_argv_and_option_properties() {
         "{}",
         option_props["fields"]
     );
+    assert!(
+        def.description.contains("not an option on find")
+            && def.description.contains("options.mode:\"simple\"")
+            && def.description.contains("options.mode:\"execute\""),
+        "{}",
+        def.description
+    );
+    assert!(
+        option_props["mode"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("not find"),
+        "{}",
+        option_props["mode"]
+    );
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn find_with_explain_option_returns_executable_explain_recovery() {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    node.add_collection("type DeliveryAudit { reference: String status: String priority: Int }")
+        .await
+        .unwrap();
+    gents_store::config_client::ConfigAccess::write_local(
+        &node,
+        "seed_explain_recovery",
+        r#"mutation { add_DeliveryAudit(input: {reference: "Q-01", status: "queued", priority: 1}) {_docID} }"#,
+    )
+    .await
+    .unwrap();
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["DeliveryAudit".into()]),
+    );
+
+    let root_help = run_query(&tool, json!({"argv": ["help"]})).await.unwrap();
+    assert!(
+        root_help["help"]
+            .as_str()
+            .unwrap()
+            .contains("explain inspects a native plan"),
+        "{root_help}"
+    );
+
+    let err = run_query(
+        &tool,
+        json!({
+            "argv": ["find"],
+            "collection": "DeliveryAudit",
+            "options": {
+                "fields": ["reference", "status"],
+                "filter": {"status": {"_eq": "delivered"}},
+                "limit": 5,
+                "explain": {"mode": "execute"}
+            }
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("argv:[\"explain\"]"),
+        "{err}"
+    );
+    assert_eq!(
+        err["recovery"],
+        json!({
+            "tool": "query",
+            "args": {
+                "argv": ["explain"],
+                "collection": "DeliveryAudit",
+                "options": {
+                    "fields": ["reference", "status"],
+                    "filter": {"status": {"_eq": "delivered"}},
+                    "limit": 5,
+                    "mode": "execute"
+                }
+            }
+        })
+    );
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["mode"], "execute");
+    assert_eq!(recovered["plan"]["executionSuccess"], true);
+
+    // find with options.explain: true and a find-only option drops find-only options
+    // and keeps default simple mode (never defaults to execute).
+    let err = run_query(
+        &tool,
+        json!({
+            "argv": ["find"],
+            "collection": "DeliveryAudit",
+            "options": {
+                "fields": ["reference"],
+                "limit": 5,
+                "signer": true,
+                "explain": true
+            }
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["recovery"]["args"]["argv"], json!(["explain"]));
+    assert!(err["recovery"]["args"]["options"].get("explain").is_none());
+    assert!(err["recovery"]["args"]["options"].get("signer").is_none());
+    assert!(err["recovery"]["args"]["options"].get("mode").is_none());
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["mode"], "simple");
+    assert!(recovered["plan"].get("executionSuccess").is_none());
+
+    // find with options.explain: {type: "execute"}, "execute", and options.mode: "execute".
+    for options in [
+        json!({"fields": ["reference"], "explain": {"type": "execute"}}),
+        json!({"fields": ["reference"], "explain": "execute"}),
+        json!({"fields": ["reference"], "mode": "execute"}),
+    ] {
+        let err = run_query(
+            &tool,
+            json!({"argv": ["find"], "collection": "DeliveryAudit", "options": options}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["recovery"]["args"]["argv"], json!(["explain"]));
+        assert_eq!(err["recovery"]["args"]["options"]["mode"], "execute");
+        let recovered = run_query(&tool, err["recovery"]["args"].clone())
+            .await
+            .unwrap();
+        assert_eq!(recovered["mode"], "execute");
+    }
+
+    // find with options.explain: false keeps find and removes explain.
+    let err = run_query(
+        &tool,
+        json!({
+            "argv": ["find"],
+            "collection": "DeliveryAudit",
+            "options": {"fields": ["reference"], "explain": false}
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["recovery"]["args"]["argv"], json!(["find"]));
+    assert!(err["recovery"]["args"]["options"].get("explain").is_none());
+    let recovered = run_query(&tool, err["recovery"]["args"].clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered["returned_count"], 1);
+
+    // explain with nested options.explain or options.type rewrites to options.mode.
+    for (bad_key, bad_val, expected_mode) in [
+        ("explain", json!({"mode": "execute"}), "execute"),
+        ("type", json!("simple"), "simple"),
+    ] {
+        let mut opts = serde_json::Map::new();
+        opts.insert("fields".into(), json!(["reference"]));
+        opts.insert(bad_key.into(), bad_val);
+        let err = run_query(
+            &tool,
+            json!({"argv": ["explain"], "collection": "DeliveryAudit", "options": opts}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["recovery"]["args"]["options"]["mode"], expected_mode);
+        let recovered = run_query(&tool, err["recovery"]["args"].clone())
+            .await
+            .unwrap();
+        assert_eq!(recovered["mode"], expected_mode);
+    }
+
     node.shutdown().await.expect("shut down test node");
 }
 
