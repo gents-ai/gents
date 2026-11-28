@@ -287,7 +287,7 @@ pub async fn terminalize_pending_request_rejection(
     let escaped_agent = escape_graphql_string(agent_did);
     let owner = node_did.to_owned();
     let now = Utc::now().to_rfc3339();
-    let doc_id = escape_graphql_string(doc_id);
+    let escaped_doc_id = escape_graphql_string(doc_id);
     let node_did = escape_graphql_string(node_did);
     let failure_reason = escape_graphql_string(reason);
     let terminalized_at = escape_graphql_string(&now);
@@ -295,8 +295,8 @@ pub async fn terminalize_pending_request_rejection(
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{
             update_AgentRequest(
-                docID: "{doc_id}", filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
+                docID: "{escaped_doc_id}", filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
                     node_did: {{ _eq: "{node_did}" }},
                     agent_did: {{ _eq: "{escaped_agent}" }},
                     lifecycle_state: {{ _eq: "{pending}" }}
@@ -323,6 +323,16 @@ pub async fn terminalize_pending_request_rejection(
             let owner = &owner;
             let now = &now;
             Box::pin(async move {
+                use crate::request::lifecycle::pending_settlement::{
+                    settle_pending_in_txn, PendingDisposition,
+                };
+                match settle_pending_in_txn(txn, doc_id, owner, Some(agent_did), now).await? {
+                    None => return Ok(PendingRejectionOutcome::NotMatched),
+                    Some(PendingDisposition::Expired) => {
+                        return Ok(PendingRejectionOutcome::Terminalized)
+                    }
+                    Some(PendingDisposition::Open) => {}
+                }
                 let response = txn
                     .execute_with_variables(
                         mutation,
@@ -2189,21 +2199,24 @@ mod tests {
                 .unwrap()
         }
 
-        async fn read_session_rows(&self, session_id: &str) -> Vec<serde_json::Value> {
-            let owner = gents_store::graphql::escape_graphql_string(self.runtime().did());
-            let selected = self
-                .home
+        async fn read_as_agent(&self, document: &str) -> defra_node::QueryResponse {
+            self.home
                 .agent_access
                 .transact_readonly("test.admission_fixture_agent_read", |txn| {
-                    let query = format!(
-                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                        gents_store::graphql::escape_graphql_string(session_id),
-                        gents_protocol::session::AGENT_SESSION_FIELDS,
-                    );
-                    Box::pin(async move { txn.execute_local_response(&query).await })
+                    Box::pin(async move { txn.execute_local_response(document).await })
                 })
                 .await
-                .unwrap();
+                .unwrap()
+        }
+
+        async fn read_session_rows(&self, session_id: &str) -> Vec<serde_json::Value> {
+            let owner = gents_store::graphql::escape_graphql_string(self.runtime().did());
+            let query = format!(
+                r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                gents_store::graphql::escape_graphql_string(session_id),
+                gents_protocol::session::AGENT_SESSION_FIELDS,
+            );
+            let selected = self.read_as_agent(&query).await;
             assert!(!selected.has_errors(), "{:?}", selected.errors);
             selected.data.as_ref().unwrap()["AgentSession"]
                 .as_array()
@@ -2585,6 +2598,145 @@ mod tests {
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
+        fixture
+            .node()
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn route_refusal_of_an_expired_request_ends_it_stale() {
+        let fixture = AdmissionFixture::new("route-refusal-ttl").await;
+        let agent_did = fixture.agent().did().to_owned();
+        let node_did = gents_store::graphql::escape_graphql_string(fixture.runtime().did());
+        let passed = "2020-01-01T00:00:00Z";
+        let live = "2999-01-01T00:00:00Z";
+        let unassigned = gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE;
+        let invalid_origin = "request admission denied: invalid execution origin";
+        let cases = [
+            (passed, true, "dead", "Stale", 0),
+            (passed, false, "dead", "Stale", 0),
+            (live, true, "failed", unassigned, 1),
+            (live, false, "failed", invalid_origin, 1),
+        ];
+        for (index, (valid_until, via_lifecycle, state, failure_reason, sessions)) in
+            cases.into_iter().enumerate()
+        {
+            let request_id = format!("route-refusal-{index}");
+            let session_id = format!("route-refusal-session-{index}");
+            let mut create = fixture.local_self_create(&request_id, &session_id, &agent_did, None);
+            create.valid_until = Some(valid_until.to_owned());
+            let doc_id = fixture.create_signed_request(create).await;
+            if via_lifecycle {
+                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &fixture.home.agent_access,
+                    &doc_id,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let execution_origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+                    request.execution_origin.as_deref(),
+                )
+                .unwrap();
+                let mut lifecycle =
+                    crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                        fixture.node().clone(),
+                        request,
+                        30,
+                        execution_origin,
+                        "",
+                    );
+                lifecycle
+                    .bind_managed_agent(fixture.agent().as_ref())
+                    .unwrap();
+                lifecycle.reject_admission(unassigned).await.unwrap();
+            } else {
+                let outcome = super::terminalize_pending_request_rejection(
+                    fixture.node(),
+                    &doc_id,
+                    fixture.runtime().did(),
+                    &agent_did,
+                    fixture.agent().as_ref(),
+                    invalid_origin,
+                    "test.route_refusal_ttl",
+                )
+                .await
+                .unwrap();
+                assert_eq!(outcome, super::PendingRejectionOutcome::Terminalized);
+            }
+            let observed = fixture
+                .read_as_agent(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }}
+                        AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ session_id }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&doc_id),
+                    gents_store::graphql::escape_graphql_string(&session_id),
+                ))
+                .await;
+            assert!(!observed.has_errors(), "{:?}", observed.errors);
+            let data = observed.data.as_ref().unwrap();
+            let row = &data["AgentRequest"][0];
+            assert_eq!(row["lifecycle_state"], state, "{request_id}: {row}");
+            assert_eq!(row["failure_reason"], failure_reason, "{request_id}: {row}");
+            assert_eq!(
+                data["AgentSession"].as_array().map(Vec::len),
+                Some(sessions),
+                "{request_id}: only the refusal's own failure projects a session: {data}"
+            );
+        }
+        fixture
+            .node()
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn expired_refusal_of_a_row_without_request_id_lands() {
+        let fixture = AdmissionFixture::new("expired-refusal-no-request-id").await;
+        let agent_did = fixture.agent().did().to_owned();
+        let escaped_agent_did = gents_store::graphql::escape_graphql_string(&agent_did);
+        let node_did = gents_store::graphql::escape_graphql_string(fixture.runtime().did());
+        let doc_id = fixture
+            .write_as(
+                &fixture.admin,
+                format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                    purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}",
+                    agent_did: "{escaped_agent_did}", session_id: "no-request-id",
+                    content: "malformed turn", lifecycle_state: "pending",
+                    created_at: "2026-09-01T00:00:00Z", retry_count: 0, request_hop: 0,
+                    valid_until: "2020-01-01T00:00:00Z"
+                }}) {{ _docID }} }}"#
+                ),
+                "AgentRequest",
+            )
+            .await;
+        fixture.grant_working_agent(&doc_id, &agent_did).await;
+        let outcome = super::terminalize_pending_request_rejection(
+            fixture.node(),
+            &doc_id,
+            fixture.runtime().did(),
+            &agent_did,
+            fixture.agent().as_ref(),
+            "request rejected at ingest: malformed durable AgentRequest row",
+            "test.expired_refusal_without_request_id",
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the refusal must land: {error}"));
+        assert_eq!(outcome, super::PendingRejectionOutcome::Terminalized);
+        let observed = fixture
+            .read_as_agent(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state failure_reason }} }}"#,
+                gents_store::graphql::escape_graphql_string(&doc_id),
+            ))
+            .await;
+        assert!(!observed.has_errors(), "{:?}", observed.errors);
+        let row = &observed.data.as_ref().unwrap()["AgentRequest"][0];
+        assert!(row["request_id"].is_null(), "{row}");
+        assert_eq!(row["lifecycle_state"], "dead", "{row}");
+        assert_eq!(row["failure_reason"], "Stale", "{row}");
         fixture
             .node()
             .shutdown()
